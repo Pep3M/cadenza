@@ -34,15 +34,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "1.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -104,7 +95,6 @@ version = "0.1.0"
 name = "cadenza-engine"
 version = "0.1.0"
 dependencies = [
- "arc-swap",
  "cadenza-core",
  "cadenza-dsp",
  "cadenza-model",
@@ -113,6 +103,7 @@ dependencies = [
  "rtrb",
  "schemars",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -881,6 +872,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "uuid",
@@ -1170,6 +1162,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.8",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

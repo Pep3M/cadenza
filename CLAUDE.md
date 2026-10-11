@@ -135,7 +135,15 @@ pub struct RenderOptions { sample_rate: u32, block_size: usize, start: Tick, end
 pub fn render_offline(project: &Project, opts: &RenderOptions) -> Result<StereoBuffer, EngineError>;
 pub fn render_to_wav(project: &Project, opts: &RenderOptions, path: &Path) -> Result<MixReport, EngineError>;
 pub fn analyze_mix(project: &Project, opts: &RenderOptions) -> Result<MixReport, EngineError>;
-pub struct MixReport { master: LevelStats, tracks: Vec<(TrackId, String, LevelStats)> }
-pub struct LevelStats { peak_db: f32, rms_db: f32, lufs_integrated: f32 /* BS.1770 */, clipped_samples: u64 }
-pub struct Player; // realtime playback via cpal: new(), load(&Project), play(), stop(), seek(Tick)
+pub fn compile(project: &Project, sample_rate: u32, max_block: usize) -> Result<Graph, EngineError>;
+pub struct MixReport { sample_rate, duration_seconds, latency_samples, warnings: Vec<String>,
+	master: LevelStats, tracks: Vec<TrackLevel { track_id, name, stats }> }
+pub struct LevelStats { peak_db, true_peak_db, rms_db, lufs_integrated /* BS.1770-4 */, lufs_short_term_max,
+	crest_factor_db, clipped_samples, band_energy_db: BandEnergy, stereo_correlation } // silence = -144
+pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing()
+```
+Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
+PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
+swapped via rtrb and returned to be dropped off the audio thread.
+```text
 ```

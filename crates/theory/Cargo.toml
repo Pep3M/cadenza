@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cadenza-core.workspace = true
+serde.workspace = true
+schemars.workspace = true
+thiserror.workspace = true

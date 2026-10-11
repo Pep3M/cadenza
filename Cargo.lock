@@ -38,10 +38,24 @@ version = "0.1.0"
 [[package]]
 name = "cadenza-model"
 version = "0.1.0"
+dependencies = [
+ "cadenza-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "cadenza-theory"
 version = "0.1.0"
+dependencies = [
+ "cadenza-core",
+ "schemars",
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "cfg-if"

@@ -1,3 +1,4 @@
 /target
 *.wav
 !tests/fixtures/*.wav
+__pycache__/

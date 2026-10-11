@@ -56,10 +56,20 @@ impl EventList {
 
 	/// Converts a Cadenza MIDI event (offset clamped to `frames - 1`). With
 	/// `midi_dialect` the plugin gets raw MIDI 1.0 bytes on port 0 channel 1;
-	/// otherwise CLAP note events. "All notes off" becomes a wildcard note-off
-	/// (CLAP) or CC 123 (MIDI).
+	/// otherwise CLAP note events. "All notes off" becomes one note-off per key
+	/// (CLAP) or CC 123 (MIDI): the spec-valid wildcard key (-1) makes some plugins
+	/// (Surge XT) index out of bounds and abort.
 	pub fn push_midi(&mut self, e: &MidiEvent, frames: u32, midi_dialect: bool) -> bool {
 		let time = e.offset().min(frames.saturating_sub(1));
+		if let (MidiEvent::AllNotesOff { .. }, false) = (*e, midi_dialect) {
+			return (0u16..128).all(|key| {
+				self.push(HostEvent::NoteOff(NoteOffEvent::new(
+					time,
+					Pckn::new(0u16, 0u16, key, Match::All),
+					0.0,
+				)))
+			});
+		}
 		let event = match (*e, midi_dialect) {
 			(
 				MidiEvent::NoteOn {
@@ -76,11 +86,7 @@ impl EventList {
 				Pckn::new(0u16, 0u16, u16::from(pitch.min(127)), Match::All),
 				0.0,
 			)),
-			(MidiEvent::AllNotesOff { .. }, false) => HostEvent::NoteOff(NoteOffEvent::new(
-				time,
-				Pckn::new(0u16, Match::All, Match::All, Match::All),
-				0.0,
-			)),
+			(MidiEvent::AllNotesOff { .. }, false) => unreachable!("expanded per key above"),
 			(
 				MidiEvent::NoteOn {
 					pitch, velocity, ..

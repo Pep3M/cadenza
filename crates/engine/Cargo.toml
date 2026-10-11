@@ -8,6 +8,7 @@ license.workspace = true
 cadenza-core.workspace = true
 cadenza-model.workspace = true
 cadenza-dsp.workspace = true
+cadenza-plugin-host.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
@@ -17,3 +18,4 @@ rtrb.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true

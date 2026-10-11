@@ -2,6 +2,10 @@
 //! files and instantiates devices. Problems that only affect part of the project (unknown
 //! devices or params, unsupported plugin formats, missing files, invalid routing) become
 //! warnings instead of errors so a render always produces something.
+//!
+//! Third-party plugins (`DeviceKind::Clap`/`Vst3`) are resolved through an optional
+//! [`PluginCatalog`]. A plugin that cannot be found or loaded is bypassed with a warning:
+//! an instrument slot stays silent and an effect slot passes audio through.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -10,6 +14,7 @@ use std::sync::Arc;
 use cadenza_core::{DeviceId, ParamTarget, TrackId};
 use cadenza_dsp::{DeviceRole, Processor};
 use cadenza_model::{ClipContent, DeviceKind, Output, Project, Track, TrackKind};
+use cadenza_plugin_host::{PluginCatalog, PluginError, PluginFormat, ProcessMode};
 
 use crate::audio_clip::{AudioData, ClipPlayback, load_wav};
 use crate::automation::{AutoTarget, Binding, Curve, DeviceSlot};
@@ -19,15 +24,44 @@ use crate::pdc::{PdcEdge, PdcNode, plan};
 use crate::schedule::MidiSchedule;
 use crate::{MAX_TAIL_SECONDS, QUANTUM};
 
-/// Compiles `project` for `sample_rate`.
-///
-/// `max_block` is the largest block the host will pass to [`Graph::process`]; it is only
-/// validated, since the graph accepts any block length and processes devices in fixed
-/// [`QUANTUM`]-sample steps.
+/// Compiles `project` for `sample_rate` with built-in devices only; plugin devices are
+/// bypassed with a warning. See [`compile_with`].
 pub fn compile(
 	project: &Project,
 	sample_rate: u32,
 	max_block: usize,
+) -> Result<Graph, EngineError> {
+	compile_with(project, sample_rate, max_block, None)
+}
+
+/// Compiles `project` for `sample_rate`, instantiating plugin devices from `plugins`.
+///
+/// `max_block` is the largest block the host will pass to [`Graph::process`]; it is only
+/// validated, since the graph accepts any block length and processes devices in fixed
+/// [`QUANTUM`]-sample steps.
+pub fn compile_with(
+	project: &Project,
+	sample_rate: u32,
+	max_block: usize,
+	plugins: Option<&PluginCatalog>,
+) -> Result<Graph, EngineError> {
+	compile_for(
+		project,
+		sample_rate,
+		max_block,
+		plugins,
+		ProcessMode::Realtime,
+	)
+}
+
+/// [`compile_with`] for a given plugin processing mode (offline renders let plugins use
+/// their slower, higher-quality paths).
+pub(crate) fn compile_for(
+	project: &Project,
+	sample_rate: u32,
+	max_block: usize,
+	plugins: Option<&PluginCatalog>,
+	mode: ProcessMode,
 ) -> Result<Graph, EngineError> {
 	if !(8_000..=384_000).contains(&sample_rate) {
 		return Err(EngineError::InvalidOptions(format!(
@@ -39,7 +73,7 @@ pub fn compile(
 			"block size must be at least 1 sample (e.g. 512)".into(),
 		));
 	}
-	Compiler::new(project, sample_rate).run()
+	Compiler::new(project, sample_rate, plugins, mode).run()
 }
 
 /// Where a track's output or send goes.
@@ -51,6 +85,8 @@ enum Dest {
 
 struct Compiler<'a> {
 	project: &'a Project,
+	plugins: Option<&'a PluginCatalog>,
+	mode: ProcessMode,
 	sample_rate: u32,
 	warnings: Vec<String>,
 	files: HashMap<PathBuf, Option<Arc<AudioData>>>,
@@ -58,9 +94,16 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-	fn new(project: &'a Project, sample_rate: u32) -> Self {
+	fn new(
+		project: &'a Project,
+		sample_rate: u32,
+		plugins: Option<&'a PluginCatalog>,
+		mode: ProcessMode,
+	) -> Self {
 		Self {
 			project,
+			plugins,
+			mode,
 			sample_rate,
 			warnings: Vec::new(),
 			files: HashMap::new(),
@@ -133,29 +176,25 @@ impl<'a> Compiler<'a> {
 		if device.bypass {
 			return None;
 		}
-		let id = match &device.kind {
-			DeviceKind::Builtin { id } => id,
-			DeviceKind::Clap { plugin_id, .. } => {
-				self.warnings.push(format!(
-					"{owner}: CLAP plugin '{plugin_id}' ('{}') is not supported yet; skipped",
-					device.name
-				));
-				return None;
+		let (mut processor, id) = match &device.kind {
+			DeviceKind::Builtin { id } => {
+				let Some(processor) = cadenza_dsp::create(id) else {
+					self.warnings.push(format!(
+						"{owner}: unknown built-in device '{id}' ('{}'); skipped",
+						device.name
+					));
+					return None;
+				};
+				(processor, id.as_str())
 			}
-			DeviceKind::Vst3 { class_id, .. } => {
-				self.warnings.push(format!(
-					"{owner}: VST3 plugin '{class_id}' ('{}') is not supported yet; skipped",
-					device.name
-				));
-				return None;
-			}
-		};
-		let Some(mut processor) = cadenza_dsp::create(id) else {
-			self.warnings.push(format!(
-				"{owner}: unknown built-in device '{id}' ('{}'); skipped",
-				device.name
-			));
-			return None;
+			DeviceKind::Clap { plugin_id, path } => (
+				self.plugin(device, PluginFormat::Clap, plugin_id, path, owner)?,
+				plugin_id.as_str(),
+			),
+			DeviceKind::Vst3 { class_id, path } => (
+				self.plugin(device, PluginFormat::Vst3, class_id, path, owner)?,
+				class_id.as_str(),
+			),
 		};
 		let info = processor.info();
 		if info.role != role {
@@ -180,6 +219,75 @@ impl<'a> Compiler<'a> {
 		processor.reset();
 		self.tail = self.tail.max(processor.tail_seconds());
 		Some(processor)
+	}
+
+	/// Loads a third-party plugin from the catalog, restoring `device.state`. Explicit
+	/// `device.params` are applied by the caller; untouched parameters keep the plugin's
+	/// own values (pushing every default would override a restored state or preset).
+	fn plugin(
+		&mut self,
+		device: &cadenza_model::Device,
+		format: PluginFormat,
+		plugin_id: &str,
+		path: &std::path::Path,
+		owner: &str,
+	) -> Option<Box<dyn Processor>> {
+		let label = format!(
+			"{owner}: {} plugin '{plugin_id}' ('{}')",
+			format.as_str(),
+			device.name
+		);
+		let Some(catalog) = self.plugins else {
+			self.warnings.push(format!(
+				"{label} cannot be loaded because no plugin catalog was provided; bypassed"
+			));
+			return None;
+		};
+		let Some(desc) = catalog
+			.find_at(plugin_id, path)
+			.filter(|d| d.format == format)
+			.or_else(|| {
+				catalog
+					.descriptors()
+					.find(|d| d.id == plugin_id && d.format == format)
+			})
+		else {
+			self.warnings.push(format!(
+				"{label} is not installed or not scanned (expected at '{}'); run scan_plugins; bypassed",
+				path.display()
+			));
+			return None;
+		};
+		let state = match device.state.as_deref() {
+			None => None,
+			Some(encoded) => match cadenza_plugin_host::decode_state(plugin_id, encoded) {
+				Ok(bytes) => Some(bytes),
+				Err(e) => {
+					self.warnings.push(format!("{label}: {e}"));
+					None
+				}
+			},
+		};
+		let sr = self.sample_rate as f32;
+		let mode = self.mode;
+		let create = |state: Option<&[u8]>| {
+			cadenza_plugin_host::instantiate_with_mode(desc, sr, QUANTUM, state, mode)
+		};
+		let result = match create(state.as_deref()) {
+			Err(e @ PluginError::State { .. }) if state.is_some() => {
+				self.warnings.push(format!("{label}: {e}"));
+				create(None)
+			}
+			other => other,
+		};
+		match result {
+			Ok(processor) => Some(processor),
+			Err(e) => {
+				self.warnings
+					.push(format!("{label} failed to load: {e}; bypassed"));
+				None
+			}
+		}
 	}
 
 	fn inserts(&mut self, devices: &[cadenza_model::Device], owner: &str) -> Vec<Device> {
@@ -226,6 +334,10 @@ impl<'a> Compiler<'a> {
 						"{owner} has MIDI notes but no instrument; it is silent"
 					));
 				}
+				let notes_off_on_reset = track
+					.instrument
+					.as_ref()
+					.is_none_or(|d| matches!(d.kind, DeviceKind::Builtin { .. }));
 				let schedule = MidiSchedule::from_clips(&track.clips, &self.project.tempo, sr);
 				// +1 for a possible `AllNotesOff` on reset, plus room for every note that
 				// could be chased back in at that same instant.
@@ -237,6 +349,7 @@ impl<'a> Compiler<'a> {
 						device,
 						schedule,
 						events,
+						notes_off_on_reset,
 					},
 					false,
 				)

@@ -72,6 +72,7 @@ async fn render_writes_a_valid_wav_with_a_sane_report() {
 	));
 	let report = render::render(
 		project,
+		None,
 		render::RenderArgs {
 			path: path.display().to_string(),
 			start_beat: None,
@@ -112,6 +113,7 @@ async fn render_rejects_an_end_before_the_start() {
 	let path = std::env::temp_dir().join("cadenza-mcp-render-invalid.wav");
 	let err = render::render(
 		project,
+		None,
 		render::RenderArgs {
 			path: path.display().to_string(),
 			start_beat: Some(4.0),
@@ -146,6 +148,7 @@ async fn analyze_mix_flags_a_deliberately_hot_mix() {
 
 	let out = render::analyze_mix(
 		project,
+		None,
 		render::AnalyzeMixArgs {
 			start_beat: None,
 			end_beat: Some(2.0),
@@ -177,6 +180,7 @@ async fn analyze_mix_on_silence_has_no_loudness_observations() {
 	let project = session.document().project().clone();
 	let out = render::analyze_mix(
 		project,
+		None,
 		render::AnalyzeMixArgs {
 			start_beat: None,
 			end_beat: Some(1.0),

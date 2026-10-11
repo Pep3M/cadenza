@@ -14,11 +14,31 @@ pub enum McpError {
 	Theory(#[from] cadenza_theory::TheoryError),
 	#[error(transparent)]
 	Engine(#[from] cadenza_engine::EngineError),
-	#[error("device '{id}' is not a known device id; available {role} ids: {available}")]
+	#[error(transparent)]
+	Plugin(#[from] cadenza_plugin_host::PluginError),
+	#[error(
+		"device '{id}' is not a known device id; built-in {role} ids: {available}. Third-party \
+		 plugins use ids like 'clap:<plugin id>': search them with list_devices {{ query, source: \"plugin\" }} \
+		 (run scan_plugins first if no plugins are listed)"
+	)]
 	UnknownDevice {
 		id: String,
 		role: &'static str,
 		available: String,
+	},
+	#[error(
+		"plugin device '{id}' is not in the plugin catalog; run scan_plugins, then find its id with \
+		 list_devices {{ query, source: \"plugin\" }}"
+	)]
+	UnknownPlugin { id: String },
+	#[error(
+		"parameter '{param}' matches several parameters of device '{device}': {candidates}; \
+		 use the numeric id or the exact 'module/name' (see get_device_info)"
+	)]
+	AmbiguousParam {
+		device: String,
+		param: String,
+		candidates: String,
 	},
 	#[error(
 		"parameter '{param}' is not valid for device '{device}'; valid parameters: {available}"

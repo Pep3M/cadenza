@@ -16,11 +16,12 @@ use std::time::{Duration, Instant};
 
 use cadenza_core::Tick;
 use cadenza_model::Project;
+use cadenza_plugin_host::PluginCatalog;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::compile;
+use crate::compile_with;
 use crate::error::EngineError;
 use crate::graph::Graph;
 
@@ -212,6 +213,7 @@ impl Control {
 pub struct Player {
 	control: Control,
 	sample_rate: u32,
+	plugins: Option<Arc<PluginCatalog>>,
 	_stream: cpal::Stream,
 }
 
@@ -246,6 +248,7 @@ impl Player {
 		Ok(Self {
 			control,
 			sample_rate: config.sample_rate,
+			plugins: None,
 			_stream: stream,
 		})
 	}
@@ -255,11 +258,22 @@ impl Player {
 		self.sample_rate
 	}
 
+	/// Sets the catalog used to load plugin devices on subsequent [`Player::load`] calls
+	/// (`None`, the default, plays built-in devices only).
+	pub fn set_plugins(&mut self, plugins: Option<Arc<PluginCatalog>>) {
+		self.plugins = plugins;
+	}
+
 	/// Compiles `project` (on this thread) and swaps it in without interrupting the stream.
 	/// Playback keeps its tick position and play state; notes sounding at the swap are cut.
 	/// Returns the compile warnings.
 	pub fn load(&mut self, project: &Project) -> Result<Vec<String>, EngineError> {
-		let graph = compile(project, self.sample_rate, crate::QUANTUM)?;
+		let graph = compile_with(
+			project,
+			self.sample_rate,
+			crate::QUANTUM,
+			self.plugins.as_deref(),
+		)?;
 		let warnings = graph.warnings().to_vec();
 		self.control.load_graph(graph)?;
 		Ok(warnings)
@@ -316,6 +330,7 @@ fn build<T: SizedSample + FromSample<f32>>(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::compile;
 	use cadenza_core::PPQ;
 	use cadenza_model::{Clip, Device, Note, Track, TrackKind};
 

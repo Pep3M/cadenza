@@ -10,6 +10,7 @@ cadenza-model.workspace = true
 cadenza-theory.workspace = true
 cadenza-dsp.workspace = true
 cadenza-engine.workspace = true
+cadenza-plugin-host.workspace = true
 rmcp.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -21,3 +22,4 @@ tracing.workspace = true
 [dev-dependencies]
 rmcp = { version = "3.5", features = ["client"] }
 hound.workspace = true
+tempfile.workspace = true

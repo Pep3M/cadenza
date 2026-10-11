@@ -26,8 +26,12 @@ Cadenza: you are the arranger and mix engineer for this project. Everything you 
 through undoable commands, so experiment freely and use `undo`/`redo`/`history` to back \
 out of mistakes.\n\n\
 Typical workflow:\n\
-1. `get_project` for the current state; `list_devices` to see available instruments and \
-effects with their parameter ranges.\n\
+1. `get_project` for the current state; `list_devices` to find instruments and effects. \
+Built-in devices are always available. Third-party plugins (e.g. Surge XT, LSP) appear \
+after `scan_plugins` has run once on this machine (call it on first use if list_devices \
+reports no plugins); search them with `list_devices { query, role, source }` and inspect \
+their parameters with `get_device_info { device, param_query }` — plugins can have \
+hundreds of params, so always filter. Plugin device ids look like \"clap:<plugin id>\".\n\
 2. `create_track` for each instrument (synth, bass, drums...), optionally loading an \
 instrument device inline.\n\
 3. Write parts with `write_chord_progression` (chord symbols or roman numerals + a key, \
@@ -86,11 +90,23 @@ impl CadenzaServer {
 	fn sync_player_if_playing(&self) {
 		let still_playing = matches!(self.player().as_ref(), Some(p) if p.is_playing_hint());
 		if still_playing {
-			let project = self.session().document().project().clone();
+			let (project, plugins) = self.project_and_plugins();
 			if let Some(p) = self.player().as_ref() {
-				let _ = p.load(project);
+				let _ = p.load(project, plugins);
 			}
 		}
+	}
+
+	/// The current project plus the plugin catalog if the project uses plugins.
+	fn project_and_plugins(
+		&self,
+	) -> (
+		cadenza_model::Project,
+		Option<std::sync::Arc<cadenza_plugin_host::PluginCatalog>>,
+	) {
+		let mut session = self.session();
+		let plugins = session.plugins_for_project();
+		(session.document().project().clone(), plugins)
 	}
 
 	/// Opens the default audio output device on first use.
@@ -171,20 +187,61 @@ impl CadenzaServer {
 	// -- devices ----------------------------------------------------------------------
 
 	#[tool(
-		description = "Lists built-in instruments and effects with their parameter ranges, \
-			defaults and units, so you can pick and configure one before loading it."
+		description = "Searches available instruments and effects: built-in devices (always \
+			available, returned with their full parameter lists) and scanned third-party plugins \
+			(compact entries: id, name, vendor, format, role, features, param_count, latency; \
+			use get_device_info for their params). Filter with role, query (case-insensitive \
+			words over name/vendor/features/description) and source (builtin|plugin|all); \
+			paged with limit (default 50)/offset. Device ids are stable: built-ins use plain ids \
+			(\"poly_synth\"), plugins use \"clap:<plugin id>\" or \"vst3:<class id>\"; pass \
+			them to create_track.instrument or insert_device. When a plugin is listed in both \
+			formats, prefer the CLAP version."
 	)]
 	fn list_devices(
 		&self,
 		Parameters(args): Parameters<devices::ListDevicesArgs>,
-	) -> Json<Vec<devices::DeviceOut>> {
-		Json(devices::list_devices(args))
+	) -> Json<devices::ListDevicesOutput> {
+		let catalog =
+			(args.source != Some(devices::SourceFilter::Builtin)).then(|| self.session().plugins());
+		Json(devices::list_devices(catalog.as_deref(), args))
+	}
+
+	#[tool(
+		description = "Describes one device (built-in id or plugin id like \"clap:<plugin id>\") \
+			with its parameters: id, name, module (plugin group), min, max, default, stepped. \
+			Filter with param_query (words matched against name/module, e.g. \"filter cutoff\") \
+			and page with limit (default 100)/offset. Non-automatable plugin params are hidden \
+			unless include_non_automatable is true. Plugin params can then be set by id or by \
+			exact name / \"module/name\"."
+	)]
+	fn get_device_info(
+		&self,
+		Parameters(args): Parameters<devices::GetDeviceInfoArgs>,
+	) -> Result<Json<devices::DeviceInfoOutput>, ErrorData> {
+		let catalog = crate::convert::needs_catalog(&args.device).then(|| self.session().plugins());
+		Ok(Json(devices::get_device_info(catalog.as_deref(), args)?))
+	}
+
+	#[tool(
+		description = "Scans the machine for installed third-party plugins (CLAP and VST3) and updates \
+			the plugin catalog. Each new or changed plugin file is loaded in a separate, \
+			crash-safe process; files that crash or hang are blocklisted and reported with a \
+			reason. Unchanged files are skipped, so rescans are fast. Omit paths to scan the \
+			standard locations. Run it once before using plugins, or after installing new ones."
+	)]
+	async fn scan_plugins(
+		&self,
+		Parameters(args): Parameters<devices::ScanPluginsArgs>,
+	) -> Result<Json<devices::ScanPluginsOutput>, ErrorData> {
+		Ok(Json(devices::scan_plugins(&self.session, args).await?))
 	}
 
 	// -- tracks / mixer ----------------------------------------------------------------
 
 	#[tool(
-		description = "Creates a track (instrument, audio or bus), optionally with an instrument loaded."
+		description = "Creates a track (instrument, audio or bus), optionally with an instrument \
+			loaded: a built-in id (\"poly_synth\") or a plugin id (\"clap:<plugin id>\") from \
+			list_devices, plus optional params."
 	)]
 	fn create_track(
 		&self,
@@ -240,7 +297,9 @@ impl CadenzaServer {
 
 	#[tool(
 		description = "Inserts an effect into a channel's chain. Omit track_id to insert on \
-			the master bus. Validates the device id and every parameter against list_devices."
+			the master bus. device is a built-in id or a plugin id (\"clap:<plugin id>\") from \
+			list_devices; params are validated against the device's ranges (plugin params by id, \
+			exact name or \"module/name\"; see get_device_info)."
 	)]
 	fn insert_device(
 		&self,
@@ -259,7 +318,9 @@ impl CadenzaServer {
 
 	#[tool(
 		description = "Sets one or more parameters of a device (instrument or insert) in a \
-			single undo step. Values are validated against the device's declared range."
+			single undo step. Values are validated against the device's declared range. For \
+			plugin devices, keys may be the param id or the exact (case-insensitive) name or \
+			\"module/name\" from get_device_info."
 	)]
 	fn set_device_params(
 		&self,
@@ -491,8 +552,8 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<render::RenderArgs>,
 	) -> Result<Json<cadenza_engine::MixReport>, ErrorData> {
-		let project = self.session().document().project().clone();
-		Ok(Json(render::render(project, args).await?))
+		let (project, plugins) = self.project_and_plugins();
+		Ok(Json(render::render(project, plugins, args).await?))
 	}
 
 	#[tool(
@@ -505,8 +566,8 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<render::AnalyzeMixArgs>,
 	) -> Result<Json<render::AnalyzeMixOutput>, ErrorData> {
-		let project = self.session().document().project().clone();
-		Ok(Json(render::analyze_mix(project, args).await?))
+		let (project, plugins) = self.project_and_plugins();
+		Ok(Json(render::analyze_mix(project, plugins, args).await?))
 	}
 
 	// -- transport -----------------------------------------------------------------
@@ -521,11 +582,12 @@ impl CadenzaServer {
 		Parameters(args): Parameters<playback::PlayArgs>,
 	) -> Result<Json<playback::TransportStatus>, ErrorData> {
 		self.ensure_player()?;
-		let project = self.session().document().project().clone();
+		let (project, plugins) = self.project_and_plugins();
 		let guard = self.player();
 		Ok(Json(playback::play(
 			guard.as_ref().unwrap(),
 			project,
+			plugins,
 			args,
 		)?))
 	}

@@ -4,17 +4,20 @@
 //! latency is trimmed, so the first output sample is the timeline sample at `start`.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use cadenza_core::Tick;
 use cadenza_model::{Project, TrackKind};
+use cadenza_plugin_host::{PluginCatalog, ProcessMode};
 
+use crate::QUANTUM;
 use crate::analysis::{Analyzer, MixReport, TrackLevel};
+use crate::compile::compile_for;
 use crate::error::EngineError;
 use crate::graph::{Graph, Source};
-use crate::{QUANTUM, compile};
 
 /// What and how to render.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RenderOptions {
 	pub sample_rate: u32,
 	/// Host block size used to pull audio from the graph. The result does not depend on it.
@@ -22,6 +25,23 @@ pub struct RenderOptions {
 	pub start: Tick,
 	/// `None` = song end (`Project::end_tick`) plus the longest device tail (max 10 s).
 	pub end: Option<Tick>,
+	/// Catalog used to load third-party plugin devices. `None` renders built-in devices
+	/// only; plugin devices are then bypassed with a warning.
+	pub plugins: Option<Arc<PluginCatalog>>,
+}
+
+impl PartialEq for RenderOptions {
+	fn eq(&self, other: &Self) -> bool {
+		self.sample_rate == other.sample_rate
+			&& self.block_size == other.block_size
+			&& self.start == other.start
+			&& self.end == other.end
+			&& match (&self.plugins, &other.plugins) {
+				(None, None) => true,
+				(Some(a), Some(b)) => Arc::ptr_eq(a, b),
+				_ => false,
+			}
+	}
 }
 
 impl Default for RenderOptions {
@@ -31,6 +51,7 @@ impl Default for RenderOptions {
 			block_size: 512,
 			start: Tick::ZERO,
 			end: None,
+			plugins: None,
 		}
 	}
 }
@@ -65,7 +86,13 @@ fn prepare(project: &Project, opts: &RenderOptions) -> Result<(Graph, usize), En
 			opts.start.0
 		)));
 	}
-	let mut graph = compile(project, opts.sample_rate, opts.block_size)?;
+	let mut graph = compile_for(
+		project,
+		opts.sample_rate,
+		opts.block_size,
+		opts.plugins.as_deref(),
+		ProcessMode::Offline,
+	)?;
 	let sr = opts.sample_rate as f64;
 	let start = project.tempo.tick_to_sample(opts.start, sr) as i64;
 	let end = match opts.end {

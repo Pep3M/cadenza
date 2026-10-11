@@ -12,11 +12,16 @@ use std::thread;
 use cadenza_core::Tick;
 use cadenza_engine::Player;
 use cadenza_model::Project;
+use cadenza_plugin_host::PluginCatalog;
 
 use crate::error::McpError;
 
 enum Command {
-	Load(Project, mpsc::Sender<Result<Vec<String>, String>>),
+	Load(
+		Box<Project>,
+		Option<Arc<PluginCatalog>>,
+		mpsc::Sender<Result<Vec<String>, String>>,
+	),
 	Play(Option<f64>, mpsc::Sender<Result<(), String>>),
 	Stop(mpsc::Sender<Result<(), String>>),
 	Position(mpsc::Sender<f64>),
@@ -56,7 +61,8 @@ impl PlayerHandle {
 				let _ = init_tx.send(Ok(()));
 				for cmd in rx {
 					match cmd {
-						Command::Load(project, reply) => {
+						Command::Load(project, plugins, reply) => {
+							player.set_plugins(plugins);
 							let _ = reply.send(player.load(&project).map_err(|e| e.to_string()));
 						}
 						Command::Play(from_beat, reply) => {
@@ -110,8 +116,13 @@ impl PlayerHandle {
 	}
 
 	/// Compiles and swaps `project` into the player without interrupting the stream.
-	pub fn load(&self, project: Project) -> Result<Vec<String>, McpError> {
-		self.roundtrip(|reply| Command::Load(project, reply))
+	/// `plugins` is needed for projects with plugin devices.
+	pub fn load(
+		&self,
+		project: Project,
+		plugins: Option<Arc<PluginCatalog>>,
+	) -> Result<Vec<String>, McpError> {
+		self.roundtrip(|reply| Command::Load(Box::new(project), plugins, reply))
 	}
 
 	/// Starts (or resumes) playback, optionally seeking first.

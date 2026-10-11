@@ -8,7 +8,10 @@ use cadenza_model::{ChannelPatch, Command, Output, Send as ModelSend, TrackKind,
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::convert::{DeviceSpec, build_device, builtin_info_for, check_param_range};
+use crate::convert::{
+	DeviceSpec, build_device, device_ref_for, is_plugin_device, needs_catalog, resolve_param,
+	resolve_param_key,
+};
 use crate::error::McpError;
 use crate::session::Session;
 
@@ -16,7 +19,8 @@ use crate::session::Session;
 pub struct CreateTrackArgs {
 	pub name: String,
 	pub kind: TrackKind,
-	/// Instrument to load on an Instrument track (ignored/invalid on other kinds).
+	/// Instrument to load on an Instrument track (invalid on other kinds): a built-in id or
+	/// a plugin id such as `"clap:<plugin id>"` from `list_devices`.
 	#[serde(default)]
 	pub instrument: Option<DeviceSpec>,
 	/// `"#RRGGBB"`.
@@ -34,6 +38,40 @@ pub struct CreateTrackOutput {
 	pub instrument_device_id: Option<DeviceId>,
 }
 
+/// Builds a device, loading the plugin catalog only when the id is not a built-in.
+fn build_spec(
+	session: &mut Session,
+	spec: &DeviceSpec,
+	role: DeviceRole,
+) -> Result<cadenza_model::Device, McpError> {
+	let catalog = needs_catalog(&spec.device).then(|| session.plugins());
+	build_device(spec, role, catalog.as_deref())
+}
+
+/// Resolves a param key of an existing device to its stored id, validating `values`
+/// against the device's range (built-ins, and plugins present in the catalog).
+fn resolve_existing_param(
+	session: &mut Session,
+	track: Option<TrackId>,
+	device: DeviceId,
+	key: &str,
+	values: &[f32],
+) -> Result<String, McpError> {
+	let project = session.document().project();
+	let catalog = is_plugin_device(project, track, device).then(|| session.plugins());
+	let device = device_ref_for(
+		session.document().project(),
+		track,
+		device,
+		catalog.as_deref(),
+	);
+	let id = resolve_param_key(device, key)?;
+	for &value in values {
+		resolve_param(device, key, value)?;
+	}
+	Ok(id)
+}
+
 pub fn create_track(
 	session: &mut Session,
 	args: CreateTrackArgs,
@@ -43,7 +81,7 @@ pub fn create_track(
 		track = track.with_color(color);
 	}
 	let instrument_device_id = if let Some(spec) = args.instrument {
-		let device = build_device(&spec, DeviceRole::Instrument)?;
+		let device = build_spec(session, &spec, DeviceRole::Instrument)?;
 		let id = device.id;
 		track = track.with_instrument(device);
 		Some(id)
@@ -169,7 +207,7 @@ pub fn insert_device(
 	session: &mut Session,
 	args: InsertDeviceArgs,
 ) -> Result<InsertDeviceOutput, McpError> {
-	let device = build_device(&args.device, DeviceRole::Effect)?;
+	let device = build_spec(session, &args.device, DeviceRole::Effect)?;
 	let device_id = device.id;
 	session.document_mut().execute(Command::InsertDevice {
 		track: args.track_id,
@@ -199,7 +237,8 @@ pub struct SetDeviceParamsArgs {
 	#[serde(default)]
 	pub track_id: Option<TrackId>,
 	pub device_id: DeviceId,
-	/// Plain (unnormalized) parameter values by id.
+	/// Plain (unnormalized) parameter values by param id; for plugins also by exact
+	/// (case-insensitive) param name or `"module/name"`.
 	pub params: BTreeMap<String, f32>,
 }
 
@@ -207,12 +246,11 @@ pub fn set_device_params(session: &mut Session, args: SetDeviceParamsArgs) -> Re
 	if args.params.is_empty() {
 		return Err(McpError::Invalid("params must not be empty".into()));
 	}
-	let info = builtin_info_for(session.document().project(), args.track_id, args.device_id);
 	let mut commands = Vec::with_capacity(args.params.len());
 	for (param, value) in &args.params {
-		check_param_range(info, param, *value)?;
+		let id = resolve_existing_param(session, args.track_id, args.device_id, param, &[*value])?;
 		commands.push(Command::SetParam {
-			address: ParamAddress::device(args.track_id, args.device_id, param.clone()),
+			address: ParamAddress::device(args.track_id, args.device_id, id),
 			value: *value,
 		});
 	}
@@ -243,18 +281,31 @@ pub fn set_bypass(session: &mut Session, args: SetBypassArgs) -> Result<(), McpE
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SetParamArgs {
 	/// `track/{id}/volume` | `track/{id}/pan` | `track/{id}/device/{id}/{param}` |
-	/// `master/volume` | `master/device/{id}/{param}`.
+	/// `master/volume` | `master/device/{id}/{param}`. For plugin devices `{param}` may be
+	/// the param id or its exact name.
 	pub address: ParamAddress,
 	pub value: f32,
 }
 
-pub fn set_param(session: &mut Session, args: SetParamArgs) -> Result<(), McpError> {
-	if let cadenza_core::ParamTarget::Device { device, param } = &args.address.target {
-		let info = builtin_info_for(session.document().project(), args.address.track, *device);
-		check_param_range(info, param, args.value)?;
+/// Rewrites a device param address so it names the param by its stored id.
+fn resolve_address(
+	session: &mut Session,
+	address: ParamAddress,
+	values: &[f32],
+) -> Result<ParamAddress, McpError> {
+	match &address.target {
+		cadenza_core::ParamTarget::Device { device, param } => {
+			let id = resolve_existing_param(session, address.track, *device, param, values)?;
+			Ok(ParamAddress::device(address.track, *device, id))
+		}
+		_ => Ok(address),
 	}
+}
+
+pub fn set_param(session: &mut Session, args: SetParamArgs) -> Result<(), McpError> {
+	let address = resolve_address(session, args.address, &[args.value])?;
 	session.document_mut().execute(Command::SetParam {
-		address: args.address,
+		address,
 		value: args.value,
 	})?;
 	Ok(())
@@ -274,12 +325,8 @@ pub struct SetAutomationArgs {
 }
 
 pub fn set_automation(session: &mut Session, args: SetAutomationArgs) -> Result<(), McpError> {
-	if let cadenza_core::ParamTarget::Device { device, param } = &args.address.target {
-		let info = builtin_info_for(session.document().project(), args.address.track, *device);
-		for p in &args.points {
-			check_param_range(info, param, p.value)?;
-		}
-	}
+	let values: Vec<f32> = args.points.iter().map(|p| p.value).collect();
+	let address = resolve_address(session, args.address, &values)?;
 	let points = args
 		.points
 		.into_iter()
@@ -287,10 +334,9 @@ pub fn set_automation(session: &mut Session, args: SetAutomationArgs) -> Result<
 			cadenza_model::AutomationPoint::new(crate::convert::beats_to_tick(p.beat), p.value)
 		})
 		.collect();
-	session.document_mut().execute(Command::SetAutomation {
-		address: args.address,
-		points,
-	})?;
+	session
+		.document_mut()
+		.execute(Command::SetAutomation { address, points })?;
 	Ok(())
 }
 

@@ -2,12 +2,14 @@
 //! never held while the engine is crunching audio.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cadenza_engine::{
 	BandEnergy, LevelStats, MixReport, RenderOptions, analyze_mix as engine_analyze_mix,
 	render_to_wav,
 };
 use cadenza_model::{Project, TrackKind};
+use cadenza_plugin_host::PluginCatalog;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,11 +20,13 @@ fn build_options(
 	start_beat: Option<f64>,
 	end_beat: Option<f64>,
 	sample_rate: Option<u32>,
+	plugins: Option<Arc<PluginCatalog>>,
 ) -> RenderOptions {
 	RenderOptions {
 		sample_rate: sample_rate.unwrap_or(48_000),
 		start: beats_to_tick(start_beat.unwrap_or(0.0)),
 		end: end_beat.map(beats_to_tick),
+		plugins,
 		..RenderOptions::default()
 	}
 }
@@ -76,9 +80,14 @@ pub struct RenderArgs {
 	pub sample_rate: Option<u32>,
 }
 
-/// Renders `project` to a WAV file on a blocking thread pool thread.
-pub async fn render(project: Project, args: RenderArgs) -> Result<MixReport, McpError> {
-	let opts = build_options(args.start_beat, args.end_beat, args.sample_rate);
+/// Renders `project` to a WAV file on a blocking thread pool thread. `plugins` is needed
+/// for projects with plugin devices (see `Session::plugins_for_project`).
+pub async fn render(
+	project: Project,
+	plugins: Option<Arc<PluginCatalog>>,
+	args: RenderArgs,
+) -> Result<MixReport, McpError> {
+	let opts = build_options(args.start_beat, args.end_beat, args.sample_rate, plugins);
 	let path = PathBuf::from(args.path);
 	let report = tokio::task::spawn_blocking(move || render_to_wav(&project, &opts, &path))
 		.await
@@ -331,9 +340,10 @@ fn observations(report: &MixReport, target_lufs: f32, genre: GenreProfile) -> Ve
 /// pool thread.
 pub async fn analyze_mix(
 	project: Project,
+	plugins: Option<Arc<PluginCatalog>>,
 	args: AnalyzeMixArgs,
 ) -> Result<AnalyzeMixOutput, McpError> {
-	let opts = build_options(args.start_beat, args.end_beat, args.sample_rate);
+	let opts = build_options(args.start_beat, args.end_beat, args.sample_rate, plugins);
 	let target_lufs = args.target_lufs.unwrap_or(-14.0);
 	let genre = args.genre_profile.unwrap_or_default();
 	let report = tokio::task::spawn_blocking(move || engine_analyze_mix(&project, &opts))

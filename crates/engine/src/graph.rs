@@ -196,6 +196,10 @@ pub(crate) enum Source {
 		device: Option<Device>,
 		schedule: MidiSchedule,
 		events: Vec<MidiEvent>,
+		/// Send `AllNotesOff` after a reset. False for third-party plugins: their `reset`
+		/// already kills every voice (CLAP `reset` contract), and some (e.g. Surge XT)
+		/// mishandle the wildcard note-off that `AllNotesOff` becomes.
+		notes_off_on_reset: bool,
 	},
 	Audio {
 		clips: Vec<ClipPlayback>,
@@ -491,10 +495,13 @@ impl Graph {
 					device,
 					schedule,
 					events,
+					notes_off_on_reset,
 				} => {
 					events.clear();
 					if all_notes_off {
-						events.push(MidiEvent::AllNotesOff { offset: 0 });
+						if *notes_off_on_reset {
+							events.push(MidiEvent::AllNotesOff { offset: 0 });
+						}
 						// Chase notes that should already be sounding at `pos` so a
 						// start/seek landing mid-note doesn't leave it silent.
 						schedule.chase(pos, events);

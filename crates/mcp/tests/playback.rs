@@ -41,7 +41,7 @@ fn play_stop_round_trip_succeeds_or_fails_cleanly_without_a_device() {
 	let project = session.document().project().clone();
 
 	handle
-		.load(project)
+		.load(project, None)
 		.expect("loading an empty project should not fail");
 	assert!(!handle.is_playing_hint());
 

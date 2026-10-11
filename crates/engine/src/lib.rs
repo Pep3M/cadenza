@@ -18,7 +18,8 @@ mod render;
 mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
-pub use compile::compile;
+pub use cadenza_plugin_host::PluginCatalog;
+pub use compile::{compile, compile_with};
 pub use error::EngineError;
 pub use graph::Graph;
 pub use player::Player;

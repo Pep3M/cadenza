@@ -25,9 +25,10 @@ pub struct TransportStatus {
 pub fn play(
 	player: &PlayerHandle,
 	project: Project,
+	plugins: Option<std::sync::Arc<cadenza_plugin_host::PluginCatalog>>,
 	args: PlayArgs,
 ) -> Result<TransportStatus, McpError> {
-	player.load(project)?;
+	player.load(project, plugins)?;
 	player.play(args.from_beat)?;
 	Ok(TransportStatus {
 		playing: true,

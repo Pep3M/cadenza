@@ -1,0 +1,19 @@
+[package]
+name = "cadenza-plugin-host"
+description = "Third-party plugin hosting for Cadenza: discovery, out-of-process scanning, catalog and real-time CLAP instances"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cadenza-dsp.workspace = true
+clack-host.workspace = true
+clack-extensions = { workspace = true, features = ["clack-host", "audio-ports", "note-ports", "params", "state", "latency", "tail", "log", "thread-check"] }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -156,4 +156,16 @@ pub trait Processor: Send {
 	fn tail_seconds(&self) -> f32 {
 		0.0
 	}
+	/// Serializes the device's complete internal state (e.g. a plugin's preset
+	/// chunk) as opaque bytes. Non-realtime: called off the audio thread.
+	/// `None` means the device has no state beyond its parameters.
+	fn save_state(&mut self) -> Option<Vec<u8>> {
+		None
+	}
+	/// Restores state produced by [`Processor::save_state`]. Non-realtime:
+	/// called off the audio thread. Returns `false` if the data was rejected
+	/// or the device has no opaque state.
+	fn load_state(&mut self, _data: &[u8]) -> bool {
+		false
+	}
 }

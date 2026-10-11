@@ -23,14 +23,14 @@ use crate::descriptor::{PluginDescriptor, PluginRole};
 use crate::error::PluginError;
 
 /// Room for MIDI events per block on top of one slot per parameter.
-const NOTE_EVENT_CAPACITY: usize = 1024;
+pub(crate) const NOTE_EVENT_CAPACITY: usize = 1024;
 /// Upper bound for a plugin-reported tail (an "infinite" tail would otherwise
 /// make offline renders never end).
-const MAX_TAIL_SECONDS: f32 = 30.0;
+pub(crate) const MAX_TAIL_SECONDS: f32 = 30.0;
 
 /// Default tail when the plugin has no tail extension: instruments release
 /// notes after note-off; time-based effects ring out.
-fn default_tail(desc: &PluginDescriptor) -> f32 {
+pub(crate) fn default_tail(desc: &PluginDescriptor) -> f32 {
 	match desc.role {
 		PluginRole::Instrument => 0.5,
 		PluginRole::Effect => {

@@ -40,7 +40,9 @@ pub enum PluginError {
 	)]
 	State { id: String, reason: String },
 
-	#[error("{0} plugins are not supported yet; use a CLAP plugin or a built-in device instead")]
+	#[error(
+		"{0} plugins are not supported yet; use a CLAP or VST3 plugin or a built-in device instead"
+	)]
 	UnsupportedFormat(&'static str),
 
 	#[error(

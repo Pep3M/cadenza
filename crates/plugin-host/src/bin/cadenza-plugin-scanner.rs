@@ -31,9 +31,7 @@ fn main() -> ExitCode {
 
 	let result = match plugin_format(&plugin) {
 		Some(PluginFormat::Clap) => cadenza_plugin_host::clap::scan_file(&plugin),
-		Some(PluginFormat::Vst3) => {
-			Err(cadenza_plugin_host::PluginError::UnsupportedFormat("VST3"))
-		}
+		Some(PluginFormat::Vst3) => cadenza_plugin_host::vst3::scan_file(&plugin),
 		None => cadenza_plugin_host::clap::scan_file(&plugin),
 	};
 	let descriptors = match result {

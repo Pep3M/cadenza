@@ -6,26 +6,41 @@
 //! - [`instantiate`]: turns a [`PluginDescriptor`] into a real-time
 //!   [`cadenza_dsp::Processor`] the engine can run like any built-in device.
 //!
-//! Only CLAP is hostable today; the descriptor/catalog layer is
-//! format-agnostic so VST3 can be added behind the same API.
+//! CLAP ([`clap`]) and VST3 ([`vst3`]) are peer formats behind the same
+//! descriptor, catalog, scanner and `instantiate` API. Both share one plugin
+//! main thread (`cadenza-plugin-main`, see `main_thread.rs`).
 
 pub mod catalog;
 pub mod clap;
 pub mod descriptor;
 pub mod discovery;
 mod error;
+pub(crate) mod main_thread;
 pub mod scanner;
+pub mod vst3;
 
 use base64::Engine as _;
 use cadenza_dsp::Processor;
 
 pub use catalog::{BlockedPlugin, FileStamp, PluginCatalog, ScanReport, default_cache_path};
 pub use descriptor::{PluginDescriptor, PluginFormat, PluginParam, PluginRole};
-pub use discovery::{default_search_paths, find_clap_files};
+pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, find_vst3_files};
 pub use error::PluginError;
 pub use scanner::{DEFAULT_SCAN_TIMEOUT, SCANNER_ENV, scanner_path};
 
-/// Creates, activates and (optionally) restores a plugin instance.
+/// How the plugin will be driven, passed to plugins that distinguish it
+/// (VST3 `ProcessModes`). CLAP plugins currently always run in realtime mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessMode {
+	/// Live playback: the plugin must keep up with the audio clock.
+	#[default]
+	Realtime,
+	/// Offline rendering: the plugin may use slower, higher-quality paths.
+	Offline,
+}
+
+/// Creates, activates and (optionally) restores a plugin instance in
+/// [`ProcessMode::Realtime`]; see [`instantiate_with_mode`].
 ///
 /// `sample_rate`/`max_block` are used for the initial activation; calling
 /// `prepare` later with different values re-activates the plugin. `state` is
@@ -41,6 +56,18 @@ pub fn instantiate(
 	max_block: usize,
 	state: Option<&[u8]>,
 ) -> Result<Box<dyn Processor>, PluginError> {
+	instantiate_with_mode(desc, sample_rate, max_block, state, ProcessMode::Realtime)
+}
+
+/// Like [`instantiate`], with an explicit [`ProcessMode`] (e.g. `Offline`
+/// for bounces).
+pub fn instantiate_with_mode(
+	desc: &PluginDescriptor,
+	sample_rate: f32,
+	max_block: usize,
+	state: Option<&[u8]>,
+	mode: ProcessMode,
+) -> Result<Box<dyn Processor>, PluginError> {
 	match desc.format {
 		PluginFormat::Clap => Ok(Box::new(clap::ClapProcessor::create(
 			desc,
@@ -48,7 +75,13 @@ pub fn instantiate(
 			max_block,
 			state,
 		)?)),
-		PluginFormat::Vst3 => Err(PluginError::UnsupportedFormat("VST3")),
+		PluginFormat::Vst3 => Ok(Box::new(vst3::Vst3Processor::create(
+			desc,
+			sample_rate,
+			max_block,
+			state,
+			mode,
+		)?)),
 	}
 }
 

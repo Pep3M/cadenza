@@ -11,3 +11,12 @@ crate-type = ["cdylib"]
 [dependencies]
 clack-plugin.workspace = true
 clack-extensions = { workspace = true, features = ["clack-plugin", "audio-ports", "note-ports", "params", "state", "latency"] }
+
+[dev-dependencies]
+vst3.workspace = true
+
+# Minimal VST3 plugin for the VST3 host tests (wrapped into a `.vst3` bundle
+# by `cadenza-plugin-host`'s test helpers).
+[[example]]
+name = "vst3_gain"
+crate-type = ["cdylib"]

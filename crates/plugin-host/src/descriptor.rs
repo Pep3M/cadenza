@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub enum PluginFormat {
 	/// CLever Audio Plugin (`.clap`), hosted in-process via clack.
 	Clap,
-	/// Steinberg VST3 (`.vst3`). Not hostable yet.
+	/// Steinberg VST3 (`.vst3` bundle or file), hosted in-process via the `vst3` COM bindings.
 	Vst3,
 }
 
@@ -54,7 +54,8 @@ impl From<PluginRole> for DeviceRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PluginParam {
 	/// Stable parameter id used in `Device.params` and automation addresses.
-	/// For CLAP this is the plugin's `clap_id` written as a decimal string.
+	/// For CLAP this is the plugin's `clap_id`, for VST3 the `ParamID`, both
+	/// written as decimal strings.
 	pub id: String,
 	/// Display name chosen by the plugin vendor (e.g. "Cutoff").
 	pub name: String,
@@ -67,6 +68,10 @@ pub struct PluginParam {
 	pub stepped: bool,
 	/// The host may change this parameter over time (automation lanes).
 	pub automatable: bool,
+	/// The plugin's own bypass switch (`max` = bypassed). Prefer the device's
+	/// `bypass` flag; this exists so state and automation stay faithful.
+	#[serde(default)]
+	pub bypass: bool,
 }
 
 /// Everything Cadenza knows about one installed plugin without loading it.
@@ -74,7 +79,8 @@ pub struct PluginParam {
 pub struct PluginDescriptor {
 	pub format: PluginFormat,
 	/// Unique plugin id: the CLAP plugin id (reverse-DNS, e.g. "org.surge-synth-team.surge-xt")
-	/// or, for VST3, the class id. Use it as `plugin_id` when inserting the device.
+	/// or, for VST3, the audio-module class id as 32 hex digits. Use it as `plugin_id`
+	/// (CLAP) or `class_id` (VST3) when inserting the device.
 	pub id: String,
 	pub name: String,
 	pub vendor: String,
@@ -197,6 +203,9 @@ impl PluginDescriptor {
 			p.min.to_bits().hash(&mut hasher);
 			p.max.to_bits().hash(&mut hasher);
 			p.default.to_bits().hash(&mut hasher);
+			p.stepped.hash(&mut hasher);
+			p.automatable.hash(&mut hasher);
+			p.bypass.hash(&mut hasher);
 		}
 		let key = hasher.finish();
 		let mut cache = CACHE
@@ -223,6 +232,9 @@ impl PluginDescriptor {
 				}
 				if !p.automatable {
 					notes.push("not automatable".to_string());
+				}
+				if p.bypass {
+					notes.push("plugin bypass switch".to_string());
 				}
 				ParamInfo {
 					id: leak(&p.id),
@@ -269,6 +281,7 @@ mod tests {
 				default: 0.5,
 				stepped: false,
 				automatable: true,
+				bypass: false,
 			}],
 			audio_inputs: 2,
 			audio_outputs: 2,

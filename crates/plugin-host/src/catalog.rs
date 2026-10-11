@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::descriptor::PluginDescriptor;
-use crate::discovery::find_clap_files;
+use crate::discovery::find_plugin_files;
 use crate::error::PluginError;
 use crate::scanner::{DEFAULT_SCAN_TIMEOUT, ScanFailure, scan_in_subprocess};
 
@@ -164,7 +164,7 @@ impl PluginCatalog {
 		&self.cache_path
 	}
 
-	/// Scans every `.clap` file under `roots` (directories or files) using the
+	/// Scans every `.clap` and `.vst3` plugin under `roots` (directories or files) using the
 	/// scanner executable, one subprocess per new or changed file. Unchanged
 	/// files and blocked files are skipped. Plugins previously found under one
 	/// of `roots` whose file is gone are removed.
@@ -179,7 +179,7 @@ impl PluginCatalog {
 		if !scanner_exe.is_file() {
 			return Err(PluginError::ScannerMissing(scanner_exe.to_path_buf()));
 		}
-		let files = find_clap_files(roots);
+		let files = find_plugin_files(roots);
 		let mut report = ScanReport {
 			files_found: files.len(),
 			..Default::default()

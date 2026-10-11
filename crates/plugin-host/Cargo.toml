@@ -1,6 +1,6 @@
 [package]
 name = "cadenza-plugin-host"
-description = "Third-party plugin hosting for Cadenza: discovery, out-of-process scanning, catalog and real-time CLAP instances"
+description = "Third-party plugin hosting for Cadenza: discovery, out-of-process scanning, catalog and real-time CLAP and VST3 instances"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,8 @@ serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
 base64.workspace = true
+vst3.workspace = true
+libloading.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

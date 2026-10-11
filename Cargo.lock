@@ -152,6 +152,7 @@ dependencies = [
  "cadenza-engine",
  "cadenza-mcp",
  "cadenza-model",
+ "cadenza-plugin-host",
  "clap",
  "serde",
  "serde_json",
@@ -181,12 +182,14 @@ dependencies = [
  "cadenza-core",
  "cadenza-dsp",
  "cadenza-model",
+ "cadenza-plugin-host",
  "cpal",
  "hound",
  "rtrb",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -198,12 +201,14 @@ dependencies = [
  "cadenza-dsp",
  "cadenza-engine",
  "cadenza-model",
+ "cadenza-plugin-host",
  "cadenza-theory",
  "hound",
  "rmcp",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -229,11 +234,13 @@ dependencies = [
  "cadenza-dsp",
  "clack-extensions",
  "clack-host",
+ "libloading",
  "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "vst3",
 ]
 
 [[package]]
@@ -242,6 +249,7 @@ version = "0.1.0"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
+ "vst3",
 ]
 
 [[package]]
@@ -378,6 +386,12 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "com-scrape-types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ce183b975b8fc736a20919c4002717255fbd867df575c792aeefa9a56a73ad0"
 
 [[package]]
 name = "combine"
@@ -1639,6 +1653,15 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vst3"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31e3fe7a6f028ded8c5a9984cf283319e6dc63572c9b71da1d4ee9d71d3b6bf"
+dependencies = [
+ "com-scrape-types",
+]
 
 [[package]]
 name = "walkdir"

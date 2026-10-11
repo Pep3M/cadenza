@@ -1,5 +1,6 @@
-//! Verifies that a hosted CLAP plugin's `process` and `set_param` never touch
-//! the host heap (the test plugin's own allocator is separate and not counted).
+//! Verifies that hosted CLAP and VST3 plugins' `process`, `set_param` and
+//! `reset` never touch the host heap (the test plugins' own allocators are
+//! separate and not counted).
 
 mod common;
 
@@ -8,8 +9,10 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cadenza_dsp::{MidiEvent, Transport};
+use cadenza_plugin_host::PluginDescriptor;
 use cadenza_plugin_host::instantiate;
-use common::{GAIN_ID, SINE_ID, descriptor};
+use cadenza_plugin_host::scanner::scan_in_subprocess;
+use common::{GAIN_ID, SINE_ID, descriptor, scanner, vst3_bundle};
 
 struct CountingAlloc;
 
@@ -81,8 +84,15 @@ fn process_and_set_param_never_allocate() {
 		beat_position: 3.5,
 	};
 
-	for id in [GAIN_ID, SINE_ID] {
-		let desc = descriptor(id);
+	let vst3: Vec<PluginDescriptor> = scan_in_subprocess(
+		&scanner(),
+		vst3_bundle(),
+		std::time::Duration::from_secs(30),
+	)
+	.unwrap();
+	let descs = [descriptor(GAIN_ID), descriptor(SINE_ID), &vst3[0]];
+	for desc in descs {
+		let id = &desc.id;
 		let mut device = instantiate(desc, 48_000.0, max_block, None).unwrap();
 		let mut total = 0;
 		for (round, &block) in [1usize, 7, 64, 333, 512, 128].iter().enumerate() {
@@ -106,6 +116,9 @@ fn process_and_set_param_never_allocate() {
 				}
 				for _ in 0..4 {
 					device.process(&mut left[..block], &mut right[..block], ev, &transport);
+				}
+				if round == 3 {
+					device.reset();
 				}
 				let _ = device.latency();
 				let _ = device.tail_seconds();

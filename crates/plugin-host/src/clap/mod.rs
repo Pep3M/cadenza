@@ -10,8 +10,8 @@
 //! - **Main thread**: a dedicated, lazily spawned `cadenza-plugin-main` thread
 //!   owns every `PluginInstance` (which is `!Send` in clack). Creation,
 //!   activation/deactivation, state save/load, latency queries, destruction and
-//!   `on_main_thread` callbacks all run there, submitted as jobs by
-//!   [`run_on_main`]. Callers block until the job finishes; none of this is
+//!   `on_main_thread` callbacks all run there, submitted as jobs through
+//!   [`crate::main_thread`] (shared with VST3 hosting). Callers block until the job finishes; none of this is
 //!   real-time. The out-of-process scanner instead uses its own process main
 //!   thread directly (see [`scan_file`]).
 //! - **Audio thread**: the `Processor` returned by `instantiate` owns the
@@ -35,11 +35,8 @@ pub(crate) mod instance;
 
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::Arc;
 
 use clack_extensions::audio_ports::{AudioPortFlags, AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::latency::PluginLatency;
@@ -167,6 +164,7 @@ pub(crate) fn query_capabilities(instance: &mut PluginInstance<CadenzaHost>) -> 
 				default: info.default_value.clamp(min, max),
 				stepped: info.flags.contains(ParamInfoFlags::IS_STEPPED),
 				automatable: info.flags.contains(ParamInfoFlags::IS_AUTOMATABLE),
+				bypass: info.flags.contains(ParamInfoFlags::IS_BYPASS),
 			});
 		}
 	}
@@ -347,9 +345,9 @@ pub(crate) struct Hosted {
 	pub flags: Arc<HostFlags>,
 }
 
-/// State owned by the plugin main thread.
+/// CLAP state owned by the plugin main thread (see [`crate::main_thread`]).
 #[derive(Default)]
-pub(crate) struct MainState {
+pub(crate) struct ClapState {
 	pub instances: HashMap<u64, Hosted>,
 	next_key: u64,
 	/// Loaded binaries stay resident for the process lifetime: unloading code a
@@ -357,7 +355,7 @@ pub(crate) struct MainState {
 	entries: HashMap<PathBuf, PluginEntry>,
 }
 
-impl MainState {
+impl ClapState {
 	pub fn entry(&mut self, path: &Path) -> Result<PluginEntry, PluginError> {
 		if let Some(e) = self.entries.get(path) {
 			return Ok(e.clone());
@@ -373,7 +371,7 @@ impl MainState {
 		self.next_key
 	}
 
-	fn service_callbacks(&mut self) {
+	pub(crate) fn service_callbacks(&mut self) {
 		for h in self.instances.values_mut() {
 			if HostFlags::take(&h.flags.callback) {
 				h.instance.call_on_main_thread_callback();
@@ -382,59 +380,14 @@ impl MainState {
 	}
 }
 
-type Job = Box<dyn FnOnce(&mut MainState) + Send>;
-
-/// How often the main thread wakes up to serve `request_callback`.
-const CALLBACK_POLL: Duration = Duration::from_millis(15);
-
-fn main_sender() -> &'static Sender<Job> {
-	static SENDER: OnceLock<Sender<Job>> = OnceLock::new();
-	SENDER.get_or_init(|| {
-		let (tx, rx) = mpsc::channel::<Job>();
-		std::thread::Builder::new()
-			.name("cadenza-plugin-main".into())
-			.spawn(move || {
-				let mut state = MainState::default();
-				loop {
-					match rx.recv_timeout(CALLBACK_POLL) {
-						Ok(job) => job(&mut state),
-						Err(RecvTimeoutError::Timeout) => {}
-						Err(RecvTimeoutError::Disconnected) => break,
-					}
-					state.service_callbacks();
-				}
-			})
-			.expect("spawn plugin main thread");
-		tx
-	})
-}
-
-/// Runs `f` on the plugin main thread and waits for its result. Must not be
-/// called from the audio thread (it blocks) nor from inside another job.
+/// Runs `f` with the CLAP state on the plugin main thread and waits for it.
 pub(crate) fn run_on_main<R: Send + 'static>(
-	f: impl FnOnce(&mut MainState) -> R + Send + 'static,
+	f: impl FnOnce(&mut ClapState) -> R + Send + 'static,
 ) -> Result<R, PluginError> {
-	let (tx, rx) = mpsc::sync_channel(1);
-	main_sender()
-		.send(Box::new(move |state| {
-			let result = catch_unwind(AssertUnwindSafe(|| f(state)));
-			let _ = tx.send(result);
-		}))
-		.map_err(|_| PluginError::HostThread("the plugin main thread has stopped".into()))?;
-	match rx.recv() {
-		Ok(Ok(r)) => Ok(r),
-		Ok(Err(_)) => Err(PluginError::HostThread(
-			"a plugin operation panicked on the main thread".into(),
-		)),
-		Err(_) => Err(PluginError::HostThread(
-			"the plugin main thread stopped while working".into(),
-		)),
-	}
+	crate::main_thread::run_on_main(move |state| f(&mut state.clap))
 }
 
-/// Queues `f` on the plugin main thread without waiting.
-pub(crate) fn post_to_main(f: impl FnOnce(&mut MainState) + Send + 'static) {
-	let _ = main_sender().send(Box::new(move |state| {
-		let _ = catch_unwind(AssertUnwindSafe(|| f(state)));
-	}));
+/// Queues `f` with the CLAP state on the plugin main thread without waiting.
+pub(crate) fn post_to_main(f: impl FnOnce(&mut ClapState) + Send + 'static) {
+	crate::main_thread::post_to_main(move |state| f(&mut state.clap));
 }

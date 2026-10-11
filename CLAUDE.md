@@ -145,5 +145,3 @@ pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>,
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.
-```text
-```

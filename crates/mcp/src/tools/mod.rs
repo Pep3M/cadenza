@@ -1,0 +1,9 @@
+//! Tool logic, as plain functions over a [`crate::session::Session`]. Each function is
+//! independently testable; `server.rs` only adapts these to the MCP tool-call protocol.
+
+pub mod arrange;
+pub mod clips;
+pub mod compose;
+pub mod devices;
+pub mod project;
+pub mod tracks;

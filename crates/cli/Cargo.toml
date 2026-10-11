@@ -10,3 +10,10 @@ name = "cadenza"
 path = "src/main.rs"
 
 [dependencies]
+cadenza-core.workspace = true
+cadenza-model.workspace = true
+cadenza-engine.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true

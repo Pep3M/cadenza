@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Pep3M/cadenza"
+rust-version = "1.88"
+
+[workspace.dependencies]
+cadenza-core = { path = "crates/core" }
+cadenza-model = { path = "crates/model" }
+cadenza-theory = { path = "crates/theory" }
+cadenza-dsp = { path = "crates/dsp" }
+cadenza-engine = { path = "crates/engine" }
+cadenza-mcp = { path = "crates/mcp" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+hound = "3.5"
+cpal = "0.18"
+rtrb = "0.4"
+arc-swap = "1.9"
+schemars = { version = "1", features = ["uuid1"] }
+tokio = { version = "1", features = ["full"] }
+rmcp = "3.5"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+debug = 1

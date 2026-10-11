@@ -1,0 +1,12 @@
+[package]
+name = "cadenza-cli"
+description = "Cadenza command line: render projects, run the MCP server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cadenza"
+path = "src/main.rs"
+
+[dependencies]

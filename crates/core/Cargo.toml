@@ -1,0 +1,15 @@
+[package]
+name = "cadenza-core"
+description = "Shared vocabulary for Cadenza: ids, musical time, tempo map, parameter addresses"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

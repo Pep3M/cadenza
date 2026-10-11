@@ -2,3 +2,6 @@
 *.wav
 !tests/fixtures/*.wav
 __pycache__/
+.env
+.env.*
+!.env.example

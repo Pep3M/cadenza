@@ -495,6 +495,9 @@ impl Graph {
 					events.clear();
 					if all_notes_off {
 						events.push(MidiEvent::AllNotesOff { offset: 0 });
+						// Chase notes that should already be sounding at `pos` so a
+						// start/seek landing mid-note doesn't leave it silent.
+						schedule.chase(pos, events);
 					}
 					schedule.collect(pos, QUANTUM, events);
 					if let Some(d) = device {

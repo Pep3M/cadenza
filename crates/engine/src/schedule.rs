@@ -1,8 +1,11 @@
 //! MIDI clip scheduling: clip-relative notes become absolute, sample-positioned events.
 //!
 //! Notes are cut at their clip's end. When playback starts (or seeks) in the middle of a
-//! note, that note stays silent: its note-on lies before the start position and is never
-//! replayed; only its (harmless) note-off is delivered.
+//! note, its regular note-on lies before the start position and is never replayed by
+//! [`MidiSchedule::collect`] alone — only its (harmless) note-off would be. To avoid that
+//! silence, [`MidiSchedule::chase`] finds notes whose span covers the new position and
+//! re-triggers them with a note-on at offset 0; their already-scheduled note-off still
+//! fires normally; so they sound for their remaining length instead of not at all.
 
 use cadenza_core::TempoMap;
 use cadenza_dsp::MidiEvent;
@@ -33,15 +36,28 @@ impl ScheduledEvent {
 	}
 }
 
+/// A note's absolute timeline span, kept around purely for note-chasing (deciding what
+/// should already be sounding at a given sample).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct NoteSpan {
+	start: i64,
+	end: i64,
+	pitch: u8,
+	velocity: f32,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct MidiSchedule {
 	events: Vec<ScheduledEvent>,
 	cursor: usize,
+	/// Sorted by `start`; used only by [`Self::chase`] and [`Self::max_chase_notes`].
+	notes: Vec<NoteSpan>,
 }
 
 impl MidiSchedule {
 	pub fn from_clips(clips: &[Clip], tempo: &TempoMap, sample_rate: f64) -> Self {
 		let mut events = Vec::new();
+		let mut spans = Vec::new();
 		for clip in clips {
 			let ClipContent::Midi { notes } = &clip.content else {
 				continue;
@@ -56,23 +72,31 @@ impl MidiSchedule {
 				}
 				let on = tempo.tick_to_sample(clip.start + note.start, sample_rate) as i64;
 				let off = (tempo.tick_to_sample(clip.start + end, sample_rate) as i64).max(on + 1);
+				let pitch = note.pitch.min(127);
+				let velocity = note.velocity.clamp(0.0, 1.0);
 				events.push(ScheduledEvent {
 					sample: on,
-					kind: EventKind::NoteOn {
-						pitch: note.pitch.min(127),
-						velocity: note.velocity.clamp(0.0, 1.0),
-					},
+					kind: EventKind::NoteOn { pitch, velocity },
 				});
 				events.push(ScheduledEvent {
 					sample: off,
-					kind: EventKind::NoteOff {
-						pitch: note.pitch.min(127),
-					},
+					kind: EventKind::NoteOff { pitch },
+				});
+				spans.push(NoteSpan {
+					start: on,
+					end: off,
+					pitch,
+					velocity,
 				});
 			}
 		}
 		events.sort_by_key(ScheduledEvent::sort_key);
-		Self { events, cursor: 0 }
+		spans.sort_by_key(|s| s.start);
+		Self {
+			events,
+			cursor: 0,
+			notes: spans,
+		}
 	}
 
 	#[cfg(test)]
@@ -97,6 +121,50 @@ impl MidiSchedule {
 	/// Positions the cursor at the first event at or after `sample`.
 	pub fn seek(&mut self, sample: i64) {
 		self.cursor = self.events.partition_point(|e| e.sample < sample);
+	}
+
+	/// Largest number of notes that can be simultaneously sounding at any instant, i.e. the
+	/// worst case for [`Self::chase`]'s output, so its caller can size its buffer once.
+	pub fn max_chase_notes(&self) -> usize {
+		let mut starts: Vec<i64> = self.notes.iter().map(|n| n.start).collect();
+		let mut ends: Vec<i64> = self.notes.iter().map(|n| n.end).collect();
+		starts.sort_unstable();
+		ends.sort_unstable();
+		let (mut i, mut j, mut current, mut best) = (0, 0, 0usize, 0usize);
+		while i < starts.len() {
+			if starts[i] < ends[j] {
+				current += 1;
+				i += 1;
+				best = best.max(current);
+			} else {
+				current -= 1;
+				j += 1;
+			}
+		}
+		best
+	}
+
+	/// Appends a note-on at offset 0 for every note that is already sounding at `sample`
+	/// (started strictly before it and not yet ended), so a start/seek landing inside a note
+	/// re-triggers it instead of leaving it silent for its remaining length. Does not touch
+	/// the cursor: call alongside [`Self::seek`], not instead of it. `self.notes` is sorted
+	/// by `start`, so the scan can stop as soon as it passes `sample`; it never allocates.
+	pub fn chase(&self, sample: i64, out: &mut Vec<MidiEvent>) {
+		for n in &self.notes {
+			if n.start >= sample {
+				break;
+			}
+			if n.end > sample {
+				if out.len() == out.capacity() {
+					break;
+				}
+				out.push(MidiEvent::NoteOn {
+					offset: 0,
+					pitch: n.pitch,
+					velocity: n.velocity,
+				});
+			}
+		}
 	}
 
 	/// Appends the events in `[start, start + len)` with block-relative offsets. Never
@@ -208,6 +276,47 @@ mod tests {
 				pitch: 60
 			}]
 		);
+	}
+
+	#[test]
+	fn chase_retriggers_a_note_that_is_already_sounding() {
+		let tempo = TempoMap::constant(120.0);
+		let clip = clip_with(0, PPQ * 4, &[(60, 0, PPQ * 2)]);
+		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
+		let mut out = Vec::with_capacity(4);
+		// Same position as `seek_into_a_note_skips_its_note_on`: `collect` alone would never
+		// replay this note's note-on, so `chase` must supply it instead.
+		s.chase(10_000, &mut out);
+		assert_eq!(
+			out,
+			vec![MidiEvent::NoteOn {
+				offset: 0,
+				pitch: 60,
+				velocity: 0.8
+			}]
+		);
+	}
+
+	#[test]
+	fn chase_skips_notes_that_start_exactly_at_or_after_the_position() {
+		let tempo = TempoMap::constant(120.0);
+		// Starts exactly at sample 0: `collect` will deliver its note-on normally, so
+		// `chase` must not also fire one (that would double-trigger it).
+		let clip = clip_with(0, PPQ * 4, &[(60, 0, PPQ * 2)]);
+		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
+		let mut out = Vec::with_capacity(4);
+		s.chase(0, &mut out);
+		assert!(out.is_empty(), "{out:?}");
+	}
+
+	#[test]
+	fn chase_skips_notes_that_have_already_ended() {
+		let tempo = TempoMap::constant(120.0);
+		let clip = clip_with(0, PPQ * 4, &[(60, 0, PPQ)]); // ends at sample 24_000
+		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
+		let mut out = Vec::with_capacity(4);
+		s.chase(30_000, &mut out);
+		assert!(out.is_empty(), "{out:?}");
 	}
 
 	#[test]

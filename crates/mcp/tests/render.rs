@@ -151,6 +151,7 @@ async fn analyze_mix_flags_a_deliberately_hot_mix() {
 			end_beat: Some(2.0),
 			sample_rate: Some(48_000),
 			target_lufs: Some(-23.0),
+			genre_profile: None,
 		},
 	)
 	.await
@@ -181,6 +182,7 @@ async fn analyze_mix_on_silence_has_no_loudness_observations() {
 			end_beat: Some(1.0),
 			sample_rate: Some(48_000),
 			target_lufs: None,
+			genre_profile: None,
 		},
 	)
 	.await

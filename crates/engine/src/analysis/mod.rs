@@ -7,6 +7,7 @@ pub mod levels;
 pub mod loudness;
 
 use cadenza_core::TrackId;
+use cadenza_model::TrackKind;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +58,9 @@ pub struct LevelStats {
 pub struct TrackLevel {
 	pub track_id: TrackId,
 	pub name: String,
+	/// Lets consumers (e.g. the AI's mix analysis) tell source tracks apart from bus returns,
+	/// which legitimately sit far quieter or louder than the rest of the mix.
+	pub kind: TrackKind,
 	pub stats: LevelStats,
 }
 

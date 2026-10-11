@@ -227,7 +227,11 @@ impl<'a> Compiler<'a> {
 					));
 				}
 				let schedule = MidiSchedule::from_clips(&track.clips, &self.project.tempo, sr);
-				let events = Vec::with_capacity(schedule.max_events_per_quantum() + 1);
+				// +1 for a possible `AllNotesOff` on reset, plus room for every note that
+				// could be chased back in at that same instant.
+				let events = Vec::with_capacity(
+					schedule.max_events_per_quantum() + schedule.max_chase_notes() + 1,
+				);
 				(
 					Source::Instrument {
 						device,

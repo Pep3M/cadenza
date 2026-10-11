@@ -6,11 +6,11 @@
 use std::path::Path;
 
 use cadenza_core::Tick;
-use cadenza_model::Project;
+use cadenza_model::{Project, TrackKind};
 
 use crate::analysis::{Analyzer, MixReport, TrackLevel};
 use crate::error::EngineError;
-use crate::graph::Graph;
+use crate::graph::{Graph, Source};
 use crate::{QUANTUM, compile};
 
 /// What and how to render.
@@ -150,11 +150,17 @@ fn render_analyzed(
 		.iter()
 		.zip(&tracks)
 		.map(|(node, a)| {
+			let kind = match node.source {
+				Source::Instrument { .. } => TrackKind::Instrument,
+				Source::Audio { .. } => TrackKind::Audio,
+				Source::Bus { .. } => TrackKind::Bus,
+			};
 			(
 				node.display_index,
 				TrackLevel {
 					track_id: node.track_id,
 					name: node.name.clone(),
+					kind,
 					stats: a.finish(),
 				},
 			)

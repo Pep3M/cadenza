@@ -69,3 +69,38 @@ fn render_starting_mid_song_is_aligned_with_full_render() {
 	assert_eq!(partial.len(), full.len() - offset);
 	assert_eq!(&partial.left[..], &full.left[offset..]);
 }
+
+/// Note chasing: starting/seeking in the middle of a sustained note must make it sound
+/// immediately, and a plain from-the-start render must be exactly as before (chasing only
+/// kicks in when a start/seek lands strictly inside a note's span).
+#[test]
+fn render_starting_mid_note_chases_it_and_full_render_is_unaffected() {
+	let t = synth_track("pad", &[(60, 0.0, 8.0)], 8.0);
+	let p = project(vec![t]);
+
+	// A couple of cycles of the lowest note involved, generous enough that "immediately"
+	// can't be mistaken for "once the waveform happens to cross zero".
+	let window = 2_000;
+
+	// From the start, the note's regular note-on at sample 0 covers it; nothing to chase.
+	// This must render exactly as it did before note chasing existed, so it is the baseline
+	// "sounding immediately" level a mid-note seek must match.
+	let full = render_offline(&p, &opts(8.0)).unwrap();
+	let full_peak = peak(&full.left[..window]);
+	assert!(
+		full_peak > 0.01,
+		"sanity check: the note itself must be audible at all, peak {full_peak}"
+	);
+
+	// Seeking to the middle of that same note must *also* sound immediately: before note
+	// chasing this window would have been exact silence (its note-on lies before `start`
+	// and is never replayed), which this asserts is no longer the case.
+	let start = beats(4.0);
+	let partial = render_offline(&p, &RenderOptions { start, ..opts(8.0) }).unwrap();
+	let partial_peak = peak(&partial.left[..window]);
+	assert!(
+		partial_peak > full_peak * 0.5,
+		"a mid-note seek must chase the note so it sounds immediately, \
+		 like the from-the-start render does: full {full_peak}, partial {partial_peak}"
+	);
+}

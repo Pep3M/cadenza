@@ -89,6 +89,13 @@ RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTemp
 SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 Batch { label, commands }.
 
+Implemented extras: `ResetParam` (inverse of a first `SetParam`), `UpdateSend`, optional `index`
+on AddTrack/InsertDevice/AddSend, `UpdateClip` can move a clip to another track. Instruments are
+removed with `SetInstrument { device: null }`. Removing a track drops its lanes and sends that
+target it and re-routes its dependants to Master (undo restores all). MIDI clips only on
+Instrument tracks, audio clips only on Audio tracks. Device param ranges are NOT validated
+here (model doesn't know devices) — callers with registry access (mcp) must validate.
+
 `Document { project, undo stack, redo stack }`: `execute(Command) -> Result<(), ModelError>`
 (applies atomically, records the inverse), `undo()`, `redo()`, `can_undo/can_redo`,
 `history_labels()`. `Project::save_json(path)`, `Project::load_json(path)`,

@@ -32,6 +32,8 @@ enum Command {
 	},
 	/// Play a project on the default audio device until it ends
 	Play { project: PathBuf },
+	/// Run the MCP server over stdio, for an AI client to connect to
+	Mcp,
 }
 
 fn load(path: &PathBuf) -> Result<Project> {
@@ -45,14 +47,27 @@ fn print_json(value: &impl serde::Serialize) -> Result<()> {
 
 fn main() -> Result<()> {
 	match Cli::parse().command {
-		Command::Render { project, output, sample_rate } => {
-			let opts = RenderOptions { sample_rate, ..RenderOptions::default() };
+		Command::Render {
+			project,
+			output,
+			sample_rate,
+		} => {
+			let opts = RenderOptions {
+				sample_rate,
+				..RenderOptions::default()
+			};
 			let report = render_to_wav(&load(&project)?, &opts, &output)?;
 			eprintln!("wrote {}", output.display());
 			print_json(&report)
 		}
-		Command::Analyze { project, sample_rate } => {
-			let opts = RenderOptions { sample_rate, ..RenderOptions::default() };
+		Command::Analyze {
+			project,
+			sample_rate,
+		} => {
+			let opts = RenderOptions {
+				sample_rate,
+				..RenderOptions::default()
+			};
 			print_json(&analyze_mix(&load(&project)?, &opts)?)
 		}
 		Command::Play { project } => {
@@ -73,5 +88,21 @@ fn main() -> Result<()> {
 			eprintln!();
 			Ok(())
 		}
+		Command::Mcp => run_mcp(),
 	}
+}
+
+/// Runs the MCP server over stdio. stdout is the JSON-RPC channel, so every log line goes
+/// to stderr instead.
+fn run_mcp() -> Result<()> {
+	tracing_subscriber::fmt()
+		.with_writer(std::io::stderr)
+		.with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+		.init();
+	tokio::runtime::Builder::new_multi_thread()
+		.enable_all()
+		.build()
+		.context("building the async runtime")?
+		.block_on(cadenza_mcp::serve_stdio())
+		.context("running the MCP server")
 }

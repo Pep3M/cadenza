@@ -7,6 +7,7 @@
 
 pub mod convert;
 pub mod error;
+pub mod player;
 pub mod server;
 pub mod session;
 pub mod tools;

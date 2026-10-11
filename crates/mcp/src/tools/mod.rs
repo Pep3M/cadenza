@@ -5,5 +5,7 @@ pub mod arrange;
 pub mod clips;
 pub mod compose;
 pub mod devices;
+pub mod playback;
 pub mod project;
+pub mod render;
 pub mod tracks;

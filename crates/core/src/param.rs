@@ -34,15 +34,27 @@ pub struct ParamAddressError(pub String);
 
 impl ParamAddress {
 	pub fn track_volume(track: TrackId) -> Self {
-		Self { track: Some(track), target: ParamTarget::Volume }
+		Self {
+			track: Some(track),
+			target: ParamTarget::Volume,
+		}
 	}
 
 	pub fn track_pan(track: TrackId) -> Self {
-		Self { track: Some(track), target: ParamTarget::Pan }
+		Self {
+			track: Some(track),
+			target: ParamTarget::Pan,
+		}
 	}
 
 	pub fn device(track: Option<TrackId>, device: DeviceId, param: impl Into<String>) -> Self {
-		Self { track, target: ParamTarget::Device { device, param: param.into() } }
+		Self {
+			track,
+			target: ParamTarget::Device {
+				device,
+				param: param.into(),
+			},
+		}
 	}
 }
 
@@ -119,7 +131,10 @@ mod tests {
 		let addr = ParamAddress::device(Some(TrackId::new()), DeviceId::new(), "cutoff");
 		let parsed: ParamAddress = addr.to_string().parse().unwrap();
 		assert_eq!(parsed, addr);
-		assert_eq!("master/volume".parse::<ParamAddress>().unwrap().target, ParamTarget::Volume);
+		assert_eq!(
+			"master/volume".parse::<ParamAddress>().unwrap().target,
+			ParamTarget::Volume
+		);
 		assert!("track/nope/volume".parse::<ParamAddress>().is_err());
 	}
 

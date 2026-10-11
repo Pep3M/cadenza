@@ -12,6 +12,8 @@ pub enum McpError {
 	Model(#[from] cadenza_model::ModelError),
 	#[error(transparent)]
 	Theory(#[from] cadenza_theory::TheoryError),
+	#[error(transparent)]
+	Engine(#[from] cadenza_engine::EngineError),
 	#[error("device '{id}' is not a known device id; available {role} ids: {available}")]
 	UnknownDevice {
 		id: String,
@@ -63,6 +65,10 @@ impl From<McpError> for ErrorData {
 	fn from(err: McpError) -> Self {
 		match err {
 			McpError::Io { .. } => ErrorData::internal_error(err.to_string(), None),
+			McpError::Engine(cadenza_engine::EngineError::InvalidOptions(_)) => {
+				ErrorData::invalid_params(err.to_string(), None)
+			}
+			McpError::Engine(_) => ErrorData::internal_error(err.to_string(), None),
 			_ => ErrorData::invalid_params(err.to_string(), None),
 		}
 	}

@@ -1,9 +1,13 @@
 //! The MCP server: a thin `rmcp` adapter over the plain tool functions in `tools/*.rs`.
 //!
-//! Every tool method here does the same three things: lock the session, call the
-//! matching function in `tools/`, and convert its `Result<T, McpError>` into
-//! `Result<Json<T>, rmcp::ErrorData>` (or `Result<(), rmcp::ErrorData>`). All actual
-//! logic — validation, command construction, music theory — lives in `tools/`.
+//! Every tool method here does the same few things: lock the session, call the matching
+//! function in `tools/`, and convert its `Result<T, McpError>` into
+//! `Result<Json<T>, rmcp::ErrorData>` (or `Result<(), rmcp::ErrorData>`). All actual logic
+//! — validation, command construction, music theory, rendering — lives in `tools/`.
+//!
+//! Mutating tools go through [`CadenzaServer::run_mut`], which additionally pushes the
+//! post-mutation project into the realtime player if it is currently playing, so playback
+//! reflects edits made while the transport is running.
 
 use std::sync::Mutex;
 
@@ -13,8 +17,9 @@ use rmcp::model::{ServerCapabilities, ServerConfig};
 use rmcp::{ErrorData, Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 use crate::error::ServeError;
+use crate::player::PlayerHandle;
 use crate::session::Session;
-use crate::tools::{arrange, clips, compose, devices, project, tracks};
+use crate::tools::{arrange, clips, compose, devices, playback, project, render, tracks};
 
 const INSTRUCTIONS: &str = "\
 Cadenza: you are the arranger and mix engineer for this project. Everything you do goes \
@@ -33,12 +38,15 @@ like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_no
 4. Route tracks to reverb/delay buses with `create_track` (kind: bus) + `add_send`; shape \
 tone with `insert_device`/`set_device_params` on a track or the master.\n\
 5. Balance the mix with `set_channel` (volume/pan/mute/solo) and mark song sections with \
-`add_marker`.\n\n\
+`add_marker`. Use `analyze_mix` to get loudness/peak/band readings plus plain-language \
+mix observations before committing to a `render`. `play`/`stop` audition on the default \
+output device; edits made while playing are pushed to the player automatically.\n\n\
 Positions and durations are always in beats (quarter notes); pitches are note names \
 (\"C4\") or MIDI numbers (60 = C4); velocity is 0..1; volume is dB; pan is -1..1.";
 
 pub struct CadenzaServer {
 	session: Mutex<Session>,
+	player: Mutex<Option<PlayerHandle>>,
 	tool_router: ToolRouter<Self>,
 }
 
@@ -46,6 +54,7 @@ impl CadenzaServer {
 	pub fn new() -> Self {
 		Self {
 			session: Mutex::new(Session::new()),
+			player: Mutex::new(None),
 			tool_router: Self::tool_router(),
 		}
 	}
@@ -54,6 +63,43 @@ impl CadenzaServer {
 		self.session
 			.lock()
 			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	fn player(&self) -> std::sync::MutexGuard<'_, Option<PlayerHandle>> {
+		self.player
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	/// Runs a mutating tool function against the session, then — if the player exists and
+	/// is currently playing — pushes the resulting project into it so playback reflects
+	/// the edit.
+	fn run_mut<T>(
+		&self,
+		f: impl FnOnce(&mut Session) -> Result<T, crate::McpError>,
+	) -> Result<T, ErrorData> {
+		let value = f(&mut self.session())?;
+		self.sync_player_if_playing();
+		Ok(value)
+	}
+
+	fn sync_player_if_playing(&self) {
+		let still_playing = matches!(self.player().as_ref(), Some(p) if p.is_playing_hint());
+		if still_playing {
+			let project = self.session().document().project().clone();
+			if let Some(p) = self.player().as_ref() {
+				let _ = p.load(project);
+			}
+		}
+	}
+
+	/// Opens the default audio output device on first use.
+	fn ensure_player(&self) -> Result<(), crate::McpError> {
+		let mut guard = self.player();
+		if guard.is_none() {
+			*guard = Some(PlayerHandle::start()?);
+		}
+		Ok(())
 	}
 }
 
@@ -72,7 +118,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<project::NewProjectArgs>,
 	) -> Result<Json<cadenza_model::ProjectSummary>, ErrorData> {
-		Ok(Json(project::new_project(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| project::new_project(s, args))?))
 	}
 
 	#[tool(description = "Opens a project from a JSON file, replacing the one currently open.")]
@@ -80,7 +126,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<project::OpenProjectArgs>,
 	) -> Result<Json<cadenza_model::ProjectSummary>, ErrorData> {
-		Ok(Json(project::open_project(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| project::open_project(s, args))?))
 	}
 
 	#[tool(description = "Saves the current project to disk as JSON.")]
@@ -109,12 +155,12 @@ impl CadenzaServer {
 
 	#[tool(description = "Reverts the last change.")]
 	fn undo(&self) -> Result<Json<project::HistoryStep>, ErrorData> {
-		Ok(Json(project::undo(&mut self.session())?))
+		Ok(Json(self.run_mut(project::undo)?))
 	}
 
 	#[tool(description = "Re-applies the last undone change.")]
 	fn redo(&self) -> Result<Json<project::HistoryStep>, ErrorData> {
-		Ok(Json(project::redo(&mut self.session())?))
+		Ok(Json(self.run_mut(project::redo)?))
 	}
 
 	#[tool(description = "Lists undoable and redoable steps, each with its human-readable label.")]
@@ -144,7 +190,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::CreateTrackArgs>,
 	) -> Result<Json<tracks::CreateTrackOutput>, ErrorData> {
-		Ok(Json(tracks::create_track(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| tracks::create_track(s, args))?))
 	}
 
 	#[tool(description = "Renames a track and/or changes its color.")]
@@ -152,7 +198,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::UpdateTrackArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::update_track(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::update_track(s, args))
 	}
 
 	#[tool(description = "Deletes a track and everything on it (clips, devices, sends).")]
@@ -160,7 +206,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::DeleteTrackArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::delete_track(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::delete_track(s, args))
 	}
 
 	#[tool(
@@ -171,7 +217,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::SetChannelArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::set_channel(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::set_channel(s, args))
 	}
 
 	#[tool(description = "Adds a send from a track to a bus track (e.g. for shared reverb/delay).")]
@@ -179,7 +225,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::AddSendArgs>,
 	) -> Result<Json<tracks::AddSendOutput>, ErrorData> {
-		Ok(Json(tracks::add_send(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| tracks::add_send(s, args))?))
 	}
 
 	#[tool(description = "Removes a send.")]
@@ -187,7 +233,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::RemoveSendArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::remove_send(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::remove_send(s, args))
 	}
 
 	// -- devices on a channel -----------------------------------------------------------
@@ -200,7 +246,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::InsertDeviceArgs>,
 	) -> Result<Json<tracks::InsertDeviceOutput>, ErrorData> {
-		Ok(Json(tracks::insert_device(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| tracks::insert_device(s, args))?))
 	}
 
 	#[tool(description = "Removes an insert effect from a channel.")]
@@ -208,7 +254,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::RemoveDeviceArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::remove_device(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::remove_device(s, args))
 	}
 
 	#[tool(
@@ -219,7 +265,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::SetDeviceParamsArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::set_device_params(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::set_device_params(s, args))
 	}
 
 	#[tool(description = "Bypasses or re-enables a device.")]
@@ -227,7 +273,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::SetBypassArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::set_bypass(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::set_bypass(s, args))
 	}
 
 	#[tool(
@@ -239,7 +285,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::SetParamArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::set_param(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::set_param(s, args))
 	}
 
 	#[tool(
@@ -249,7 +295,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<tracks::SetAutomationArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(tracks::set_automation(&mut self.session(), args)?)
+		self.run_mut(|s| tracks::set_automation(s, args))
 	}
 
 	// -- clips / notes -------------------------------------------------------------------
@@ -261,7 +307,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::AddMidiClipArgs>,
 	) -> Result<Json<clips::AddMidiClipOutput>, ErrorData> {
-		Ok(Json(clips::add_midi_clip(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| clips::add_midi_clip(s, args))?))
 	}
 
 	#[tool(description = "Adds notes to an existing MIDI clip.")]
@@ -269,7 +315,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::AddNotesArgs>,
 	) -> Result<Json<clips::AddNotesOutput>, ErrorData> {
-		Ok(Json(clips::add_notes(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| clips::add_notes(s, args))?))
 	}
 
 	#[tool(description = "Removes notes from a clip by id, or every note with all: true.")]
@@ -277,7 +323,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::RemoveNotesArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::remove_notes(&mut self.session(), args)?)
+		self.run_mut(|s| clips::remove_notes(s, args))
 	}
 
 	#[tool(
@@ -287,7 +333,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::TransposeNotesArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::transpose_notes(&mut self.session(), args)?)
+		self.run_mut(|s| clips::transpose_notes(s, args))
 	}
 
 	#[tool(
@@ -297,7 +343,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::QuantizeNotesArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::quantize_notes(&mut self.session(), args)?)
+		self.run_mut(|s| clips::quantize_notes(s, args))
 	}
 
 	#[tool(
@@ -308,7 +354,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::HumanizeNotesArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::humanize_notes(&mut self.session(), args)?)
+		self.run_mut(|s| clips::humanize_notes(s, args))
 	}
 
 	#[tool(description = "Moves a clip to a new start beat and/or a different track.")]
@@ -316,7 +362,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::MoveClipArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::move_clip(&mut self.session(), args)?)
+		self.run_mut(|s| clips::move_clip(s, args))
 	}
 
 	#[tool(
@@ -326,7 +372,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::ResizeClipArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::resize_clip(&mut self.session(), args)?)
+		self.run_mut(|s| clips::resize_clip(s, args))
 	}
 
 	#[tool(description = "Deletes a clip and its notes.")]
@@ -334,7 +380,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::DeleteClipArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(clips::delete_clip(&mut self.session(), args)?)
+		self.run_mut(|s| clips::delete_clip(s, args))
 	}
 
 	#[tool(
@@ -344,7 +390,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<clips::DuplicateClipArgs>,
 	) -> Result<Json<clips::DuplicateClipOutput>, ErrorData> {
-		Ok(Json(clips::duplicate_clip(&mut self.session(), args)?))
+		Ok(Json(self.run_mut(|s| clips::duplicate_clip(s, args))?))
 	}
 
 	// -- composition helpers ---------------------------------------------------------
@@ -360,10 +406,9 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<compose::WriteChordProgressionArgs>,
 	) -> Result<Json<compose::WriteChordProgressionOutput>, ErrorData> {
-		Ok(Json(compose::write_chord_progression(
-			&mut self.session(),
-			args,
-		)?))
+		Ok(Json(
+			self.run_mut(|s| compose::write_chord_progression(s, args))?,
+		))
 	}
 
 	#[tool(
@@ -376,10 +421,9 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<compose::WriteDrumPatternArgs>,
 	) -> Result<Json<compose::WriteDrumPatternOutput>, ErrorData> {
-		Ok(Json(compose::write_drum_pattern(
-			&mut self.session(),
-			args,
-		)?))
+		Ok(Json(
+			self.run_mut(|s| compose::write_drum_pattern(s, args))?,
+		))
 	}
 
 	#[tool(
@@ -397,7 +441,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<compose::SnapToScaleArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(compose::snap_to_scale(&mut self.session(), args)?)
+		self.run_mut(|s| compose::snap_to_scale(s, args))
 	}
 
 	// -- arrangement -------------------------------------------------------------------
@@ -407,7 +451,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<arrange::SetTempoArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(arrange::set_tempo(&mut self.session(), args)?)
+		self.run_mut(|s| arrange::set_tempo(s, args))
 	}
 
 	#[tool(description = "Sets the project's time signature.")]
@@ -415,7 +459,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<arrange::SetTimeSignatureArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(arrange::set_time_signature(&mut self.session(), args)?)
+		self.run_mut(|s| arrange::set_time_signature(s, args))
 	}
 
 	#[tool(
@@ -425,7 +469,7 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<arrange::AddMarkerArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(arrange::add_marker(&mut self.session(), args)?)
+		self.run_mut(|s| arrange::add_marker(s, args))
 	}
 
 	#[tool(description = "Removes the marker at a beat position.")]
@@ -433,7 +477,67 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<arrange::RemoveMarkerArgs>,
 	) -> Result<(), ErrorData> {
-		Ok(arrange::remove_marker(&mut self.session(), args)?)
+		self.run_mut(|s| arrange::remove_marker(s, args))
+	}
+
+	// -- rendering / analysis --------------------------------------------------------
+
+	#[tool(
+		description = "Renders the project to a 32-bit float stereo WAV file and returns the \
+			mix report (levels, loudness, band energy, per track). CPU-heavy; runs off the main \
+			session lock."
+	)]
+	async fn render(
+		&self,
+		Parameters(args): Parameters<render::RenderArgs>,
+	) -> Result<Json<cadenza_engine::MixReport>, ErrorData> {
+		let project = self.session().document().project().clone();
+		Ok(Json(render::render(project, args).await?))
+	}
+
+	#[tool(
+		description = "Renders and measures the mix (no audio written) and returns the report \
+			plus plain-language observations (e.g. peaks too hot, loudness off target, a track \
+			much louder than the rest, clipping, mono/phase issues, muddy or harsh bands) to \
+			guide the next mix move."
+	)]
+	async fn analyze_mix(
+		&self,
+		Parameters(args): Parameters<render::AnalyzeMixArgs>,
+	) -> Result<Json<render::AnalyzeMixOutput>, ErrorData> {
+		let project = self.session().document().project().clone();
+		Ok(Json(render::analyze_mix(project, args).await?))
+	}
+
+	// -- transport -----------------------------------------------------------------
+
+	#[tool(
+		description = "Starts (or resumes) playback on the default audio output device, \
+			reloading the current project first. Opens the output device on first use; returns \
+			a clear error if none is available."
+	)]
+	fn play(
+		&self,
+		Parameters(args): Parameters<playback::PlayArgs>,
+	) -> Result<Json<playback::TransportStatus>, ErrorData> {
+		self.ensure_player()?;
+		let project = self.session().document().project().clone();
+		let guard = self.player();
+		Ok(Json(playback::play(
+			guard.as_ref().unwrap(),
+			project,
+			args,
+		)?))
+	}
+
+	#[tool(description = "Stops playback.")]
+	fn stop(&self) -> Result<Json<playback::TransportStatus>, ErrorData> {
+		Ok(Json(playback::stop(self.player().as_ref())?))
+	}
+
+	#[tool(description = "Reports whether the transport is playing and its current beat position.")]
+	fn transport_status(&self) -> Result<Json<playback::TransportStatus>, ErrorData> {
+		Ok(Json(playback::transport_status(self.player().as_ref())?))
 	}
 }
 

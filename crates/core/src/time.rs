@@ -8,7 +8,18 @@ pub const PPQ: i64 = 960;
 
 /// Musical position or duration in ticks (1 quarter note = [`PPQ`] ticks).
 #[derive(
-	Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize, JsonSchema,
+	Debug,
+	Clone,
+	Copy,
+	PartialEq,
+	Eq,
+	Hash,
+	PartialOrd,
+	Ord,
+	Default,
+	Serialize,
+	Deserialize,
+	JsonSchema,
 )]
 #[serde(transparent)]
 pub struct Tick(pub i64);

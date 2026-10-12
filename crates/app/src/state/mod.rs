@@ -269,6 +269,9 @@ pub struct AppState {
 	lane_preview: Option<(ParamAddress, Vec<cadenza_model::AutomationPoint>)>,
 	/// Play was pressed (and not stopped since): pattern mode auditions only then.
 	play_intent: bool,
+	/// The user placed the playhead since the last stop: pattern mode starts there
+	/// (inside the pattern) instead of at the pattern start.
+	cued: bool,
 	/// Loop and audition last sent to the player.
 	play_config: Option<transport::PlayConfig>,
 }
@@ -335,6 +338,7 @@ impl AppState {
 			last_tick: None,
 			lane_preview: None,
 			play_intent: false,
+			cued: false,
 			play_config: None,
 		}
 	}
@@ -1301,16 +1305,17 @@ impl AppState {
 				 Playing the song instead.",
 			);
 		}
-		// Start inside the loop: pattern mode always, song mode when past its end.
+		// Start inside the loop: pattern mode at the pattern start (FL Studio) unless the
+		// playhead was placed inside it, song mode when past the loop end.
 		if let Some((start, end)) = config.loop_range {
 			let pos = self.position();
 			let outside = if config.pattern.is_some() {
-				pos < start || pos >= end
+				!self.cued || pos < start || pos >= end
 			} else {
 				pos >= end
 			};
 			if outside {
-				self.seek(start);
+				self.locate(start);
 			}
 		}
 		self.send_config(config);
@@ -1322,12 +1327,17 @@ impl AppState {
 		}
 	}
 
+	/// Stops; pattern mode goes back to the pattern start (FL Studio).
 	pub fn stop(&mut self) {
 		self.play_intent = false;
+		self.cued = false;
 		if let Some(a) = &self.audio {
 			a.stop();
 		}
 		let (config, _) = self.transport_config();
+		if let (Some(_), Some((start, _))) = (config.pattern, config.loop_range) {
+			self.locate(start);
+		}
 		self.send_config(config);
 	}
 
@@ -1384,7 +1394,7 @@ impl AppState {
 		{
 			let pos = self.position();
 			if pos < start || pos >= end {
-				self.seek(start);
+				self.locate(start);
 			}
 		}
 		self.send_config(config);
@@ -1448,7 +1458,14 @@ impl AppState {
 		}
 	}
 
+	/// Moves the playhead (a user action: pattern mode then plays from there).
 	pub fn seek(&mut self, tick: Tick) {
+		self.cued = true;
+		self.locate(tick);
+	}
+
+	/// Moves the playhead without cueing (transport bookkeeping).
+	fn locate(&mut self, tick: Tick) {
 		let tick = Tick(tick.0.max(0));
 		self.position = tick;
 		if let Some(a) = &self.audio {
@@ -1546,7 +1563,8 @@ impl AppState {
 		self.view.transport.loop_on = false;
 		self.view.transport.loop_range = None;
 		self.load_warnings.clear();
-		self.seek(Tick::ZERO);
+		self.locate(Tick::ZERO);
+		self.cued = false;
 		self.schedule_reload();
 	}
 

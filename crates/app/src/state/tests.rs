@@ -519,6 +519,54 @@ fn pattern_mode_loops_the_piano_roll_clip_alone_and_falls_back() {
 }
 
 #[test]
+fn pattern_mode_starts_at_the_pattern_and_follows_drawn_notes() {
+	use transport::PlayMode;
+	let (mut s, _) = state_with_song();
+	let clip = s.project().tracks[0].clips[0].id;
+	assert!(s.open_piano_roll(clip));
+	s.set_play_mode(PlayMode::Pattern);
+	// FL Studio: Play starts at the pattern start, Stop goes back there.
+	s.seek(Tick(PPQ * 2));
+	s.stop();
+	assert_eq!(
+		s.position(),
+		Tick::ZERO,
+		"stop rewinds to the pattern start"
+	);
+	s.play();
+	assert_eq!(s.position(), Tick::ZERO);
+	s.stop();
+	// ... unless the playhead was placed inside the pattern since the last stop.
+	s.seek(Tick(PPQ * 2));
+	s.play();
+	assert_eq!(s.position(), Tick(PPQ * 2), "cued inside the pattern");
+	assert_eq!(
+		s.play_config().unwrap().loop_range,
+		Some((Tick::ZERO, Tick(PPQ * 4)))
+	);
+	// A note drawn past the end grows the clip to the next bar and the loop follows on
+	// the next tick, without moving the playhead (no restart).
+	let (cmd, _) = piano::add_note(s.project(), clip, Tick(PPQ * 5), 64, Tick(PPQ), 0.8).unwrap();
+	assert!(s.apply(cmd));
+	s.tick(Instant::now());
+	assert_eq!(
+		s.play_config().unwrap().loop_range,
+		Some((Tick::ZERO, Tick(PPQ * 8)))
+	);
+	assert_eq!(s.position(), Tick(PPQ * 2), "still playing where it was");
+	assert!(s.play_intent());
+	// Undo shrinks it back and the loop follows again.
+	s.undo();
+	s.tick(Instant::now());
+	assert_eq!(
+		s.play_config().unwrap().loop_range,
+		Some((Tick::ZERO, Tick(PPQ * 4)))
+	);
+	s.stop();
+	assert_eq!(s.position(), Tick::ZERO);
+}
+
+#[test]
 fn loop_region_gestures_drive_song_playback() {
 	let (mut s, _) = state_with_song();
 	assert_eq!(s.view.transport.loop_range, None);

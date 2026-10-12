@@ -51,10 +51,14 @@ pub struct PlayConfig {
 	pub pattern: Option<ClipId>,
 }
 
-/// The span pattern mode loops for `clip`: the clip, at least one bar long.
+/// The span pattern mode loops for `clip` (FL Studio pattern length): its notes rounded
+/// up to the next bar (at least one bar), or the clip's own length when that is longer.
+/// Notes drawn past the end grow the clip, and the loop follows on the next tick.
 pub fn pattern_range(clip: &Clip, ts: TimeSignature) -> (Tick, Tick) {
-	let end = clip.end().max(clip.start + ts.ticks_per_bar());
-	(clip.start, end)
+	let bar = ts.ticks_per_bar().0.max(1);
+	let content = clip.notes().iter().map(|n| n.end().0).max().unwrap_or(0);
+	let rounded = Tick(((content.max(0) + bar - 1) / bar).max(1) * bar);
+	(clip.start, clip.start + rounded.max(clip.length))
 }
 
 /// The player configuration for `view`. `piano_clip` is the clip open in the piano roll;
@@ -133,6 +137,26 @@ mod tests {
 		let (c, _) = config(&p, &view, Some(long_id), false);
 		assert_eq!(c.loop_range, Some((Tick(PPQ * 16), Tick(PPQ * 22))));
 		assert_eq!(c.audition, None, "no audition while stopped");
+		// Notes decide when they reach further than the clip: rounded up to the bar.
+		let ts = p.time_signature;
+		let mut clip = Clip::midi("c", Tick(PPQ * 4), Tick(PPQ * 2));
+		assert_eq!(
+			pattern_range(&clip, ts),
+			(Tick(PPQ * 4), Tick(PPQ * 8)),
+			"empty: a bar"
+		);
+		clip = clip.with_notes([cadenza_model::Note::new(60, Tick(PPQ * 4), Tick(PPQ), 0.8)]);
+		assert_eq!(
+			pattern_range(&clip, ts).1,
+			Tick(PPQ * 12),
+			"5 beats: two bars"
+		);
+		clip = clip.with_notes([cadenza_model::Note::new(60, Tick::ZERO, Tick(PPQ * 8), 0.8)]);
+		assert_eq!(
+			pattern_range(&clip, ts).1,
+			Tick(PPQ * 12),
+			"exactly two bars"
+		);
 		// No clip open: the song, with its loop region.
 		let (c, fell_back) = config(&p, &view, None, true);
 		assert!(fell_back);

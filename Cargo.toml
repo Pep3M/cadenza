@@ -55,7 +55,7 @@ signalsmith-stretch = "0.1"
 mp3lame-encoder = "0.2"
 midly = { version = "0.5.3", default-features = false, features = ["std"] }
 midir = "0.11.1"
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "wayland", "x11", "wgpu"] }
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wayland", "x11", "wgpu"] }
 egui = "0.36"
 egui_kittest = "0.36"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }

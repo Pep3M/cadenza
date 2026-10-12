@@ -20,11 +20,14 @@ cadenza-mcp.workspace = true
 cadenza-plugin-host.workspace = true
 cadenza-audio-io.workspace = true
 cadenza-midi-io.workspace = true
+cadenza-theory.workspace = true
 eframe.workspace = true
 egui.workspace = true
 rfd.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+serde_json.workspace = true
 tempfile.workspace = true

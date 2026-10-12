@@ -37,7 +37,7 @@ pub fn run(project: Option<PathBuf>) -> Result<(), AppError> {
 	eframe::run_native(
 		"Cadenza",
 		options,
-		Box::new(move |cc| Ok(Box::new(CadenzaApp::new(&cc.egui_ctx, project)))),
+		Box::new(move |cc| Ok(Box::new(CadenzaApp::new(&cc.egui_ctx, cc.storage, project)))),
 	)
 	.map_err(|e| AppError::Window(e.to_string()))
 }

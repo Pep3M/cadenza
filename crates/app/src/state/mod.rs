@@ -9,9 +9,13 @@
 //! Views only read state and call these methods.
 
 pub mod browser;
+pub mod dnd;
 pub mod edits;
+pub mod files;
+pub mod layout;
 pub mod meters;
 pub mod notices;
+pub mod piano;
 pub mod selection;
 pub mod timeline;
 
@@ -20,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cadenza_core::{DeviceId, Tick, TrackId};
+use cadenza_core::{ClipId, DeviceId, Tick, TrackId};
 use cadenza_dsp::DeviceRole;
 use cadenza_engine::{MeterBank, MixReport, PlayerClock, RenderOptions};
 use cadenza_mcp::{McpError, Session};
@@ -30,8 +34,12 @@ use cadenza_plugin_host::{PluginCatalog, ScanReport};
 use crate::audio::{AudioEngine, AudioEvent, Waker};
 use crate::jobs::{FileAction, Job, PeakCache};
 use browser::BrowserItem;
+use dnd::{DropAction, DropTarget, Payload};
+use files::FileBrowser;
+use layout::{FollowMode, PanelKind, PanelLayout, Prefs};
 use meters::Meters;
 use notices::Notices;
+use piano::PianoView;
 use selection::{DeviceRef, Selection};
 use timeline::Timeline;
 
@@ -51,11 +59,15 @@ pub struct ViewState {
 	pub track_height: f32,
 	/// Vertical scroll of the track list, in pixels.
 	pub scroll_y: f32,
-	pub show_browser: bool,
-	pub show_mixer: bool,
-	pub show_inspector: bool,
+	pub panels: PanelLayout,
+	/// Snap clips and notes to the grid (shared by the arrange view and the piano roll).
 	pub snap: bool,
-	pub follow_playhead: bool,
+	pub follow: FollowMode,
+	pub piano: PianoView,
+	/// Bookmarked folders of the browser's Files section.
+	pub bookmarks: Vec<PathBuf>,
+	/// The F1 keyboard-shortcut overlay is open.
+	pub help: bool,
 }
 
 impl Default for ViewState {
@@ -64,11 +76,12 @@ impl Default for ViewState {
 			timeline: Timeline::default(),
 			track_height: DEFAULT_TRACK_HEIGHT,
 			scroll_y: 0.0,
-			show_browser: true,
-			show_mixer: true,
-			show_inspector: true,
+			panels: PanelLayout::default(),
 			snap: true,
-			follow_playhead: true,
+			follow: FollowMode::Page,
+			piano: PianoView::default(),
+			bookmarks: Vec::new(),
+			help: false,
 		}
 	}
 }
@@ -120,6 +133,10 @@ pub struct AppState {
 	pub load_warnings: Vec<String>,
 	pub peaks: PeakCache,
 	pub jobs: Jobs,
+	pub files: FileBrowser,
+	/// Notes sounding through [`AppState::preview_note_on`] (released on mouse up, on
+	/// piano roll close and when the previewed track changes).
+	pub previewing: Vec<(TrackId, u8)>,
 	/// Awaiting the unsaved-changes prompt.
 	pub confirm: Option<Pending>,
 	/// Set when the app may close (nothing unsaved, or the user chose to discard/save).
@@ -168,6 +185,8 @@ impl AppState {
 			load_warnings: Vec::new(),
 			peaks: PeakCache::new(waker.clone()),
 			jobs: Jobs::default(),
+			files: FileBrowser::default(),
+			previewing: Vec::new(),
 			confirm: None,
 			quit_confirmed: false,
 			after_save: None,
@@ -253,6 +272,7 @@ impl AppState {
 	fn after_edit(&mut self, reload: bool) {
 		self.dirty = true;
 		self.selection.prune(self.session.document().project());
+		self.view.piano.prune(self.session.document().project());
 		let project = self.session.document().project();
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
@@ -380,18 +400,8 @@ impl AppState {
 	/// effects): an instrument replaces the instrument of an instrument track (or creates
 	/// a new instrument track), an effect is appended to the chain.
 	pub fn use_device(&mut self, item: &BrowserItem, track: Option<TrackId>) -> bool {
-		let catalog = (item.source == browser::Source::Plugin).then(|| self.session.plugins());
-		let spec = cadenza_mcp::convert::DeviceSpec {
-			device: item.id.clone(),
-			params: Default::default(),
-		};
-		let device = match cadenza_mcp::convert::build_device(&spec, item.role, catalog.as_deref())
-		{
-			Ok(d) => d,
-			Err(e) => {
-				self.notices.error(e.to_string());
-				return false;
-			}
+		let Some(device) = self.build_device(item) else {
+			return false;
 		};
 		let target = track.or(self.selection.track);
 		let project = self.project();
@@ -517,6 +527,12 @@ impl AppState {
 		}
 	}
 
+	/// Song end (last clip end), at least one bar.
+	pub fn song_end(&self) -> Tick {
+		let bar = self.project().time_signature.ticks_per_bar();
+		Tick(self.project().end_tick().0.max(bar.0))
+	}
+
 	pub fn toggle_play(&mut self) {
 		if self.is_playing() {
 			self.stop();
@@ -602,6 +618,10 @@ impl AppState {
 		self.previews = Previews::default();
 		self.view.timeline.scroll_beats = 0.0;
 		self.view.scroll_y = 0.0;
+		self.release_previews();
+		self.view.piano.clip = None;
+		self.view.piano.selected.clear();
+		self.view.piano.framed = None;
 		self.load_warnings.clear();
 		self.seek(Tick::ZERO);
 		self.schedule_reload();
@@ -651,10 +671,16 @@ impl AppState {
 			.selection
 			.track
 			.filter(|t| self.project().track(*t).map(|t| t.kind) == Some(TrackKind::Audio));
+		self.import_audio_at(path, track, None);
+	}
+
+	/// Imports an audio file onto `track` (an audio track; `None` = a new one) at `at`
+	/// (`None` = the playhead).
+	pub fn import_audio_at(&mut self, path: &Path, track: Option<TrackId>, at: Option<Tick>) {
 		let args = cadenza_mcp::tools::audio::ImportAudioArgs {
 			path: path.display().to_string(),
 			track_id: track,
-			at_beats: Some(self.position().beats()),
+			at_beats: Some(at.unwrap_or_else(|| self.position()).beats()),
 			name: None,
 			gain_db: None,
 		};
@@ -670,21 +696,372 @@ impl AppState {
 
 	/// Imports a standard MIDI file as new instrument tracks.
 	pub fn import_midi(&mut self, path: &Path) {
-		let args = cadenza_mcp::tools::midi::ImportMidiArgs {
-			path: path.display().to_string(),
-			split_by_channel: false,
-			track_id: None,
-			at_beats: None,
+		self.import_midi_at(path, None, Some(Tick::ZERO));
+	}
+
+	/// Imports a MIDI file into instrument track `track` as one clip, or (`None`) as new
+	/// instrument tracks, starting at `at` (`None` = the playhead). One undo step.
+	pub fn import_midi_at(&mut self, path: &Path, track: Option<TrackId>, at: Option<Tick>) {
+		let at = at.unwrap_or_else(|| self.position());
+		if track.is_some() || at == Tick::ZERO {
+			let args = cadenza_mcp::tools::midi::ImportMidiArgs {
+				path: path.display().to_string(),
+				split_by_channel: false,
+				track_id: track,
+				at_beats: Some(at.beats()),
+			};
+			if let Some(out) = self.edit_session(|s| cadenza_mcp::tools::midi::import_midi(s, args))
+			{
+				for w in out.warnings {
+					self.notices.warn(w);
+				}
+				if let Some(c) = out.clip {
+					self.selection.click_clip(c.track_id, c.clip_id, false);
+				}
+				self.notices.info(format!(
+					"Imported {} ({} tracks)",
+					path.display(),
+					out.created_tracks.len().max(1)
+				));
+			}
+			return;
+		}
+		// New tracks at a position: the shared tool always starts them at 0, so build the
+		// import batch here and shift its clips (still one command, one undo step).
+		let result = std::fs::read(path)
+			.map_err(|e| e.to_string())
+			.and_then(|bytes| {
+				cadenza_midi_io::import_smf(
+					&bytes,
+					&cadenza_midi_io::ImportOptions {
+						split_by_channel: false,
+						target: cadenza_midi_io::ImportTarget::NewTracks,
+					},
+				)
+				.map_err(|e| e.to_string())
+			});
+		let mut result = match result {
+			Ok(r) => r,
+			Err(e) => {
+				self.notices
+					.error(format!("Cannot import {}: {e}", path.display()));
+				return;
+			}
 		};
-		if let Some(out) = self.edit_session(|s| cadenza_mcp::tools::midi::import_midi(s, args)) {
-			for w in out.warnings {
+		let mut tracks = 0;
+		if let Command::Batch { commands, .. } = &mut result.command {
+			for cmd in commands {
+				if let Command::AddTrack { track, .. } = cmd {
+					tracks += 1;
+					for c in &mut track.clips {
+						c.start = c.start + at;
+					}
+				}
+			}
+		}
+		if self.apply(result.command) {
+			for w in result.warnings {
 				self.notices.warn(w);
 			}
-			self.notices.info(format!(
-				"Imported {} ({} tracks)",
-				path.display(),
-				out.created_tracks.len()
-			));
+			self.notices
+				.info(format!("Imported {} ({tracks} tracks)", path.display()));
+		}
+	}
+
+	// --- Drag and drop -------------------------------------------------------------
+
+	/// What dropping `payload` on `target` would do (for the drop hint).
+	pub fn drop_action(&self, payload: &Payload, target: DropTarget, copy: bool) -> DropAction {
+		dnd::resolve(self.project(), payload, target, copy)
+	}
+
+	/// Performs a drop. Returns false when nothing happened (rejected or failed).
+	pub fn drop_payload(&mut self, payload: &Payload, target: DropTarget, copy: bool) -> bool {
+		match self.drop_action(payload, target, copy) {
+			DropAction::SetInstrument { track, item } => self.use_device(&item, Some(track)),
+			DropAction::InsertEffect { track, item, index } => {
+				self.insert_effect(&item, track, index)
+			}
+			DropAction::NewTrack { item, after } => self.new_track_with(&item, after),
+			DropAction::LoadPreset { device, preset } => {
+				self.load_factory_preset(device, preset);
+				self.selection.select_device(device);
+				true
+			}
+			DropAction::DeviceWithPreset {
+				track,
+				device,
+				preset,
+			} => self.add_device_with_preset(track, &device, preset),
+			DropAction::MoveInsert {
+				from,
+				device,
+				to,
+				slot,
+				copy,
+			} => match edits::drop_insert(self.project(), from, device, to, slot, copy) {
+				Some(cmd) => self.apply(cmd),
+				None => false,
+			},
+			DropAction::ImportAudio { path, track, at } => {
+				self.import_audio_at(&path, track, at);
+				true
+			}
+			DropAction::ImportMidi { path, track, at } => {
+				self.import_midi_at(&path, track, at);
+				true
+			}
+			DropAction::OpenProject(path) => {
+				self.request(Pending::Open(Some(path)));
+				true
+			}
+			DropAction::Reject(why) => {
+				self.notices.info(why);
+				false
+			}
+		}
+	}
+
+	fn build_device(&mut self, item: &BrowserItem) -> Option<cadenza_model::Device> {
+		let catalog = (item.source == browser::Source::Plugin).then(|| self.session.plugins());
+		let spec = cadenza_mcp::convert::DeviceSpec {
+			device: item.id.clone(),
+			params: Default::default(),
+		};
+		match cadenza_mcp::convert::build_device(&spec, item.role, catalog.as_deref()) {
+			Ok(d) => Some(d),
+			Err(e) => {
+				self.notices.error(e.to_string());
+				None
+			}
+		}
+	}
+
+	/// Inserts an effect at `index` (None = end) of a channel (`None` = master).
+	pub fn insert_effect(
+		&mut self,
+		item: &BrowserItem,
+		track: Option<TrackId>,
+		index: Option<usize>,
+	) -> bool {
+		let Some(device) = self.build_device(item) else {
+			return false;
+		};
+		let r = DeviceRef {
+			track,
+			device: device.id,
+		};
+		let ok = self.apply(Command::InsertDevice {
+			track,
+			device,
+			index,
+		});
+		if ok {
+			self.selection.select_device(r);
+		}
+		ok
+	}
+
+	/// A new track below `after` (or at the end) holding `item`: an instrument track for
+	/// an instrument, a bus for an effect.
+	pub fn new_track_with(&mut self, item: &BrowserItem, after: Option<TrackId>) -> bool {
+		let Some(device) = self.build_device(item) else {
+			return false;
+		};
+		let project = self.project();
+		let r;
+		let track = match item.role {
+			DeviceRole::Instrument => {
+				let mut t = edits::new_track(project, TrackKind::Instrument);
+				t.name = item.name.clone();
+				r = DeviceRef {
+					track: Some(t.id),
+					device: device.id,
+				};
+				t.instrument = Some(device);
+				t
+			}
+			DeviceRole::Effect => {
+				let mut t = edits::new_track(project, TrackKind::Bus);
+				t.name = format!("{} Bus", item.name);
+				r = DeviceRef {
+					track: Some(t.id),
+					device: device.id,
+				};
+				t.channel.inserts.push(device);
+				t
+			}
+		};
+		let after = after.or_else(|| project.tracks.last().map(|t| t.id));
+		let cmd = edits::add_track(project, track, after);
+		let ok = self.apply(cmd);
+		if ok {
+			self.selection.select_device(r);
+		}
+		ok
+	}
+
+	/// Adds built-in `device` with `preset` loaded to `track` (instrument or insert).
+	fn add_device_with_preset(
+		&mut self,
+		track: TrackId,
+		device: &str,
+		preset: &cadenza_dsp::FactoryPreset,
+	) -> bool {
+		let Some(info) = cadenza_dsp::registry().iter().find(|i| i.id == device) else {
+			return false;
+		};
+		let mut d = cadenza_model::Device::builtin(info.id, info.name);
+		d.params = preset
+			.params
+			.iter()
+			.map(|(k, v)| ((*k).to_owned(), *v))
+			.collect();
+		let r = DeviceRef {
+			track: Some(track),
+			device: d.id,
+		};
+		let cmd = match info.role {
+			DeviceRole::Instrument => Command::SetInstrument {
+				track,
+				device: Some(d),
+			},
+			DeviceRole::Effect => Command::InsertDevice {
+				track: Some(track),
+				device: d,
+				index: None,
+			},
+		};
+		let ok = self.apply(cmd);
+		if ok {
+			self.selection.select_device(r);
+		}
+		ok
+	}
+
+	// --- Piano roll and note preview ----------------------------------------------
+
+	/// Opens `clip` (a MIDI clip) in the piano roll and shows the panel.
+	pub fn open_piano_roll(&mut self, clip: ClipId) -> bool {
+		let Some((track, c)) = self.project().find_clip(clip) else {
+			return false;
+		};
+		if !c.is_midi() {
+			return false;
+		}
+		let track = track.id;
+		if self.view.piano.clip != Some(clip) {
+			self.release_previews();
+			self.view.piano.selected.clear();
+			self.view.piano.framed = None;
+		}
+		self.view.piano.clip = Some(clip);
+		self.selection.click_clip(track, clip, false);
+		self.view.panels.open_piano_roll();
+		true
+	}
+
+	pub fn close_piano_roll(&mut self) {
+		self.release_previews();
+		self.view.panels.set(PanelKind::PianoRoll, false);
+	}
+
+	/// Track of the clip in the piano roll.
+	pub fn piano_track(&self) -> Option<TrackId> {
+		let clip = self.view.piano.clip?;
+		self.project().find_clip(clip).map(|(t, _)| t.id)
+	}
+
+	/// Starts sounding `pitch` on `track`'s instrument (also while stopped). Notes held
+	/// on another track are released first.
+	pub fn preview_note_on(&mut self, track: TrackId, pitch: u8, velocity: f32) {
+		if self.previewing.iter().any(|(t, _)| *t != track) {
+			self.release_previews();
+		}
+		if self.previewing.contains(&(track, pitch)) {
+			return;
+		}
+		self.previewing.push((track, pitch));
+		if let Some(a) = &self.audio {
+			a.preview_on(track, pitch, velocity);
+		}
+	}
+
+	pub fn preview_note_off(&mut self, track: TrackId, pitch: u8) {
+		let before = self.previewing.len();
+		self.previewing.retain(|n| *n != (track, pitch));
+		if self.previewing.len() != before
+			&& let Some(a) = &self.audio
+		{
+			a.preview_off(track, pitch);
+		}
+	}
+
+	/// Releases every previewed note.
+	pub fn release_previews(&mut self) {
+		for (track, pitch) in std::mem::take(&mut self.previewing) {
+			if let Some(a) = &self.audio {
+				a.preview_off(track, pitch);
+			}
+		}
+	}
+
+	// --- Preferences ---------------------------------------------------------------
+
+	/// The per-user layout/zoom preferences to persist.
+	pub fn prefs(&self) -> Prefs {
+		let v = &self.view;
+		let mut panels = v.panels.clone();
+		// The mixer only made room for the piano roll (which starts closed next time).
+		panels.mixer |= panels.mixer_yielded;
+		Prefs {
+			panels,
+			px_per_beat: v.timeline.px_per_beat,
+			track_height: v.track_height,
+			snap: v.snap,
+			follow: v.follow,
+			piano_px_per_beat: v.piano.timeline.px_per_beat,
+			piano_row_height: v.piano.row_height,
+			piano_velocity_lane: v.piano.velocity_lane,
+			piano_ghosts: v.piano.ghosts,
+			piano_scale: v
+				.piano
+				.scale
+				.map(|s| format!("{} {}", s.root.name(false), scale_kind_name(s.kind)))
+				.unwrap_or_default(),
+			bookmarks: v.bookmarks.clone(),
+		}
+	}
+
+	/// Restores saved preferences (values are clamped to valid ranges).
+	pub fn apply_prefs(&mut self, p: Prefs) {
+		let v = &mut self.view;
+		v.panels = PanelLayout {
+			maximized: None,
+			focus: None,
+			mixer_yielded: false,
+			..p.panels
+		};
+		// The piano roll has nothing to show until a clip is opened.
+		v.panels.piano_roll = false;
+		v.timeline.px_per_beat = p
+			.px_per_beat
+			.clamp(timeline::MIN_PX_PER_BEAT, timeline::MAX_PX_PER_BEAT);
+		v.track_height = p.track_height.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+		v.snap = p.snap;
+		v.follow = p.follow;
+		v.piano.timeline.px_per_beat = p
+			.piano_px_per_beat
+			.clamp(timeline::MIN_PX_PER_BEAT, timeline::MAX_PX_PER_BEAT);
+		v.piano.row_height = p
+			.piano_row_height
+			.clamp(piano::MIN_ROW_HEIGHT, piano::MAX_ROW_HEIGHT);
+		v.piano.velocity_lane = p.piano_velocity_lane;
+		v.piano.ghosts = p.piano_ghosts;
+		v.piano.scale = cadenza_theory::Scale::parse(&p.piano_scale).ok();
+		v.bookmarks = p.bookmarks;
+		if self.files.dir.is_none() {
+			self.files.dir = v.bookmarks.first().cloned();
 		}
 	}
 
@@ -936,6 +1313,27 @@ impl AppState {
 					.error("Plugin scan failed: the scan thread stopped"),
 			}
 		}
+	}
+}
+
+/// Name of a scale kind as `cadenza_theory::Scale::parse` reads it.
+pub fn scale_kind_name(kind: cadenza_theory::ScaleKind) -> &'static str {
+	use cadenza_theory::ScaleKind as K;
+	match kind {
+		K::Major => "major",
+		K::NaturalMinor => "minor",
+		K::HarmonicMinor => "harmonic minor",
+		K::MelodicMinor => "melodic minor",
+		K::Dorian => "dorian",
+		K::Phrygian => "phrygian",
+		K::Lydian => "lydian",
+		K::Mixolydian => "mixolydian",
+		K::Locrian => "locrian",
+		K::MajorPentatonic => "major pentatonic",
+		K::MinorPentatonic => "minor pentatonic",
+		K::Blues => "blues",
+		K::WholeTone => "whole tone",
+		K::Chromatic => "chromatic",
 	}
 }
 

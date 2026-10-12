@@ -41,14 +41,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 		tempo(ui, state);
 		time_signature(ui, state);
 		ui.add_space(8.0);
-		let follow = state.view.follow_playhead;
-		if ui
-			.selectable_label(follow, "Follow")
-			.on_hover_text("Scroll the arrange view with the playhead")
-			.clicked()
-		{
-			state.view.follow_playhead = !follow;
-		}
+		super::arrange::follow_menu(ui, state);
 
 		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 			ui.add_space(6.0);

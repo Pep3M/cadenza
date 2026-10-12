@@ -7,7 +7,10 @@
 //! through [`cadenza_mcp::CadenzaServer::call_tool_json`] behind a file-system policy
 //! ([`tools`]), spending is capped by [`budget`], and every session leaves a JSONL audit
 //! trail ([`transcript`]).
-
+//!
+//! Two modes: [`Agent`] composes a song from a brief into a folder (`cadenza compose`);
+//! [`SessionAgent`] is the in-app producer, a conversation that edits the project the
+//! user has open through a shared session, one undo step per request ([`session`]).
 
 pub mod agent;
 pub mod budget;
@@ -19,6 +22,7 @@ pub mod observer;
 pub mod openrouter;
 pub mod prompt;
 pub mod provider;
+pub mod session;
 pub mod tools;
 pub mod transcript;
 pub mod types;
@@ -31,3 +35,4 @@ pub use observer::{AgentEvent, AgentObserver};
 pub use openrouter::{OpenRouterConfig, OpenRouterProvider};
 pub use prompt::AppContext;
 pub use provider::LlmProvider;
+pub use session::{RequestOutcome, RequestStatus, SessionAgent, SessionConfig};

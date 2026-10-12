@@ -1080,8 +1080,8 @@ impl ArrangeUi {
 					.selection
 					.click_clip(track.id, clip.id, add && !drag_started);
 			}
-			if r.double_clicked() && clip.is_midi() {
-				state.open_piano_roll(clip.id);
+			if r.double_clicked() {
+				state.open_editor(clip.id);
 			}
 			if drag_started && let Some(press) = r.interact_pointer_pos() {
 				let kind = if press.x > rect.right() - RESIZE_HANDLE {
@@ -1208,7 +1208,11 @@ impl ArrangeUi {
 			.view
 			.panels
 			.visible(crate::state::layout::PanelKind::PianoRoll)
-			&& state.view.piano.clip == Some(clip.id);
+			&& if state.view.audio_editor {
+				state.view.audio.clip == Some(clip.id)
+			} else {
+				state.view.piano.clip == Some(clip.id)
+			};
 		if copying {
 			// The original stays; the copy is drawn at the destination.
 			if rect.intersects(area) {
@@ -1486,6 +1490,15 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 			.clicked()
 		{
 			state.open_piano_roll(clip.id);
+			ui.close();
+		}
+		ui.separator();
+	} else {
+		if ui
+			.add(egui::Button::new("Open in audio editor").shortcut_text("Double-click"))
+			.clicked()
+		{
+			state.open_audio_editor(clip.id);
 			ui.close();
 		}
 		ui.separator();

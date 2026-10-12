@@ -8,6 +8,7 @@
 //! marked dirty, the selection is pruned and a debounced player reload is scheduled.
 //! Views only read state and call these methods.
 
+pub mod audio_edit;
 pub mod automation;
 pub mod browser;
 pub mod dnd;
@@ -88,6 +89,10 @@ pub struct ViewState {
 	pub help: bool,
 	/// Automation and tempo lanes of the arrange view.
 	pub automation: automation::AutomationView,
+	/// The audio editor (shares the bottom editor dock with the piano roll).
+	pub audio: audio_edit::AudioEditorView,
+	/// The editor dock shows the audio editor instead of the piano roll.
+	pub audio_editor: bool,
 }
 
 impl Default for ViewState {
@@ -103,6 +108,8 @@ impl Default for ViewState {
 			bookmarks: Vec::new(),
 			help: false,
 			automation: automation::AutomationView::default(),
+			audio: audio_edit::AudioEditorView::default(),
+			audio_editor: false,
 		}
 	}
 }
@@ -131,6 +138,8 @@ pub enum Pending {
 pub struct Jobs {
 	pub scan: Option<Job<Result<(PluginCatalog, ScanReport), String>>>,
 	pub export: Option<Job<Result<(PathBuf, MixReport), String>>>,
+	/// An audio editor operation rendering a processed copy.
+	pub process: Option<Job<Result<audio_edit::Rendered, String>>>,
 	pub dialog: Option<(FileAction, Job<Option<PathBuf>>)>,
 }
 
@@ -308,6 +317,7 @@ impl AppState {
 		self.view
 			.automation
 			.prune(self.session.document().project());
+		self.view.audio.prune(self.session.document().project());
 		let project = self.session.document().project();
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
@@ -934,6 +944,8 @@ impl AppState {
 		self.view.piano.selected.clear();
 		self.view.piano.framed = None;
 		self.view.automation = automation::AutomationView::default();
+		self.view.audio = audio_edit::AudioEditorView::default();
+		self.view.audio_editor = false;
 		self.load_warnings.clear();
 		self.seek(Tick::ZERO);
 		self.schedule_reload();
@@ -1268,9 +1280,80 @@ impl AppState {
 			self.view.piano.framed = None;
 		}
 		self.view.piano.clip = Some(clip);
+		self.view.audio_editor = false;
 		self.selection.click_clip(track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
+	}
+
+	/// Opens `clip` in its editor: the piano roll for MIDI, the audio editor for audio.
+	pub fn open_editor(&mut self, clip: ClipId) -> bool {
+		match self.project().find_clip(clip) {
+			Some((_, c)) if c.is_midi() => self.open_piano_roll(clip),
+			Some(_) => self.open_audio_editor(clip),
+			None => false,
+		}
+	}
+
+	/// Opens an audio clip in the audio editor (the bottom editor dock).
+	pub fn open_audio_editor(&mut self, clip: ClipId) -> bool {
+		let Some(r) = audio_edit::region(self.project(), clip) else {
+			return false;
+		};
+		self.release_previews();
+		if self.view.audio.clip != Some(clip) {
+			self.view.audio.selection = None;
+			self.view.audio.framed = None;
+		}
+		self.view.audio.clip = Some(clip);
+		self.view.audio_editor = true;
+		self.selection.click_clip(r.track, clip, false);
+		self.view.panels.open_piano_roll();
+		true
+	}
+
+	/// Clip-based edit of the audio editor (one command; errors become notices).
+	pub fn audio_edit(&mut self, cmd: Option<Command>) -> bool {
+		match cmd {
+			Some(cmd) => self.apply(cmd),
+			None => false,
+		}
+	}
+
+	/// Renders `op` over the editor's selection (or the whole clip region) into a new
+	/// file next to the project, then swaps it into the clip (one undo step).
+	pub fn process_audio(&mut self, op: audio_edit::Process) {
+		if !op.available() {
+			self.notices.warn(audio_edit::STRETCH_HINT);
+			return;
+		}
+		if self.jobs.process.is_some() {
+			self.notices.warn("An audio operation is already running");
+			return;
+		}
+		let Some(clip) = self.view.audio.clip else {
+			return;
+		};
+		let Some(r) = audio_edit::region(self.project(), clip) else {
+			return;
+		};
+		let range = r.clamp(self.view.audio.selection.unwrap_or((r.offset, r.end())));
+		if range.1 - range.0 <= 1e-6 {
+			self.notices.info("Select a range of the clip first");
+			return;
+		}
+		let out = audio_edit::processed_path(self.path(), &r.file, op);
+		let source = r.file.clone();
+		self.notices.info(format!("{}…", op.label()));
+		self.jobs.process = Some(Job::spawn("audio-process", self.waker.clone(), move || {
+			let extra = audio_edit::render_processed(&source, &out, range, op)?;
+			Ok(audio_edit::Rendered {
+				clip,
+				op,
+				file: out,
+				extra_seconds: extra,
+			})
+		}));
 	}
 
 	pub fn close_piano_roll(&mut self) {
@@ -1523,6 +1606,7 @@ impl AppState {
 			|| self.reload_since.is_some()
 			|| self.jobs.scan.is_some()
 			|| self.jobs.export.is_some()
+			|| self.jobs.process.is_some()
 	}
 
 	fn poll_audio(&mut self) {
@@ -1603,6 +1687,29 @@ impl AppState {
 				None => self
 					.notices
 					.error("Export failed: the render thread stopped"),
+			}
+		}
+		if let Some(r) = self.jobs.process.as_ref().and_then(Job::poll) {
+			self.jobs.process = None;
+			match r {
+				Some(Ok(done)) => match audio_edit::swap_in(self.project(), &done) {
+					Some(cmd) => {
+						if self.apply(cmd) {
+							self.notices.info(format!(
+								"{}: wrote {}",
+								done.op.label(),
+								done.file.display()
+							));
+						}
+					}
+					None => self
+						.notices
+						.warn("The clip was removed before the operation finished"),
+				},
+				Some(Err(e)) => self.notices.error(format!("Audio operation failed: {e}")),
+				None => self
+					.notices
+					.error("Audio operation failed: the worker thread stopped"),
 			}
 		}
 		if let Some(r) = self.jobs.scan.as_ref().and_then(Job::poll) {

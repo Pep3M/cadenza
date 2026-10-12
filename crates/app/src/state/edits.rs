@@ -344,6 +344,116 @@ pub fn split_clip(project: &Project, clip: ClipId, at: Tick) -> Option<(Command,
 	Some((batch("Split clip", commands)?, id))
 }
 
+/// Moves a clip's start edge to `start` (left trim/extend) keeping its content where it
+/// is on the timeline: MIDI notes shift inside the clip (notes cut off at the left are
+/// removed or shortened), an audio clip's `offset_seconds` follows (never below 0, which
+/// limits how far it extends). The end stays put.
+pub fn trim_start(project: &Project, clip: ClipId, start: Tick) -> Option<Command> {
+	let (_, c) = project.find_clip(clip)?;
+	let end = c.end();
+	let mut start = Tick(start.0.clamp(0, end.0 - MIN_CLIP_LENGTH.0));
+	let mut commands = Vec::new();
+	match &c.content {
+		ClipContent::Midi { notes } => {
+			let delta = start - c.start;
+			if delta.0 == 0 {
+				return None;
+			}
+			let resize = Command::UpdateClip {
+				clip,
+				patch: ClipPatch {
+					start: Some(start),
+					length: Some(end - start),
+					..ClipPatch::default()
+				},
+			};
+			let gone: Vec<NoteId> = notes
+				.iter()
+				.filter(|n| n.end() <= delta)
+				.map(|n| n.id)
+				.collect();
+			let moved: Vec<NotePatch> = notes
+				.iter()
+				.filter(|n| !gone.contains(&n.id))
+				.map(|n| {
+					let new_start = n.start - delta;
+					let (s, len) = if new_start.0 < 0 {
+						(Tick::ZERO, n.length + new_start)
+					} else {
+						(new_start, n.length)
+					};
+					NotePatch {
+						id: n.id,
+						pitch: None,
+						velocity: None,
+						start: Some(s),
+						length: (len != n.length).then_some(len),
+					}
+				})
+				.collect();
+			if delta.0 < 0 {
+				// Growing: make room first, then move the notes later.
+				commands.push(resize.clone());
+			}
+			if !gone.is_empty() {
+				commands.push(Command::RemoveNotes { clip, notes: gone });
+			}
+			if !moved.is_empty() {
+				commands.push(Command::UpdateNotes { clip, notes: moved });
+			}
+			if delta.0 > 0 {
+				commands.push(resize);
+			}
+		}
+		ClipContent::Audio {
+			offset_seconds,
+			fade_in,
+			fade_out,
+			..
+		} => {
+			let tempo = &project.tempo;
+			let old_s = tempo.tick_to_seconds(c.start);
+			let mut offset = offset_seconds + tempo.tick_to_seconds(start) - old_s;
+			if offset < 0.0 {
+				// Cannot reveal audio before the file start.
+				start = tempo
+					.seconds_to_tick(old_s - offset_seconds)
+					.max(Tick::ZERO);
+				offset = (offset_seconds + tempo.tick_to_seconds(start) - old_s).max(0.0);
+			}
+			if start == c.start {
+				return None;
+			}
+			let duration = tempo.tick_to_seconds(end) - tempo.tick_to_seconds(start);
+			let fin = fade_in.filter(|f| f.seconds < duration);
+			let fout = fade_out.filter(|f| f.seconds + fin.map_or(0.0, |f| f.seconds) < duration);
+			if fin != *fade_in || fout != *fade_out {
+				commands.push(Command::SetClipFades {
+					clip,
+					fade_in: fin,
+					fade_out: fout,
+				});
+			}
+			commands.push(Command::UpdateAudioClip {
+				clip,
+				patch: cadenza_model::AudioClipPatch {
+					offset_seconds: Some(offset),
+					..Default::default()
+				},
+			});
+			commands.push(Command::UpdateClip {
+				clip,
+				patch: ClipPatch {
+					start: Some(start),
+					length: Some(end - start),
+					..ClipPatch::default()
+				},
+			});
+		}
+	}
+	batch("Trim clip start", commands)
+}
+
 /// An empty one-bar (at least) MIDI clip on an instrument track.
 pub fn new_midi_clip(
 	project: &Project,
@@ -649,5 +759,79 @@ mod tests {
 		let (cmd, id) = new_midi_clip(p, fx.keys2, beats(8.0), beats(4.0)).unwrap();
 		fx.doc.execute(cmd).unwrap();
 		assert_eq!(clip(&fx.doc, id).0, fx.keys2);
+	}
+}
+
+#[cfg(test)]
+mod trim_tests {
+	use super::*;
+	use cadenza_model::Document;
+
+	fn beats(b: f64) -> Tick {
+		Tick::from_beats(b)
+	}
+
+	fn exec(p: &Project, cmd: Command) -> Project {
+		let mut doc = Document::new(p.clone());
+		doc.execute(cmd).unwrap();
+		doc.into_project()
+	}
+
+	#[test]
+	fn trimming_the_start_keeps_midi_notes_in_place() {
+		let mut p = Project::new("t");
+		let mut t = Track::new("Keys", TrackKind::Instrument);
+		let clip = Clip::midi("A", beats(4.0), beats(8.0)).with_notes([
+			Note::new(60, beats(0.0), beats(1.0), 0.8),
+			Note::new(62, beats(1.5), beats(1.0), 0.8),
+			Note::new(64, beats(4.0), beats(1.0), 0.8),
+		]);
+		let id = clip.id;
+		t.clips.push(clip);
+		p.tracks.push(t);
+		// Trim 2 beats: note 1 is gone, note 2 is cut to its tail, note 3 moves.
+		let trimmed = exec(&p, trim_start(&p, id, beats(6.0)).unwrap());
+		let (_, c) = trimmed.find_clip(id).unwrap();
+		assert_eq!((c.start, c.length), (beats(6.0), beats(6.0)));
+		let notes = c.notes();
+		assert_eq!(notes.len(), 2);
+		assert_eq!((notes[0].start, notes[0].length), (Tick::ZERO, beats(0.5)));
+		assert_eq!(
+			notes[1].start,
+			beats(2.0),
+			"absolute position kept (beat 8)"
+		);
+		// Extending back left moves them later again.
+		let grown = exec(&trimmed, trim_start(&trimmed, id, beats(2.0)).unwrap());
+		let (_, c) = grown.find_clip(id).unwrap();
+		assert_eq!((c.start, c.length), (beats(2.0), beats(10.0)));
+		assert_eq!(c.notes()[1].start, beats(6.0));
+		assert!(trim_start(&grown, id, beats(2.0)).is_none());
+	}
+
+	#[test]
+	fn trimming_an_audio_clip_moves_its_offset() {
+		let mut p = Project::new("t");
+		let mut t = Track::new("Vox", TrackKind::Audio);
+		let clip = Clip::audio("V", beats(4.0), beats(8.0), "v.wav");
+		let id = clip.id;
+		t.clips.push(clip);
+		p.tracks.push(t);
+		// 120 bpm: 2 beats = 1 s.
+		let trimmed = exec(&p, trim_start(&p, id, beats(6.0)).unwrap());
+		let (_, c) = trimmed.find_clip(id).unwrap();
+		assert_eq!((c.start, c.end()), (beats(6.0), beats(12.0)));
+		let ClipContent::Audio { offset_seconds, .. } = c.content else {
+			panic!()
+		};
+		assert!((offset_seconds - 1.0).abs() < 1e-9);
+		// Extending further left than the file start stops at offset 0.
+		let back = exec(&trimmed, trim_start(&trimmed, id, beats(0.0)).unwrap());
+		let (_, c) = back.find_clip(id).unwrap();
+		assert_eq!(c.start, beats(4.0));
+		let ClipContent::Audio { offset_seconds, .. } = c.content else {
+			panic!()
+		};
+		assert!(offset_seconds.abs() < 1e-9);
 	}
 }

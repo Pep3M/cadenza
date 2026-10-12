@@ -7,6 +7,10 @@ license.workspace = true
 # egui 0.36 needs a newer compiler than the rest of the workspace.
 rust-version = "1.95"
 
+[features]
+# Time-stretch / pitch-shift in the audio editor (Signalsmith; C++ compiler + libclang).
+stretch = ["cadenza-audio-io/stretch", "cadenza-engine/stretch"]
+
 [[bin]]
 name = "cadenza-app"
 path = "src/main.rs"

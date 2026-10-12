@@ -5,6 +5,7 @@
 //! methods, so every edit becomes a `Command`.
 
 pub mod arrange;
+pub mod audio_editor;
 pub mod automation;
 pub mod browser;
 pub mod dnd;
@@ -39,6 +40,7 @@ pub struct CadenzaApp {
 	arrange: arrange::ArrangeUi,
 	browser: browser::BrowserUi,
 	piano: piano_roll::PianoUi,
+	audio_editor: audio_editor::AudioEditorUi,
 	title: String,
 	themed: bool,
 	/// Whether the piano roll was visible last frame (to release previews on hide).
@@ -77,6 +79,7 @@ impl CadenzaApp {
 			arrange: arrange::ArrangeUi::default(),
 			browser: browser::BrowserUi::default(),
 			piano: piano_roll::PianoUi::default(),
+			audio_editor: audio_editor::AudioEditorUi::default(),
 			title: String::new(),
 			themed: false,
 			piano_was_visible: false,
@@ -86,6 +89,11 @@ impl CadenzaApp {
 	/// Automation lane `address` in the arrange view in the last frame (headless tests).
 	pub fn lane_rect(&self, address: &cadenza_core::ParamAddress) -> Option<Rect> {
 		self.arrange.lane_rect(self.state.view.scroll_y, address)
+	}
+
+	/// Waveform area of the audio editor in the last frame (headless tests).
+	pub fn audio_wave(&self) -> Option<Rect> {
+		self.audio_editor.wave_rect
 	}
 
 	/// Note grid of the piano roll in the last frame (headless tests).
@@ -174,12 +182,19 @@ impl CadenzaApp {
 		}
 		if docked(PanelKind::PianoRoll) {
 			let piano = &mut self.piano;
+			let audio = &mut self.audio_editor;
 			let r = Panel::bottom("piano-roll")
 				.resizable(true)
 				.default_size(360.0)
 				.size_range(200.0..=900.0)
 				.frame(Frame::new().fill(theme::BG_DEEP))
-				.show(ui, |ui| piano.show(ui, state));
+				.show(ui, |ui| {
+					if state.view.audio_editor {
+						audio.show(ui, state)
+					} else {
+						piano.show(ui, state)
+					}
+				});
 			rects.push((PanelKind::PianoRoll, r.response.rect));
 		}
 		if docked(PanelKind::Browser) {
@@ -211,9 +226,11 @@ impl CadenzaApp {
 		}
 		let arrange = &mut self.arrange;
 		let piano = &mut self.piano;
+		let audio = &mut self.audio_editor;
 		let browser = &mut self.browser;
 		let central = egui::CentralPanel::no_frame().show(ui, |ui| match center {
 			Some(PanelKind::Arrange) => arrange.show(ui, state),
+			Some(PanelKind::PianoRoll) if state.view.audio_editor => audio.show(ui, state),
 			Some(PanelKind::PianoRoll) => piano.show(ui, state),
 			Some(PanelKind::Mixer) => {
 				Frame::new()
@@ -351,7 +368,11 @@ impl CadenzaApp {
 		let piano_focused = self.state.view.panels.focus == Some(PanelKind::PianoRoll)
 			&& self.state.view.panels.visible(PanelKind::PianoRoll);
 		if piano_focused {
-			self.piano.shortcuts(ctx, &mut self.state);
+			if self.state.view.audio_editor {
+				self.audio_editor.shortcuts(ctx, &mut self.state);
+			} else {
+				self.piano.shortcuts(ctx, &mut self.state);
+			}
 		}
 		let s = &mut self.state;
 		if pressed(Modifiers::NONE, Key::Space) {
@@ -434,14 +455,10 @@ impl eframe::App for CadenzaApp {
 /// opens the selected MIDI clip (if any).
 pub fn toggle_panel(state: &mut AppState, panel: PanelKind) {
 	if panel == PanelKind::PianoRoll && !state.view.panels.visible(panel) {
-		let selected = state.selection.clips.iter().copied().find(|c| {
-			state
-				.project()
-				.find_clip(*c)
-				.is_some_and(|(_, c)| c.is_midi())
-		});
-		if let Some(clip) = selected.filter(|_| state.view.piano.clip.is_none()) {
-			state.open_piano_roll(clip);
+		let selected = state.selection.clips.iter().copied().next();
+		let opened = state.view.piano.clip.is_some() || state.view.audio.clip.is_some();
+		if let Some(clip) = selected.filter(|_| !opened) {
+			state.open_editor(clip);
 			return;
 		}
 		state.view.panels.open_piano_roll();

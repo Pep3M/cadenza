@@ -285,6 +285,117 @@ fn inspector_shows_the_selected_device() {
 	assert_eq!(h.state().state.undo_label(), Some("Bypass device"));
 }
 
+/// A 2 s decaying stereo tone written to a temporary WAV.
+fn tone_wav(dir: &std::path::Path) -> PathBuf {
+	let sr = 44_100usize;
+	let l: Vec<f32> = (0..sr * 2)
+		.map(|i| {
+			let t = i as f32 / sr as f32;
+			0.8 * (-1.5 * t).exp() * (t * 220.0 * std::f32::consts::TAU).sin()
+		})
+		.collect();
+	let r: Vec<f32> = l
+		.iter()
+		.enumerate()
+		.map(|(i, x)| x * (0.5 + 0.5 * ((i / 4000) % 2) as f32))
+		.collect();
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(sr as u32, vec![l, r]).unwrap();
+	let path = dir.join("tone.wav");
+	cadenza_audio_io::export(
+		&buf,
+		&path,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	path
+}
+
+#[test]
+fn audio_editor_trims_fades_and_processes_through_commands() {
+	let dir = tempfile::tempdir().unwrap();
+	let wav = tone_wav(dir.path());
+	let mut a = app();
+	// Saved in the temp dir, so processed copies land in "song audio" there.
+	assert!(a.state.save_as(dir.path().join("song.cadenza.json")));
+	a.state.import_audio_at(&wav, None, Some(Tick::ZERO));
+	let clip = *a
+		.state
+		.selection
+		.clips
+		.iter()
+		.next()
+		.expect("imported clip selected");
+	assert!(a.state.open_editor(clip));
+	assert!(a.state.view.audio_editor);
+	let mut h = harness(a);
+	h.run_steps(4);
+	// Wait for the peaks worker.
+	for _ in 0..200 {
+		h.run_steps(1);
+		if matches!(
+			h.state_mut().state.peaks.get(&wav),
+			cadenza_app::jobs::Peaks::Ready(_)
+		) {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	let wave = h.state().audio_wave().expect("audio editor drawn");
+	let region = |h: &Harness<'_, CadenzaApp>| {
+		cadenza_app::state::audio_edit::region(h.state().state.project(), clip).unwrap()
+	};
+	let x_of =
+		|h: &Harness<'_, CadenzaApp>, s: f64| wave.left() + h.state().state.view.audio.x_of(s);
+	assert!((region(&h).duration - 2.0).abs() < 0.01);
+
+	// Drag a selection over 0.5..1.0 s, then Trim: one undo step, content stays in place.
+	let y = wave.center().y + 20.0;
+	h.drag_at(pos2(x_of(&h, 0.5), y));
+	h.run_steps(1);
+	h.hover_at(pos2(x_of(&h, 0.75), y));
+	h.run_steps(1);
+	h.drop_at(pos2(x_of(&h, 1.0), y));
+	h.run_steps(2);
+	let (a, b) = h.state().state.view.audio.selection.unwrap();
+	assert!((a - 0.5).abs() < 0.02 && (b - 1.0).abs() < 0.02, "{a}..{b}");
+	h.get_by_label("Trim").click();
+	h.run_steps(3);
+	let r = region(&h);
+	assert!((r.offset - 0.5).abs() < 0.02 && (r.duration - 0.5).abs() < 0.03);
+	assert_eq!(h.state().state.undo_label(), Some("Trim clip to selection"));
+
+	// Fade-in handle drag sets the fade (one SetClipFades).
+	let start = pos2(x_of(&h, r.offset), wave.top() + 6.0);
+	h.drag_at(start);
+	h.run_steps(1);
+	h.hover_at(start + vec2(20.0, 0.0));
+	h.run_steps(1);
+	h.drop_at(pos2(x_of(&h, r.offset + 0.1), wave.top() + 6.0));
+	h.run_steps(2);
+	let fade = region(&h).fade_in.expect("fade in set").seconds;
+	assert!((fade - 0.1).abs() < 0.02, "{fade}");
+	assert_eq!(h.state().state.undo_label(), Some("Set clip fades"));
+
+	// Reverse renders a processed copy next to the (unsaved: cache) project and swaps it.
+	h.state_mut().state.view.audio.selection = None;
+	h.get_by_label("Reverse").click();
+	for _ in 0..300 {
+		h.run_steps(1);
+		if h.state().state.jobs.process.is_none() {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	let swapped = region(&h).file;
+	assert_ne!(swapped, wav);
+	assert!(swapped.exists());
+	assert!(swapped.starts_with(dir.path().join("song audio")));
+	assert_eq!(h.state().state.undo_label(), Some("Reverse"));
+	h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+	h.run_steps(2);
+	assert_eq!(region(&h).file, wav, "undo swaps the original back");
+}
+
 #[test]
 fn automation_lanes_add_move_and_delete_points() {
 	let mut a = app();
@@ -525,6 +636,68 @@ fn render_screens() {
 	h.hover_at(pos2(752.0, 578.0));
 	shot(&mut h, "automation_hover");
 	h.remove_cursor();
+
+	// Audio editor on an imported tone: fades, gain, a selection; then zoomed to samples.
+	let tmp = tempfile::tempdir().unwrap();
+	let wav = tone_wav(tmp.path());
+	let clip = {
+		let s = &mut h.state_mut().state;
+		s.view.automation.tempo = false;
+		s.import_audio_at(&wav, None, Some(Tick(PPQ * 4)));
+		let clip = *s.selection.clips.iter().next().unwrap();
+		let cmd = cadenza_app::state::audio_edit::set_fades(
+			s.project(),
+			clip,
+			Some(cadenza_model::ClipFade::new(
+				0.15,
+				cadenza_model::FadeCurve::EqualPower,
+			)),
+			Some(cadenza_model::ClipFade::new(
+				0.6,
+				cadenza_model::FadeCurve::SCurve,
+			)),
+		);
+		s.audio_edit(cmd);
+		let cmd = cadenza_app::state::audio_edit::set_region_end(s.project(), clip, 1.7);
+		s.audio_edit(cmd);
+		s.audio_edit(cadenza_app::state::audio_edit::set_gain(
+			s.project(),
+			clip,
+			-2.5,
+		));
+		s.open_editor(clip);
+		s.view.audio.selection = Some((0.55, 0.9));
+		clip
+	};
+	for _ in 0..300 {
+		h.run_steps(1);
+		if matches!(
+			h.state_mut().state.peaks.get(&wav),
+			cadenza_app::jobs::Peaks::Ready(_)
+		) {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	shot(&mut h, "audio_editor");
+	{
+		let s = &mut h.state_mut().state;
+		let _ = s.peaks.samples(&wav);
+		s.view.audio.px_per_second = 30_000.0;
+		s.view.audio.scroll = 0.6;
+		s.view.audio.framed = Some(clip);
+	}
+	for _ in 0..300 {
+		h.run_steps(1);
+		if matches!(
+			h.state_mut().state.peaks.samples(&wav),
+			cadenza_app::jobs::Samples::Ready(_)
+		) {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	shot(&mut h, "audio_editor_samples");
 
 	h.state_mut().state.dirty = true;
 	h.state_mut()

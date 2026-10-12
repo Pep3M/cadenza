@@ -62,23 +62,42 @@ pub enum Peaks {
 	Failed(String),
 }
 
-/// Decodes audio files on a worker thread and caches their waveform peaks by path.
+/// Decoded samples of one file, for drawing finer than the finest peak level (the
+/// audio editor zoomed in).
+#[derive(Clone)]
+pub enum Samples {
+	Pending,
+	Ready(Arc<cadenza_audio_io::AudioBuffer>),
+	Failed,
+}
+
+type PeakResult = (
+	PathBuf,
+	Result<(WaveformPeaks, Option<Arc<cadenza_audio_io::AudioBuffer>>), String>,
+);
+
+/// Decodes audio files on a worker thread and caches their waveform peaks by path;
+/// keeps the samples of the one file the audio editor shows.
 pub struct PeakCache {
 	entries: HashMap<PathBuf, Peaks>,
-	requests: Sender<PathBuf>,
-	results: Receiver<(PathBuf, Result<WaveformPeaks, String>)>,
+	samples: Option<(PathBuf, Samples)>,
+	requests: Sender<(PathBuf, bool)>,
+	results: Receiver<PeakResult>,
 }
 
 impl PeakCache {
 	pub fn new(waker: Option<Waker>) -> Self {
-		let (requests, rx) = mpsc::channel::<PathBuf>();
-		let (tx, results) = mpsc::channel();
+		let (requests, rx) = mpsc::channel::<(PathBuf, bool)>();
+		let (tx, results) = mpsc::channel::<PeakResult>();
 		let _ = thread::Builder::new()
 			.name("cadenza-app-peaks".into())
 			.spawn(move || {
-				for path in rx {
+				for (path, keep) in rx {
 					let peaks = cadenza_audio_io::decode_file(&path)
-						.map(|buf| WaveformPeaks::compute_default(&buf))
+						.map(|buf| {
+							let peaks = WaveformPeaks::compute_default(&buf);
+							(peaks, keep.then(|| Arc::new(buf)))
+						})
 						.map_err(|e| e.to_string());
 					if tx.send((path, peaks)).is_err() {
 						break;
@@ -90,6 +109,7 @@ impl PeakCache {
 			});
 		Self {
 			entries: HashMap::new(),
+			samples: None,
 			requests,
 			results,
 		}
@@ -101,16 +121,38 @@ impl PeakCache {
 			return p.clone();
 		}
 		self.entries.insert(path.to_path_buf(), Peaks::Pending);
-		let _ = self.requests.send(path.to_path_buf());
+		let _ = self.requests.send((path.to_path_buf(), false));
 		Peaks::Pending
+	}
+
+	/// The decoded samples of `path` (one file at a time), decoding on first use.
+	pub fn samples(&mut self, path: &Path) -> Samples {
+		match &self.samples {
+			Some((p, s)) if p == path => s.clone(),
+			_ => {
+				self.samples = Some((path.to_path_buf(), Samples::Pending));
+				let _ = self.requests.send((path.to_path_buf(), true));
+				Samples::Pending
+			}
+		}
 	}
 
 	/// Collects finished computations. Returns true when something new arrived.
 	pub fn poll(&mut self) -> bool {
 		let mut any = false;
 		while let Ok((path, result)) = self.results.try_recv() {
+			if let Some((p, s)) = &mut self.samples
+				&& *p == path
+				&& matches!(s, Samples::Pending)
+			{
+				match &result {
+					Ok((_, Some(buf))) => *s = Samples::Ready(buf.clone()),
+					Err(_) => *s = Samples::Failed,
+					Ok((_, None)) => {}
+				}
+			}
 			let entry = match result {
-				Ok(p) => Peaks::Ready(Arc::new(p)),
+				Ok((p, _)) => Peaks::Ready(Arc::new(p)),
 				Err(e) => Peaks::Failed(e),
 			};
 			self.entries.insert(path, entry);

@@ -9,12 +9,19 @@
 //! post-mutation project into the realtime player if it is currently playing, so playback
 //! reflects edits made while the transport is running.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ServerCapabilities, ServerConfig};
-use rmcp::{ErrorData, Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::model::{
+	CallToolRequestParams, CallToolResponse, NumberOrString, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::{
+	ErrorData, Json, Peer, RoleServer, ServerHandler, ServiceExt, tool, tool_handler, tool_router,
+};
 
 use crate::error::ServeError;
 use crate::player::PlayerHandle;
@@ -52,15 +59,118 @@ pub struct CadenzaServer {
 	session: Mutex<Session>,
 	player: Mutex<Option<PlayerHandle>>,
 	tool_router: ToolRouter<Self>,
+	/// Peer handed to tools called in-process (see [`CadenzaServer::call_tool_json`]).
+	local_peer: OnceLock<Peer<RoleServer>>,
+	local_request_id: AtomicU32,
 }
+
+/// One tool as advertised to an LLM: name, description and JSON Schema of its arguments.
+#[derive(Debug, Clone)]
+pub struct ToolDefinition {
+	pub name: String,
+	pub description: String,
+	pub input_schema: serde_json::Value,
+}
+
+/// Handler behind the detached in-process peer; it never receives a request.
+struct InProcessPeerHandler;
+
+impl ServerHandler for InProcessPeerHandler {}
 
 impl CadenzaServer {
 	pub fn new() -> Self {
+		Self::with_session(Session::new())
+	}
+
+	/// A server around an existing session (e.g. one with a custom plugin cache).
+	pub fn with_session(session: Session) -> Self {
 		Self {
-			session: Mutex::new(Session::new()),
+			session: Mutex::new(session),
 			player: Mutex::new(None),
 			tool_router: Self::tool_router(),
+			local_peer: OnceLock::new(),
+			local_request_id: AtomicU32::new(1),
 		}
+	}
+
+	/// Every tool this server exposes, sorted by name, for embedding the tools in an
+	/// in-process agent without an MCP connection.
+	pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
+		self.tool_router
+			.list_all()
+			.into_iter()
+			.map(|tool| ToolDefinition {
+				name: tool.name.to_string(),
+				description: tool.description.as_deref().unwrap_or_default().to_owned(),
+				input_schema: serde_json::Value::Object((*tool.input_schema).clone()),
+			})
+			.collect()
+	}
+
+	/// Calls a tool in-process through the same router the MCP transport uses, so the
+	/// behavior (argument validation, error texts, structured output) is identical.
+	///
+	/// Returns the tool's structured JSON output (or `{"ok": true}` for tools without
+	/// output); `Err` carries the LLM-readable error text. Must be called from within a
+	/// tokio runtime.
+	pub async fn call_tool_json(
+		&self,
+		name: &str,
+		args: serde_json::Value,
+	) -> Result<serde_json::Value, String> {
+		let mut params = CallToolRequestParams::new(name.to_owned());
+		match args {
+			serde_json::Value::Object(map) => params = params.with_arguments(map),
+			serde_json::Value::Null => {}
+			other => {
+				return Err(format!(
+					"tool arguments must be a JSON object, got: {other}"
+				));
+			}
+		}
+		let id = self.local_request_id.fetch_add(1, Ordering::Relaxed);
+		let context = ToolCallContext::new(
+			self,
+			params,
+			RequestContext::new(NumberOrString::Number(id.into()), self.local_peer()),
+		);
+		match self.tool_router.call(context).await {
+			Ok(CallToolResponse::Complete(result)) => {
+				let text = result
+					.content
+					.iter()
+					.filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+					.collect::<Vec<_>>()
+					.join("\n");
+				if result.is_error == Some(true) {
+					return Err(text);
+				}
+				if let Some(structured) = result.structured_content {
+					return Ok(structured);
+				}
+				if text.is_empty() {
+					return Ok(serde_json::json!({ "ok": true }));
+				}
+				Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text)))
+			}
+			Ok(_) => Err(format!(
+				"tool '{name}' asked the client for more input, which in-process calls do not support"
+			)),
+			Err(err) if err.message == "tool not found" => Err(format!("unknown tool '{name}'")),
+			Err(err) => Err(err.message.into_owned()),
+		}
+	}
+
+	/// Tool handlers never talk back to the client, but the router's call context needs a
+	/// peer; this one is detached (its service loop ends immediately).
+	fn local_peer(&self) -> Peer<RoleServer> {
+		self.local_peer
+			.get_or_init(|| {
+				let (io, _closed) = tokio::io::duplex(64);
+				let running = rmcp::service::serve_directly(InProcessPeerHandler, io, None);
+				running.peer().clone()
+			})
+			.clone()
 	}
 
 	fn session(&self) -> std::sync::MutexGuard<'_, Session> {

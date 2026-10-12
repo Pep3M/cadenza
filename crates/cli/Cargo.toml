@@ -1,6 +1,6 @@
 [package]
 name = "cadenza-cli"
-description = "Cadenza command line: render projects, run the MCP server"
+description = "Cadenza command line: render projects, run the MCP server, compose with the AI agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ cadenza-core.workspace = true
 cadenza-model.workspace = true
 cadenza-engine.workspace = true
 cadenza-mcp.workspace = true
+cadenza-agent.workspace = true
 cadenza-plugin-host.workspace = true
 clap.workspace = true
 anyhow.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "cadenza-agent"
+description = "Cadenza's embedded AI arranger/mix engineer: an LLM tool loop over the Cadenza tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cadenza-mcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

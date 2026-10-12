@@ -9,6 +9,8 @@ use cadenza_model::Project;
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 use clap::{Parser, Subcommand};
 
+mod compose;
+
 #[derive(Parser)]
 #[command(name = "cadenza", version, about = "Cadenza DAW command line")]
 struct Cli {
@@ -58,6 +60,9 @@ enum Command {
 	},
 	/// Run the MCP server over stdio, for an AI client to connect to
 	Mcp,
+	/// Let the embedded AI producer compose, arrange, mix and render a song from a brief
+	#[command(after_long_help = compose::presets_help())]
+	Compose(compose::ComposeArgs),
 }
 
 fn load(path: &PathBuf) -> Result<Project> {
@@ -124,6 +129,7 @@ fn main() -> Result<()> {
 			Ok(())
 		}
 		Command::Mcp => run_mcp(),
+		Command::Compose(args) => compose::run(args),
 		Command::ScanPlugins { paths, json } => scan_plugins(paths, json),
 		Command::ListPlugins { query, json } => list_plugins(query, json),
 	}

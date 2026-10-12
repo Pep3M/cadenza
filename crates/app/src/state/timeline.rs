@@ -221,6 +221,10 @@ impl Overview {
 
 	/// Viewport `offset..offset + visible` as an x range, at least `min_px` wide.
 	pub fn thumb(&self, offset: f64, visible: f64, min_px: f32) -> (f32, f32) {
+		// A strip squeezed to nothing (empty project, tiny window) has no room for a thumb.
+		if self.width <= 0.0 {
+			return (0.0, 0.0);
+		}
 		let x0 = self.to_x(offset).clamp(0.0, self.width);
 		let w = self.to_x(visible).max(min_px).min(self.width);
 		let x0 = x0.min(self.width - w).max(0.0);
@@ -289,6 +293,15 @@ mod tests {
 		numerator: 4,
 		denominator: 4,
 	};
+
+	#[test]
+	fn thumb_of_a_collapsed_strip_is_empty() {
+		let strip = Overview {
+			total: 0.0,
+			width: -76.0,
+		};
+		assert_eq!(strip.thumb(0.0, 10.0, 12.0), (0.0, 0.0));
+	}
 
 	#[test]
 	fn time_pixel_mapping_round_trips() {

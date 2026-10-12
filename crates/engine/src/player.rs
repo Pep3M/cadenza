@@ -15,7 +15,12 @@
 //! audio thread (handed over through another ring, and handed back to be dropped on the
 //! control side). Each callback drains it into a pre-allocated buffer and feeds note
 //! events to the monitored track's instrument at the start of the block, so input latency
-//! is at most one output buffer. Monitoring sounds while the transport runs.
+//! is at most one output buffer. Monitoring sounds while the transport runs and, as a
+//! preview of the monitored instrument only, while it is stopped.
+//!
+//! Note preview ([`Player::preview_note_on`] / [`Player::preview_note_off`]): editors
+//! play single notes through a track's instrument the same way, also while stopped (the
+//! previewed track becomes the monitored one).
 //!
 //! Plugin devices are sandboxed by default (see [`crate::hosting`]): a crashing or hanging
 //! plugin is bypassed on the audio thread by its sandbox proxy, and the control side
@@ -28,6 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use cadenza_core::{Tick, TrackId};
+use cadenza_dsp::MidiEvent;
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
 use cadenza_model::Project;
 use cadenza_plugin_host::PluginCatalog;
@@ -65,6 +71,8 @@ enum Cmd {
 	/// Live fader move: `track: None` = master.
 	Volume(Option<TrackId>, f32),
 	Pan(Option<TrackId>, f32),
+	/// A note for `track`'s instrument (it becomes the monitored track).
+	Preview(TrackId, MidiEvent),
 }
 
 #[derive(Debug, Default)]
@@ -190,6 +198,17 @@ impl AudioCore {
 				Cmd::Pan(track, pan) => {
 					if let Some(g) = &mut self.graph {
 						g.set_channel_pan(track, pan);
+					}
+				}
+				Cmd::Preview(track, event) => {
+					if self.monitor != Some(track) {
+						self.monitor = Some(track);
+						if let Some(g) = &mut self.graph {
+							g.set_monitor_track(Some(track));
+						}
+					}
+					if let Some(g) = &mut self.graph {
+						g.push_live_event(event);
 					}
 				}
 			}
@@ -563,6 +582,44 @@ impl Player {
 		self.control.send(Cmd::Monitor(track))
 	}
 
+	/// Plays `pitch` (0..=127) through the instrument of `track` until
+	/// [`Player::preview_note_off`], also while the transport is stopped (only that
+	/// instrument and the channels it feeds are rendered then). `track` becomes the
+	/// monitored track (see [`Player::set_monitor_track`]); switching to another track
+	/// releases the notes held on the previous one. Velocity 0..=1.
+	pub fn preview_note_on(
+		&mut self,
+		track: TrackId,
+		pitch: u8,
+		velocity: f32,
+	) -> Result<(), EngineError> {
+		self.control.send(Cmd::Preview(
+			track,
+			MidiEvent::NoteOn {
+				offset: 0,
+				pitch: pitch.min(127),
+				velocity: velocity.clamp(0.0, 1.0),
+			},
+		))
+	}
+
+	/// Releases a note started with [`Player::preview_note_on`].
+	pub fn preview_note_off(&mut self, track: TrackId, pitch: u8) -> Result<(), EngineError> {
+		self.control.send(Cmd::Preview(
+			track,
+			MidiEvent::NoteOff {
+				offset: 0,
+				pitch: pitch.min(127),
+			},
+		))
+	}
+
+	/// Releases every previewed note of `track`.
+	pub fn preview_all_notes_off(&mut self, track: TrackId) -> Result<(), EngineError> {
+		self.control
+			.send(Cmd::Preview(track, MidiEvent::AllNotesOff { offset: 0 }))
+	}
+
 	pub fn play(&mut self) -> Result<(), EngineError> {
 		self.control.shared.playing.store(true, Ordering::Relaxed);
 		self.control.send(Cmd::Play)
@@ -831,7 +888,7 @@ mod tests {
 	}
 
 	#[test]
-	fn live_midi_is_discarded_while_stopped_or_unmonitored() {
+	fn live_midi_is_discarded_while_unmonitored_and_previewed_while_stopped() {
 		let (p, keys, _) = live_project();
 		let (mut control, mut core) = channel_pair(48_000);
 		control
@@ -846,16 +903,76 @@ mod tests {
 		core.fill_interleaved(&mut out, 2);
 		core.fill_interleaved(&mut out, 2);
 		assert_eq!(energy(&out), 0.0);
-		// Monitored but stopped: drained and dropped, nothing plays on resume.
+		// Monitored and stopped: the instrument is previewed, the playhead stays.
 		control.send(Cmd::Monitor(Some(keys))).unwrap();
 		control.send(Cmd::Stop).unwrap();
+		let pos = control.shared.position.load(Ordering::Relaxed);
 		note(&mut producer, &[0x90, 62, 100]);
 		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
 		assert_eq!(producer.slots(), MIDI_QUEUE, "queue drained");
+		assert!(energy(&out) > 0.0, "stopped monitoring previews the note");
+		assert_eq!(control.shared.position.load(Ordering::Relaxed), pos);
+		// Playing again starts clean: the previewed note is cut, the song is empty.
+		control.send(Cmd::Play).unwrap();
+		for _ in 0..200 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		assert!(energy(&out) < 1e-6, "{}", energy(&out));
+	}
+
+	#[test]
+	fn note_preview_plays_while_stopped_and_releases() {
+		let p = project();
+		let track = p.tracks[0].id;
+		let (mut control, mut core) = channel_pair(48_000);
+		control
+			.load_graph(compile(&p, 48_000, 256).unwrap())
+			.unwrap();
+		let mut out = vec![0.0f32; 512];
+		core.fill_interleaved(&mut out, 2);
+		assert_eq!(energy(&out), 0.0, "stopped: silent");
+		control
+			.send(Cmd::Preview(
+				track,
+				MidiEvent::NoteOn {
+					offset: 0,
+					pitch: 72,
+					velocity: 0.9,
+				},
+			))
+			.unwrap();
+		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
+		assert!(energy(&out) > 0.0, "previewed note sounds while stopped");
+		assert_eq!(control.shared.position.load(Ordering::Relaxed), 0);
+		assert_eq!(core.graph.as_ref().unwrap().monitor_track(), Some(track));
+		// Held: keeps sounding well past the release window.
+		for _ in 0..400 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		assert!(core.graph.as_ref().unwrap().is_previewing());
+		assert!(energy(&out) > 0.0);
+		control
+			.send(Cmd::Preview(
+				track,
+				MidiEvent::NoteOff {
+					offset: 0,
+					pitch: 72,
+				},
+			))
+			.unwrap();
+		// 3 s of 256-frame callbacks: the release and the tail end, then silence.
+		for _ in 0..600 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		assert!(!core.graph.as_ref().unwrap().is_previewing());
+		assert_eq!(energy(&out), 0.0);
+		// The song still plays from the playhead afterwards (chased note at tick 0).
 		control.send(Cmd::Play).unwrap();
 		core.fill_interleaved(&mut out, 2);
 		core.fill_interleaved(&mut out, 2);
-		assert_eq!(energy(&out), 0.0);
+		assert!(energy(&out) > 0.0);
 	}
 
 	/// Needs a MIDI input device; run with `cargo test -- --ignored`.

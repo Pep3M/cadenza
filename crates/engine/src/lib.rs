@@ -45,6 +45,11 @@ pub const QUANTUM: usize = 32;
 /// burst are dropped.
 pub const LIVE_EVENT_CAPACITY: usize = 512;
 
+/// How long a stopped graph keeps rendering the monitored instrument after the last live
+/// note was released (on top of the project's longest device tail, see
+/// [`crate::Graph::push_live_event`]).
+pub const PREVIEW_RELEASE_SECONDS: f32 = 1.5;
+
 /// Finite stand-in for -inf dB (silence) so reports stay valid JSON.
 pub const FLOOR_DB: f32 = -144.0;
 

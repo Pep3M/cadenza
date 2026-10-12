@@ -130,3 +130,46 @@ fn metering_does_not_allocate() {
 	assert!(loudest > 0.0, "meters saw the song");
 	assert_eq!(meters.master().rms, [0.0, 0.0]);
 }
+
+#[test]
+fn stopped_note_preview_does_not_allocate() {
+	let p = mini_song();
+	let source = p.tracks[0].id;
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	assert!(graph.set_monitor_track(Some(source)));
+
+	TRACKING.with(|t| t.set(true));
+	let mut loudest = 0.0f32;
+	for (i, block) in [1usize, 37, 512, 1024]
+		.into_iter()
+		.cycle()
+		.take(300)
+		.enumerate()
+	{
+		let pitch = 48 + (i % 24) as u8;
+		if i % 10 == 0 {
+			graph.push_live_event(cadenza_dsp::MidiEvent::NoteOn {
+				offset: 0,
+				pitch,
+				velocity: 0.8,
+			});
+		}
+		if i % 10 == 5 {
+			graph.push_live_event(cadenza_dsp::MidiEvent::AllNotesOff { offset: 0 });
+		}
+		graph.process(&mut left[..block], &mut right[..block]);
+		loudest = loudest.max(left[..block].iter().fold(0.0f32, |m, x| m.max(x.abs())));
+	}
+	graph.seek(beats(2.0));
+	graph.process(&mut left, &mut right);
+	graph.play();
+	graph.process(&mut left, &mut right);
+	graph.stop();
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+
+	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(loudest > 0.0, "the stopped preview sounded");
+}

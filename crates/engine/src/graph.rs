@@ -383,6 +383,12 @@ pub struct Graph {
 	pub(crate) monitor_release: Option<usize>,
 	/// Live events for the next quantum (capacity [`crate::LIVE_EVENT_CAPACITY`]).
 	pub(crate) live: Vec<MidiEvent>,
+	/// Frames the stopped graph still renders for live notes (note preview).
+	pub(crate) preview_frames: u32,
+	/// Live pitches held down (bit per MIDI pitch): the preview runs while any is held.
+	pub(crate) held: [u64; 2],
+	/// A preview rendered since the last stop/seek: the next `play` must reset first.
+	pub(crate) previewed: bool,
 	/// Per-track and master levels for the UI.
 	pub(crate) meters: Meters,
 }
@@ -514,17 +520,53 @@ impl Graph {
 	}
 
 	/// Queues a live event for the monitored instrument; it plays at the start of the next
-	/// rendered quantum (its offset is ignored). Returns false when nothing is monitored,
-	/// the transport is stopped or the buffer is full. Realtime safe (never allocates).
+	/// rendered quantum (its offset is ignored). Returns false when nothing is monitored or
+	/// the buffer is full. Realtime safe (never allocates).
+	///
+	/// While the transport is stopped, live events are previewed: the graph renders only
+	/// the monitored instrument (and the channels it feeds; no clips, no song notes, the
+	/// playhead does not move) while notes are held and for
+	/// [`crate::PREVIEW_RELEASE_SECONDS`] plus the device tails after the last release.
 	pub fn push_live_event(&mut self, event: MidiEvent) -> bool {
-		if self.monitor.is_none() || !self.playing || self.live.len() == self.live.capacity() {
+		if self.monitor.is_none() || self.live.len() == self.live.capacity() {
 			return false;
 		}
+		match event {
+			MidiEvent::NoteOn { pitch, .. } => {
+				self.held[usize::from(pitch >> 6) & 1] |= 1 << (pitch & 63);
+			}
+			MidiEvent::NoteOff { pitch, .. } => {
+				self.held[usize::from(pitch >> 6) & 1] &= !(1 << (pitch & 63));
+			}
+			MidiEvent::AllNotesOff { .. } => self.held = [0; 2],
+		}
 		self.live.push(event);
+		if !self.playing {
+			self.preview_frames = self.preview_tail_frames();
+		}
 		true
 	}
 
+	fn preview_tail_frames(&self) -> u32 {
+		((crate::PREVIEW_RELEASE_SECONDS + self.tail_seconds.min(4.0)) * self.sample_rate as f32)
+			as u32
+	}
+
+	/// Whether a stopped graph is rendering previewed live notes.
+	pub fn is_previewing(&self) -> bool {
+		!self.playing && self.preview_frames > 0
+	}
+
 	pub fn play(&mut self) {
+		if self.previewed {
+			// The preview ran the devices outside the song: start from a clean state.
+			self.previewed = false;
+			self.needs_reset = true;
+			self.fifo_pos = QUANTUM;
+			self.engine_pos = self.out_pos;
+			self.discard = self.latency;
+		}
+		self.preview_frames = 0;
 		self.playing = true;
 	}
 
@@ -532,6 +574,8 @@ impl Graph {
 	pub fn stop(&mut self) {
 		self.playing = false;
 		self.live.clear();
+		self.held = [0; 2];
+		self.preview_frames = 0;
 		self.needs_reset = true;
 		self.fifo_pos = QUANTUM;
 		self.engine_pos = self.out_pos;
@@ -585,6 +629,10 @@ impl Graph {
 	/// stopped, writes silence and does not advance.
 	pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
 		let n = left.len().min(right.len());
+		if !self.playing && self.preview_frames > 0 {
+			self.process_preview(&mut left[..n], &mut right[..n]);
+			return;
+		}
 		if !self.playing {
 			left.fill(0.0);
 			right.fill(0.0);
@@ -616,6 +664,36 @@ impl Graph {
 			done += take;
 		}
 		self.out_pos += n as i64;
+		self.meters.publish();
+	}
+
+	/// Stopped transport with live notes: renders quanta without song content and
+	/// without moving the playhead.
+	fn process_preview(&mut self, left: &mut [f32], right: &mut [f32]) {
+		if !self.previewed {
+			self.previewed = true;
+			self.fifo_pos = QUANTUM;
+		}
+		let n = left.len();
+		let mut done = 0;
+		while done < n {
+			if self.fifo_pos == QUANTUM {
+				self.render_quantum_inner(true);
+				self.fifo_pos = 0;
+			}
+			let take = (n - done).min(QUANTUM - self.fifo_pos);
+			left[done..done + take]
+				.copy_from_slice(&self.master.buf.l[self.fifo_pos..self.fifo_pos + take]);
+			right[done..done + take]
+				.copy_from_slice(&self.master.buf.r[self.fifo_pos..self.fifo_pos + take]);
+			self.fifo_pos += take;
+			done += take;
+		}
+		if self.held == [0; 2] {
+			self.preview_frames = self.preview_frames.saturating_sub(n as u32);
+		} else {
+			self.preview_frames = self.preview_tail_frames();
+		}
 		self.meters.publish();
 	}
 
@@ -696,6 +774,12 @@ impl Graph {
 	/// Renders one quantum starting at `engine_pos` into `master.buf` (and every node's
 	/// post-fader `buf`), then advances `engine_pos`.
 	pub(crate) fn render_quantum(&mut self) {
+		self.render_quantum_inner(false);
+	}
+
+	/// `preview`: stopped-transport note preview; only live events play (no clip notes,
+	/// no audio clips, no chase) and `engine_pos` stays put.
+	fn render_quantum_inner(&mut self, preview: bool) {
 		let all_notes_off = self.needs_reset;
 		if self.needs_reset {
 			self.reset_state();
@@ -706,7 +790,7 @@ impl Graph {
 		let seg = self.segment_at(pos as f64);
 		let transport = Transport {
 			bpm: seg.bpm,
-			playing: true,
+			playing: !preview,
 			beat_position: self.beat_at(pos).max(0.0),
 		};
 		for acc in &mut self.accumulators {
@@ -743,7 +827,9 @@ impl Graph {
 						}
 						// Chase notes that should already be sounding at `pos` so a
 						// start/seek landing mid-note doesn't leave it silent.
-						schedule.chase(pos, events);
+						if !preview {
+							schedule.chase(pos, events);
+						}
 					}
 					if *monitor_release == Some(i) {
 						*monitor_release = None;
@@ -757,7 +843,9 @@ impl Graph {
 							events.push(at_offset_zero(e));
 						}
 					}
-					schedule.collect(pos, QUANTUM, events);
+					if !preview {
+						schedule.collect(pos, QUANTUM, events);
+					}
 					if let Some(d) = device {
 						d.run(buf, events, &transport, done);
 						for e in &mut node.aux_edges {
@@ -771,11 +859,12 @@ impl Graph {
 						}
 					}
 				}
-				Source::Audio { clips } => {
+				Source::Audio { clips } if !preview => {
 					for c in clips.iter() {
 						c.mix(pos, &mut buf.l, &mut buf.r);
 					}
 				}
+				Source::Audio { .. } => {}
 				Source::Bus { accumulator } => {
 					let acc = &accumulators[*accumulator];
 					buf.l.copy_from_slice(&acc.l);
@@ -811,7 +900,9 @@ impl Graph {
 		}
 		master.fader.apply(&mut master.buf);
 		meters.measure(None, &master.buf.l, &master.buf.r);
-		self.engine_pos += QUANTUM as i64;
+		if !preview {
+			self.engine_pos += QUANTUM as i64;
+		}
 	}
 }
 

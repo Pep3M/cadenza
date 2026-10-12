@@ -731,6 +731,9 @@ impl<'a> Compiler<'a> {
 			monitor: None,
 			monitor_release: None,
 			live: Vec::with_capacity(crate::LIVE_EVENT_CAPACITY),
+			preview_frames: 0,
+			held: [0; 2],
+			previewed: false,
 			meters,
 		})
 	}

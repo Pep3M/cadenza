@@ -633,9 +633,9 @@ impl ArrangeUi {
 				pos2(layout.header.center().x, zone.top() + h * 0.5),
 				Align2::CENTER_CENTER,
 				if matches!(target, DropTarget::BelowSampler { .. }) {
-					"＋ new sampler track"
+					"+ new sampler track"
 				} else {
-					"＋ new track (Alt: sampler)"
+					"+ new track (Alt: sampler)"
 				},
 				theme::small(),
 				theme::ACCENT,

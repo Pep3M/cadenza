@@ -18,6 +18,8 @@ cadenza-engine = { path = "crates/engine" }
 cadenza-mcp = { path = "crates/mcp" }
 cadenza-plugin-host = { path = "crates/plugin-host" }
 cadenza-agent = { path = "crates/agent" }
+cadenza-audio-io = { path = "crates/audio-io" }
+cadenza-midi-io = { path = "crates/midi-io" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -45,6 +47,13 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
 async-trait = "0.1"
+symphonia = { version = "0.6", features = ["all"] }
+rubato = "5"
+flacenc = { version = "0.5", default-features = false }
+signalsmith-stretch = "0.1"
+mp3lame-encoder = "0.2"
+midly = { version = "0.5.3", default-features = false, features = ["std"] }
+midir = "0.11.1"
 
 [profile.release]
 debug = 1

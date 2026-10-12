@@ -24,10 +24,10 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
 | `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `gui` (starts `cadenza-app`) | all |
-| `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, mixer with live meters, browser, inspector; `AppState` over the MCP `Session` | core, model, dsp, engine, mcp, plugin-host, audio-io, midi-io |
+| `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector; `AppState` over the MCP `Session` | core, model, theory, dsp, engine, mcp, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output) | — |
 
-Future: piano roll / automation / audio editor (phase 10), plugin editor windows (11), AI chat
+Future: automation / audio editor (phase 10b), plugin editor windows (11), AI chat
 panel in the app (12), audio editing (destructive + clip-based), sandbox on Windows/macOS.
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
@@ -256,11 +256,37 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   plugin crashes polled every 500 ms and shown as toasts. No device = app works without sound.
 - `jobs`: waveform peaks (decoded + `WaveformPeaks` on a worker, cached by path), plugin
   rescans, renders (`render_to_file`, format by extension) and file dialogs run off the UI thread.
-- `ui`: views only read state and call its methods. Panels: menu, transport, browser (left, F5),
-  inspector + history (right, F4), mixer (bottom, F3), arrange (center); `theme` is the single
-  palette/metrics module. Shortcuts: Space play/stop, Home return, Ctrl+Z / Ctrl+Shift+Z,
-  Ctrl+S/Shift+S/O/N/E/I, Ctrl+D duplicate, S split at playhead, Del delete, Ctrl+wheel zoom,
-  Shift+wheel scroll, Alt+wheel track height. Dirty state is confirmed on new/open/close.
+- `ui`: views only read state and call its methods; `theme` is the single palette/metrics
+  module. Panels (`state::layout::PanelLayout`, FL Studio-like keys): F5 arrange, F6 / Alt+F8
+  browser, F7 piano roll, F8 inspector, F9 mixer, F11 / Ctrl+Enter maximize the focused panel
+  (last one clicked), F12 close tool panels, F1 shortcut overlay (`layout::SHORTCUTS` is the
+  single shortcut table; View menu shows checkmarks + keys). The piano roll docks at the bottom
+  (borrowing the mixer's place, given back on close); with the arrange hidden it takes the
+  center. Layout, zooms, snap, follow mode, scale, bookmarks persist per user in eframe storage
+  (`layout::Prefs`, key `cadenza-prefs`; panel sizes via egui memory).
+- Navigation (arrange and piano roll alike, math in `state::timeline`): wheel vertical,
+  Shift+wheel horizontal, Ctrl+wheel zoom at the mouse, Alt+wheel track/key height,
+  middle-drag pan (Space stays play/stop), themed scrollbars, song overview strip with a
+  draggable viewport, Home/End, PageUp/Down (Shift: vertical), Z zoom to selection, Shift+Z fit,
+  follow playhead Off/Page/Continuous, edge auto-scroll while dragging. Ruler/markers pinned,
+  headers scroll with lanes. Clips: Ctrl+drag copies, Alt disables snap, double-click a MIDI
+  clip opens the piano roll.
+- Piano roll (`state::piano` pure builders + `ui::piano_roll`): absolute song time axis with
+  the clip span marked and outside shaded, keyboard (click/drag auditions), draw/select tools
+  (P/E), move/resize/rubber band, right-click/Del delete, arrows transpose/nudge, Q quantize
+  (absolute grid), Ctrl+A/C/V/D, velocity lane (paint, or relative on a multi-selection),
+  ghost notes (this track / all), scale highlighting (cadenza-theory). One command per gesture.
+  Editing past the clip end grows the clip to the next bar in the same batch (notes before the
+  start are clamped). Notes are auditioned through `AppState::preview_note_on/off`, released on
+  mouse up, panel close and track change.
+- Drag & drop (`state::dnd`: `Payload` x `DropTarget` -> `DropAction`, executed by
+  `AppState::drop_payload`; views only hit-test and show the hint next to the pointer):
+  devices -> track/lane (instrument or insert), mixer insert slot, below the tracks (new
+  instrument track / bus); presets -> device or track; mixer inserts reorder / move to another
+  strip (Ctrl copies); browser Files tab (bookmarks, audio/MIDI filter) and OS file drops:
+  audio/MIDI import at the drop beat/track (new tracks below), `.cadenza.json` opens (dirty
+  prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/E/I, Ctrl+D, S
+  split, Del. Dirty state is confirmed on new/open/close.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu).
 - Phase 12 (AI panel): the agent's tools must act on the app's `Session` (today `CadenzaServer`

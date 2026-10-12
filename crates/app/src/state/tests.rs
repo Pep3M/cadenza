@@ -1,0 +1,243 @@
+use super::*;
+use cadenza_core::PPQ;
+use cadenza_model::{Clip, Track};
+
+fn state_with_song() -> (AppState, TrackId) {
+	let mut s = AppState::headless();
+	let mut p = Project::new("Song");
+	let mut keys = Track::new("Keys", TrackKind::Instrument);
+	keys.instrument = Some(cadenza_model::Device::builtin("poly_synth", "Synth"));
+	keys.clips.push(
+		Clip::midi("A", Tick::ZERO, Tick(PPQ * 4)).with_notes([cadenza_model::Note::new(
+			60,
+			Tick::ZERO,
+			Tick(PPQ),
+			0.8,
+		)]),
+	);
+	let id = keys.id;
+	p.tracks.push(keys);
+	s.session.reset(Document::new(p), None);
+	(s, id)
+}
+
+#[test]
+fn edits_mark_dirty_schedule_a_reload_and_undo() {
+	let (mut s, keys) = state_with_song();
+	let now = Instant::now();
+	s.tick(now + RELOAD_DEBOUNCE);
+	assert!(!s.reload_pending());
+	assert!(!s.dirty);
+
+	let cmd = edits::add_track(
+		s.project(),
+		edits::new_track(s.project(), TrackKind::Bus),
+		None,
+	);
+	assert!(s.apply(cmd));
+	assert!(s.dirty);
+	assert!(s.reload_pending());
+	assert_eq!(s.project().tracks.len(), 2);
+	assert_eq!(s.undo_label(), Some("Add track 'Bus 1'"));
+
+	// Debounced: nothing is sent before the window elapses.
+	let t0 = Instant::now();
+	s.tick(t0);
+	assert!(s.reload_pending());
+	s.tick(t0 + RELOAD_DEBOUNCE * 2);
+	assert!(!s.reload_pending());
+
+	s.undo();
+	assert_eq!(s.project().tracks.len(), 1);
+	assert_eq!(s.redo_label(), Some("Add track 'Bus 1'"));
+	assert!(s.reload_pending());
+	s.redo();
+	assert_eq!(s.project().tracks.len(), 2);
+
+	// A rejected command changes nothing and reports why.
+	assert!(!s.apply(Command::RemoveTrack {
+		track: TrackId::new()
+	}));
+	assert_eq!(s.notices.count(notices::Level::Error), 1);
+	assert_eq!(s.project().tracks[0].id, keys);
+}
+
+#[test]
+fn fader_gestures_are_one_undo_step() {
+	let (mut s, keys) = state_with_song();
+	for db in [-1.0, -2.0, -3.5] {
+		s.preview_volume(Some(keys), db);
+		assert_eq!(s.volume_db(Some(keys)), db, "preview shown");
+	}
+	assert_eq!(
+		s.project().tracks[0].channel.volume_db,
+		0.0,
+		"not committed yet"
+	);
+	assert!(s.document().history_labels().is_empty());
+	s.commit_volume(Some(keys), -3.5);
+	assert_eq!(s.project().tracks[0].channel.volume_db, -3.5);
+	assert_eq!(s.document().history_labels().len(), 1);
+	assert!(s.previews.volume.is_empty());
+	// Committing the same value again is not a new step.
+	s.commit_volume(Some(keys), -3.5);
+	s.commit_pan(None, 0.25);
+	assert_eq!(s.project().master.pan, 0.25);
+	assert_eq!(s.document().history_labels().len(), 2);
+	s.undo();
+	s.undo();
+	assert_eq!(s.volume_db(Some(keys)), 0.0);
+}
+
+#[test]
+fn browser_devices_target_the_selection() {
+	let (mut s, keys) = state_with_song();
+	let items = s.browser_items().to_vec();
+	let reverb = items.iter().find(|i| i.id == "reverb").unwrap();
+	let piano = items.iter().find(|i| i.id == "electric_piano").unwrap();
+
+	// No selection: effects go to the master...
+	s.selection.select_master();
+	assert!(s.use_device(reverb, None));
+	assert_eq!(s.project().master.inserts.len(), 1);
+	// ...instruments create a new instrument track.
+	assert!(s.use_device(piano, None));
+	assert_eq!(s.project().tracks.len(), 2);
+	assert_eq!(s.project().tracks[1].name, piano.name);
+
+	// On an instrument track: replace its instrument, append effects.
+	s.selection.select_track(keys);
+	assert!(s.use_device(piano, None));
+	let t = s.project().track(keys).unwrap();
+	assert_eq!(
+		t.instrument.as_ref().map(|d| &d.kind),
+		Some(&cadenza_model::DeviceKind::Builtin {
+			id: "electric_piano".into()
+		})
+	);
+	assert!(s.use_device(reverb, Some(keys)));
+	let fx = s.project().track(keys).unwrap().channel.inserts[0].id;
+	assert_eq!(
+		s.selection.device,
+		Some(DeviceRef {
+			track: Some(keys),
+			device: fx
+		})
+	);
+
+	// Presets replace the params in one step; removing selects nothing.
+	let preset = &cadenza_dsp::factory_presets("reverb")[0];
+	let r = s.selection.device.unwrap();
+	s.load_factory_preset(r, preset);
+	assert_eq!(s.device(r).unwrap().params.len(), preset.params.len());
+	s.remove_device(Some(keys), fx);
+	assert!(s.selection.device.is_none());
+	let instrument = s
+		.project()
+		.track(keys)
+		.unwrap()
+		.instrument
+		.as_ref()
+		.unwrap()
+		.id;
+	s.remove_device(Some(keys), instrument);
+	assert!(s.project().track(keys).unwrap().instrument.is_none());
+}
+
+#[test]
+fn unsaved_changes_are_confirmed_and_files_round_trip() {
+	let (mut s, _) = state_with_song();
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("song.cadenza.json");
+
+	// Clean: proceeds at once.
+	s.request(Pending::New);
+	assert!(s.confirm.is_none());
+	assert!(s.project().tracks.is_empty());
+
+	let cmd = edits::add_track(
+		s.project(),
+		edits::new_track(s.project(), TrackKind::Audio),
+		None,
+	);
+	s.apply(cmd);
+	s.request(Pending::Quit);
+	assert_eq!(s.confirm, Some(Pending::Quit));
+	assert!(!s.quit_confirmed);
+
+	assert!(s.save_as(dir.path().join("song")));
+	assert_eq!(s.path(), Some(path.as_path()), "extension added");
+	assert!(!s.dirty);
+	assert!(s.title().contains("song.cadenza.json"));
+
+	s.request(Pending::New);
+	assert!(s.open(&path));
+	assert_eq!(s.project().tracks.len(), 1);
+	assert!(!s.dirty);
+	assert!(!s.open(&dir.path().join("missing.json")));
+	assert_eq!(
+		s.project().tracks.len(),
+		1,
+		"a failed open keeps the project"
+	);
+
+	s.apply(Command::SetTempo {
+		tick: Tick::ZERO,
+		bpm: 100.0,
+	});
+	s.save_then(Pending::Quit);
+	assert!(s.quit_confirmed && !s.dirty);
+	assert_eq!(
+		Project::load_json(&path).unwrap().tempo.bpm_at(Tick::ZERO),
+		100.0
+	);
+}
+
+#[test]
+fn imports_use_the_shared_tools() {
+	let (mut s, _) = state_with_song();
+	let dir = tempfile::tempdir().unwrap();
+	let wav = dir.path().join("loop.wav");
+	let samples = vec![0.25f32; 48_000];
+	let buf =
+		cadenza_audio_io::AudioBuffer::from_planar(48_000, vec![samples.clone(), samples]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Int16),
+	)
+	.unwrap();
+	s.seek(Tick(PPQ * 4));
+	s.import_audio(&wav);
+	let audio = s.project().tracks.last().unwrap();
+	assert_eq!(audio.kind, TrackKind::Audio);
+	assert_eq!(audio.clips[0].start, Tick(PPQ * 4));
+	assert_eq!(s.selection.clips.len(), 1);
+	assert_eq!(s.document().history_labels().len(), 1, "one undo step");
+
+	let mid = dir.path().join("riff.mid");
+	std::fs::write(
+		&mid,
+		cadenza_midi_io::export_project(&state_with_song().0.session.document().project().clone())
+			.unwrap(),
+	)
+	.unwrap();
+	let before = s.project().tracks.len();
+	s.import_midi(&mid);
+	assert!(s.project().tracks.len() > before);
+
+	s.import_midi(&dir.path().join("nope.mid"));
+	assert!(s.notices.count(notices::Level::Error) >= 1);
+}
+
+#[test]
+fn transport_without_audio_keeps_a_position() {
+	let (mut s, _) = state_with_song();
+	s.seek(Tick(-5));
+	assert_eq!(s.position(), Tick::ZERO);
+	s.seek(Tick(PPQ));
+	assert_eq!(s.position(), Tick(PPQ));
+	s.play();
+	assert!(!s.is_playing());
+	assert_eq!(s.notices.count(notices::Level::Warning), 1);
+}

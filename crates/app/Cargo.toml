@@ -1,0 +1,30 @@
+[package]
+name = "cadenza-app"
+description = "Cadenza desktop application (egui)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# egui 0.36 needs a newer compiler than the rest of the workspace.
+rust-version = "1.95"
+
+[[bin]]
+name = "cadenza-app"
+path = "src/main.rs"
+
+[dependencies]
+cadenza-core.workspace = true
+cadenza-model.workspace = true
+cadenza-dsp.workspace = true
+cadenza-engine.workspace = true
+cadenza-mcp.workspace = true
+cadenza-plugin-host.workspace = true
+cadenza-audio-io.workspace = true
+cadenza-midi-io.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+tempfile.workspace = true

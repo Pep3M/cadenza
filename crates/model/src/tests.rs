@@ -1857,3 +1857,169 @@ fn audio_clips_without_fades_keep_the_old_json_shape() {
 	.unwrap();
 	assert_eq!(with.fades().1, Some(ClipFade::new(1.5, FadeCurve::Linear)));
 }
+
+#[test]
+fn send_levels_are_automatable_and_their_lanes_follow_the_send() {
+	let fx = fixture();
+	let address = ParamAddress::send(fx.lead, fx.send);
+	let after = round_trip(
+		&fx.project,
+		Command::SetParam {
+			address: address.clone(),
+			value: -3.0,
+		},
+	);
+	let level = |p: &Project| p.track(fx.lead).unwrap().channel.sends[0].level_db;
+	assert_eq!(level(&after), -3.0);
+	assert!(matches!(
+		exec_err(
+			&fx.project,
+			Command::SetParam {
+				address: address.clone(),
+				value: 40.0
+			}
+		),
+		ModelError::InvalidVolume(_)
+	));
+	let lane = Command::SetAutomation {
+		address: address.clone(),
+		points: vec![
+			AutomationPoint::new(Tick(0), -20.0),
+			AutomationPoint::new(beats(4.0), 0.0).with_shape(PointShape::Smooth),
+		],
+	};
+	let with_lane = round_trip(&fx.project, lane.clone());
+	assert!(with_lane.automation_lane(&address).is_some());
+	assert!(matches!(
+		exec_err(
+			&fx.project,
+			Command::SetAutomation {
+				address: ParamAddress::send(fx.lead, DeviceId::new()),
+				points: vec![AutomationPoint::new(Tick(0), 0.0)],
+			}
+		),
+		ModelError::SendNotFound { .. }
+	));
+
+	// Removing the send drops its lane; undo brings both back.
+	let removed = round_trip(
+		&with_lane,
+		Command::RemoveSend {
+			track: fx.lead,
+			send: fx.send,
+		},
+	);
+	assert!(removed.automation_lane(&address).is_none());
+	// Removing the bus it feeds drops it too.
+	let no_bus = round_trip(&with_lane, Command::RemoveTrack { track: fx.reverb });
+	assert!(no_bus.automation_lane(&address).is_none());
+	assert!(no_bus.validate().is_ok());
+}
+
+#[test]
+fn point_shapes_interpolate_and_keep_the_old_json_shape() {
+	let tempo = cadenza_core::TempoMap::constant(120.0);
+	let points = vec![
+		AutomationPoint::new(beats(0.0), 0.0),
+		AutomationPoint::new(beats(4.0), 1.0).with_shape(PointShape::Hold),
+		AutomationPoint::new(beats(8.0), 0.0).with_shape(PointShape::Smooth),
+		AutomationPoint::new(beats(12.0), 1.0),
+	];
+	let at = |b: f64| automation_value(&points, beats(b), &tempo).unwrap();
+	assert_eq!(at(-1.0), 0.0);
+	assert!((at(2.0) - 0.5).abs() < 1e-6, "linear");
+	assert_eq!(at(6.0), 1.0, "hold keeps the value");
+	assert_eq!(at(7.99), 1.0);
+	assert!((at(10.0) - 0.5).abs() < 1e-6, "smooth is symmetric");
+	assert!(at(9.0) < 0.25, "smooth starts slowly");
+	assert_eq!(at(100.0), 1.0);
+	assert!(automation_value(&[], beats(1.0), &tempo).is_none());
+
+	// Interpolation runs in seconds: across a tempo change the halfway value is where
+	// half the time has passed, not half the beats.
+	let mut slow = cadenza_core::TempoMap::constant(120.0);
+	slow.set_point(beats(2.0), 60.0);
+	let ramp = [
+		AutomationPoint::new(beats(0.0), 0.0),
+		AutomationPoint::new(beats(4.0), 3.0),
+	];
+	// 0..2 beats = 1 s, 2..4 beats = 2 s: beat 2 is a third of the way.
+	assert!((automation_value(&ramp, beats(2.0), &slow).unwrap() - 1.0).abs() < 1e-5);
+
+	let json = serde_json::to_value(AutomationPoint::new(Tick(0), 1.0)).unwrap();
+	assert_eq!(json, json!({"tick": 0, "value": 1.0}));
+	let held: AutomationPoint =
+		serde_json::from_value(json!({"tick": 0, "value": 1.0, "shape": "hold"})).unwrap();
+	assert_eq!(held.shape, PointShape::Hold);
+	let old: AutomationPoint = serde_json::from_value(json!({"tick": 5, "value": 2.0})).unwrap();
+	assert_eq!(old.shape, PointShape::Linear);
+}
+
+#[test]
+fn update_audio_clip_swaps_source_offset_and_gain() {
+	let fx = fixture();
+	let after = round_trip(
+		&fx.project,
+		Command::UpdateAudioClip {
+			clip: fx.vox,
+			patch: AudioClipPatch {
+				file: Some("vox.processed.wav".into()),
+				offset_seconds: Some(0.5),
+				gain_db: Some(-3.0),
+			},
+		},
+	);
+	let (_, clip) = after.find_clip(fx.vox).unwrap();
+	let ClipContent::Audio {
+		file,
+		offset_seconds,
+		gain_db,
+		..
+	} = &clip.content
+	else {
+		panic!("audio clip");
+	};
+	assert_eq!(file, &std::path::PathBuf::from("vox.processed.wav"));
+	assert_eq!((*offset_seconds, *gain_db), (0.5, -3.0));
+	let label = Command::UpdateAudioClip {
+		clip: fx.vox,
+		patch: AudioClipPatch {
+			gain_db: Some(2.0),
+			..Default::default()
+		},
+	}
+	.label();
+	assert_eq!(label, "Set clip gain to 2.0 dB");
+	for patch in [
+		AudioClipPatch::default(),
+		AudioClipPatch {
+			offset_seconds: Some(-1.0),
+			..Default::default()
+		},
+		AudioClipPatch {
+			file: Some("".into()),
+			..Default::default()
+		},
+	] {
+		exec_err(
+			&fx.project,
+			Command::UpdateAudioClip {
+				clip: fx.vox,
+				patch,
+			},
+		);
+	}
+	assert!(matches!(
+		exec_err(
+			&fx.project,
+			Command::UpdateAudioClip {
+				clip: fx.riff,
+				patch: AudioClipPatch {
+					gain_db: Some(0.0),
+					..Default::default()
+				},
+			}
+		),
+		ModelError::NotAnAudioClip(_)
+	));
+}

@@ -281,8 +281,8 @@ pub fn set_bypass(session: &mut Session, args: SetBypassArgs) -> Result<(), McpE
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SetParamArgs {
 	/// `track/{id}/volume` | `track/{id}/pan` | `track/{id}/device/{id}/{param}` |
-	/// `master/volume` | `master/device/{id}/{param}`. For plugin devices `{param}` may be
-	/// the param id or its exact name.
+	/// `track/{id}/send/{send_id}` (dB) | `master/volume` | `master/device/{id}/{param}`.
+	/// For plugin devices `{param}` may be the param id or its exact name.
 	pub address: ParamAddress,
 	pub value: f32,
 }
@@ -315,6 +315,10 @@ pub fn set_param(session: &mut Session, args: SetParamArgs) -> Result<(), McpErr
 pub struct AutomationPointArg {
 	pub beat: f64,
 	pub value: f32,
+	/// How the value moves from this point to the next: `linear` (default), `hold`
+	/// (step) or `smooth` (slow start and end).
+	#[serde(default)]
+	pub shape: Option<cadenza_model::PointShape>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -332,6 +336,7 @@ pub fn set_automation(session: &mut Session, args: SetAutomationArgs) -> Result<
 		.into_iter()
 		.map(|p| {
 			cadenza_model::AutomationPoint::new(crate::convert::beats_to_tick(p.beat), p.value)
+				.with_shape(p.shape.unwrap_or_default())
 		})
 		.collect();
 	session

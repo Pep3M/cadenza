@@ -4,6 +4,7 @@
 //! Grammar:
 //! - `track/{track_id}/volume` | `track/{track_id}/pan`
 //! - `track/{track_id}/device/{device_id}/{param_id}` (instrument or insert)
+//! - `track/{track_id}/send/{send_id}` (send level, dB)
 //! - `master/volume` | `master/device/{device_id}/{param_id}`
 
 use std::fmt;
@@ -18,7 +19,14 @@ use crate::id::{DeviceId, TrackId};
 pub enum ParamTarget {
 	Volume,
 	Pan,
-	Device { device: DeviceId, param: String },
+	Device {
+		device: DeviceId,
+		param: String,
+	},
+	/// Level (dB) of one of the track's sends.
+	Send {
+		send: DeviceId,
+	},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -47,6 +55,13 @@ impl ParamAddress {
 		}
 	}
 
+	pub fn send(track: TrackId, send: DeviceId) -> Self {
+		Self {
+			track: Some(track),
+			target: ParamTarget::Send { send },
+		}
+	}
+
 	pub fn device(track: Option<TrackId>, device: DeviceId, param: impl Into<String>) -> Self {
 		Self {
 			track,
@@ -68,6 +83,7 @@ impl fmt::Display for ParamAddress {
 			ParamTarget::Volume => write!(f, "volume"),
 			ParamTarget::Pan => write!(f, "pan"),
 			ParamTarget::Device { device, param } => write!(f, "device/{device}/{param}"),
+			ParamTarget::Send { send } => write!(f, "send/{send}"),
 		}
 	}
 }
@@ -89,6 +105,9 @@ impl FromStr for ParamAddress {
 			["device", device, param] if !param.is_empty() => ParamTarget::Device {
 				device: device.parse().map_err(|_| err())?,
 				param: (*param).to_owned(),
+			},
+			["send", send] if track.is_some() => ParamTarget::Send {
+				send: send.parse().map_err(|_| err())?,
 			},
 			_ => return Err(err()),
 		};
@@ -117,7 +136,7 @@ impl JsonSchema for ParamAddress {
 	fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 		schemars::json_schema!({
 			"type": "string",
-			"description": "track/{track_id}/volume | track/{track_id}/pan | track/{track_id}/device/{device_id}/{param_id} | master/volume | master/device/{device_id}/{param_id}"
+			"description": "track/{track_id}/volume | track/{track_id}/pan | track/{track_id}/device/{device_id}/{param_id} | track/{track_id}/send/{send_id} | master/volume | master/device/{device_id}/{param_id}"
 		})
 	}
 }
@@ -136,6 +155,14 @@ mod tests {
 			ParamTarget::Volume
 		);
 		assert!("track/nope/volume".parse::<ParamAddress>().is_err());
+		let send = ParamAddress::send(TrackId::new(), DeviceId::new());
+		assert_eq!(send.to_string().parse::<ParamAddress>().unwrap(), send);
+		assert!(
+			format!("master/send/{}", DeviceId::new())
+				.parse::<ParamAddress>()
+				.is_err(),
+			"the master has no sends"
+		);
 	}
 
 	#[test]

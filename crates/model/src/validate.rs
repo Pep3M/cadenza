@@ -629,15 +629,28 @@ pub(crate) fn address(project: &Project, address: &ParamAddress) -> Result<(), M
 			device: *device,
 		});
 	}
+	if let ParamTarget::Send { send } = &address.target {
+		let Some(track) = address.track else {
+			return Err(ModelError::MasterRestriction("cannot have sends"));
+		};
+		let exists = project
+			.track(track)
+			.is_some_and(|t| t.channel.sends.iter().any(|s| s.id == *send));
+		if !exists {
+			return Err(ModelError::SendNotFound { track, send: *send });
+		}
+	}
 	Ok(())
 }
 
-/// Validates a value for `address` (dB range for volume, -1..1 for pan, finite otherwise).
+/// Validates a value for `address` (dB range for volume and sends, -1..1 for pan, finite
+/// otherwise).
 pub(crate) fn param_value(address: &ParamAddress, value: f32) -> Result<(), ModelError> {
 	match &address.target {
 		ParamTarget::Volume => volume(value),
 		ParamTarget::Pan => pan(value),
 		ParamTarget::Device { param, .. } => finite(format!("parameter '{param}'"), value),
+		ParamTarget::Send { .. } => volume(value),
 	}
 }
 

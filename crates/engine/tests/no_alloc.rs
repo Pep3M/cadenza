@@ -59,12 +59,32 @@ fn graph_process_does_not_allocate() {
 		.channel
 		.inserts
 		.push(cadenza_model::Device::builtin("compressor", "Duck").with_sidechain(source, true));
+	// Automate a send level and a device parameter too.
+	let chords = &p.tracks[2];
+	let send = chords.channel.sends[0].id;
+	let keys = chords.instrument.as_ref().unwrap().id;
+	let lanes = vec![cadenza_model::AutomationLane::new(
+		cadenza_core::ParamAddress::send(chords.id, send),
+		vec![
+			cadenza_model::AutomationPoint::new(beats(0.0), -30.0),
+			cadenza_model::AutomationPoint::new(beats(4.0), 0.0)
+				.with_shape(cadenza_model::PointShape::Smooth),
+			cadenza_model::AutomationPoint::new(beats(8.0), -6.0)
+				.with_shape(cadenza_model::PointShape::Hold),
+		],
+	)];
+	p.automation.extend(lanes.clone());
 	let mut graph = compile(&p, 48_000, 1024).unwrap();
 	assert!(graph.warnings().is_empty(), "{:?}", graph.warnings());
 	let mut left = vec![0.0f32; 1024];
 	let mut right = vec![0.0f32; 1024];
 	graph.play();
 	assert!(graph.set_monitor_track(Some(source)));
+	// Live parameter changes and automation edits, prepared off the audio thread.
+	let info = cadenza_dsp::device_info("electric_piano").unwrap();
+	let param = info.params[0].id;
+	let index = graph.param_index(keys, param).unwrap();
+	let mut edited = graph.prepare_automation(&p.automation[..1], &p.tempo);
 
 	TRACKING.with(|t| t.set(true));
 	for (i, block) in [1usize, 37, 512, 1024]
@@ -88,6 +108,12 @@ fn graph_process_does_not_allocate() {
 		}
 		if i == 250 {
 			graph.set_monitor_track(Some(source));
+		}
+		// Knob drags and automation previews reach the running graph.
+		assert!(graph.set_device_param(keys, index, i as f32 * 0.01));
+		assert!(graph.set_send_level(send, -(i as f32 % 40.0)));
+		if i % 100 == 0 {
+			graph.swap_automation(&mut edited);
 		}
 		graph.process(&mut left[..block], &mut right[..block]);
 	}

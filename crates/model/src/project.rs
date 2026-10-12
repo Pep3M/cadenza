@@ -224,6 +224,40 @@ pub struct AutomationLane {
 pub struct AutomationPoint {
 	pub tick: Tick,
 	pub value: f32,
+	/// How the value travels from this point to the next one (default: linear). Missing
+	/// in older files, so `format_version` stays 1.
+	#[serde(default, skip_serializing_if = "PointShape::is_linear")]
+	pub shape: PointShape,
+}
+
+/// Shape of the automation segment that starts at a point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PointShape {
+	/// Straight line in time to the next point.
+	#[default]
+	Linear,
+	/// Keeps this value until the next point, then jumps (steps).
+	Hold,
+	/// Slow start and end (raised cosine), for smooth sweeps.
+	Smooth,
+}
+
+impl PointShape {
+	pub fn is_linear(&self) -> bool {
+		*self == Self::Linear
+	}
+
+	/// Value at `t` (0..=1) of the way from `from` to `to`.
+	pub fn interpolate(self, from: f32, to: f32, t: f64) -> f32 {
+		let t = t.clamp(0.0, 1.0);
+		let k = match self {
+			Self::Linear => t,
+			Self::Hold => 0.0,
+			Self::Smooth => 0.5 - 0.5 * (std::f64::consts::PI * t).cos(),
+		};
+		(f64::from(from) + f64::from(to - from) * k) as f32
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -546,11 +580,48 @@ impl AutomationLane {
 	pub fn new(address: ParamAddress, points: Vec<AutomationPoint>) -> Self {
 		Self { address, points }
 	}
+
+	/// Value of the lane at `tick` (see [`automation_value`]); `None` without points.
+	pub fn value_at(&self, tick: Tick, tempo: &TempoMap) -> Option<f32> {
+		automation_value(&self.points, tick, tempo)
+	}
+}
+
+/// Value of sorted automation `points` at `tick`: held before the first and after the
+/// last point, and shaped by each point's [`PointShape`] in between. Interpolation runs
+/// in seconds (through `tempo`), exactly like the engine, which interpolates in samples.
+pub fn automation_value(points: &[AutomationPoint], tick: Tick, tempo: &TempoMap) -> Option<f32> {
+	let i = points.partition_point(|p| p.tick <= tick);
+	let first = points.first()?;
+	if i == 0 {
+		return Some(first.value);
+	}
+	let a = points[i - 1];
+	let Some(b) = points.get(i) else {
+		return Some(a.value);
+	};
+	let s0 = tempo.tick_to_seconds(a.tick);
+	let span = tempo.tick_to_seconds(b.tick) - s0;
+	let t = if span > 0.0 {
+		(tempo.tick_to_seconds(tick) - s0) / span
+	} else {
+		1.0
+	};
+	Some(a.shape.interpolate(a.value, b.value, t))
 }
 
 impl AutomationPoint {
 	pub fn new(tick: Tick, value: f32) -> Self {
-		Self { tick, value }
+		Self {
+			tick,
+			value,
+			shape: PointShape::Linear,
+		}
+	}
+
+	pub fn with_shape(mut self, shape: PointShape) -> Self {
+		self.shape = shape;
+		self
 	}
 }
 

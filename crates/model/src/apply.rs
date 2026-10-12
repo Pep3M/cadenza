@@ -16,7 +16,9 @@ use std::collections::HashSet;
 
 use cadenza_core::{ParamAddress, ParamTarget, Tick, TrackId};
 
-use crate::command::{ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch};
+use crate::command::{
+	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
+};
 use crate::error::ModelError;
 use crate::project::{AutomationLane, ClipContent, Note, Output, Project, sort_notes};
 use crate::validate::{self, location};
@@ -71,6 +73,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				track: removed,
 				index: Some(index),
 			}];
+			let mut dropped_sends = Vec::new();
 			for other in &mut project.tracks {
 				if other.channel.output == Output::Bus(id) {
 					other.channel.output = Output::Master;
@@ -87,6 +90,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				other.channel.sends.retain(|send| {
 					let keep = send.target != id;
 					if !keep {
+						dropped_sends.push(send.id);
 						inverse.push(Command::AddSend {
 							track: other_id,
 							send: send.clone(),
@@ -117,7 +121,10 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			for d in &mut project.master.inserts {
 				unkey(d, id, None, &mut inverse);
 			}
-			inverse.extend(take_lanes(project, |a| a.track == Some(id)));
+			inverse.extend(take_lanes(project, |a| {
+				a.track == Some(id)
+					|| matches!(a.target, ParamTarget::Send { send } if dropped_sends.contains(&send))
+			}));
 			Ok(inverse)
 		}
 
@@ -426,6 +433,14 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					})?;
 					d.params.insert(param.clone(), value)
 				}
+				ParamTarget::Send { send } => {
+					let track = address.track.ok_or_else(|| missing_track(None))?;
+					let s = project
+						.track_mut(track)
+						.and_then(|t| t.channel.sends.iter_mut().find(|s| s.id == *send))
+						.ok_or(ModelError::SendNotFound { track, send: *send })?;
+					Some(std::mem::replace(&mut s.level_db, value))
+				}
 			};
 			Ok(vec![match old {
 				Some(value) => Command::SetParam {
@@ -443,7 +458,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				return Err(ModelError::invalid(
 					"reset_param address",
 					address,
-					"only device parameters can be reset; use set_param to change volume or pan",
+					"only device parameters can be reset; use set_param to change volume, pan or send levels",
 				));
 			};
 			validate::address(project, address)?;
@@ -494,11 +509,16 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				},
 			)?;
 			let removed = t.channel.sends.remove(index);
-			Ok(vec![Command::AddSend {
+			let mut inverse = vec![Command::AddSend {
 				track: *track,
 				send: removed,
 				index: Some(index),
-			}])
+			}];
+			let id = *send;
+			inverse.extend(take_lanes(project, |a| {
+				a.target == ParamTarget::Send { send: id }
+			}));
+			Ok(inverse)
 		}
 
 		Command::UpdateSend { track, send, patch } => {
@@ -610,6 +630,47 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				clip: *clip,
 				fade_in: old_in,
 				fade_out: old_out,
+			}])
+		}
+
+		Command::UpdateAudioClip { clip, patch } => {
+			if patch.file.is_none() && patch.offset_seconds.is_none() && patch.gain_db.is_none() {
+				return Err(empty_patch(
+					"update_audio_clip",
+					"file, offset_seconds and/or gain_db",
+				));
+			}
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			let mut updated = c.clone();
+			let ClipContent::Audio {
+				file,
+				offset_seconds,
+				gain_db,
+				..
+			} = &mut updated.content
+			else {
+				return Err(ModelError::NotAnAudioClip(*clip));
+			};
+			let old = AudioClipPatch {
+				file: patch
+					.file
+					.as_ref()
+					.map(|f| std::mem::replace(file, f.clone())),
+				offset_seconds: patch
+					.offset_seconds
+					.map(|v| std::mem::replace(offset_seconds, v)),
+				gain_db: patch.gain_db.map(|v| std::mem::replace(gain_db, v)),
+			};
+			validate::clip(&updated)?;
+			let target = project
+				.find_clip_mut(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			*target = updated;
+			Ok(vec![Command::UpdateAudioClip {
+				clip: *clip,
+				patch: old,
 			}])
 		}
 

@@ -32,15 +32,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use cadenza_core::{Tick, TrackId};
+use std::collections::HashSet;
+
+use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_dsp::MidiEvent;
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
-use cadenza_model::Project;
+use cadenza_model::{AutomationLane, Project};
 use cadenza_plugin_host::PluginCatalog;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::automation::{AutoTarget, AutomationSet, Resolver};
 use crate::compile_hosted;
 use crate::error::EngineError;
 use crate::graph::Graph;
@@ -50,6 +53,9 @@ use crate::meter::MeterBank;
 const GRAPH_SLOTS: usize = 4;
 const GARBAGE_SLOTS: usize = 8;
 const COMMAND_SLOTS: usize = 256;
+/// Automation sets in flight (and coming back to be dropped).
+const AUTOMATION_SLOTS: usize = 4;
+const AUTOMATION_GARBAGE_SLOTS: usize = 8;
 const MIDI_INPUT_SLOTS: usize = 2;
 /// Capacity of the hardware MIDI queue, and of the per-block drain buffer (so draining
 /// can never outgrow it).
@@ -71,6 +77,10 @@ enum Cmd {
 	/// Live fader move: `track: None` = master.
 	Volume(Option<TrackId>, f32),
 	Pan(Option<TrackId>, f32),
+	/// Live parameter change: device, parameter index, plain value.
+	Param(DeviceId, u32, f32),
+	/// Live send level (dB).
+	SendLevel(DeviceId, f32),
 	/// A note for `track`'s instrument (it becomes the monitored track).
 	Preview(TrackId, MidiEvent),
 }
@@ -87,6 +97,10 @@ struct AudioCore {
 	graphs: Consumer<Box<Graph>>,
 	garbage: Producer<Box<Graph>>,
 	commands: Consumer<Cmd>,
+	automations: Consumer<Box<AutomationSet>>,
+	automation_garbage: Producer<Box<AutomationSet>>,
+	/// A set for a graph that is queued but not swapped in yet.
+	pending_automation: Option<Box<AutomationSet>>,
 	shared: Arc<Shared>,
 	playing: bool,
 	position: Tick,
@@ -106,6 +120,8 @@ struct Control {
 	graphs: Producer<Box<Graph>>,
 	garbage: Consumer<Box<Graph>>,
 	commands: Producer<Cmd>,
+	automations: Producer<Box<AutomationSet>>,
+	automation_garbage: Consumer<Box<AutomationSet>>,
 	shared: Arc<Shared>,
 	midi_inputs: Producer<Consumer<TimedMessage>>,
 	midi_garbage: Consumer<Consumer<TimedMessage>>,
@@ -115,6 +131,8 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 	let (graph_tx, graph_rx) = RingBuffer::new(GRAPH_SLOTS);
 	let (garbage_tx, garbage_rx) = RingBuffer::new(GARBAGE_SLOTS);
 	let (cmd_tx, cmd_rx) = RingBuffer::new(COMMAND_SLOTS);
+	let (auto_tx, auto_rx) = RingBuffer::new(AUTOMATION_SLOTS);
+	let (auto_garbage_tx, auto_garbage_rx) = RingBuffer::new(AUTOMATION_GARBAGE_SLOTS);
 	let (midi_tx, midi_rx) = RingBuffer::new(MIDI_INPUT_SLOTS);
 	let (midi_garbage_tx, midi_garbage_rx) = RingBuffer::new(MIDI_INPUT_SLOTS + 1);
 	let shared = Arc::new(Shared::default());
@@ -123,6 +141,8 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			graphs: graph_tx,
 			garbage: garbage_rx,
 			commands: cmd_tx,
+			automations: auto_tx,
+			automation_garbage: auto_garbage_rx,
 			shared: shared.clone(),
 			midi_inputs: midi_tx,
 			midi_garbage: midi_garbage_rx,
@@ -132,6 +152,9 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			graphs: graph_rx,
 			garbage: garbage_tx,
 			commands: cmd_rx,
+			automations: auto_rx,
+			automation_garbage: auto_garbage_tx,
+			pending_automation: None,
 			shared,
 			playing: false,
 			position: Tick::ZERO,
@@ -200,6 +223,16 @@ impl AudioCore {
 						g.set_channel_pan(track, pan);
 					}
 				}
+				Cmd::Param(device, index, value) => {
+					if let Some(g) = &mut self.graph {
+						g.set_device_param(device, index as usize, value);
+					}
+				}
+				Cmd::SendLevel(send, db) => {
+					if let Some(g) = &mut self.graph {
+						g.set_send_level(send, db);
+					}
+				}
 				Cmd::Preview(track, event) => {
 					if self.monitor != Some(track) {
 						self.monitor = Some(track);
@@ -213,6 +246,7 @@ impl AudioCore {
 				}
 			}
 		}
+		self.receive_automation();
 		// A new input replaces the old one only when the old can be handed back.
 		if self.midi_garbage.slots() > 0
 			&& let Ok(input) = self.midi_inputs.pop()
@@ -221,6 +255,42 @@ impl AudioCore {
 			self.midi = Some(input);
 		}
 		self.feed_live_midi();
+	}
+
+	/// Swaps in automation sets for the current graph. Sets meant for a graph that is
+	/// still queued wait in `pending_automation`; stale ones go straight back. Every set
+	/// leaves through the garbage ring, so nothing is dropped here.
+	fn receive_automation(&mut self) {
+		if let Some(set) = self.pending_automation.take() {
+			self.apply_automation(set);
+		}
+		// Room for the popped set and a displaced pending one.
+		while self.pending_automation.is_none() && self.automation_garbage.slots() >= 2 {
+			let Ok(set) = self.automations.pop() else {
+				break;
+			};
+			self.apply_automation(set);
+		}
+	}
+
+	fn apply_automation(&mut self, mut set: Box<AutomationSet>) {
+		let current = self.graph.as_ref().map(|g| g.load_id);
+		match current {
+			Some(id) if id == set.load_id => {
+				if let Some(g) = &mut self.graph {
+					g.swap_automation(&mut set.bindings);
+				}
+			}
+			Some(id) if id < set.load_id => {
+				self.pending_automation = Some(set);
+				return;
+			}
+			_ => {}
+		}
+		if let Err(rtrb::PushError::Full(set)) = self.automation_garbage.push(set) {
+			// Only reachable if the control side stopped collecting; keep it alive.
+			self.pending_automation = Some(set);
+		}
 	}
 
 	/// Hands the current MIDI queue back to the control thread (never dropped here).
@@ -300,6 +370,7 @@ impl AudioCore {
 impl Control {
 	fn collect_garbage(&mut self) {
 		while self.garbage.pop().is_ok() {}
+		while self.automation_garbage.pop().is_ok() {}
 		while self.midi_garbage.pop().is_ok() {}
 	}
 
@@ -312,6 +383,13 @@ impl Control {
 	fn send(&mut self, cmd: Cmd) -> Result<(), EngineError> {
 		self.collect_garbage();
 		self.commands.push(cmd).map_err(|_| EngineError::Busy)
+	}
+
+	fn send_automation(&mut self, set: AutomationSet) -> Result<(), EngineError> {
+		self.collect_garbage();
+		self.automations
+			.push(Box::new(set))
+			.map_err(|_| EngineError::Busy)
 	}
 
 	fn load_graph(&mut self, graph: Graph) -> Result<(), EngineError> {
@@ -369,6 +447,12 @@ pub struct Player {
 	midi_input: Option<MidiInputConnection>,
 	/// Meters of the last loaded graph.
 	meters: Option<Arc<MeterBank>>,
+	/// Address map of the last loaded graph (live parameters and automation).
+	resolver: Option<Resolver>,
+	/// Targets automated in the running graph.
+	automated: HashSet<AutoTarget>,
+	/// Id of the last loaded graph.
+	load_id: u64,
 	_stream: cpal::Stream,
 }
 
@@ -447,6 +531,9 @@ impl Player {
 			watches: Vec::new(),
 			midi_input: None,
 			meters: None,
+			resolver: None,
+			automated: HashSet::new(),
+			load_id: 0,
 			_stream: stream,
 		})
 	}
@@ -477,6 +564,70 @@ impl Player {
 		self.control.send(Cmd::Pan(track, pan))
 	}
 
+	/// Sets a device parameter (plain value; `param` is the built-in or plugin param id)
+	/// in the running graph, without recompiling: built-ins, in-process and sandboxed
+	/// plugins alike, so sounding notes keep playing. Use it alongside the matching
+	/// project edit. Returns `Ok(false)` when the loaded graph does not have that device
+	/// or parameter (e.g. a bypassed device): reload instead.
+	pub fn set_live_param(
+		&mut self,
+		device: DeviceId,
+		param: &str,
+		value: f32,
+	) -> Result<bool, EngineError> {
+		let Some(index) = self
+			.resolver
+			.as_ref()
+			.and_then(|r| r.param_index(device, param))
+		else {
+			return Ok(false);
+		};
+		self.control
+			.send(Cmd::Param(device, index as u32, value))
+			.map(|()| true)
+	}
+
+	/// Sets a send's level (dB) in the running graph, ramped and without recompiling.
+	/// Returns `Ok(false)` when the loaded graph does not play that send.
+	pub fn set_live_send(&mut self, send: DeviceId, db: f32) -> Result<bool, EngineError> {
+		if !self
+			.resolver
+			.as_ref()
+			.is_some_and(|r| r.sends.contains_key(&send))
+		{
+			return Ok(false);
+		}
+		self.control.send(Cmd::SendLevel(send, db)).map(|()| true)
+	}
+
+	/// Replaces the automation of the running graph with `lanes` (the whole project's
+	/// lanes), without recompiling or cutting notes. Returns `Ok(false)` when that is not
+	/// possible and the project must be reloaded instead: nothing loaded yet, a different
+	/// tempo map, or a lane removed (its parameter must return to its static value).
+	pub fn set_automation(
+		&mut self,
+		lanes: &[AutomationLane],
+		tempo: &TempoMap,
+	) -> Result<bool, EngineError> {
+		let Some(resolver) = &self.resolver else {
+			return Ok(false);
+		};
+		if *tempo != resolver.tempo {
+			return Ok(false);
+		}
+		let bindings = resolver.bind(lanes, tempo, None, &mut Vec::new());
+		let targets = crate::automation::targets(&bindings);
+		if !self.automated.is_subset(&targets) {
+			return Ok(false);
+		}
+		self.control.send_automation(AutomationSet {
+			load_id: self.load_id,
+			bindings: crate::automation::AutomationBindings(bindings),
+		})?;
+		self.automated = targets;
+		Ok(true)
+	}
+
 	/// Sets the catalog used to load plugin devices on subsequent [`Player::load`] calls
 	/// (`None`, the default, plays built-in devices only).
 	pub fn set_plugins(&mut self, plugins: Option<Arc<PluginCatalog>>) {
@@ -489,7 +640,7 @@ impl Player {
 	///
 	/// Every plugin device is created afresh, so this also restarts crashed plugins.
 	pub fn load(&mut self, project: &Project) -> Result<Vec<String>, EngineError> {
-		let graph = compile_hosted(
+		let mut graph = compile_hosted(
 			project,
 			self.sample_rate,
 			crate::QUANTUM,
@@ -499,9 +650,15 @@ impl Player {
 		let warnings = graph.warnings().to_vec();
 		let watches = graph.plugin_watches.clone();
 		let meters = graph.meters();
+		let resolver = graph.resolver.clone();
+		let automated = crate::automation::targets(&graph.automation);
+		graph.load_id = self.load_id + 1;
 		self.control.load_graph(graph)?;
+		self.load_id += 1;
 		self.watches = watches.into_iter().map(|w| (w, false)).collect();
 		self.meters = Some(meters);
+		self.resolver = Some(resolver);
+		self.automated = automated;
 		Ok(warnings)
 	}
 
@@ -792,6 +949,111 @@ mod tests {
 		core.fill_interleaved(&mut out, 2);
 		core.fill_interleaved(&mut out, 2);
 		assert!(energy(&out) < 1e-9);
+	}
+
+	/// A synth through a `gain` insert and a pre-fader send to a bus.
+	fn gain_project() -> (Project, DeviceId, DeviceId) {
+		let mut p = project();
+		let gain = Device::builtin("gain", "Trim");
+		let id = gain.id;
+		p.tracks[0].channel.inserts.push(gain);
+		let bus = Track::new("bus", TrackKind::Bus);
+		let mut send = cadenza_model::Send::new(bus.id, 0.0);
+		send.pre_fader = true;
+		let send_id = send.id;
+		p.tracks[0].channel.sends.push(send);
+		p.tracks[0].channel.volume_db = -144.0;
+		p.tracks.push(bus);
+		(p, id, send_id)
+	}
+
+	#[test]
+	fn live_params_and_send_levels_change_the_running_graph() {
+		let (p, gain, send) = gain_project();
+		let (mut control, mut core) = channel_pair(48_000);
+		let graph = compile(&p, 48_000, 256).unwrap();
+		let index = graph.param_index(gain, "gain").unwrap() as u32;
+		control.load_graph(graph).unwrap();
+		control.send(Cmd::Play).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		core.fill_interleaved(&mut out, 2);
+		// Only the send is audible (the track fader is down).
+		let before = energy(&out);
+		assert!(before > 0.0);
+		control.send(Cmd::SendLevel(send, -40.0)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
+		let quieter = energy(&out);
+		assert!(quieter < before * 1e-3, "{quieter} vs {before}");
+		control.send(Cmd::SendLevel(send, 0.0)).unwrap();
+		control.send(Cmd::Param(gain, index, -40.0)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
+		assert!(energy(&out) < before * 1e-3, "gain insert follows live");
+		// Unknown ids are ignored, and the graph kept playing (no reload, no reset).
+		control.send(Cmd::Param(DeviceId::new(), 0, 1.0)).unwrap();
+		control.send(Cmd::SendLevel(DeviceId::new(), 1.0)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(core.graph.as_ref().unwrap().is_playing());
+		assert_eq!(control.garbage.slots(), 0, "no graph swapped");
+	}
+
+	#[test]
+	fn automation_sets_swap_without_reloading() {
+		let (mut p, gain, _) = gain_project();
+		p.tracks[0].channel.volume_db = 0.0;
+		let track = p.tracks[0].id;
+		let (mut control, mut core) = channel_pair(48_000);
+		let graph = compile(&p, 48_000, 256).unwrap();
+		let lanes = [AutomationLane::new(
+			cadenza_core::ParamAddress::device(Some(track), gain, "gain"),
+			vec![cadenza_model::AutomationPoint::new(Tick::ZERO, -60.0)],
+		)];
+		let bindings = graph.prepare_automation(&lanes, &p.tempo);
+		control.load_graph(graph).unwrap();
+		control.send(Cmd::Play).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		core.fill_interleaved(&mut out, 2);
+		let before = energy(&out);
+		control
+			.send_automation(AutomationSet {
+				load_id: 0,
+				bindings,
+			})
+			.unwrap();
+		for _ in 0..3 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		assert!(energy(&out) < before * 1e-4, "{} vs {before}", energy(&out));
+		// The old (empty) set comes back to be dropped here.
+		assert_eq!(control.automation_garbage.slots(), 1);
+		control.collect_garbage();
+
+		// A set for an older graph is returned unused; one for a newer graph waits.
+		control
+			.send_automation(AutomationSet {
+				load_id: 7,
+				bindings: Default::default(),
+			})
+			.unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(core.pending_automation.is_some());
+		let mut next = compile(&p, 48_000, 256).unwrap();
+		next.load_id = 7;
+		control.load_graph(next).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(core.pending_automation.is_none());
+		assert_eq!(core.graph.as_ref().unwrap().load_id, 7);
+		assert!(core.graph.as_ref().unwrap().automation.is_empty());
+		control
+			.send_automation(AutomationSet {
+				load_id: 3,
+				bindings: Default::default(),
+			})
+			.unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(core.pending_automation.is_none());
+		assert!(control.automation_garbage.slots() > 0, "stale set returned");
 	}
 
 	#[test]

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cadenza_core::{DeviceId, ParamTarget, TrackId};
+use cadenza_core::{DeviceId, TempoMap, TrackId};
 use cadenza_dsp::{DeviceRole, Processor};
 use cadenza_model::{ClipContent, DeviceKind, Output, Project, Track, TrackKind};
 use cadenza_plugin_host::{
@@ -21,7 +21,7 @@ use cadenza_plugin_host::{
 };
 
 use crate::audio_clip::{self, ClipPlayback};
-use crate::automation::{AutoTarget, Binding, Curve, DeviceSlot};
+use crate::automation::{DeviceEntry, DeviceSlot, Resolver};
 use crate::error::EngineError;
 use crate::graph::{
 	AuxEdge, Device, Edge, Fader, Graph, Master, Node, Sidechain, Source, StereoBuf, StereoDelay,
@@ -103,6 +103,9 @@ pub(crate) fn compile_for(
 	}
 	Compiler::new(project, sample_rate, plugins, hosting, mode).run()
 }
+
+/// A send's id, level (dB) and pre-fader flag.
+type SendSpec = (DeviceId, f32, bool);
 
 /// Where a track's output or send goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,7 +492,7 @@ impl<'a> Compiler<'a> {
 
 		// Routing: output first, then sends, per track.
 		let mut routes: HashMap<TrackId, Vec<Dest>> = HashMap::new();
-		let mut send_specs: HashMap<TrackId, Vec<Option<(f32, bool)>>> = HashMap::new();
+		let mut send_specs: HashMap<TrackId, Vec<Option<SendSpec>>> = HashMap::new();
 		for track in &project.tracks {
 			let mut dests = vec![self.output_of(track)];
 			let mut specs = vec![None];
@@ -502,7 +505,7 @@ impl<'a> Compiler<'a> {
 					continue;
 				}
 				dests.push(Dest::Bus(send.target));
-				specs.push(Some((send.level_db, send.pre_fader)));
+				specs.push(Some((send.id, send.level_db, send.pre_fader)));
 			}
 			routes.insert(track.id, dests);
 			send_specs.insert(track.id, specs);
@@ -602,8 +605,8 @@ impl<'a> Compiler<'a> {
 						}
 					}
 				};
-				let (gain, pre_fader) = spec.map_or((1.0, false), |(db, pre)| {
-					(cadenza_core::db_to_gain(db), pre)
+				let (send, gain, pre_fader) = spec.map_or((None, 1.0, false), |(id, db, pre)| {
+					(Some(id), cadenza_core::db_to_gain(db), pre)
 				});
 				pdc_edges.push(PdcEdge {
 					from: pos,
@@ -612,7 +615,9 @@ impl<'a> Compiler<'a> {
 				});
 				edges.push(Edge {
 					accumulator,
+					send,
 					gain,
+					target_gain: gain,
 					pre_fader,
 					delay: StereoDelay::new(0),
 				});
@@ -708,7 +713,13 @@ impl<'a> Compiler<'a> {
 			),
 			buf: StereoBuf::new(),
 		};
-		let automation = self.bind_automation(&nodes, &master);
+		let resolver = resolver(&nodes, &master, &project.tempo, f64::from(sr));
+		let automation = resolver.bind(
+			&project.automation,
+			&project.tempo,
+			Some(project),
+			&mut self.warnings,
+		);
 		let meters = crate::meter::Meters::new(nodes.iter().map(|n| n.track_id), sr);
 
 		Ok(Graph {
@@ -717,6 +728,8 @@ impl<'a> Compiler<'a> {
 			nodes,
 			master,
 			automation,
+			resolver,
+			load_id: 0,
 			tempo: crate::graph::tempo_segments(&project.tempo, sr as f64),
 			latency,
 			tail_seconds: self.tail.min(MAX_TAIL_SECONDS),
@@ -901,84 +914,48 @@ impl<'a> Compiler<'a> {
 		}
 		edges
 	}
-
-	fn bind_automation(&mut self, nodes: &[Node], master: &Master) -> Vec<Binding> {
-		let project = self.project;
-		let sr = self.sample_rate as f64;
-		let mut bindings = Vec::new();
-		for lane in &project.automation {
-			let Some(curve) = Curve::from_lane(lane, &project.tempo, sr) else {
-				continue;
-			};
-			let address = &lane.address;
-			let node = match address.track {
-				None => None,
-				Some(id) => match nodes.iter().position(|n| n.track_id == id) {
-					Some(i) => Some(i),
-					None => {
-						self.warnings.push(format!(
-							"automation lane '{address}' targets a track that does not exist; ignored"
-						));
-						continue;
-					}
-				},
-			};
-			let target = match &address.target {
-				ParamTarget::Volume => AutoTarget::Volume { node },
-				ParamTarget::Pan => AutoTarget::Pan { node },
-				ParamTarget::Device { device, param } => {
-					let Some((slot, processor)) = find_device(nodes, master, node, *device) else {
-						// Present in the project but skipped (bypassed/unsupported) is fine.
-						if project.device(address.track, *device).is_none() {
-							self.warnings.push(format!(
-								"automation lane '{address}' targets a device that does not exist; ignored"
-							));
-						}
-						continue;
-					};
-					let Some(index) = processor.info().param_index(param) else {
-						self.warnings.push(format!(
-							"automation lane '{address}': device '{}' has no parameter '{param}'; ignored",
-							processor.info().id
-						));
-						continue;
-					};
-					AutoTarget::Param { node, slot, index }
-				}
-			};
-			bindings.push(Binding {
-				curve,
-				target,
-				last: f32::NAN,
-			});
-		}
-		bindings
-	}
 }
 
-fn find_device<'g>(
-	nodes: &'g [Node],
-	master: &'g Master,
-	node: Option<usize>,
-	id: DeviceId,
-) -> Option<(DeviceSlot, &'g dyn Processor)> {
-	let inserts = match node {
-		Some(i) => {
-			if let Source::Instrument {
-				device: Some(d), ..
-			} = &nodes[i].source
-				&& d.id == id
-			{
-				return Some((DeviceSlot::Instrument, d.processor.as_ref()));
-			}
-			&nodes[i].inserts
-		}
-		None => &master.inserts,
+/// Address -> target map of a compiled graph.
+fn resolver(nodes: &[Node], master: &Master, tempo: &TempoMap, sample_rate: f64) -> Resolver {
+	let mut r = Resolver {
+		tempo: tempo.clone(),
+		sample_rate,
+		..Resolver::default()
 	};
-	inserts
-		.iter()
-		.position(|d| d.id == id)
-		.map(|k| (DeviceSlot::Insert(k), inserts[k].processor.as_ref()))
+	let mut add = |node: Option<usize>, slot: DeviceSlot, d: &Device| {
+		r.devices.insert(
+			d.id,
+			DeviceEntry {
+				node,
+				slot,
+				info: d.processor.info(),
+			},
+		);
+	};
+	for (i, n) in nodes.iter().enumerate() {
+		if let Source::Instrument {
+			device: Some(d), ..
+		} = &n.source
+		{
+			add(Some(i), DeviceSlot::Instrument, d);
+		}
+		for (k, d) in n.inserts.iter().enumerate() {
+			add(Some(i), DeviceSlot::Insert(k), d);
+		}
+	}
+	for (k, d) in master.inserts.iter().enumerate() {
+		add(None, DeviceSlot::Insert(k), d);
+	}
+	for (i, n) in nodes.iter().enumerate() {
+		r.nodes.insert(n.track_id, i);
+		for (k, e) in n.edges.iter().enumerate() {
+			if let Some(send) = e.send {
+				r.sends.insert(send, (i, k));
+			}
+		}
+	}
+	r
 }
 
 fn stage(d: &Device) -> PdcStage {

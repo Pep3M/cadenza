@@ -4,10 +4,11 @@
 
 use cadenza_core::{DeviceId, PPQ, TempoMap, Tick, TrackId};
 use cadenza_dsp::{MidiEvent, Processor, Transport};
+use cadenza_model::AutomationLane;
 
 use crate::QUANTUM;
 use crate::audio_clip::ClipPlayback;
-use crate::automation::{AutoTarget, Binding, DeviceSlot};
+use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Resolver};
 use crate::hosting::{PluginCrash, PluginWatch};
 use crate::meter::{MeterBank, Meters};
 use crate::schedule::MidiSchedule;
@@ -75,13 +76,28 @@ impl StereoDelay {
 		}
 	}
 
-	/// Adds `l`/`r` (at most one quantum) to `dst` through the delay.
+	/// Adds `l`/`r` (at most one quantum) to `dst` through the delay, at a constant gain.
 	fn mix(&mut self, l: &[f32], r: &[f32], gain: f32, dst: &mut StereoBuf) {
+		self.mix_ramp(l, r, gain, gain, dst);
+	}
+
+	/// Like [`StereoDelay::mix`], with the gain going linearly from `from` to `to` over
+	/// the quantum (click-free level changes).
+	fn mix_ramp(&mut self, l: &[f32], r: &[f32], from: f32, to: f32, dst: &mut StereoBuf) {
 		let n = l.len().min(r.len()).min(QUANTUM);
+		let step = (to - from) / QUANTUM as f32;
+		let gain = |i: usize| {
+			if from == to {
+				to
+			} else {
+				from + step * (i + 1) as f32
+			}
+		};
 		if self.l.is_empty() {
 			for i in 0..n {
-				dst.l[i] += l[i] * gain;
-				dst.r[i] += r[i] * gain;
+				let g = gain(i);
+				dst.l[i] += l[i] * g;
+				dst.r[i] += r[i] * g;
 			}
 			return;
 		}
@@ -94,8 +110,9 @@ impl StereoDelay {
 			if self.pos == len {
 				self.pos = 0;
 			}
-			dst.l[i] += yl * gain;
-			dst.r[i] += yr * gain;
+			let g = gain(i);
+			dst.l[i] += yl * g;
+			dst.r[i] += yr * g;
 		}
 	}
 }
@@ -104,14 +121,26 @@ impl StereoDelay {
 #[derive(Debug, Clone)]
 pub(crate) struct Edge {
 	pub accumulator: usize,
+	/// The send this edge plays (`None`: the track's main output).
+	pub send: Option<DeviceId>,
+	/// Gain of the last quantum, ramped towards `target_gain` (live/automated send levels).
 	pub gain: f32,
+	pub target_gain: f32,
 	pub pre_fader: bool,
 	pub delay: StereoDelay,
 }
 
 impl Edge {
 	fn mix(&mut self, src: &StereoBuf, dst: &mut StereoBuf) {
-		self.delay.mix(&src.l, &src.r, self.gain, dst);
+		let (from, to) = (self.gain, self.target_gain);
+		self.delay.mix_ramp(&src.l, &src.r, from, to, dst);
+		self.gain = to;
+	}
+
+	fn set_level_db(&mut self, db: f32) {
+		if db.is_finite() {
+			self.target_gain = cadenza_core::db_to_gain(db);
+		}
 	}
 }
 
@@ -361,6 +390,10 @@ pub struct Graph {
 	pub(crate) accumulators: Vec<StereoBuf>,
 	pub(crate) master: Master,
 	pub(crate) automation: Vec<Binding>,
+	/// Address -> target map (control side only; never used by `process`).
+	pub(crate) resolver: Resolver,
+	/// Which `Player::load` this graph came from (0 offline), to match automation sets.
+	pub(crate) load_id: u64,
 	pub(crate) tempo: Vec<TempoSegment>,
 	pub(crate) latency: u32,
 	pub(crate) tail_seconds: f32,
@@ -512,6 +545,75 @@ impl Graph {
 			},
 		}
 		true
+	}
+
+	/// Sets parameter `index` of the device `device` (instrument or insert, any track or
+	/// the master) without recompiling; plain value, the device smooths and clamps it.
+	/// Realtime safe. Returns false when the graph has no such device (e.g. bypassed).
+	pub fn set_device_param(&mut self, device: DeviceId, index: usize, value: f32) -> bool {
+		let found = self
+			.nodes
+			.iter_mut()
+			.flat_map(|n| {
+				let instrument = match &mut n.source {
+					Source::Instrument { device, .. } => device.as_mut(),
+					_ => None,
+				};
+				instrument.into_iter().chain(n.inserts.iter_mut())
+			})
+			.chain(self.master.inserts.iter_mut())
+			.find(|d| d.id == device);
+		match found {
+			Some(d) => {
+				d.processor.set_param(index, value);
+				true
+			}
+			None => false,
+		}
+	}
+
+	/// Sets a send's level (dB) without recompiling; ramped over one quantum. Realtime
+	/// safe. Returns false for a send the graph does not play.
+	pub fn set_send_level(&mut self, send: DeviceId, db: f32) -> bool {
+		let edge = self
+			.nodes
+			.iter_mut()
+			.flat_map(|n| n.edges.iter_mut())
+			.find(|e| e.send == Some(send));
+		match edge {
+			Some(e) => {
+				e.set_level_db(db);
+				true
+			}
+			None => false,
+		}
+	}
+
+	/// Index of `param` (built-in or plugin param id) on the graph's device `device`, for
+	/// [`Graph::set_device_param`]. Not realtime: call it off the audio thread.
+	pub fn param_index(&self, device: DeviceId, param: &str) -> Option<usize> {
+		self.resolver.param_index(device, param)
+	}
+
+	/// Resolves `lanes` against this graph (off the audio thread) for
+	/// [`Graph::swap_automation`]. Lanes the graph cannot play are skipped.
+	pub fn prepare_automation(
+		&self,
+		lanes: &[AutomationLane],
+		tempo: &TempoMap,
+	) -> AutomationBindings {
+		AutomationBindings(self.resolver.bind(lanes, tempo, None, &mut Vec::new()))
+	}
+
+	/// Replaces the automation with `bindings` (prepared by this graph); the old bindings
+	/// are left in it, to be dropped off the audio thread. Every lane is re-applied at the
+	/// next quantum. Realtime safe: swaps the vectors, never allocates. A parameter whose
+	/// lane is gone keeps its last automated value until the next recompile.
+	pub fn swap_automation(&mut self, bindings: &mut AutomationBindings) {
+		std::mem::swap(&mut self.automation, &mut bindings.0);
+		for b in &mut self.automation {
+			b.last = f32::NAN;
+		}
 	}
 
 	/// The monitored track, if any.
@@ -723,6 +825,7 @@ impl Graph {
 			}
 			for e in &mut node.edges {
 				e.delay.clear();
+				e.gain = e.target_gain;
 			}
 			for e in &mut node.aux_edges {
 				e.delay.clear();
@@ -753,6 +856,11 @@ impl Graph {
 					Some(i) => self.nodes[i].fader.set_pan(v),
 					None => self.master.fader.set_pan(v),
 				},
+				AutoTarget::Send { node, edge } => {
+					if let Some(e) = self.nodes[node].edges.get_mut(edge) {
+						e.set_level_db(v);
+					}
+				}
 				AutoTarget::Param { node, slot, index } => {
 					let device = match (node, slot) {
 						(Some(i), DeviceSlot::Instrument) => match &mut self.nodes[i].source {
@@ -933,7 +1041,9 @@ mod tests {
 	fn pdc_delay_shifts_signal() {
 		let mut e = Edge {
 			accumulator: 0,
+			send: None,
 			gain: 1.0,
+			target_gain: 1.0,
 			pre_fader: false,
 			delay: StereoDelay::new(3),
 		};

@@ -80,3 +80,47 @@ fn pan_and_device_param_automation() {
 		"device gain automation: {before} vs {after}"
 	);
 }
+
+#[test]
+fn send_levels_and_point_shapes_are_automated() {
+	let mut a = synth_track("a", &[(60, 0.0, 8.0)], 8.0);
+	let fx = bus("fx");
+	let s = send(&fx, 0.0, true);
+	let send_id = s.id;
+	a.channel.sends.push(s);
+	a.channel.volume_db = -144.0;
+	let mut p = project(vec![a.clone(), fx]);
+	// Send silent for 4 beats (held), then open.
+	p.automation.push(AutomationLane::new(
+		ParamAddress::send(a.id, send_id),
+		vec![
+			AutomationPoint::new(beats(0.0), -144.0).with_shape(cadenza_model::PointShape::Hold),
+			AutomationPoint::new(beats(4.0), 0.0),
+		],
+	));
+	let out = render_offline(&p, &opts(8.0)).unwrap();
+	let quiet = rms(&out.left[seconds(0.5)..seconds(1.9)]);
+	let loud = rms(&out.left[seconds(2.2)..seconds(3.5)]);
+	assert!(quiet < 1e-6 && loud > 1e-3, "{quiet} vs {loud}");
+}
+
+#[test]
+fn automation_swaps_into_a_compiled_graph() {
+	let a = synth_track("a", &[(60, 0.0, 8.0)], 8.0);
+	let p = project(vec![a.clone()]);
+	let mut graph = cadenza_engine::compile(&p, 48_000, 512).unwrap();
+	let lanes = [AutomationLane::new(
+		ParamAddress::track_volume(a.id),
+		vec![AutomationPoint::new(beats(0.0), -80.0)],
+	)];
+	let mut bindings = graph.prepare_automation(&lanes, &p.tempo);
+	graph.play();
+	let mut l = vec![0.0f32; 24_000];
+	let mut r = vec![0.0f32; 24_000];
+	graph.process(&mut l, &mut r);
+	let before = rms(&l[12_000..]);
+	graph.swap_automation(&mut bindings);
+	graph.process(&mut l, &mut r);
+	let after = rms(&l[12_000..]);
+	assert!(after < before * 1e-3, "{after} vs {before}");
+}

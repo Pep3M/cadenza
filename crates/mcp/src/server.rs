@@ -571,7 +571,7 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Replaces the automation curve for a parameter address; an empty points list removes it."
+		description = "Replaces the automation curve for a parameter address (volume, pan, a send level or a device parameter); each point may set its shape (linear, hold, smooth). An empty points list removes the lane."
 	)]
 	fn set_automation(
 		&self,

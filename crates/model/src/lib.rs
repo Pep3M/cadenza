@@ -12,13 +12,15 @@ pub mod project;
 pub mod summary;
 pub mod validate;
 
-pub use command::{ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch};
+pub use command::{
+	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
+};
 pub use document::Document;
 pub use error::ModelError;
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
-	FORMAT_VERSION, FadeCurve, Marker, Note, Output, OutputRoute, Project, Send, SidechainSource,
-	Track, TrackKind,
+	FORMAT_VERSION, FadeCurve, Marker, Note, Output, OutputRoute, PointShape, Project, Send,
+	SidechainSource, Track, TrackKind, automation_value,
 };
 pub use summary::{
 	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,

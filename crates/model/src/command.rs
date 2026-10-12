@@ -1,6 +1,7 @@
 //! The undoable command API shared by the UI and the AI.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use cadenza_core::{ClipId, DeviceId, NoteId, ParamAddress, Tick, TimeSignature, TrackId};
 use schemars::JsonSchema;
@@ -102,7 +103,7 @@ pub enum Command {
 		track: TrackId,
 		routes: Vec<OutputRoute>,
 	},
-	/// Volume (dB), pan (-1..1) or a device parameter (plain value).
+	/// Volume (dB), pan (-1..1), a send level (dB) or a device parameter (plain value).
 	SetParam {
 		address: ParamAddress,
 		value: f32,
@@ -147,6 +148,14 @@ pub enum Command {
 		fade_in: Option<ClipFade>,
 		#[serde(default)]
 		fade_out: Option<ClipFade>,
+	},
+	/// Changes the source file, the start offset inside it (seconds) and/or the gain of an
+	/// audio clip (e.g. after rendering a processed copy of the file, or trimming its
+	/// start). Fields left out are unchanged.
+	UpdateAudioClip {
+		clip: ClipId,
+		#[serde(flatten)]
+		patch: AudioClipPatch,
 	},
 	AddNotes {
 		clip: ClipId,
@@ -238,6 +247,17 @@ pub struct ClipPatch {
 	pub track: Option<TrackId>,
 }
 
+/// Fields left out (or `None`) are unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AudioClipPatch {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub file: Option<PathBuf>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub offset_seconds: Option<f64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub gain_db: Option<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct NotePatch {
 	pub id: NoteId,
@@ -286,6 +306,7 @@ impl Command {
 			Self::RemoveClip { .. } => "remove_clip",
 			Self::UpdateClip { .. } => "update_clip",
 			Self::SetClipFades { .. } => "set_clip_fades",
+			Self::UpdateAudioClip { .. } => "update_audio_clip",
 			Self::AddNotes { .. } => "add_notes",
 			Self::RemoveNotes { .. } => "remove_notes",
 			Self::UpdateNotes { .. } => "update_notes",
@@ -359,6 +380,7 @@ impl Command {
 				cadenza_core::ParamTarget::Device { param, .. } => {
 					format!("Set '{param}' to {value}")
 				}
+				cadenza_core::ParamTarget::Send { .. } => format!("Set send to {value:.1} dB"),
 			},
 			Self::ResetParam { address } => match &address.target {
 				cadenza_core::ParamTarget::Device { param, .. } => format!("Reset '{param}'"),
@@ -383,6 +405,13 @@ impl Command {
 				..
 			} => "Remove clip fades".into(),
 			Self::SetClipFades { .. } => "Set clip fades".into(),
+			Self::UpdateAudioClip { patch, .. } => {
+				match (&patch.file, patch.offset_seconds, patch.gain_db) {
+					(Some(_), _, _) => "Replace clip audio".into(),
+					(None, None, Some(db)) => format!("Set clip gain to {db:.1} dB"),
+					_ => "Edit audio clip".into(),
+				}
+			}
 			Self::AddNotes { notes, .. } => plural("Add", notes.len(), "note"),
 			Self::RemoveNotes { notes, .. } => plural("Remove", notes.len(), "note"),
 			Self::UpdateNotes { notes, .. } => plural("Edit", notes.len(), "note"),

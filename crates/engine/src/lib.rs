@@ -21,6 +21,7 @@ mod render;
 mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
+pub use automation::AutomationBindings;
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 pub use cadenza_midi_io::PortInfo as MidiPort;
 pub use cadenza_plugin_host::PluginCatalog;

@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use cadenza_core::Tick;
-use cadenza_engine::Player;
+use cadenza_engine::{Player, PluginCrash, PluginHosting};
 use cadenza_model::Project;
 use cadenza_plugin_host::PluginCatalog;
 
@@ -20,8 +20,10 @@ enum Command {
 	Load(
 		Box<Project>,
 		Option<Arc<PluginCatalog>>,
+		PluginHosting,
 		mpsc::Sender<Result<Vec<String>, String>>,
 	),
+	Crashes(mpsc::Sender<Vec<PluginCrash>>),
 	Play(Option<f64>, mpsc::Sender<Result<(), String>>),
 	Stop(mpsc::Sender<Result<(), String>>),
 	Position(mpsc::Sender<f64>),
@@ -61,8 +63,9 @@ impl PlayerHandle {
 				let _ = init_tx.send(Ok(()));
 				for cmd in rx {
 					match cmd {
-						Command::Load(project, plugins, reply) => {
+						Command::Load(project, plugins, hosting, reply) => {
 							player.set_plugins(plugins);
+							player.set_hosting(hosting);
 							let _ = reply.send(player.load(&project).map_err(|e| e.to_string()));
 						}
 						Command::Play(from_beat, reply) => {
@@ -78,6 +81,9 @@ impl PlayerHandle {
 						}
 						Command::Stop(reply) => {
 							let _ = reply.send(player.stop().map_err(|e| e.to_string()));
+						}
+						Command::Crashes(reply) => {
+							let _ = reply.send(player.plugin_crashes());
 						}
 						Command::Position(reply) => {
 							let _ = reply.send(player.position().beats());
@@ -116,13 +122,24 @@ impl PlayerHandle {
 	}
 
 	/// Compiles and swaps `project` into the player without interrupting the stream.
-	/// `plugins` is needed for projects with plugin devices.
+	/// `plugins` is needed for projects with plugin devices; `hosting` says where they run.
+	/// Every device is created afresh, which also restarts crashed plugins.
 	pub fn load(
 		&self,
 		project: Project,
 		plugins: Option<Arc<PluginCatalog>>,
+		hosting: PluginHosting,
 	) -> Result<Vec<String>, McpError> {
-		self.roundtrip(|reply| Command::Load(Box::new(project), plugins, reply))
+		self.roundtrip(|reply| Command::Load(Box::new(project), plugins, hosting, reply))
+	}
+
+	/// Plugins of the loaded project that crashed or hung during playback (bypassed).
+	pub fn plugin_crashes(&self) -> Result<Vec<PluginCrash>, McpError> {
+		let (reply_tx, reply_rx) = mpsc::channel();
+		self.tx
+			.send(Command::Crashes(reply_tx))
+			.map_err(|_| thread_gone())?;
+		reply_rx.recv().map_err(|_| thread_gone())
 	}
 
 	/// Starts (or resumes) playback, optionally seeking first.

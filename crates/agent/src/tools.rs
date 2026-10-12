@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::types::{ToolCall, ToolSpec};
 
 /// Tools not offered to the embedded agent: it runs headless and cannot hear playback.
-const HIDDEN_TOOLS: &[&str] = &["play", "stop", "transport_status"];
+const HIDDEN_TOOLS: &[&str] = &["play", "stop", "transport_status", "restart_plugins"];
 /// Tools that only exist to work with third-party plugins.
 const PLUGIN_TOOLS: &[&str] = &["scan_plugins"];
 /// Tools that never change the project (they don't invalidate an earlier save/render).

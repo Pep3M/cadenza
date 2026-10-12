@@ -41,7 +41,7 @@ fn play_stop_round_trip_succeeds_or_fails_cleanly_without_a_device() {
 	let project = session.document().project().clone();
 
 	handle
-		.load(project, None)
+		.load(project, None, cadenza_engine::PluginHosting::default())
 		.expect("loading an empty project should not fail");
 	assert!(!handle.is_playing_hint());
 
@@ -63,6 +63,7 @@ fn transport_status_tool_without_a_player_reports_stopped() {
 	let status = playback::transport_status(None).unwrap();
 	assert!(!status.playing);
 	assert_eq!(status.position_beats, 0.0);
+	assert!(status.plugin_crashes.is_empty());
 
 	let status = playback::stop(None).unwrap();
 	assert!(!status.playing);

@@ -115,6 +115,7 @@ async fn surge_chord_through_lsp_compressor() {
 	let report = render::render(
 		s.document().project().clone(),
 		s.plugins_for_project(),
+		s.plugin_hosting().clone(),
 		args(json!({ "path": path.display().to_string() })),
 	)
 	.await

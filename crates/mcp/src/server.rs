@@ -52,6 +52,10 @@ tone with `insert_device`/`set_device_params` on a track or the master.\n\
 `add_marker`. Use `analyze_mix` to get loudness/peak/band readings plus plain-language \
 mix observations before committing to a `render`. `play`/`stop` audition on the default \
 output device; edits made while playing are pushed to the player automatically.\n\n\
+Third-party plugins run in crash-isolated sandbox processes: a plugin that crashes or \
+hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in \
+`warnings` (re-render to retry); during playback `transport_status` lists it under \
+`plugin_crashes` and `restart_plugins` reloads it. Replace a plugin that keeps crashing.\n\n\
 Positions and durations are always in beats (quarter notes); pitches are note names \
 (\"C4\") or MIDI numbers (60 = C4); velocity is 0..1; volume is dB; pan is -1..1.";
 
@@ -200,23 +204,26 @@ impl CadenzaServer {
 	fn sync_player_if_playing(&self) {
 		let still_playing = matches!(self.player().as_ref(), Some(p) if p.is_playing_hint());
 		if still_playing {
-			let (project, plugins) = self.project_and_plugins();
+			let (project, plugins, hosting) = self.project_and_plugins();
 			if let Some(p) = self.player().as_ref() {
-				let _ = p.load(project, plugins);
+				let _ = p.load(project, plugins, hosting);
 			}
 		}
 	}
 
-	/// The current project plus the plugin catalog if the project uses plugins.
+	/// The current project, the plugin catalog if the project uses plugins, and where
+	/// plugins run.
 	fn project_and_plugins(
 		&self,
 	) -> (
 		cadenza_model::Project,
 		Option<std::sync::Arc<cadenza_plugin_host::PluginCatalog>>,
+		cadenza_engine::PluginHosting,
 	) {
 		let mut session = self.session();
 		let plugins = session.plugins_for_project();
-		(session.document().project().clone(), plugins)
+		let hosting = session.plugin_hosting().clone();
+		(session.document().project().clone(), plugins, hosting)
 	}
 
 	/// Opens the default audio output device on first use.
@@ -662,8 +669,8 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<render::RenderArgs>,
 	) -> Result<Json<cadenza_engine::MixReport>, ErrorData> {
-		let (project, plugins) = self.project_and_plugins();
-		Ok(Json(render::render(project, plugins, args).await?))
+		let (project, plugins, hosting) = self.project_and_plugins();
+		Ok(Json(render::render(project, plugins, hosting, args).await?))
 	}
 
 	#[tool(
@@ -676,8 +683,10 @@ impl CadenzaServer {
 		&self,
 		Parameters(args): Parameters<render::AnalyzeMixArgs>,
 	) -> Result<Json<render::AnalyzeMixOutput>, ErrorData> {
-		let (project, plugins) = self.project_and_plugins();
-		Ok(Json(render::analyze_mix(project, plugins, args).await?))
+		let (project, plugins, hosting) = self.project_and_plugins();
+		Ok(Json(
+			render::analyze_mix(project, plugins, hosting, args).await?,
+		))
 	}
 
 	// -- transport -----------------------------------------------------------------
@@ -692,12 +701,13 @@ impl CadenzaServer {
 		Parameters(args): Parameters<playback::PlayArgs>,
 	) -> Result<Json<playback::TransportStatus>, ErrorData> {
 		self.ensure_player()?;
-		let (project, plugins) = self.project_and_plugins();
+		let (project, plugins, hosting) = self.project_and_plugins();
 		let guard = self.player();
 		Ok(Json(playback::play(
 			guard.as_ref().unwrap(),
 			project,
 			plugins,
+			hosting,
 			args,
 		)?))
 	}
@@ -707,9 +717,30 @@ impl CadenzaServer {
 		Ok(Json(playback::stop(self.player().as_ref())?))
 	}
 
-	#[tool(description = "Reports whether the transport is playing and its current beat position.")]
+	#[tool(
+		description = "Reports whether the transport is playing, its current beat position, and \
+			any plugin that crashed or hung during playback (it is bypassed; see \
+			restart_plugins)."
+	)]
 	fn transport_status(&self) -> Result<Json<playback::TransportStatus>, ErrorData> {
 		Ok(Json(playback::transport_status(self.player().as_ref())?))
+	}
+
+	#[tool(
+		description = "Restarts crashed plugins by reloading the current project into the \
+			player (every plugin is re-created from the project's saved state; playback \
+			position and play state are kept). Use it after transport_status reports \
+			plugin_crashes; if the same plugin crashes again, replace or bypass it. Renders \
+			and analyze_mix always start with fresh plugins and need no restart."
+	)]
+	fn restart_plugins(&self) -> Result<Json<playback::TransportStatus>, ErrorData> {
+		let (project, plugins, hosting) = self.project_and_plugins();
+		Ok(Json(playback::restart_plugins(
+			self.player().as_ref(),
+			project,
+			plugins,
+			hosting,
+		)?))
 	}
 }
 

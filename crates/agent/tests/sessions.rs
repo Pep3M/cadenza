@@ -138,7 +138,14 @@ async fn full_session_writes_parts_and_renders_with_correct_wire_format() {
 		assert_eq!(tool["type"], "function");
 		let name = tool["function"]["name"].as_str().unwrap();
 		assert!(
-			!["play", "stop", "transport_status", "scan_plugins"].contains(&name),
+			![
+				"play",
+				"stop",
+				"transport_status",
+				"restart_plugins",
+				"scan_plugins"
+			]
+			.contains(&name),
 			"{name} offered"
 		);
 		assert_eq!(tool["function"]["parameters"]["type"], "object", "{name}");

@@ -1,5 +1,6 @@
-//! Builds the `cadenza-test-plugins` CLAP binary and the plugin scanner, then scans the
-//! test plugins into a temporary catalog shared by every test in the process.
+//! Builds the `cadenza-test-plugins` CLAP binary, the plugin scanner and the plugin
+//! sandbox, then scans the test plugins into a temporary catalog shared by every test in
+//! the process. The crash/hang test effect (`clap_crash` example) gets its own catalog.
 
 #![allow(dead_code)]
 
@@ -8,10 +9,12 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use cadenza_engine::PluginHosting;
 use cadenza_plugin_host::PluginCatalog;
 
 pub const GAIN_ID: &str = "dev.cadenza.test.gain";
 pub const SINE_ID: &str = "dev.cadenza.test.sine";
+pub const CRASH_ID: &str = "dev.cadenza.test.crash";
 
 fn workspace_manifest() -> PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml")
@@ -70,6 +73,68 @@ fn build() -> (PathBuf, PathBuf) {
 	.find(|f| f.file_stem().is_some_and(|s| s == "cadenza-plugin-scanner"))
 	.expect("cargo reported no cadenza-plugin-scanner executable");
 	(library, scanner)
+}
+
+fn find_exe(files: Vec<PathBuf>, name: &str) -> PathBuf {
+	files
+		.into_iter()
+		.find(|f| f.file_stem().is_some_and(|s| s == name))
+		.unwrap_or_else(|| panic!("cargo reported no {name} executable"))
+}
+
+/// The `cadenza-plugin-sandbox` executable, built once per process.
+pub fn sandbox_exe() -> PathBuf {
+	static EXE: OnceLock<PathBuf> = OnceLock::new();
+	EXE.get_or_init(|| {
+		find_exe(
+			cargo_build(&[
+				"-p",
+				"cadenza-plugin-host",
+				"--bin",
+				"cadenza-plugin-sandbox",
+			]),
+			"cadenza-plugin-sandbox",
+		)
+	})
+	.clone()
+}
+
+/// Sandboxed hosting with this build's sandbox executable, no core dumps (the crash
+/// tests abort on purpose) and a realtime deadline loose enough for loaded CI machines.
+pub fn sandboxed() -> PluginHosting {
+	let mut hosting = PluginHosting::sandboxed();
+	hosting.sandbox.executable = Some(sandbox_exe());
+	hosting.sandbox.core_dumps = false;
+	hosting.sandbox.realtime_timeout = std::time::Duration::from_millis(500);
+	hosting
+}
+
+/// A catalog holding only the crash/hang test effect (`dev.cadenza.test.crash`).
+pub fn crash_catalog() -> Arc<PluginCatalog> {
+	static CATALOG: OnceLock<Arc<PluginCatalog>> = OnceLock::new();
+	CATALOG
+		.get_or_init(|| {
+			let library = cargo_build(&["-p", "cadenza-test-plugins", "--example", "clap_crash"])
+				.into_iter()
+				.find(|f| {
+					let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+					let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned());
+					matches!(ext, "so" | "dll" | "dylib")
+						&& stem.is_some_and(|s| s.contains("clap_crash"))
+				})
+				.expect("cargo reported no cdylib for clap_crash");
+			let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+				.join(format!("crash-plugin-{}", std::process::id()))
+				.join("plugins");
+			std::fs::create_dir_all(&dir).unwrap();
+			std::fs::copy(&library, dir.join("cadenza-crash.clap")).unwrap();
+			let cache = dir.join("../catalog.json");
+			let mut catalog = PluginCatalog::load_or_default(&cache);
+			let report = catalog.scan(&[dir], &scanner()).expect("scan crash plugin");
+			assert_eq!(report.added.len(), 1, "{report:?}");
+			Arc::new(catalog)
+		})
+		.clone()
 }
 
 /// Built artifacts: (test plugin library, scanner executable), built once per process.

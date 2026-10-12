@@ -22,6 +22,7 @@ fn session() -> Session {
 	let dir = std::env::temp_dir().join(format!("cadenza-mcp-plugins-{}", std::process::id()));
 	let mut s = Session::with_plugin_cache(dir.join("never-written.json"));
 	s.set_plugins(plugin_support::catalog());
+	s.set_plugin_hosting(plugin_support::sandboxed());
 	s
 }
 
@@ -254,6 +255,7 @@ async fn renders_song_with_plugin_instrument_and_effect() {
 	let report = render::render(
 		s.document().project().clone(),
 		plugins.clone(),
+		plugin_support::sandboxed(),
 		args(json!({ "path": path.display().to_string(), "end_beat": 4.0 })),
 	)
 	.await
@@ -274,6 +276,7 @@ async fn renders_song_with_plugin_instrument_and_effect() {
 	let out = render::analyze_mix(
 		s.document().project().clone(),
 		None,
+		plugin_support::sandboxed(),
 		args(json!({ "end_beat": 4.0 })),
 	)
 	.await

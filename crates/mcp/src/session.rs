@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use cadenza_engine::PluginHosting;
 use cadenza_model::{Document, Project};
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 
@@ -13,6 +14,8 @@ pub struct Session {
 	plugin_cache: PathBuf,
 	/// Loaded from `plugin_cache` on first use.
 	plugins: Option<Arc<PluginCatalog>>,
+	/// Where plugin devices run in renders, analysis and playback.
+	plugin_hosting: PluginHosting,
 }
 
 impl Session {
@@ -28,6 +31,7 @@ impl Session {
 			path: None,
 			plugin_cache: cache_path.into(),
 			plugins: None,
+			plugin_hosting: PluginHosting::default(),
 		}
 	}
 
@@ -64,6 +68,16 @@ impl Session {
 		self.plugins
 			.get_or_insert_with(|| Arc::new(PluginCatalog::load_or_default(&self.plugin_cache)))
 			.clone()
+	}
+
+	/// Where plugin devices run (default: sandboxed unless
+	/// `CADENZA_PLUGIN_HOSTING=in-process`; see [`PluginHosting`]).
+	pub fn plugin_hosting(&self) -> &PluginHosting {
+		&self.plugin_hosting
+	}
+
+	pub fn set_plugin_hosting(&mut self, hosting: PluginHosting) {
+		self.plugin_hosting = hosting;
 	}
 
 	/// Replaces the plugin catalog (e.g. after a scan).

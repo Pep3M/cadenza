@@ -4,23 +4,46 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use cadenza_engine::{Player, RenderOptions, analyze_mix, render_to_wav};
+use cadenza_engine::{Player, PluginHosting, RenderOptions, analyze_mix, render_to_wav};
 use cadenza_model::Project;
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 use clap::{Parser, Subcommand};
 
 mod compose;
 
+const PLUGIN_HOSTING_HELP: &str = "\
+Plugin sandbox:
+  Third-party plugins (CLAP/VST3) used by render, analyze, play, mcp and compose run each in
+  its own `cadenza-plugin-sandbox` helper process, so a plugin that crashes or hangs is
+  bypassed and reported (render/analyze: in the report's warnings; play: on stderr) instead
+  of taking Cadenza down. The helper must sit next to the `cadenza` executable
+  (`cargo build --release` builds both into target/release) or be named by the
+  CADENZA_PLUGIN_SANDBOX variable; if it is missing, plugins run in-process with a warning.
+  Use --in-process-plugins or CADENZA_PLUGIN_HOSTING=in-process to load plugins into the
+  cadenza process itself (debugging, benchmarks).";
+
 #[derive(Parser)]
-#[command(name = "cadenza", version, about = "Cadenza DAW command line")]
+#[command(
+	name = "cadenza",
+	version,
+	about = "Cadenza DAW command line",
+	after_long_help = PLUGIN_HOSTING_HELP
+)]
 struct Cli {
+	/// Load third-party plugins into this process instead of sandbox processes (faster
+	/// startup, but a crashing plugin aborts cadenza; same as CADENZA_PLUGIN_HOSTING=in-process)
+	#[arg(long, global = true)]
+	in_process_plugins: bool,
 	#[command(subcommand)]
 	command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-	/// Render a project to a 32-bit float WAV file and print the mix report
+	/// Render a project to a 32-bit float WAV file and print the mix report.
+	///
+	/// Plugins run sandboxed (see `cadenza --help`): a crashing plugin is bypassed and named
+	/// in the report's warnings, and the render still completes.
 	Render {
 		project: PathBuf,
 		#[arg(short, long)]
@@ -81,7 +104,13 @@ fn print_json(value: &impl serde::Serialize) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-	match Cli::parse().command {
+	let cli = Cli::parse();
+	let hosting = if cli.in_process_plugins {
+		PluginHosting::in_process()
+	} else {
+		PluginHosting::default()
+	};
+	match cli.command {
 		Command::Render {
 			project,
 			output,
@@ -91,6 +120,7 @@ fn main() -> Result<()> {
 			let opts = RenderOptions {
 				sample_rate,
 				plugins: plugins_for(&project),
+				hosting,
 				..RenderOptions::default()
 			};
 			let report = render_to_wav(&project, &opts, &output)?;
@@ -105,6 +135,7 @@ fn main() -> Result<()> {
 			let opts = RenderOptions {
 				sample_rate,
 				plugins: plugins_for(&project),
+				hosting,
 				..RenderOptions::default()
 			};
 			print_json(&analyze_mix(&project, &opts)?)
@@ -113,6 +144,7 @@ fn main() -> Result<()> {
 			let project = load(&project)?;
 			let mut player = Player::new()?;
 			player.set_plugins(plugins_for(&project));
+			player.set_hosting(hosting);
 			for warning in player.load(&project)? {
 				eprintln!("warning: {warning}");
 			}
@@ -120,6 +152,9 @@ fn main() -> Result<()> {
 			player.play()?;
 			while player.is_playing() && player.position() < end {
 				eprint!("\r{:>8.2} beats", player.position().beats());
+				for crash in player.take_plugin_crashes() {
+					eprintln!("\nwarning: {}", crash.message);
+				}
 				thread::sleep(Duration::from_millis(100));
 			}
 			// let reverb and delay tails ring out
@@ -128,10 +163,24 @@ fn main() -> Result<()> {
 			eprintln!();
 			Ok(())
 		}
-		Command::Mcp => run_mcp(),
-		Command::Compose(args) => compose::run(args),
+		Command::Mcp => {
+			set_in_process_env(cli.in_process_plugins);
+			run_mcp()
+		}
+		Command::Compose(args) => {
+			set_in_process_env(cli.in_process_plugins);
+			compose::run(args)
+		}
 		Command::ScanPlugins { paths, json } => scan_plugins(paths, json),
 		Command::ListPlugins { query, json } => list_plugins(query, json),
+	}
+}
+
+/// The MCP server and the agent read their hosting default from the environment.
+fn set_in_process_env(in_process: bool) {
+	if in_process {
+		// SAFETY: called on the main thread before any other thread is spawned.
+		unsafe { std::env::set_var(cadenza_engine::HOSTING_ENV, "in-process") };
 	}
 }
 

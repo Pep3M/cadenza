@@ -483,6 +483,31 @@ impl Graph {
 		track.is_none() || next.is_some()
 	}
 
+	/// Sets a channel's fader volume (`track: None` = master) without recompiling; the
+	/// change is smoothed. Realtime safe. Returns false for an unknown track.
+	pub fn set_channel_volume(&mut self, track: Option<TrackId>, db: f32) -> bool {
+		match track {
+			None => self.master.fader.set_volume_db(db),
+			Some(id) => match self.nodes.iter_mut().find(|n| n.track_id == id) {
+				Some(n) => n.fader.set_volume_db(db),
+				None => return false,
+			},
+		}
+		true
+	}
+
+	/// Like [`Graph::set_channel_volume`], for pan (-1..1).
+	pub fn set_channel_pan(&mut self, track: Option<TrackId>, pan: f32) -> bool {
+		match track {
+			None => self.master.fader.set_pan(pan),
+			Some(id) => match self.nodes.iter_mut().find(|n| n.track_id == id) {
+				Some(n) => n.fader.set_pan(pan),
+				None => return false,
+			},
+		}
+		true
+	}
+
 	/// The monitored track, if any.
 	pub fn monitor_track(&self) -> Option<TrackId> {
 		self.monitor.map(|i| self.nodes[i].track_id)

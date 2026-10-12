@@ -62,6 +62,9 @@ enum Cmd {
 	Seek(Tick),
 	Monitor(Option<TrackId>),
 	DetachMidi,
+	/// Live fader move: `track: None` = master.
+	Volume(Option<TrackId>, f32),
+	Pan(Option<TrackId>, f32),
 }
 
 #[derive(Debug, Default)]
@@ -179,6 +182,16 @@ impl AudioCore {
 					}
 				}
 				Cmd::DetachMidi => self.retire_midi(),
+				Cmd::Volume(track, db) => {
+					if let Some(g) = &mut self.graph {
+						g.set_channel_volume(track, db);
+					}
+				}
+				Cmd::Pan(track, pan) => {
+					if let Some(g) = &mut self.graph {
+						g.set_channel_pan(track, pan);
+					}
+				}
 			}
 		}
 		// A new input replaces the old one only when the old can be handed back.
@@ -301,6 +314,31 @@ impl Control {
 	}
 }
 
+/// Read-only view of a [`Player`]'s transport that can be sent to and polled from any
+/// thread (e.g. a UI drawing the playhead) while the `Player` itself stays on its own
+/// thread (its `cpal::Stream` is not `Send` everywhere).
+#[derive(Debug, Clone)]
+pub struct PlayerClock {
+	shared: Arc<Shared>,
+	sample_rate: u32,
+}
+
+impl PlayerClock {
+	/// Current playhead (updated by the audio thread once per callback).
+	pub fn position(&self) -> Tick {
+		Tick(self.shared.position.load(Ordering::Relaxed))
+	}
+
+	pub fn is_playing(&self) -> bool {
+		self.shared.playing.load(Ordering::Relaxed)
+	}
+
+	/// Output device sample rate.
+	pub fn sample_rate(&self) -> u32 {
+		self.sample_rate
+	}
+}
+
 /// Realtime player on the default output device.
 pub struct Player {
 	control: Control,
@@ -397,6 +435,27 @@ impl Player {
 	/// Output device sample rate; projects are compiled at this rate.
 	pub fn sample_rate(&self) -> u32 {
 		self.sample_rate
+	}
+
+	/// A thread-safe handle to the playhead and play state.
+	pub fn clock(&self) -> PlayerClock {
+		PlayerClock {
+			shared: self.control.shared.clone(),
+			sample_rate: self.sample_rate,
+		}
+	}
+
+	/// Moves a fader of the loaded graph immediately (smoothed, no recompilation, notes
+	/// keep sounding); `track: None` is the master. Use it while the user drags a fader,
+	/// alongside the matching project edit, so a later [`Player::load`] agrees. Ignored
+	/// for tracks the loaded graph does not have.
+	pub fn set_live_volume(&mut self, track: Option<TrackId>, db: f32) -> Result<(), EngineError> {
+		self.control.send(Cmd::Volume(track, db))
+	}
+
+	/// Like [`Player::set_live_volume`], for pan (-1..1).
+	pub fn set_live_pan(&mut self, track: Option<TrackId>, pan: f32) -> Result<(), EngineError> {
+		self.control.send(Cmd::Pan(track, pan))
 	}
 
 	/// Sets the catalog used to load plugin devices on subsequent [`Player::load`] calls
@@ -653,6 +712,29 @@ mod tests {
 		core.fill_interleaved(&mut out, 2);
 		let after = meters.master();
 		assert_eq!(after.rms, [0.0, 0.0], "stopping clears the levels");
+	}
+
+	#[test]
+	fn live_volume_changes_the_level_without_reloading() {
+		let p = project();
+		let track = p.tracks[0].id;
+		let (mut control, mut core) = channel_pair(48_000);
+		control
+			.load_graph(compile(&p, 48_000, 256).unwrap())
+			.unwrap();
+		control.send(Cmd::Play).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		core.fill_interleaved(&mut out, 2);
+		let before = energy(&out);
+		control.send(Cmd::Volume(Some(track), -40.0)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
+		assert!(energy(&out) < before * 1e-3, "{} vs {before}", energy(&out));
+		control.send(Cmd::Volume(None, -200.0)).unwrap();
+		control.send(Cmd::Pan(Some(TrackId::new()), 1.0)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
+		assert!(energy(&out) < 1e-9);
 	}
 
 	#[test]

@@ -27,8 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, devices, midi, playback, presets, project, render, samples,
-	tracks,
+	arrange, audio, clips, compose, devices, midi, playback, portable, presets, project, render,
+	samples, tracks,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -906,6 +906,55 @@ impl CadenzaServer {
 		Parameters(args): Parameters<arrange::RemoveMarkerArgs>,
 	) -> Result<(), ErrorData> {
 		self.run_mut(|s| arrange::remove_marker(s, args))
+	}
+
+	// -- portable projects -----------------------------------------------------------
+
+	#[tool(
+		description = "Copies every file the project uses from outside its folder (audio clips, \
+			processed copies, sample zones; factory samples only with include_factory) into the \
+			project folder (Audio/, Samples/), copying identical content once, and points the \
+			references at the copies in one undo step. Needs a saved project. dry_run reports \
+			the plan only. Run it before sharing or moving a project."
+	)]
+	fn collect_files(
+		&self,
+		Parameters(args): Parameters<portable::CollectFilesArgs>,
+	) -> Result<Json<portable::CollectFilesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| portable::collect_files(s, args))?))
+	}
+
+	#[tool(
+		description = "Lists the files the project refers to that are missing on disk (audio \
+			clips and sample zones), with their original names. Fix them with relink_files."
+	)]
+	fn list_missing_files(&self) -> Result<Json<Vec<portable::MissingFile>>, ErrorData> {
+		Ok(Json(portable::list_missing_files(&self.session())))
+	}
+
+	#[tool(
+		description = "Searches search_folder recursively for the project's missing files (by \
+			original file name; ties go to the path whose folders match best) and relinks every \
+			match at once, in one undo step. Reports what was relinked and what is still missing."
+	)]
+	fn relink_files(
+		&self,
+		Parameters(args): Parameters<portable::RelinkFilesArgs>,
+	) -> Result<Json<portable::RelinkFilesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| portable::relink_files(s, args))?))
+	}
+
+	#[tool(
+		description = "Packs the saved project's folder into one archive (.cadenza.zip) for \
+			sharing, with the current (even unsaved) project state; caches, autosaves, backups \
+			and (unless include_renders) Renders/ are left out. Files outside the folder are \
+			listed in 'outside': run collect_files first to include them."
+	)]
+	fn pack_project(
+		&self,
+		Parameters(args): Parameters<portable::PackProjectArgs>,
+	) -> Result<Json<portable::PackOutput>, ErrorData> {
+		Ok(Json(portable::pack_current(&self.session(), args)?))
 	}
 
 	// -- rendering / analysis --------------------------------------------------------

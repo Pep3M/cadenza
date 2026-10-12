@@ -8,6 +8,7 @@ pub mod compose;
 pub mod devices;
 pub mod midi;
 pub mod playback;
+pub mod portable;
 pub mod presets;
 pub mod project;
 pub mod render;

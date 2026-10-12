@@ -32,10 +32,14 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"get_audio_info",
 	"export_midi",
 	"list_factory_samples",
+	"list_missing_files",
+	"pack_project",
 ];
 
 /// Formats the `render` tool may write.
 const RENDER_EXTENSIONS: &[&str] = &["wav", "flac", "mp3"];
+/// Project archive extensions for `pack_project` (`.cadenza.zip` ends in `.zip`).
+const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cadenzapack"];
 /// MIDI file extensions for `import_midi`/`export_midi`.
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
@@ -134,6 +138,33 @@ impl PathPolicy {
 }
 
 impl PathPolicy {
+	/// A folder inside the session folder (relative or absolute; the root itself is
+	/// allowed), e.g. where `relink_files` searches.
+	pub fn resolve_dir(&self, raw: &str) -> Result<PathBuf, String> {
+		let outside = || {
+			format!("folder '{raw}' is outside the session folder; use a folder inside it (or '.')")
+		};
+		let raw_path = Path::new(raw.trim());
+		if raw_path
+			.components()
+			.any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
+		{
+			return Err(outside());
+		}
+		let path = if raw_path.is_absolute() {
+			raw_path.to_path_buf()
+		} else {
+			self.root.join(raw_path)
+		};
+		let real = path
+			.canonicalize()
+			.map_err(|e| format!("cannot open folder '{raw}': {e}"))?;
+		if !real.starts_with(&self.root) {
+			return Err(outside());
+		}
+		Ok(real)
+	}
+
 	/// A sample for `load_sample`: an audio file in the session folder, or one of the
 	/// factory samples (read-only library).
 	pub fn resolve_sample(&self, raw: &str) -> Result<PathBuf, String> {
@@ -366,6 +397,22 @@ impl ToolBridge {
 					None => return Err("missing 'path'".into()),
 				}
 			}
+			"relink_files" => {
+				let raw = obj
+					.get("search_folder")
+					.and_then(Value::as_str)
+					.ok_or("missing 'search_folder'")?;
+				let path = self.policy.resolve_dir(raw)?;
+				obj.insert("search_folder".into(), path_value(&path));
+			}
+			"pack_project" => {
+				let raw = obj
+					.get("path")
+					.and_then(Value::as_str)
+					.ok_or("missing 'path'")?;
+				let path = self.policy.resolve_any(raw, ARCHIVE_EXTENSIONS)?;
+				obj.insert("path".into(), path_value(&path));
+			}
 			// Samples come from the session folder or the factory sample library.
 			"load_sample" => {
 				let raw = obj
@@ -401,7 +448,7 @@ fn offered(name: &str, allow_plugins: bool) -> bool {
 fn describe(name: &str, description: String) -> String {
 	match name {
 		"save_project" | "open_project" | "render" | "import_audio" | "import_midi"
-		| "export_midi" | "get_audio_info" => format!(
+		| "export_midi" | "get_audio_info" | "relink_files" | "pack_project" => format!(
 			"{description} Paths are file names relative to the session folder; locations \
 			 outside it are rejected."
 		),
@@ -629,6 +676,18 @@ mod tests {
 		assert!(ok("import_audio", "/etc/passwd.wav").is_err());
 		assert!(ok("import_audio", "song.mid").is_err());
 		assert!(ok("import_midi", "song.mid").is_ok());
+		assert!(ok("pack_project", "share/Song.cadenza.zip").is_ok());
+		assert!(ok("pack_project", "/tmp/Song.cadenza.zip").is_err());
+		let relink =
+			|folder: &str| bridge.apply_policy("relink_files", json!({ "search_folder": folder }));
+		std::fs::create_dir_all(root.join("takes")).unwrap();
+		assert_eq!(
+			relink("takes").unwrap()["search_folder"],
+			json!(root.join("takes").display().to_string())
+		);
+		assert!(relink(".").is_ok());
+		assert!(relink("/etc").is_err());
+		assert!(relink("../").is_err());
 		assert!(ok("export_midi", "../out.mid").is_err());
 		assert!(ok("export_midi", "out.wav").unwrap_err().contains(".mid"));
 		assert!(ok("get_audio_info", "/tmp/x.wav").is_err());

@@ -219,3 +219,60 @@ fn chat_applies_one_request_and_saves_the_project() {
 	assert!(!out.status.success());
 	assert!(String::from_utf8_lossy(&out.stderr).contains("--base-url"));
 }
+
+#[test]
+fn collect_pack_and_unpack_make_a_portable_project() {
+	let dir = tempfile::tempdir().unwrap();
+	let take = dir.path().join("external").join("take.wav");
+	std::fs::create_dir_all(take.parent().unwrap()).unwrap();
+	let buf =
+		cadenza_audio_io::AudioBuffer::from_planar(48_000, vec![vec![0.25f32; 4800]]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&take,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Int16),
+	)
+	.unwrap();
+	let project = dir.path().join("Song").join("Song.cadenza.json");
+	let mut p = Project::new("Song");
+	let mut t = Track::new("Vox", TrackKind::Audio);
+	t.clips.push(Clip::audio(
+		"take",
+		Tick::ZERO,
+		Tick::from_beats(1.0),
+		&take,
+	));
+	p.tracks.push(t);
+	p.save_json(&project).unwrap();
+
+	let out = cadenza(&["collect", s(&project)]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(report["copied"].as_array().unwrap().len(), 1);
+	let json = std::fs::read_to_string(&project).unwrap();
+	assert!(json.contains("\"Audio/take.wav\""), "{json}");
+
+	let archive = dir.path().join("Song.cadenza.zip");
+	let out = cadenza(&["pack", s(&project), "-o", s(&archive)]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let dest = dir.path().join("elsewhere");
+	let out = cadenza(&["unpack", s(&archive), s(&dest)]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let opened = String::from_utf8(out.stdout).unwrap();
+	let loaded = Project::load_json(opened.trim()).unwrap();
+	let file = loaded.file_refs()[0].path.clone();
+	assert_eq!(file, dest.join("Song/Audio/take.wav"));
+	assert!(file.is_file());
+}

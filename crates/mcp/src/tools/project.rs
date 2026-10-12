@@ -53,9 +53,9 @@ pub fn open_project(
 	args: OpenProjectArgs,
 ) -> Result<ProjectSummary, McpError> {
 	let path = PathBuf::from(&args.path);
-	let project = Project::load_json(&path)?;
-	let summary = project.summary();
-	session.reset(Document::new(project), Some(path));
+	let (document, _missing) = crate::tools::portable::open_document(&path)?;
+	let summary = document.project().summary();
+	session.reset(document, Some(path));
 	Ok(summary)
 }
 

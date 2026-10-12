@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 mod chat;
 mod compose;
 mod midi_files;
+mod portable;
 
 const PLUGIN_HOSTING_HELP: &str = "\
 Plugin sandbox:
@@ -147,6 +148,39 @@ enum Command {
 		#[arg(long)]
 		json: bool,
 	},
+	/// Copy every external file a project uses (audio clips, samples) into its folder
+	/// (Audio/, Samples/), once per content, rewrite the references and save the project
+	Collect {
+		project: PathBuf,
+		/// Also copy factory samples (normally left in the shared factory library)
+		#[arg(long)]
+		include_factory: bool,
+		/// Only print what would be copied
+		#[arg(long)]
+		dry_run: bool,
+	},
+	/// Find a project's missing files in a folder (recursively, by original name), relink
+	/// them and save the project
+	Relink {
+		project: PathBuf,
+		/// Folder to search
+		#[arg(long)]
+		search: PathBuf,
+		#[arg(long)]
+		dry_run: bool,
+	},
+	/// Pack a project folder into one .cadenza.zip archive for sharing
+	Pack {
+		project: PathBuf,
+		/// Archive to write (default: <project>.cadenza.zip next to the project file)
+		#[arg(short, long)]
+		output: Option<PathBuf>,
+		/// Include the Renders/ folder
+		#[arg(long)]
+		include_renders: bool,
+	},
+	/// Extract a project archive into a folder and print the project file's path
+	Unpack { archive: PathBuf, dest: PathBuf },
 	/// Run the MCP server over stdio, for an AI client to connect to
 	Mcp,
 	/// Open the desktop app, optionally with a project.
@@ -366,6 +400,22 @@ fn main() -> Result<()> {
 			track,
 		} => midi_files::export(&project, &output, track),
 		Command::ListPlugins { query, json } => list_plugins(query, json),
+		Command::Collect {
+			project,
+			include_factory,
+			dry_run,
+		} => portable::collect(&project, include_factory, dry_run),
+		Command::Relink {
+			project,
+			search,
+			dry_run,
+		} => portable::relink(&project, &search, dry_run),
+		Command::Pack {
+			project,
+			output,
+			include_renders,
+		} => portable::pack(&project, output, include_renders),
+		Command::Unpack { archive, dest } => portable::unpack(&archive, &dest),
 	}
 }
 

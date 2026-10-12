@@ -1359,8 +1359,8 @@ impl AppState {
 	/// Plays in the current mode: the song (looping the loop region when it is on), or
 	/// in pattern mode the clip open in the piano roll, looped and heard alone.
 	pub fn play(&mut self) {
-		// Record mode (R): Play records.
-		if self.record.mode && !self.is_recording() {
+		// Record mode (R): Play records the armed tracks (nothing armed: plays).
+		if self.record.mode && !self.is_recording() && self.record_plan().is_ok() {
 			self.record();
 			return;
 		}

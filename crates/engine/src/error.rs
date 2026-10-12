@@ -7,6 +7,8 @@ pub enum EngineError {
 	InvalidOptions(String),
 	#[error("could not write WAV file '{path}': {message}")]
 	WavWrite { path: PathBuf, message: String },
+	#[error("could not write audio file '{path}': {message}")]
+	Export { path: PathBuf, message: String },
 	#[error("no audio output device available")]
 	NoOutputDevice,
 	#[error("audio device error: {0}")]

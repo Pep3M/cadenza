@@ -9,6 +9,13 @@ license.workspace = true
 name = "cadenza"
 path = "src/main.rs"
 
+[features]
+default = []
+# Offline time-stretch / pitch-shift (needs a C++ compiler + libclang).
+stretch = ["cadenza-engine/stretch", "cadenza-mcp/stretch"]
+# MP3 export (vendored LAME, LGPL; needs a C toolchain).
+mp3 = ["cadenza-engine/mp3"]
+
 [dependencies]
 cadenza-core.workspace = true
 cadenza-model.workspace = true

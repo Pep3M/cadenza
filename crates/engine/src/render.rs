@@ -6,6 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use cadenza_audio_io::{AudioBuffer, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 use cadenza_core::Tick;
 use cadenza_model::{Project, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, ProcessMode};
@@ -249,5 +250,128 @@ pub fn render_to_wav(
 		Ok(())
 	})?;
 	writer.finalize().map_err(wav_err)?;
+	Ok(report)
+}
+
+/// File formats [`render_to_file`] can write, chosen from the path's extension.
+pub const EXPORT_EXTENSIONS: &[&str] = &["wav", "flac", "mp3"];
+
+/// Whether this build can write MP3 (the `mp3` cargo feature).
+pub const MP3_SUPPORTED: bool = cfg!(feature = "mp3");
+
+/// Picks the export format from `path`'s extension: `.wav` (`bit_depth` 16, 24 or 32
+/// float; default 32 float), `.flac` (16 or 24; default 24) or `.mp3` (`mp3_bitrate_kbps`,
+/// default 320; needs the `mp3` feature). Integer formats get TPDF dither.
+pub fn export_options_for_path(
+	path: &Path,
+	bit_depth: Option<u32>,
+	mp3_bitrate_kbps: Option<u16>,
+) -> Result<ExportOptions, EngineError> {
+	let ext = path
+		.extension()
+		.and_then(|e| e.to_str())
+		.map(str::to_ascii_lowercase)
+		.unwrap_or_default();
+	let bad_depth = |fmt: &str, allowed: &str| {
+		EngineError::InvalidOptions(format!(
+			"bit depth {} is not available for {fmt}; use {allowed}",
+			bit_depth.unwrap_or_default()
+		))
+	};
+	match ext.as_str() {
+		"wav" => {
+			let format = match bit_depth {
+				Some(16) => WavSampleFormat::Int16,
+				Some(24) => WavSampleFormat::Int24,
+				None | Some(32) => WavSampleFormat::Float32,
+				Some(_) => return Err(bad_depth("WAV", "16, 24 or 32 (float)")),
+			};
+			Ok(ExportOptions::wav(format))
+		}
+		"flac" => {
+			let depth = match bit_depth {
+				Some(16) => FlacBitDepth::Bits16,
+				None | Some(24) => FlacBitDepth::Bits24,
+				Some(_) => return Err(bad_depth("FLAC", "16 or 24")),
+			};
+			Ok(ExportOptions::flac(depth))
+		}
+		"mp3" => {
+			if !MP3_SUPPORTED {
+				return Err(EngineError::InvalidOptions(
+					"MP3 export is not available in this build (compile with the `mp3` feature); \
+					 render to .wav or .flac instead"
+						.into(),
+				));
+			}
+			if bit_depth.is_some() {
+				return Err(EngineError::InvalidOptions(
+					"bit depth does not apply to MP3; omit it and set the bitrate (kbps) instead"
+						.into(),
+				));
+			}
+			let kbps = mp3_bitrate_kbps.unwrap_or(320);
+			if !(32..=320).contains(&kbps) {
+				return Err(EngineError::InvalidOptions(format!(
+					"MP3 bitrate {kbps} kbps is out of range; use 32..=320 (e.g. 192 or 320)"
+				)));
+			}
+			Ok(ExportOptions::mp3(kbps))
+		}
+		_ => Err(EngineError::InvalidOptions(format!(
+			"cannot tell the audio format of '{}'; end the file name in .wav, .flac or .mp3",
+			path.display()
+		))),
+	}
+}
+
+/// Renders to `path` in the given format and returns the analysis of the rendered
+/// (pre-quantization) audio. 32-bit float WAV streams to disk like [`render_to_wav`];
+/// other formats are rendered to memory, then encoded (with TPDF dither for 16/24-bit).
+pub fn render_to_file(
+	project: &Project,
+	opts: &RenderOptions,
+	path: &Path,
+	export: &ExportOptions,
+) -> Result<MixReport, EngineError> {
+	if export.format
+		== (ExportFormat::Wav {
+			sample_format: WavSampleFormat::Float32,
+		}) {
+		return render_to_wav(project, opts, path);
+	}
+	if matches!(export.format, ExportFormat::Mp3 { .. }) {
+		if !MP3_SUPPORTED {
+			return Err(EngineError::InvalidOptions(
+				"MP3 export is not available in this build (compile with the `mp3` feature); \
+				 render to .wav or .flac instead"
+					.into(),
+			));
+		}
+		if !matches!(
+			opts.sample_rate,
+			8000 | 11025 | 12000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000
+		) {
+			return Err(EngineError::InvalidOptions(format!(
+				"MP3 needs a standard sample rate up to 48000 Hz (got {}); render at 44100 or 48000",
+				opts.sample_rate
+			)));
+		}
+	}
+	let (graph, len) = prepare(project, opts)?;
+	let mut left = Vec::with_capacity(len);
+	let mut right = Vec::with_capacity(len);
+	let report = render_analyzed(graph, len, |l, r| {
+		left.extend_from_slice(l);
+		right.extend_from_slice(r);
+		Ok(())
+	})?;
+	let export_err = |message: String| EngineError::Export {
+		path: path.to_path_buf(),
+		message,
+	};
+	let buffer = AudioBuffer::from_planar(opts.sample_rate, vec![left, right])
+		.map_err(|e| export_err(e.to_string()))?;
+	cadenza_audio_io::export(&buffer, path, export).map_err(|e| export_err(e.to_string()))?;
 	Ok(report)
 }

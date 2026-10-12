@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Offline time-stretch / pitch-shift tools (needs a C++ compiler + libclang).
+stretch = ["cadenza-audio-io/stretch", "cadenza-engine/stretch"]
+
 [dependencies]
 cadenza-core.workspace = true
 cadenza-model.workspace = true
@@ -11,6 +16,8 @@ cadenza-theory.workspace = true
 cadenza-dsp.workspace = true
 cadenza-engine.workspace = true
 cadenza-plugin-host.workspace = true
+cadenza-audio-io.workspace = true
+cadenza-midi-io.workspace = true
 rmcp.workspace = true
 tokio.workspace = true
 serde.workspace = true

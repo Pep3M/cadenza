@@ -761,9 +761,11 @@ impl CadenzaServer {
 	// -- rendering / analysis --------------------------------------------------------
 
 	#[tool(
-		description = "Renders the project to a 32-bit float stereo WAV file and returns the \
-			mix report (levels, loudness, band energy, per track). CPU-heavy; runs off the main \
-			session lock."
+		description = "Renders the project to a stereo audio file and returns the mix report \
+			(levels, loudness, band energy, per track). The path extension picks the format: \
+			.wav (32-bit float, or bit_depth 16/24), .flac (24-bit, or 16) or .mp3 (if this \
+			build supports it; mp3_bitrate_kbps). 16/24-bit output is TPDF-dithered. \
+			CPU-heavy; runs off the main session lock."
 	)]
 	async fn render(
 		&self,

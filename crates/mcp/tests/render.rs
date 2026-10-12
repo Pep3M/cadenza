@@ -79,6 +79,7 @@ async fn render_writes_a_valid_wav_with_a_sane_report() {
 			start_beat: None,
 			end_beat: Some(2.0),
 			sample_rate: Some(48_000),
+			..Default::default()
 		},
 	)
 	.await
@@ -121,11 +122,51 @@ async fn render_rejects_an_end_before_the_start() {
 			start_beat: Some(4.0),
 			end_beat: Some(2.0),
 			sample_rate: None,
+			..Default::default()
 		},
 	)
 	.await
 	.unwrap_err();
 	assert!(err.to_string().contains("end"), "{err}");
+}
+
+#[tokio::test]
+async fn render_picks_the_format_from_the_extension() {
+	let mut session = Session::new();
+	let track_id = instrument_track_with_synth(&mut session);
+	add_notes(&mut session, track_id, 0.8);
+	let dir = tempfile::tempdir().unwrap();
+	for (name, depth) in [("mix.flac", Some(16)), ("mix16.wav", Some(16))] {
+		let path = dir.path().join(name);
+		render::render(
+			session.document().project().clone(),
+			None,
+			cadenza_engine::PluginHosting::default(),
+			render::RenderArgs {
+				path: path.display().to_string(),
+				end_beat: Some(1.0),
+				bit_depth: depth,
+				..Default::default()
+			},
+		)
+		.await
+		.unwrap();
+		let info = cadenza_audio_io::probe(&path).unwrap();
+		assert_eq!(info.bits_per_sample, Some(16), "{name}");
+		assert_eq!(info.channels, 2);
+	}
+	let err = render::render(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::RenderArgs {
+			path: dir.path().join("mix.aiff").display().to_string(),
+			..Default::default()
+		},
+	)
+	.await
+	.unwrap_err();
+	assert!(err.to_string().contains(".wav, .flac or .mp3"), "{err}");
 }
 
 #[tokio::test]

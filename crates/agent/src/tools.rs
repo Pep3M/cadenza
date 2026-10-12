@@ -27,6 +27,9 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"save_project",
 ];
 
+/// Formats the `render` tool may write.
+const RENDER_EXTENSIONS: &[&str] = &["wav", "flac", "mp3"];
+
 /// Where the session may read and write files.
 #[derive(Debug, Clone)]
 pub struct PathPolicy {
@@ -61,6 +64,13 @@ impl PathPolicy {
 	/// Resolves a model-supplied path (relative to the session folder, or absolute inside
 	/// it) and checks its extension. Creates missing parent folders inside the root.
 	pub fn resolve(&self, raw: &str, extension: &str) -> Result<PathBuf, String> {
+		self.resolve_any(raw, &[extension])
+	}
+
+	/// [`PathPolicy::resolve`] accepting any of `extensions` (the first one is suggested
+	/// in error messages).
+	pub fn resolve_any(&self, raw: &str, extensions: &[&str]) -> Result<PathBuf, String> {
+		let extension = extensions.first().copied().unwrap_or("");
 		let outside = || {
 			format!(
 				"path '{raw}' is outside the session folder; use a plain file name such as \
@@ -90,9 +100,14 @@ impl PathPolicy {
 		let ext_ok = path
 			.extension()
 			.and_then(|e| e.to_str())
-			.is_some_and(|e| e.eq_ignore_ascii_case(extension));
+			.is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)));
 		if !ext_ok {
-			return Err(format!("path '{raw}' must end in .{extension}"));
+			let list = extensions
+				.iter()
+				.map(|x| format!(".{x}"))
+				.collect::<Vec<_>>()
+				.join(", ");
+			return Err(format!("path '{raw}' must end in one of: {list}"));
 		}
 		let parent = path.parent().ok_or_else(outside)?;
 		std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder: {e}"))?;
@@ -281,7 +296,7 @@ impl ToolBridge {
 			}
 			"render" => {
 				let path = match obj.get("path").and_then(Value::as_str) {
-					Some(raw) => self.policy.resolve(raw, "wav")?,
+					Some(raw) => self.policy.resolve_any(raw, RENDER_EXTENSIONS)?,
 					None => self.policy.default_wav.clone(),
 				};
 				obj.insert("path".into(), path_value(&path));

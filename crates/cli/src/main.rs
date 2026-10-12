@@ -4,7 +4,9 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use cadenza_engine::{Player, PluginHosting, RenderOptions, analyze_mix, render_to_wav};
+use cadenza_engine::{
+	Player, PluginHosting, RenderOptions, analyze_mix, export_options_for_path, render_to_file,
+};
 use cadenza_model::Project;
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 use clap::{Parser, Subcommand};
@@ -40,7 +42,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-	/// Render a project to a 32-bit float WAV file and print the mix report.
+	/// Render a project to an audio file and print the mix report.
+	///
+	/// The format follows the output extension: .wav (32-bit float by default, or
+	/// --bit-depth 16/24), .flac (24-bit by default, or 16) or .mp3 (only in builds with the
+	/// `mp3` feature; --bitrate in kbps). 16/24-bit output gets TPDF dither.
 	///
 	/// Plugins run sandboxed (see `cadenza --help`): a crashing plugin is bypassed and named
 	/// in the report's warnings, and the render still completes.
@@ -50,6 +56,12 @@ enum Command {
 		output: PathBuf,
 		#[arg(long, default_value_t = 48_000)]
 		sample_rate: u32,
+		/// WAV: 16, 24 or 32 (float); FLAC: 16 or 24
+		#[arg(long)]
+		bit_depth: Option<u32>,
+		/// MP3 bitrate in kbps (32..=320, default 320)
+		#[arg(long)]
+		bitrate: Option<u16>,
 	},
 	/// Analyze a project's mix (loudness, peaks, band energy) without writing audio
 	Analyze {
@@ -115,7 +127,10 @@ fn main() -> Result<()> {
 			project,
 			output,
 			sample_rate,
+			bit_depth,
+			bitrate,
 		} => {
+			let export = export_options_for_path(&output, bit_depth, bitrate)?;
 			let project = load(&project)?;
 			let opts = RenderOptions {
 				sample_rate,
@@ -123,7 +138,7 @@ fn main() -> Result<()> {
 				hosting,
 				..RenderOptions::default()
 			};
-			let report = render_to_wav(&project, &opts, &output)?;
+			let report = render_to_file(&project, &opts, &output, &export)?;
 			eprintln!("wrote {}", output.display());
 			print_json(&report)
 		}

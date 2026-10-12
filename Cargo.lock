@@ -346,9 +346,11 @@ dependencies = [
 name = "cadenza-mcp"
 version = "0.1.0"
 dependencies = [
+ "cadenza-audio-io",
  "cadenza-core",
  "cadenza-dsp",
  "cadenza-engine",
+ "cadenza-midi-io",
  "cadenza-model",
  "cadenza-plugin-host",
  "cadenza-theory",

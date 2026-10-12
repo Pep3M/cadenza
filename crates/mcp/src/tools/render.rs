@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use cadenza_engine::{
 	BandEnergy, LevelStats, MixReport, PluginHosting, RenderOptions,
-	analyze_mix as engine_analyze_mix, render_to_wav,
+	analyze_mix as engine_analyze_mix, export_options_for_path, render_to_file,
 };
 use cadenza_model::{Project, TrackKind};
 use cadenza_plugin_host::PluginCatalog;
@@ -68,9 +68,10 @@ fn compact_report(mut report: MixReport) -> MixReport {
 	report
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct RenderArgs {
-	/// Output WAV path (32-bit float, stereo).
+	/// Output path; the extension picks the format: .wav, .flac or .mp3 (MP3 only when
+	/// this build has it). Stereo.
 	pub path: String,
 	#[serde(default)]
 	pub start_beat: Option<f64>,
@@ -80,9 +81,16 @@ pub struct RenderArgs {
 	/// Defaults to 48000.
 	#[serde(default)]
 	pub sample_rate: Option<u32>,
+	/// WAV: 16, 24 or 32 (float, default); FLAC: 16 or 24 (default). 16/24-bit output is
+	/// TPDF-dithered. Not used for MP3.
+	#[serde(default)]
+	pub bit_depth: Option<u32>,
+	/// MP3 bitrate in kbps, 32..=320 (default 320).
+	#[serde(default)]
+	pub mp3_bitrate_kbps: Option<u16>,
 }
 
-/// Renders `project` to a WAV file on a blocking thread pool thread. `plugins` is needed
+/// Renders `project` to an audio file on a blocking thread pool thread. `plugins` is needed
 /// for projects with plugin devices (see `Session::plugins_for_project`); `hosting` says
 /// where they run (see `Session::plugin_hosting`). Plugin crashes during the render are
 /// reported in the report's warnings.
@@ -100,9 +108,11 @@ pub async fn render(
 		hosting,
 	);
 	let path = PathBuf::from(args.path);
-	let report = tokio::task::spawn_blocking(move || render_to_wav(&project, &opts, &path))
-		.await
-		.map_err(|e| McpError::Invalid(format!("render task panicked: {e}")))??;
+	let export = export_options_for_path(&path, args.bit_depth, args.mp3_bitrate_kbps)?;
+	let report =
+		tokio::task::spawn_blocking(move || render_to_file(&project, &opts, &path, &export))
+			.await
+			.map_err(|e| McpError::Invalid(format!("render task panicked: {e}")))??;
 	Ok(compact_report(report))
 }
 

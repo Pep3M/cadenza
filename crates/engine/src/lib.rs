@@ -1,5 +1,5 @@
 //! Cadenza audio engine: compiles a [`cadenza_model::Project`] into a render [`Graph`] and
-//! drives it offline ([`render_offline`], [`render_to_wav`]), for mix analysis
+//! drives it offline ([`render_offline`], [`render_to_wav`], [`render_to_file`]), for mix analysis
 //! ([`analyze_mix`], the AI's "ears") and in realtime ([`Player`]).
 //!
 //! The graph always runs in fixed quanta of [`QUANTUM`] samples on a grid anchored at the
@@ -20,6 +20,7 @@ mod render;
 mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
+pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 pub use cadenza_plugin_host::PluginCatalog;
 pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions};
 pub use compile::{compile, compile_hosted, compile_with};
@@ -28,7 +29,10 @@ pub use error::EngineError;
 pub use graph::Graph;
 pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting};
 pub use player::Player;
-pub use render::{RenderOptions, StereoBuffer, analyze_mix, render_offline, render_to_wav};
+pub use render::{
+	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,
+	export_options_for_path, render_offline, render_to_file, render_to_wav,
+};
 
 /// Internal processing quantum in samples: devices always process this many samples at a
 /// time, and automation and transport changes are applied at quantum boundaries.

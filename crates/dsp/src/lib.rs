@@ -7,13 +7,17 @@
 
 pub mod effects;
 pub mod instruments;
+mod presets;
 mod processor;
 mod registry;
 pub mod util;
 
 pub use effects::compressor::Compressor;
 pub use effects::limiter::Limiter;
-pub use processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
+pub use presets::{FactoryPreset, factory_presets};
+pub use processor::{
+	DeviceInfo, DeviceRole, MidiEvent, ParamInfo, PresetInfo, Processor, Transport,
+};
 pub use registry::{create, device_info, registry};
 
 #[cfg(test)]

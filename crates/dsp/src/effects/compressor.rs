@@ -1,5 +1,5 @@
-//! `compressor`: feed-forward, stereo-linked peak compressor with soft knee
-//! and parallel (dry/wet) mix.
+//! `compressor`: feed-forward, stereo-linked peak compressor with soft knee,
+//! parallel (dry/wet) mix and an optional external sidechain (key) input.
 
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::smoother::Smoother;
@@ -88,7 +88,10 @@ pub static INFO: DeviceInfo = DeviceInfo {
 		Controls dynamics and adds punch/glue. Typical: VOCALS threshold -20, ratio 3, attack 5, \
 		release 100, makeup 4. DRUM BUS ratio 4, attack 20, release 100, mix 50. BASS ratio 4, \
 		attack 10, release 150. MIX BUS GLUE ratio 1.5-2, attack 30, release 200, knee 10, aim for \
-		1-2 dB of reduction. Place after EQ; put a limiter (not this) last on the master.",
+		1-2 dB of reduction. Place after EQ; put a limiter (not this) last on the master. \
+		SIDECHAIN: key it from another track with set_sidechain (e.g. bass or pad ducked by the \
+		kick: threshold -30, ratio 8-10, attack 0.5, release 120-200); without a sidechain it \
+		reacts to its own input.",
 	params: &PARAMS,
 };
 
@@ -116,6 +119,11 @@ pub struct Compressor {
 	threshold: Smoother,
 	makeup: Smoother,
 	mix: Smoother,
+	/// Sidechain signal for the next block (allocated in `prepare`).
+	key_l: Vec<f32>,
+	key_r: Vec<f32>,
+	key_len: usize,
+	key_active: bool,
 }
 
 impl Default for Compressor {
@@ -137,6 +145,10 @@ impl Compressor {
 			makeup: Smoother::new(db_to_gain(params.get(P_MAKEUP))),
 			mix: Smoother::new(params.get(P_MIX) * 0.01),
 			params,
+			key_l: Vec::new(),
+			key_r: Vec::new(),
+			key_len: 0,
+			key_active: false,
 		};
 		c.update_times();
 		c
@@ -159,8 +171,10 @@ impl Processor for Compressor {
 		&INFO
 	}
 
-	fn prepare(&mut self, sample_rate: f32, _max_block: usize) {
+	fn prepare(&mut self, sample_rate: f32, max_block: usize) {
 		self.sample_rate = sample_rate.max(1.0);
+		self.key_l = vec![0.0; max_block.max(1)];
+		self.key_r = vec![0.0; max_block.max(1)];
 		self.threshold.prepare(self.sample_rate, 20.0);
 		self.makeup.prepare(self.sample_rate, 20.0);
 		self.mix.prepare(self.sample_rate, 20.0);
@@ -191,9 +205,16 @@ impl Processor for Compressor {
 		let ratio = self.params.get(P_RATIO);
 		let knee = self.params.get(P_KNEE);
 		let mut max_gr: f32 = 0.0;
-		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+		let keyed = std::mem::take(&mut self.key_active);
+		for (i, (l, r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
 			let threshold = self.threshold.tick();
-			let peak = l.abs().max(r.abs());
+			let peak = if !keyed {
+				l.abs().max(r.abs())
+			} else if i < self.key_len {
+				self.key_l[i].abs().max(self.key_r[i].abs())
+			} else {
+				0.0
+			};
 			let target = gain_computer(gain_to_db(peak), threshold, ratio, knee);
 			let coeff = if target < self.env_db {
 				self.attack_coeff
@@ -211,7 +232,20 @@ impl Processor for Compressor {
 		self.gr_meter = max_gr;
 	}
 
+	fn has_sidechain(&self) -> bool {
+		true
+	}
+
+	fn set_sidechain(&mut self, left: &[f32], right: &[f32]) {
+		let n = left.len().min(right.len()).min(self.key_l.len());
+		self.key_l[..n].copy_from_slice(&left[..n]);
+		self.key_r[..n].copy_from_slice(&right[..n]);
+		self.key_len = n;
+		self.key_active = true;
+	}
+
 	fn reset(&mut self) {
+		self.key_active = false;
 		self.env_db = 0.0;
 		self.gr_meter = 0.0;
 		self.threshold.snap();
@@ -260,6 +294,38 @@ mod tests {
 		let out_db = gain_to_db(peak);
 		assert!(out_db < -10.0 && out_db > -18.0, "out {out_db} dB");
 		assert!(c.gain_reduction_db() > 10.0);
+	}
+
+	#[test]
+	fn sidechain_keys_gain_reduction() {
+		let mut c = Compressor::new();
+		c.prepare(48_000.0, 64);
+		for (id, v) in [("threshold", -30.0), ("ratio", 10.0), ("attack", 0.1)] {
+			c.set_param(INFO.param_index(id).unwrap(), v);
+		}
+		c.reset();
+		assert!(c.has_sidechain());
+		let t = Transport::default();
+		// Quiet main signal, loud key: ducked.
+		let key = vec![0.9_f32; 64];
+		let mut out = 1.0;
+		for _ in 0..200 {
+			let mut l = vec![0.01_f32; 64];
+			let mut r = l.clone();
+			c.set_sidechain(&key, &key);
+			c.process(&mut l, &mut r, &[], &t);
+			out = l[63];
+		}
+		assert!(out < 0.01 * 0.2, "keyed output {out}");
+		// The key only applies to the block after `set_sidechain`: without it
+		// the quiet input is left alone again once the envelope recovers.
+		for _ in 0..2_000 {
+			let mut l = vec![0.01_f32; 64];
+			let mut r = l.clone();
+			c.process(&mut l, &mut r, &[], &t);
+			out = l[63];
+		}
+		assert!((out - 0.01).abs() < 1e-4, "unkeyed output {out}");
 	}
 
 	#[test]

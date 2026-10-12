@@ -168,4 +168,47 @@ pub trait Processor: Send {
 	fn load_state(&mut self, _data: &[u8]) -> bool {
 		false
 	}
+	/// Whether the device has a sidechain (key) input, fed with
+	/// [`Processor::set_sidechain`].
+	fn has_sidechain(&self) -> bool {
+		false
+	}
+	/// Provides the sidechain signal for the next `process` call only (same
+	/// length as that block). A block processed without it has no sidechain
+	/// signal: devices then key from their main input (dynamics) or treat the
+	/// sidechain as silent. Realtime-safe: implementors copy into buffers
+	/// allocated in `prepare`.
+	fn set_sidechain(&mut self, _left: &[f32], _right: &[f32]) {}
+	/// Number of extra stereo outputs besides the main one (e.g. the
+	/// individual outputs of a multi-output drum sampler).
+	fn aux_output_count(&self) -> usize {
+		0
+	}
+	/// Extra output `index` (`0..aux_output_count()`) of the last `process`
+	/// call, as long as that block. Realtime-safe.
+	fn aux_output(&self, _index: usize) -> Option<(&[f32], &[f32])> {
+		None
+	}
+	/// Factory presets the device itself exposes (third-party plugins).
+	/// Built-in presets are listed by [`crate::factory_presets`] instead.
+	/// Non-realtime.
+	fn presets(&mut self) -> Vec<PresetInfo> {
+		Vec::new()
+	}
+	/// Loads the factory preset with this [`PresetInfo::key`]; a following
+	/// [`Processor::save_state`] captures the result. Non-realtime. Returns
+	/// `false` if the preset is unknown or the device refused it.
+	fn load_preset(&mut self, _key: &str) -> bool {
+		false
+	}
+}
+
+/// A factory preset exposed by a device (see [`Processor::presets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresetInfo {
+	/// Opaque, device-specific key for [`Processor::load_preset`].
+	pub key: String,
+	pub name: String,
+	/// Bank, category or folder; may be empty.
+	pub category: String,
 }

@@ -125,3 +125,97 @@ fn render_writes_flac_and_16_bit_wav() {
 	let out = cadenza(&["render", s(&project), "-o", s(&bad), "--bit-depth", "12"]);
 	assert!(String::from_utf8_lossy(&out.stderr).contains("16, 24 or 32"));
 }
+
+/// Answers OpenAI-style chat completions from a script: one JSON body per request.
+fn mock_completions(bodies: Vec<String>) -> String {
+	use std::io::{Read, Write};
+	let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+	let addr = listener.local_addr().unwrap();
+	std::thread::spawn(move || {
+		for body in bodies {
+			let Ok((mut socket, _)) = listener.accept() else {
+				return;
+			};
+			let mut buf = Vec::new();
+			let mut chunk = [0u8; 8192];
+			loop {
+				let n = socket.read(&mut chunk).unwrap_or(0);
+				if n == 0 {
+					break;
+				}
+				buf.extend_from_slice(&chunk[..n]);
+				let text = String::from_utf8_lossy(&buf);
+				if let Some(end) = text.find("\r\n\r\n") {
+					let length: usize = text[..end]
+						.lines()
+						.find_map(|l| {
+							let (k, v) = l.split_once(':')?;
+							k.eq_ignore_ascii_case("content-length")
+								.then(|| v.trim().parse().ok())?
+						})
+						.unwrap_or(0);
+					if buf.len() >= end + 4 + length {
+						break;
+					}
+				}
+			}
+			let reply = format!(
+				"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+				body.len()
+			);
+			let _ = socket.write_all(reply.as_bytes());
+		}
+	});
+	format!("http://{addr}/v1")
+}
+
+#[test]
+fn chat_applies_one_request_and_saves_the_project() {
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("song.cadenza.json");
+	song(&path);
+	let tool = serde_json::json!({
+		"id": "a", "model": "local",
+		"choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant",
+			"content": "Marking the bridge.",
+			"tool_calls": [{"id": "c1", "type": "function", "function": {"name": "add_marker",
+				"arguments": "{\"beat\":8,\"name\":\"Bridge\"}"}}]}}],
+		"usage": {"prompt_tokens": 100, "completion_tokens": 10}
+	});
+	let done = serde_json::json!({
+		"id": "b", "model": "local",
+		"choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant",
+			"content": "Added a Bridge marker at beat 8."}}],
+		"usage": {"prompt_tokens": 120, "completion_tokens": 10}
+	});
+	let url = mock_completions(vec![tool.to_string(), done.to_string()]);
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"chat",
+			s(&path),
+			"add a bridge marker at beat 8",
+			"--provider",
+			"openai-compatible",
+			"--base-url",
+			&url,
+			"--model",
+			"local",
+			"--reasoning-effort",
+			"none",
+		])
+		.env("XDG_STATE_HOME", dir.path().join("state"))
+		.env_remove("OPENAI_API_KEY")
+		.output()
+		.unwrap();
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(out.status.success(), "{stderr}");
+	assert!(String::from_utf8_lossy(&out.stdout).contains("Bridge marker"));
+	assert!(stderr.contains("transcript:"), "{stderr}");
+	let saved = Project::load_json(&path).unwrap();
+	assert_eq!(saved.markers.len(), 1);
+	assert_eq!(saved.markers[0].name, "Bridge");
+
+	let out = cadenza(&["chat", s(&path), "x", "--provider", "openai-compatible"]);
+	assert!(!out.status.success());
+	assert!(String::from_utf8_lossy(&out.stderr).contains("--base-url"));
+}

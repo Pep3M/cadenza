@@ -243,7 +243,7 @@ fn dry_run(config: AgentConfig, args: &ComposeArgs) -> Result<()> {
 
 /// Live progress on stderr.
 #[derive(Default)]
-struct Printer {
+pub(crate) struct Printer {
 	lock: Mutex<()>,
 	mid_line: AtomicBool,
 }

@@ -12,6 +12,7 @@ use cadenza_model::{Device, Project, Track, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 use clap::{Parser, Subcommand};
 
+mod chat;
 mod compose;
 mod midi_files;
 
@@ -160,6 +161,11 @@ enum Command {
 	/// Let the embedded AI producer compose, arrange, mix and render a song from a brief
 	#[command(after_long_help = compose::presets_help())]
 	Compose(compose::ComposeArgs),
+	/// Ask the AI producer for one change to an existing project (the app chat's mode):
+	/// "add a bridge after the second chorus", "mix this"... Saves the result in place
+	/// unless --out or --no-save
+	#[command(after_long_help = compose::presets_help())]
+	Chat(chat::ChatArgs),
 }
 
 /// Finds a track by id or (case-insensitive) name.
@@ -326,6 +332,10 @@ fn main() -> Result<()> {
 		Command::Compose(args) => {
 			set_in_process_env(cli.in_process_plugins);
 			compose::run(args)
+		}
+		Command::Chat(args) => {
+			set_in_process_env(cli.in_process_plugins);
+			chat::run(args)
 		}
 		Command::ScanPlugins { paths, json } => scan_plugins(paths, json),
 		Command::Monitor {

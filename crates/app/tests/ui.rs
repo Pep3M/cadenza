@@ -552,6 +552,150 @@ fn empty_project_starts_and_shows_master_automation() {
 	assert!(h.state().lane_rect(&vol).is_some());
 }
 
+#[test]
+fn adding_an_instrument_then_f7_opens_a_new_clip_and_l_toggles_pattern_mode() {
+	use cadenza_app::state::transport::PlayMode;
+	let mut h = harness(CadenzaApp::with_state(AppState::headless()));
+	h.run_steps(3);
+	let item = h
+		.state_mut()
+		.state
+		.browser_items()
+		.iter()
+		.find(|i| i.id == "electric_piano")
+		.unwrap()
+		.clone();
+	// What a double-click in the browser does.
+	assert!(h.state_mut().state.use_device(&item, None));
+	h.run_steps(2);
+	let track = h.state().state.project().tracks[0].id;
+	assert_eq!(h.state().state.selection.track, Some(track));
+	assert!(
+		h.query_all_by_label_contains("press F7 or double-click the track")
+			.next()
+			.is_some(),
+		"the status bar says how to open the piano roll"
+	);
+
+	h.key_press(Key::F7);
+	h.run_steps(3);
+	let s = &h.state().state;
+	let clip = s.view.piano.clip.expect("F7 opened a clip");
+	let (owner, c) = s.project().find_clip(clip).unwrap();
+	assert_eq!(owner.id, track);
+	assert_eq!(c.name, item.name);
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+	assert!(h.state().piano_grid().is_some());
+	assert_eq!(s.undo_label(), Some("Add clip 'Electric Piano'"));
+
+	// L: pattern mode; Space plays the open clip alone (no device here: just the setup).
+	h.key_press(Key::L);
+	h.run_steps(2);
+	assert_eq!(h.state().state.view.transport.mode, PlayMode::Pattern);
+	h.key_press(Key::Space);
+	h.run_steps(2);
+	let config = h.state().state.play_config().unwrap().clone();
+	assert_eq!(config.pattern, Some(clip));
+	assert_eq!(config.audition, Some(vec![track]));
+	h.key_press(Key::L);
+	h.run_steps(2);
+	assert_eq!(h.state().state.view.transport.mode, PlayMode::Song);
+	assert_eq!(h.state().state.play_config().unwrap().audition, None);
+
+	// Ctrl+L: a loop region on the playhead's bar.
+	h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+	h.run_steps(2);
+	assert!(h.state().state.view.transport.loop_on);
+}
+
+#[test]
+fn double_clicking_an_instrument_header_opens_its_piano_roll() {
+	let mut a = CadenzaApp::with_state(AppState::headless());
+	let cmd = {
+		let p = a.state.project();
+		let mut t = cadenza_app::state::edits::new_track(p, cadenza_model::TrackKind::Instrument);
+		t.name = "Keys".into();
+		cadenza_app::state::edits::add_track(p, t, None)
+	};
+	assert!(a.state.apply(cmd));
+	// Short steps so two clicks fall within the double-click delay.
+	let mut h = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.with_step_dt(1.0 / 60.0)
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			a,
+		);
+	h.run_steps(3);
+	let lane = h.state().track_rect(0).unwrap();
+	let at = pos2(lane.left() - 150.0, lane.bottom() - 8.0);
+	h.hover_at(at);
+	h.run_steps(1);
+	// Two clicks one step (0.25 s) apart: a double-click.
+	for _ in 0..2 {
+		for pressed in [true, false] {
+			h.event(egui::Event::PointerButton {
+				pos: at,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: Modifiers::NONE,
+			});
+		}
+		h.run_steps(1);
+	}
+	h.run_steps(2);
+	let s = &h.state().state;
+	let clip = s.view.piano.clip.expect("double-click opened a clip");
+	assert_eq!(
+		s.project().find_clip(clip).unwrap().0.id,
+		s.project().tracks[0].id
+	);
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+}
+
+#[test]
+fn ruler_drags_set_the_loop_region() {
+	let mut h = harness(app());
+	h.run_steps(3);
+	let lane = h.state().track_rect(0).unwrap();
+	let tl = h.state().state.view.timeline;
+	// The ruler sits right above the markers lane, above the tracks; its upper half
+	// sets the loop. Find it from the lane top: overview + ruler + markers above.
+	let ruler_top = lane.top()
+		- cadenza_app::theme::MARKER_LANE_HEIGHT
+		- cadenza_app::theme::RULER_HEIGHT
+		- if h.state().state.view.automation.tempo {
+			cadenza_app::state::automation::LANE_HEIGHT
+		} else {
+			0.0
+		};
+	let y = ruler_top + 5.0;
+	let x = |beat: f64| lane.left() + tl.beat_to_x(beat);
+	h.hover_at(pos2(x(4.2), y));
+	h.drag_at(pos2(x(4.2), y));
+	h.run_steps(1);
+	h.hover_at(pos2(x(10.0), y));
+	h.run_steps(1);
+	h.drop_at(pos2(x(11.7), y));
+	h.run_steps(2);
+	let t = h.state().state.view.transport;
+	assert!(t.loop_on);
+	let (s, e) = t.loop_range.unwrap();
+	assert!(s <= Tick(PPQ * 5) && s >= Tick(PPQ * 4), "{s:?}");
+	assert!(e >= Tick(PPQ * 11) && e <= Tick(PPQ * 12), "{e:?}");
+	// A click inside the region turns the loop off; the playhead did not move.
+	let before = h.state().state.position();
+	h.hover_at(pos2(x(6.0), y));
+	h.drag_at(pos2(x(6.0), y));
+	h.drop_at(pos2(x(6.0), y));
+	h.run_steps(2);
+	assert!(!h.state().state.view.transport.loop_on);
+	assert_eq!(h.state().state.position(), before);
+}
+
 /// Renders a few app states to PNG files in `$CADENZA_SCREENSHOT_DIR` (needs a GPU):
 /// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
 #[test]
@@ -607,6 +751,31 @@ fn render_screens() {
 		s.view.piano.select(ids, false);
 	}
 	shot(&mut h, "piano_roll");
+	// Pattern mode with an arrange loop region (the region shows on the ruler only).
+	{
+		let s = &mut h.state_mut().state;
+		s.set_loop_range(Some((Tick(PPQ * 16), Tick(PPQ * 24))));
+		s.set_play_mode(cadenza_app::state::transport::PlayMode::Pattern);
+		s.seek(midi.start + Tick(PPQ * 2));
+	}
+	shot(&mut h, "pattern_mode");
+	h.state_mut()
+		.state
+		.set_play_mode(cadenza_app::state::transport::PlayMode::Song);
+	shot(&mut h, "song_loop");
+	// The piano roll's clip menu, open.
+	// The clip menu sits at the left of the piano roll toolbar.
+	let grid = h.state().piano_grid().unwrap();
+	let at = pos2(grid.left() + 100.0, grid.top() - 37.0);
+	h.hover_at(at);
+	h.drag_at(at);
+	h.drop_at(at);
+	shot(&mut h, "piano_clip_menu");
+	h.key_press(Key::Escape);
+	{
+		let s = &mut h.state_mut().state;
+		s.set_loop_range(None);
+	}
 	h.state_mut().state.view.panels.focus = Some(PanelKind::PianoRoll);
 	h.key_press(Key::F11);
 	shot(&mut h, "piano_roll_maximized");
@@ -807,5 +976,30 @@ fn render_screens() {
 		.render()
 		.unwrap()
 		.save(dir.join("empty_project.png"))
+		.unwrap();
+	// An instrument added from the browser: the hint, then the empty piano roll dock.
+	let item = empty
+		.state_mut()
+		.state
+		.browser_items()
+		.iter()
+		.find(|i| i.id == "electric_piano")
+		.unwrap()
+		.clone();
+	empty.state_mut().state.use_device(&item, None);
+	empty.state_mut().state.view.panels.open_piano_roll();
+	empty.run_steps(3);
+	empty
+		.render()
+		.unwrap()
+		.save(dir.join("instrument_added.png"))
+		.unwrap();
+	empty.state_mut().state.close_piano_roll();
+	empty.key_press(Key::F7);
+	empty.run_steps(3);
+	empty
+		.render()
+		.unwrap()
+		.save(dir.join("instrument_f7.png"))
 		.unwrap();
 }

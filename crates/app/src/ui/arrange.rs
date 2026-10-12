@@ -78,6 +78,8 @@ pub struct ArrangeUi {
 	overlaps: Vec<Rect>,
 	/// Overview viewport drag: beats between the grab point and the view start.
 	overview_grab: Option<f64>,
+	/// Loop region drag on the ruler: the song position where it started.
+	loop_drag: Option<Tick>,
 	/// Size of the lanes area in the last frame (keyboard navigation, zoom to fit).
 	pub lanes_width: f32,
 	pub lanes_height: f32,
@@ -165,7 +167,7 @@ impl ArrangeUi {
 		self.headers(ui, state, &layout);
 		self.corner(ui, state, full);
 		self.overview(ui, state, &layout);
-		ruler(ui, state, &layout);
+		ruler(ui, state, &layout, &mut self.loop_drag);
 		markers(ui, state, &layout);
 		if let Some(r) = layout.tempo {
 			let header = Rect::from_min_max(pos2(full.left(), r.top()), pos2(x0, r.bottom()));
@@ -174,6 +176,7 @@ impl ArrangeUi {
 		scrollbars(ui, state, &layout, full);
 		self.drop_zone(ui, state, &layout);
 
+		loop_overlay(ui, state, &layout);
 		// Playhead over everything in the timeline.
 		let x = layout.lanes.left() + state.view.timeline.tick_to_x(position);
 		if (layout.lanes.left()..=layout.lanes.right()).contains(&x) {
@@ -900,8 +903,17 @@ impl ArrangeUi {
 			state.selection.select_track(track.id);
 			state.selection.clear_clips();
 		}
+		// Double-click: the name renames, the rest of an instrument header opens the
+		// piano roll (creating a clip when the track has none to edit).
 		if response.double_clicked() {
-			self.rename = Some((track.id, track.name.clone()));
+			let on_name = response
+				.interact_pointer_pos()
+				.is_some_and(|p| name_rect.contains(p));
+			if track.kind == TrackKind::Instrument && !on_name {
+				state.open_track_in_piano_roll(track.id);
+			} else {
+				self.rename = Some((track.id, track.name.clone()));
+			}
 		}
 		if response.drag_started_by(PointerButton::Primary) {
 			self.track_drag = Some(TrackDrag {
@@ -1507,6 +1519,21 @@ fn track_menu(
 	track: &Track,
 	rename: &mut Option<(TrackId, String)>,
 ) {
+	if track.kind == TrackKind::Instrument {
+		if ui
+			.add(egui::Button::new("Open in piano roll").shortcut_text("F7"))
+			.clicked()
+		{
+			state.open_track_in_piano_roll(track.id);
+			ui.close();
+		}
+		if ui.button("New clip in piano roll").clicked() {
+			let at = state.position();
+			state.new_clip_in_piano_roll(track.id, at);
+			ui.close();
+		}
+		ui.separator();
+	}
 	if ui.button("Rename").clicked() {
 		*rename = Some((track.id, track.name.clone()));
 		ui.close();
@@ -1645,7 +1672,9 @@ pub(crate) fn grid(p: &Painter, area: Rect, tl: &Timeline, ts: cadenza_core::Tim
 	}
 }
 
-fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
+/// Ruler: bar numbers; click/drag the lower half moves the playhead, drag the upper half
+/// (or Ctrl+drag anywhere) sets the loop region, a click on the region toggles the loop.
+fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Option<Tick>) {
 	let r = layout.ruler;
 	let tl = state.view.timeline;
 	let ts = state.project().time_signature;
@@ -1689,18 +1718,119 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 		r.bottom() - 0.5,
 		Stroke::new(1.0, theme::BORDER),
 	);
+	let band = Rect::from_min_max(r.min, pos2(r.right(), r.center().y));
+	paint_loop_band(&p, state, r, &tl);
 	let resp = ui.interact(r, Id::new("ruler"), Sense::click_and_drag());
-	let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
+	let (ctrl, alt) = ui.input(|i| (i.modifiers.command, i.modifiers.alt));
+	let hover_band = resp.hover_pos().is_some_and(|p| band.contains(p) || ctrl);
+	let resp = resp.on_hover_cursor(if hover_band {
+		CursorIcon::ResizeHorizontal
+	} else {
+		CursorIcon::PointingHand
+	});
+	let tick_at = |x: f32| tl.x_to_tick(x - r.left());
+	let step = (state.view.snap && !alt).then(|| tl.grid(ts).step);
+	if resp.drag_started()
+		&& let Some(press) = ui.input(|i| i.pointer.press_origin())
+		&& (band.contains(press) || ctrl)
+	{
+		*loop_drag = Some(tick_at(press.x));
+	}
+	if let Some(from) = *loop_drag {
+		if let Some(pos) = resp.interact_pointer_pos() {
+			let range = crate::state::transport::loop_from_drag(from, tick_at(pos.x), step);
+			if range.is_some() && range != state.view.transport.loop_range {
+				state.set_loop_range(range);
+			}
+		}
+		if !resp.dragged() {
+			*loop_drag = None;
+		}
+		return;
+	}
+	if resp.clicked()
+		&& let Some(pos) = resp.interact_pointer_pos()
+		&& band.contains(pos)
+		&& let Some((s, e)) = state.view.transport.loop_range
+		&& (s..e).contains(&tick_at(pos.x))
+	{
+		state.toggle_loop();
+		return;
+	}
 	if (resp.clicked() || resp.dragged())
 		&& let Some(pos) = resp.interact_pointer_pos()
 	{
-		let tick = tl.x_to_tick(pos.x - r.left());
-		let tick = if state.view.snap && !ui.input(|i| i.modifiers.alt) {
+		let tick = tick_at(pos.x);
+		let tick = if state.view.snap && !alt {
 			tl.snap(tick, ts)
 		} else {
 			tick
 		};
 		state.seek(tick);
+	}
+}
+
+/// The loop region on the ruler's upper half (dim while off), and in pattern mode the
+/// looped clip span along the ruler's bottom edge.
+fn paint_loop_band(p: &Painter, state: &AppState, r: Rect, tl: &Timeline) {
+	if let Some((s, e)) = state.view.transport.loop_range {
+		let on = state.view.transport.loop_on;
+		let x0 = r.left() + tl.tick_to_x(s);
+		let x1 = r.left() + tl.tick_to_x(e);
+		let band = Rect::from_min_max(pos2(x0, r.top() + 1.0), pos2(x1, r.center().y));
+		let color = if on {
+			theme::LOOP
+		} else {
+			theme::LOOP.gamma_multiply(0.35)
+		};
+		p.rect_filled(band, CornerRadius::same(2), color.gamma_multiply(0.45));
+		p.rect_stroke(
+			band,
+			CornerRadius::same(2),
+			Stroke::new(1.0, color),
+			StrokeKind::Inside,
+		);
+	}
+	let config = state.transport_config().0;
+	if let (Some(_), Some((s, e))) = (config.pattern, config.loop_range) {
+		let x0 = r.left() + tl.tick_to_x(s);
+		let x1 = r.left() + tl.tick_to_x(e);
+		p.rect_filled(
+			Rect::from_min_max(pos2(x0, r.bottom() - 4.0), pos2(x1, r.bottom())),
+			0.0,
+			theme::PATTERN,
+		);
+	}
+}
+
+/// The active loop region over the lanes: tinted, with its edges.
+fn loop_overlay(ui: &Ui, state: &AppState, layout: &Layout) {
+	let t = &state.view.transport;
+	let Some((s, e)) = t.loop_range.filter(|_| t.loop_on) else {
+		return;
+	};
+	if state.transport_config().0.pattern.is_some() {
+		return;
+	}
+	let tl = &state.view.timeline;
+	let area = Rect::from_min_max(
+		pos2(layout.lanes.left(), layout.ruler.bottom()),
+		layout.lanes.max,
+	);
+	let x0 = area.left() + tl.tick_to_x(s);
+	let x1 = area.left() + tl.tick_to_x(e);
+	let p = ui.painter_at(area);
+	p.rect_filled(
+		Rect::from_min_max(pos2(x0, area.top()), pos2(x1, area.bottom())),
+		0.0,
+		theme::LOOP.gamma_multiply(0.06),
+	);
+	for x in [x0, x1] {
+		p.vline(
+			x,
+			area.y_range(),
+			Stroke::new(1.0, theme::LOOP.gamma_multiply(0.6)),
+		);
 	}
 }
 

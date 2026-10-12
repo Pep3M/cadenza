@@ -396,3 +396,182 @@ fn prefs_restore_layout_and_zoom() {
 	assert_eq!(t.view.timeline.px_per_beat, timeline::MAX_PX_PER_BEAT);
 	assert_eq!(t.view.track_height, MIN_TRACK_HEIGHT);
 }
+
+#[test]
+fn f7_opens_the_track_clip_or_creates_one() {
+	let (mut s, keys) = state_with_song();
+	let clip_a = s.project().tracks[0].clips[0].id;
+	// Under the playhead.
+	s.selection.select_track(keys);
+	s.seek(Tick(PPQ));
+	s.toggle_piano_roll();
+	assert_eq!(s.view.piano.clip, Some(clip_a));
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+	// F7 again hides it.
+	s.toggle_piano_roll();
+	assert!(!s.view.panels.visible(PanelKind::PianoRoll));
+	// Nothing under the playhead: the last clip opened on the track.
+	s.selection.select_track(keys);
+	s.seek(Tick(PPQ * 9));
+	s.toggle_piano_roll();
+	assert_eq!(s.view.piano.clip, Some(clip_a));
+	s.close_piano_roll();
+
+	// A track with no clip: a one-bar clip at the playhead's bar, named after it.
+	let mut t = edits::new_track(s.project(), TrackKind::Instrument);
+	t.name = "Electric Piano".into();
+	let ep = t.id;
+	assert!(s.apply(edits::add_track(s.project(), t, None)));
+	let steps = s.document().history_labels().len();
+	s.selection.select_track(ep);
+	s.seek(Tick(PPQ * 9));
+	s.toggle_piano_roll();
+	let created = s.view.piano.clip.expect("a clip is open");
+	let (track, clip) = s.project().find_clip(created).unwrap();
+	assert_eq!(track.id, ep);
+	assert_eq!(
+		(clip.start, clip.length, clip.name.as_str()),
+		(Tick(PPQ * 8), Tick(PPQ * 4), "Electric Piano")
+	);
+	assert_eq!(s.document().history_labels().len(), steps + 1, "one step");
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+	s.undo();
+	assert!(s.project().find_clip(created).is_none());
+	assert_eq!(s.view.piano.clip, None, "pruned with the clip");
+
+	// Not an instrument track: a hint, nothing created.
+	let bus = edits::new_track(s.project(), TrackKind::Bus);
+	let bus_id = bus.id;
+	assert!(s.apply(edits::add_track(s.project(), bus, None)));
+	assert!(!s.open_track_in_piano_roll(bus_id));
+	assert!(s.notices.last().unwrap().text.contains("not an instrument"));
+}
+
+#[test]
+fn adding_an_instrument_selects_its_track_and_hints_at_f7() {
+	let (mut s, _) = state_with_song();
+	let items = s.browser_items().to_vec();
+	let piano = items.iter().find(|i| i.id == "electric_piano").unwrap();
+	s.selection.select_master();
+	assert!(s.use_device(piano, None));
+	let new = s.project().tracks.last().unwrap().id;
+	assert_eq!(s.selection.track, Some(new));
+	assert!(s.notices.last().unwrap().text.contains("F7"));
+	s.toggle_piano_roll();
+	let clip = s.view.piano.clip.unwrap();
+	assert_eq!(s.project().find_clip(clip).unwrap().0.id, new);
+	// Dropped below the tracks: same.
+	assert!(s.new_track_with(piano, None));
+	assert_eq!(s.selection.track, s.project().tracks.last().map(|t| t.id));
+}
+
+#[test]
+fn pattern_mode_loops_the_piano_roll_clip_alone_and_falls_back() {
+	use transport::PlayMode;
+	let (mut s, keys) = state_with_song();
+	let clip_a = s.project().tracks[0].clips[0].id;
+	s.set_play_mode(PlayMode::Pattern);
+	// No clip open: plays the song, with a hint.
+	s.play();
+	assert!(
+		s.notices
+			.log()
+			.iter()
+			.any(|n| n.text.contains("Pattern mode plays the clip"))
+	);
+	assert_eq!(s.play_config().unwrap().audition, None);
+	s.stop();
+
+	assert!(s.open_piano_roll(clip_a));
+	s.seek(Tick(PPQ * 12));
+	s.play();
+	let c = s.play_config().unwrap().clone();
+	assert_eq!(c.loop_range, Some((Tick::ZERO, Tick(PPQ * 4))));
+	assert_eq!(c.audition, Some(vec![keys]));
+	assert_eq!(s.position(), Tick::ZERO, "starts at the clip");
+	// The clip grows while playing: the loop follows.
+	assert!(s.apply(Command::UpdateClip {
+		clip: clip_a,
+		patch: cadenza_model::ClipPatch {
+			length: Some(Tick(PPQ * 8)),
+			..Default::default()
+		},
+	}));
+	s.tick(Instant::now());
+	assert_eq!(
+		s.play_config().unwrap().loop_range,
+		Some((Tick::ZERO, Tick(PPQ * 8)))
+	);
+	// Switching to song mode restarts without the audition or the loop.
+	s.toggle_play_mode();
+	assert_eq!(s.view.transport.mode, PlayMode::Song);
+	assert!(s.play_intent());
+	assert_eq!(s.play_config(), Some(&transport::PlayConfig::default()));
+	s.toggle_play_mode();
+	assert_eq!(s.play_config().unwrap().audition, Some(vec![keys]));
+	s.stop();
+	assert_eq!(
+		s.play_config().unwrap().audition,
+		None,
+		"stopped: no audition"
+	);
+	assert!(s.play_config().unwrap().loop_range.is_some());
+}
+
+#[test]
+fn loop_region_gestures_drive_song_playback() {
+	let (mut s, _) = state_with_song();
+	assert_eq!(s.view.transport.loop_range, None);
+	// Ctrl+L without a region loops the bar at the playhead.
+	s.seek(Tick(PPQ * 5));
+	s.toggle_loop();
+	assert!(s.view.transport.loop_on);
+	assert_eq!(
+		s.view.transport.loop_range,
+		Some((Tick(PPQ * 4), Tick(PPQ * 8)))
+	);
+	assert_eq!(
+		s.play_config().unwrap().loop_range,
+		Some((Tick(PPQ * 4), Tick(PPQ * 8)))
+	);
+	s.toggle_loop();
+	assert_eq!(s.play_config().unwrap().loop_range, None);
+	// A ruler drag sets a region and turns the loop on.
+	let range = transport::loop_from_drag(Tick(PPQ * 9), Tick(PPQ * 2), Some(Tick(PPQ)));
+	s.set_loop_range(range);
+	assert!(s.view.transport.loop_on);
+	assert_eq!(
+		s.play_config().unwrap().loop_range,
+		Some((Tick(PPQ * 2), Tick(PPQ * 9)))
+	);
+	// Playing from past the end starts at the loop start.
+	s.seek(Tick(PPQ * 12));
+	s.play();
+	assert_eq!(s.position(), Tick(PPQ * 2));
+	s.stop();
+	// New project: the region is gone.
+	s.new_project();
+	assert_eq!(s.view.transport.loop_range, None);
+	assert!(!s.view.transport.loop_on);
+}
+
+#[test]
+fn note_edits_reschedule_live_without_reloading() {
+	let (mut s, _) = state_with_song();
+	let clip = s.project().tracks[0].clips[0].id;
+	s.tick(Instant::now() + RELOAD_DEBOUNCE);
+	assert!(!s.reload_pending());
+	assert!(s.apply(Command::AddNotes {
+		clip,
+		notes: vec![cadenza_model::Note::new(64, Tick(PPQ), Tick(PPQ), 0.7)],
+	}));
+	assert!(!s.reload_pending(), "piano roll edits do not recompile");
+	assert!(s.apply(Command::UpdateClip {
+		clip,
+		patch: cadenza_model::ClipPatch {
+			start: Some(Tick(PPQ * 4)),
+			..Default::default()
+		},
+	}));
+	assert!(!s.reload_pending(), "nor do MIDI clip moves");
+}

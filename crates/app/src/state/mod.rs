@@ -22,6 +22,7 @@ pub mod piano;
 pub mod rows;
 pub mod selection;
 pub mod timeline;
+pub mod transport;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,6 +94,8 @@ pub struct ViewState {
 	pub audio: audio_edit::AudioEditorView,
 	/// The editor dock shows the audio editor instead of the piano roll.
 	pub audio_editor: bool,
+	/// Pattern / Song mode and the arrange loop region.
+	pub transport: transport::TransportView,
 }
 
 impl Default for ViewState {
@@ -110,6 +113,7 @@ impl Default for ViewState {
 			automation: automation::AutomationView::default(),
 			audio: audio_edit::AudioEditorView::default(),
 			audio_editor: false,
+			transport: transport::TransportView::default(),
 		}
 	}
 }
@@ -189,6 +193,10 @@ pub struct AppState {
 	last_tick: Option<Instant>,
 	/// Lane points last sent to the player by a running gesture.
 	lane_preview: Option<(ParamAddress, Vec<cadenza_model::AutomationPoint>)>,
+	/// Play was pressed (and not stopped since): pattern mode auditions only then.
+	play_intent: bool,
+	/// Loop and audition last sent to the player.
+	play_config: Option<transport::PlayConfig>,
 }
 
 impl AppState {
@@ -236,6 +244,8 @@ impl AppState {
 			waker,
 			last_tick: None,
 			lane_preview: None,
+			play_intent: false,
+			play_config: None,
 		}
 	}
 
@@ -348,6 +358,12 @@ impl AppState {
 		if changes.automation {
 			let p = self.project();
 			a.automation(p.automation.clone(), p.tempo.clone());
+		}
+		for &track in &changes.clips {
+			let p = self.project();
+			if let Some(t) = p.track(track) {
+				a.track_clips(track, t.clips.clone(), p.tempo.clone());
+			}
 		}
 	}
 
@@ -770,8 +786,18 @@ impl AppState {
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(device_ref);
+			if item.role == DeviceRole::Instrument {
+				self.instrument_hint(&item.name);
+			}
 		}
 		ok
+	}
+
+	/// After an instrument lands on a track (which is now selected): how to write notes.
+	fn instrument_hint(&mut self, name: &str) {
+		self.notices.info(format!(
+			"{name} added — press F7 or double-click the track to open the piano roll"
+		));
 	}
 
 	/// Loads a built-in factory preset into a device (one undo step).
@@ -829,11 +855,34 @@ impl AppState {
 			.map_or(self.position, PlayerClock::position)
 	}
 
+	/// Plays in the current mode: the song (looping the loop region when it is on), or
+	/// in pattern mode the clip open in the piano roll, looped and heard alone.
 	pub fn play(&mut self) {
 		// A pending edit must reach the player before it starts.
 		if self.reload_since.is_some() {
 			self.send_reload();
 		}
+		self.play_intent = true;
+		let (config, fell_back) = self.transport_config();
+		if fell_back {
+			self.notices.info(
+				"Pattern mode plays the clip open in the piano roll — open one with F7. \
+				 Playing the song instead.",
+			);
+		}
+		// Start inside the loop: pattern mode always, song mode when past its end.
+		if let Some((start, end)) = config.loop_range {
+			let pos = self.position();
+			let outside = if config.pattern.is_some() {
+				pos < start || pos >= end
+			} else {
+				pos >= end
+			};
+			if outside {
+				self.seek(start);
+			}
+		}
+		self.send_config(config);
 		match &self.audio {
 			Some(a) if self.clock.is_some() => a.play(),
 			_ => self
@@ -843,9 +892,115 @@ impl AppState {
 	}
 
 	pub fn stop(&mut self) {
+		self.play_intent = false;
 		if let Some(a) = &self.audio {
 			a.stop();
 		}
+		let (config, _) = self.transport_config();
+		self.send_config(config);
+	}
+
+	/// Play was pressed and not stopped since (also without an audio device).
+	pub fn play_intent(&self) -> bool {
+		self.play_intent
+	}
+
+	/// What the player plays for the current mode (second value: pattern mode fell back
+	/// to the song because no clip is open in the piano roll).
+	pub fn transport_config(&self) -> (transport::PlayConfig, bool) {
+		transport::config(
+			self.project(),
+			&self.view.transport,
+			self.view.piano.clip.filter(|_| !self.view.audio_editor),
+			self.play_intent,
+		)
+	}
+
+	/// Loop and audition last sent to the player.
+	pub fn play_config(&self) -> Option<&transport::PlayConfig> {
+		self.play_config.as_ref()
+	}
+
+	/// Sends loop and audition to the player when they changed.
+	fn send_config(&mut self, config: transport::PlayConfig) {
+		if self.play_config.as_ref() == Some(&config) {
+			return;
+		}
+		if let Some(a) = &self.audio {
+			let old = self.play_config.as_ref();
+			if old.map(|c| c.loop_range) != Some(config.loop_range) {
+				a.set_loop(config.loop_range);
+			}
+			if old.map(|c| &c.audition) != Some(&config.audition) {
+				a.audition(config.audition.clone());
+			}
+		}
+		self.play_config = Some(config);
+	}
+
+	/// Keeps the player in step with the mode, the loop region and the pattern clip (it
+	/// may grow, or another clip may be opened while playing).
+	fn sync_transport(&mut self) {
+		let (config, _) = self.transport_config();
+		if self.play_config.as_ref() == Some(&config) {
+			return;
+		}
+		let new_pattern = config.pattern.is_some()
+			&& self.play_config.as_ref().map(|c| c.pattern) != Some(config.pattern);
+		if self.play_intent
+			&& new_pattern
+			&& let Some((start, end)) = config.loop_range
+		{
+			let pos = self.position();
+			if pos < start || pos >= end {
+				self.seek(start);
+			}
+		}
+		self.send_config(config);
+	}
+
+	/// Switches Pattern / Song mode; a running transport restarts in the new mode.
+	pub fn set_play_mode(&mut self, mode: transport::PlayMode) {
+		if self.view.transport.mode == mode {
+			return;
+		}
+		let playing = self.play_intent;
+		if playing {
+			self.stop();
+		}
+		self.view.transport.mode = mode;
+		if playing {
+			self.play();
+		} else {
+			let (config, _) = self.transport_config();
+			self.send_config(config);
+		}
+	}
+
+	/// The L key: Pattern <-> Song.
+	pub fn toggle_play_mode(&mut self) {
+		self.set_play_mode(self.view.transport.mode.toggled());
+	}
+
+	/// Turns the arrange loop on/off (Ctrl+L); without a region, loops the bar at the
+	/// playhead.
+	pub fn toggle_loop(&mut self) {
+		if self.view.transport.loop_range.is_none() {
+			let bar = self.project().time_signature.ticks_per_bar();
+			let pos = self.position();
+			let start = Tick(pos.0.max(0) / bar.0 * bar.0);
+			self.view.transport.loop_range = Some((start, start + bar));
+		}
+		self.view.transport.loop_on = !self.view.transport.loop_on;
+		self.sync_transport();
+	}
+
+	/// Sets the arrange loop region (and turns the loop on); `None` clears it.
+	pub fn set_loop_range(&mut self, range: Option<(Tick, Tick)>) {
+		let t = &mut self.view.transport;
+		t.loop_range = range.filter(|(s, e)| e > s);
+		t.loop_on = t.loop_range.is_some();
+		self.sync_transport();
 	}
 
 	/// Song end (last clip end), at least one bar.
@@ -946,6 +1101,9 @@ impl AppState {
 		self.view.automation = automation::AutomationView::default();
 		self.view.audio = audio_edit::AudioEditorView::default();
 		self.view.audio_editor = false;
+		self.view.piano.recent.clear();
+		self.view.transport.loop_on = false;
+		self.view.transport.loop_range = None;
 		self.load_warnings.clear();
 		self.seek(Tick::ZERO);
 		self.schedule_reload();
@@ -1221,6 +1379,9 @@ impl AppState {
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
+			if item.role == DeviceRole::Instrument {
+				self.instrument_hint(&item.name);
+			}
 		}
 		ok
 	}
@@ -1280,10 +1441,73 @@ impl AppState {
 			self.view.piano.framed = None;
 		}
 		self.view.piano.clip = Some(clip);
+		self.view.piano.recent.insert(track, clip);
 		self.view.audio_editor = false;
 		self.selection.click_clip(track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
+	}
+
+	/// Opens the piano roll for instrument track `track`: its selected clip, else the
+	/// clip under the playhead, else the last one opened there, else a new empty one-bar
+	/// clip at the playhead (one undo step, named after the track).
+	pub fn open_track_in_piano_roll(&mut self, track: TrackId) -> bool {
+		let Some(t) = self.project().track(track) else {
+			return false;
+		};
+		if t.kind != TrackKind::Instrument {
+			let msg = format!(
+				"'{}' is not an instrument track: the piano roll edits MIDI clips",
+				t.name
+			);
+			self.notices.info(msg);
+			return false;
+		}
+		let found = piano::clip_for_track(
+			self.project(),
+			track,
+			&self.selection.clips,
+			self.position(),
+			self.view.piano.recent.get(&track).copied(),
+		);
+		match found {
+			Some(clip) => self.open_piano_roll(clip),
+			None => self.new_clip_in_piano_roll(track, self.position()),
+		}
+	}
+
+	/// Creates an empty one-bar clip on `track` at the first free bar from `at` and opens
+	/// it in the piano roll (one undo step).
+	pub fn new_clip_in_piano_roll(&mut self, track: TrackId, at: Tick) -> bool {
+		let Some((cmd, clip)) = piano::new_clip(self.project(), track, at) else {
+			return false;
+		};
+		self.apply(cmd) && self.open_piano_roll(clip)
+	}
+
+	/// F7: hides a visible editor dock; otherwise opens the piano roll for the selected
+	/// instrument track (see [`AppState::open_track_in_piano_roll`]), or the selected clip
+	/// of another kind in its editor, or just shows the dock.
+	pub fn toggle_piano_roll(&mut self) {
+		if self.view.panels.visible(PanelKind::PianoRoll) {
+			self.close_piano_roll();
+			return;
+		}
+		let track = self
+			.selection
+			.track
+			.filter(|t| self.project().track(*t).map(|t| t.kind) == Some(TrackKind::Instrument));
+		if let Some(track) = track {
+			self.open_track_in_piano_roll(track);
+			return;
+		}
+		let selected = self.selection.clips.iter().copied().next();
+		let opened = self.view.piano.clip.is_some() || self.view.audio.clip.is_some();
+		if let Some(clip) = selected.filter(|_| !opened) {
+			self.open_editor(clip);
+			return;
+		}
+		self.view.panels.open_piano_roll();
 	}
 
 	/// Opens `clip` in its editor: the piano roll for MIDI, the audio editor for audio.
@@ -1598,6 +1822,7 @@ impl AppState {
 			self.send_reload();
 		}
 		self.poll_jobs();
+		self.sync_transport();
 		self.peaks.poll();
 		let ids: Vec<TrackId> = self.project().tracks.iter().map(|t| t.id).collect();
 		self.meters.update(self.bank.as_deref(), ids, dt);

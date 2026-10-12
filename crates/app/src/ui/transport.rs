@@ -8,6 +8,7 @@ use egui::{
 };
 
 use crate::state::timeline::{format_bbt, format_time};
+use crate::state::transport::PlayMode;
 use crate::state::{AppState, AudioStatus};
 use crate::theme;
 use crate::ui::widgets::{self, Gesture};
@@ -35,6 +36,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 		{
 			state.toggle_play();
 		}
+		ui.add_space(4.0);
+		mode_switch(ui, state);
+		loop_button(ui, state);
 		ui.add_space(8.0);
 		position_display(ui, state);
 		ui.add_space(8.0);
@@ -77,6 +81,108 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			}
 		});
 	});
+}
+
+/// FL Studio-like "PAT | SONG" switch (L).
+fn mode_switch(ui: &mut Ui, state: &mut AppState) {
+	let mode = state.view.transport.mode;
+	let (rect, _) = ui.allocate_exact_size(vec2(92.0, 28.0), Sense::hover());
+	let half = rect.width() / 2.0;
+	for (i, (m, label, tip)) in [
+		(
+			PlayMode::Pattern,
+			"PAT",
+			"Pattern mode (L): Play loops the clip open in the piano roll, heard alone",
+		),
+		(
+			PlayMode::Song,
+			"SONG",
+			"Song mode (L): Play runs the whole arrangement",
+		),
+	]
+	.into_iter()
+	.enumerate()
+	{
+		let r = egui::Rect::from_min_size(
+			pos2(rect.left() + i as f32 * half, rect.top()),
+			vec2(half, rect.height()),
+		);
+		let resp = ui
+			.interact(r, Id::new(("play-mode", label)), Sense::click())
+			.on_hover_text(tip);
+		let on = mode == m;
+		let color = match m {
+			PlayMode::Pattern => theme::PATTERN,
+			PlayMode::Song => theme::PLAYING,
+		};
+		let corner = if i == 0 {
+			CornerRadius {
+				nw: theme::RADIUS,
+				sw: theme::RADIUS,
+				..CornerRadius::ZERO
+			}
+		} else {
+			CornerRadius {
+				ne: theme::RADIUS,
+				se: theme::RADIUS,
+				..CornerRadius::ZERO
+			}
+		};
+		let bg = if on {
+			theme::mix(color, theme::BG_DEEP, 0.6)
+		} else if resp.hovered() {
+			theme::BG_HOVER
+		} else {
+			theme::BG_WIDGET
+		};
+		ui.painter().rect_filled(r, corner, bg);
+		ui.painter().text(
+			r.center(),
+			Align2::CENTER_CENTER,
+			label,
+			theme::mono(11.0),
+			if on { color } else { theme::TEXT_DIM },
+		);
+		if resp.clicked() {
+			state.set_play_mode(m);
+		}
+	}
+	ui.painter().vline(
+		rect.center().x,
+		rect.y_range(),
+		Stroke::new(1.0, theme::BG_DEEP),
+	);
+}
+
+/// Loop region on/off (Ctrl+L).
+fn loop_button(ui: &mut Ui, state: &mut AppState) {
+	let on = state.view.transport.loop_on;
+	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
+	let p = ui.painter();
+	let bg = if on {
+		theme::mix(theme::LOOP, theme::BG_DEEP, 0.55)
+	} else if resp.hovered() {
+		theme::BG_HOVER
+	} else {
+		theme::BG_WIDGET
+	};
+	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
+	p.text(
+		rect.center(),
+		Align2::CENTER_CENTER,
+		"⟲",
+		egui::FontId::proportional(17.0),
+		if on { theme::LOOP } else { theme::TEXT },
+	);
+	if resp
+		.on_hover_text(
+			"Loop the region marked on the arrange ruler (Ctrl+L); drag the ruler's top \
+			 half to set it",
+		)
+		.clicked()
+	{
+		state.toggle_loop();
+	}
 }
 
 #[derive(Clone, Copy)]

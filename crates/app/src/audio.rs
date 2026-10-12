@@ -16,8 +16,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
-use cadenza_engine::{MeterBank, Player, PlayerClock, PluginCrash, PluginHosting};
-use cadenza_model::{AutomationLane, Project};
+use cadenza_engine::{AuditionScope, MeterBank, Player, PlayerClock, PluginCrash, PluginHosting};
+use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
 
 /// How often the player thread polls sandboxed plugins for crashes.
@@ -49,6 +49,16 @@ enum Request {
 	},
 	/// Note preview: `Some(velocity)` = note on, `None` = note off.
 	Preview(TrackId, u8, Option<f32>),
+	/// Loop range (song ticks).
+	Loop(Option<(Tick, Tick)>),
+	/// Tracks heard alone (pattern mode).
+	Audition(Option<Vec<TrackId>>),
+	/// A track's MIDI clips changed (reschedule without reloading).
+	TrackClips {
+		track: TrackId,
+		clips: Vec<Clip>,
+		tempo: TempoMap,
+	},
 	Shutdown,
 }
 
@@ -150,6 +160,23 @@ impl AudioEngine {
 
 	pub fn preview_off(&self, track: TrackId, pitch: u8) {
 		self.send(Request::Preview(track, pitch, None));
+	}
+
+	pub fn set_loop(&self, range: Option<(Tick, Tick)>) {
+		self.send(Request::Loop(range));
+	}
+
+	pub fn audition(&self, tracks: Option<Vec<TrackId>>) {
+		self.send(Request::Audition(tracks));
+	}
+
+	/// Reschedules `track`'s MIDI clips in the running graph (reloads when it cannot).
+	pub fn track_clips(&self, track: TrackId, clips: Vec<Clip>, tempo: TempoMap) {
+		self.send(Request::TrackClips {
+			track,
+			clips,
+			tempo,
+		});
 	}
 
 	/// Next pending event, if any (never blocks).
@@ -268,6 +295,25 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 					player.preview_note_on(track, pitch, velocity)
 				}
 				Request::Preview(track, pitch, None) => player.preview_note_off(track, pitch),
+				Request::Loop(range) => player.set_loop(range),
+				Request::Audition(tracks) => {
+					player.set_audition(tracks.map(|tracks| AuditionScope { tracks }));
+					Ok(())
+				}
+				// A later load already carries these clips.
+				Request::TrackClips { .. } if last_load.is_some_and(|l| l > i) => Ok(()),
+				Request::TrackClips {
+					track,
+					clips,
+					tempo,
+				} => match player.set_track_clips(track, &clips, &tempo) {
+					Ok(true) => Ok(()),
+					Ok(false) => {
+						emit(AudioEvent::ReloadNeeded);
+						Ok(())
+					}
+					Err(e) => Err(e),
+				},
 				Request::Shutdown => {
 					let _ = player.stop();
 					return;

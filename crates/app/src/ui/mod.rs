@@ -383,6 +383,11 @@ impl CadenzaApp {
 		if pressed(Modifiers::NONE, Key::Space) {
 			s.toggle_play();
 		}
+		if pressed(cmd, Key::L) {
+			s.toggle_loop();
+		} else if pressed(Modifiers::NONE, Key::L) {
+			s.toggle_play_mode();
+		}
 		if pressed(Modifiers::NONE, Key::Home) || pressed(Modifiers::NONE, Key::Comma) {
 			s.seek(cadenza_core::Tick::ZERO);
 			s.view.timeline.scroll_beats = 0.0;
@@ -456,17 +461,11 @@ impl eframe::App for CadenzaApp {
 	}
 }
 
-/// F5..F9 / View menu: toggles a panel. Showing the piano roll without an open clip
-/// opens the selected MIDI clip (if any).
+/// F5..F9 / View menu: toggles a panel. F7 opens the piano roll for the selected
+/// instrument track (see [`AppState::toggle_piano_roll`]).
 pub fn toggle_panel(state: &mut AppState, panel: PanelKind) {
-	if panel == PanelKind::PianoRoll && !state.view.panels.visible(panel) {
-		let selected = state.selection.clips.iter().copied().next();
-		let opened = state.view.piano.clip.is_some() || state.view.audio.clip.is_some();
-		if let Some(clip) = selected.filter(|_| !opened) {
-			state.open_editor(clip);
-			return;
-		}
-		state.view.panels.open_piano_roll();
+	if panel == PanelKind::PianoRoll {
+		state.toggle_piano_roll();
 		return;
 	}
 	state.view.panels.toggle(panel);

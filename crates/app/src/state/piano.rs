@@ -12,8 +12,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use cadenza_core::{ClipId, NoteId, PPQ, Tick, TimeSignature};
-use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project};
+use cadenza_core::{ClipId, NoteId, PPQ, Tick, TimeSignature, TrackId};
+use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project, TrackKind};
 use cadenza_theory::Scale;
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +78,8 @@ pub struct PianoView {
 	pub clipboard: Vec<Note>,
 	/// Clip the view was last framed for (scroll/zoom to its notes once on open).
 	pub framed: Option<ClipId>,
+	/// Last clip opened per track (F7 on a track reopens it).
+	pub recent: HashMap<TrackId, ClipId>,
 }
 
 impl Default for PianoView {
@@ -99,6 +101,7 @@ impl Default for PianoView {
 			velocity_lane: true,
 			clipboard: Vec::new(),
 			framed: None,
+			recent: HashMap::new(),
 		}
 	}
 }
@@ -174,7 +177,57 @@ impl PianoView {
 				self.selected.clear();
 			}
 		}
+		self.recent.retain(|t, c| {
+			project
+				.find_clip(*c)
+				.is_some_and(|(track, _)| track.id == *t)
+		});
 	}
+}
+
+/// The MIDI clip of instrument track `track` the piano roll opens for it: a selected clip
+/// of that track, else the clip under the playhead, else the last one opened there.
+/// `None` when the track has none of those (create one with [`new_clip`]).
+pub fn clip_for_track(
+	project: &Project,
+	track: TrackId,
+	selected: &BTreeSet<ClipId>,
+	playhead: Tick,
+	recent: Option<ClipId>,
+) -> Option<ClipId> {
+	let t = project.track(track)?;
+	if t.kind != TrackKind::Instrument {
+		return None;
+	}
+	let midi = || t.clips.iter().filter(|c| c.is_midi());
+	midi()
+		.find(|c| selected.contains(&c.id))
+		.or_else(|| midi().find(|c| c.start <= playhead && playhead < c.end()))
+		.or_else(|| midi().find(|c| Some(c.id) == recent))
+		.map(|c| c.id)
+}
+
+/// An empty one-bar MIDI clip named after instrument track `track`, at the first bar
+/// from `at` (snapped down to the bar) that no clip of the track covers.
+pub fn new_clip(project: &Project, track: TrackId, at: Tick) -> Option<(Command, ClipId)> {
+	let t = project.track(track)?;
+	if t.kind != TrackKind::Instrument {
+		return None;
+	}
+	let bar = project.time_signature.ticks_per_bar();
+	let mut start = Tick(at.0.max(0) / bar.0 * bar.0);
+	while let Some(end) = t
+		.clips
+		.iter()
+		.filter(|c| c.start < start + bar && start < c.end())
+		.map(|c| c.end())
+		.max()
+	{
+		start = Tick((end.0 + bar.0 - 1) / bar.0 * bar.0);
+	}
+	let clip = Clip::midi(t.name.clone(), start, bar);
+	let id = clip.id;
+	Some((Command::AddClip { track, clip }, id))
 }
 
 /// Snaps an absolute position to `step` (no snapping when `step` is `None`).
@@ -578,6 +631,64 @@ mod tests {
 
 	fn set(ids: &[NoteId]) -> BTreeSet<NoteId> {
 		ids.iter().copied().collect()
+	}
+
+	#[test]
+	fn track_targets_prefer_selection_then_playhead_then_recent() {
+		let mut fx = fixture();
+		let track = fx.doc.project().tracks[0].id;
+		let later = Clip::midi("later", b(16.0), b(4.0));
+		let later_id = later.id;
+		fx.doc
+			.execute(Command::AddClip { track, clip: later })
+			.unwrap();
+		let p = fx.doc.project();
+		let none = BTreeSet::new();
+		// Under the playhead (bar 2 = beats 4..8).
+		assert_eq!(clip_for_track(p, track, &none, b(5.0), None), Some(fx.clip));
+		// Selection wins over the playhead.
+		let sel: BTreeSet<ClipId> = [later_id].into();
+		assert_eq!(clip_for_track(p, track, &sel, b(5.0), None), Some(later_id));
+		// Nothing under the playhead: the last opened one, else none.
+		assert_eq!(
+			clip_for_track(p, track, &none, b(12.0), Some(later_id)),
+			Some(later_id)
+		);
+		assert_eq!(clip_for_track(p, track, &none, b(12.0), None), None);
+		// A recent clip of another track does not count.
+		assert_eq!(
+			clip_for_track(p, track, &none, b(12.0), Some(ClipId::new())),
+			None
+		);
+	}
+
+	#[test]
+	fn new_clips_take_the_first_free_bar_and_the_track_name() {
+		let mut fx = fixture();
+		let track = fx.doc.project().tracks[0].id;
+		// Playhead in bar 1 (free): the clip starts at 0.
+		let (cmd, id) = new_clip(fx.doc.project(), track, b(2.5)).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		let (_, c) = fx.doc.project().find_clip(id).unwrap();
+		assert_eq!(
+			(c.start, c.length, c.name.as_str()),
+			(b(0.0), b(4.0), "keys")
+		);
+		// Playhead inside bars 1-2 (both taken): the next free bar.
+		let (cmd, id) = new_clip(fx.doc.project(), track, b(1.0)).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		assert_eq!(fx.doc.project().find_clip(id).unwrap().1.start, b(8.0));
+		fx.doc.undo().unwrap();
+		assert!(fx.doc.project().find_clip(id).is_none(), "undoable");
+		let bus = Track::new("bus", TrackKind::Bus);
+		let bus_id = bus.id;
+		fx.doc
+			.execute(Command::AddTrack {
+				track: bus,
+				index: None,
+			})
+			.unwrap();
+		assert!(new_clip(fx.doc.project(), bus_id, b(0.0)).is_none());
 	}
 
 	#[test]

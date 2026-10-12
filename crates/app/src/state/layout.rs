@@ -247,7 +247,15 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		"Maximize the focused panel / restore",
 	),
 	sc("Windows", "F12", "Close all tool panels"),
-	sc("Transport", "Space", "Play / stop"),
+	sc("Transport", "Space", "Play / stop (in the current mode)"),
+	sc("Transport", "L", "Pattern / Song mode"),
+	sc("Transport", "Ctrl+L", "Loop region on / off"),
+	sc(
+		"Transport",
+		"Drag ruler top",
+		"Set the loop (Ctrl+drag: anywhere)",
+	),
+	sc("Transport", "Click loop region", "Loop on / off"),
 	sc("Transport", "Home / End", "Playhead to song start / end"),
 	sc("File", "Ctrl+N / Ctrl+O", "New / open project"),
 	sc("File", "Ctrl+S / Ctrl+Shift+S", "Save / save as"),
@@ -279,6 +287,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Clips", "Alt+drag", "Move or resize without snapping"),
 	sc("Clips", "Double-click lane", "New MIDI clip"),
 	sc("Clips", "Double-click MIDI clip", "Open in the piano roll"),
+	sc(
+		"Clips",
+		"Double-click track header",
+		"Piano roll of an instrument track",
+	),
 	sc(
 		"Clips",
 		"Drag empty lane",
@@ -336,6 +349,12 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		"♩ (transport)",
 		"Tempo lane: click adds a change",
 	),
+	sc(
+		"Piano roll",
+		"F7 (instrument track)",
+		"Its clip, or a new one",
+	),
+	sc("Piano roll", "Clip menu / +", "Switch clip / new clip"),
 	sc("Piano roll", "P / E", "Draw tool / select tool"),
 	sc(
 		"Piano roll",

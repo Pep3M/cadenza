@@ -2,13 +2,14 @@
 //!
 //! [`diff`] compares the project before and after an edit (a command, an undo, a shared
 //! MCP tool): when the only differences are fader volumes/pans, send levels, device
-//! parameter values and automation lanes, they are sent to the player live
-//! (`Player::set_live_*`, `Player::set_automation`) and sounding notes keep playing.
-//! Anything else (tracks, devices, routing, clips, tempo, a parameter reset to its
-//! default...) is structural and reloads the player.
+//! parameter values, automation lanes and the MIDI clips of instrument tracks (notes,
+//! clip moves/resizes: the piano roll's edits), they are sent to the player live
+//! (`Player::set_live_*`, `Player::set_automation`, `Player::set_track_clips`) and
+//! sounding notes keep playing. Anything else (tracks, devices, routing, audio clips,
+//! tempo, a parameter reset to its default...) is structural and reloads the player.
 
 use cadenza_core::{DeviceId, TrackId};
-use cadenza_model::{Channel, Device, Project};
+use cadenza_model::{Channel, Device, Project, TrackKind};
 
 /// Edits the player can apply live.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -21,6 +22,8 @@ pub struct LiveChanges {
 	pub params: Vec<(DeviceId, String, f32)>,
 	/// The automation lanes changed.
 	pub automation: bool,
+	/// Instrument tracks whose MIDI clips changed (reschedule them).
+	pub clips: Vec<TrackId>,
 }
 
 impl LiveChanges {
@@ -43,6 +46,10 @@ pub fn diff(old: &Project, new: &Project) -> Option<LiveChanges> {
 		channel(Some(o.id), &mut o.channel, &n.channel, &mut changes)?;
 		if let (Some(od), Some(nd)) = (&mut o.instrument, &n.instrument) {
 			device(od, nd, &mut changes)?;
+		}
+		if o.clips != n.clips && o.kind == TrackKind::Instrument && n.kind == o.kind {
+			o.clips = n.clips.clone();
+			changes.clips.push(n.id);
 		}
 	}
 	channel(None, &mut normalized.master, &new.master, &mut changes)?;
@@ -167,6 +174,44 @@ mod tests {
 		);
 		assert!(diff(&n3, &n4).unwrap().automation);
 		assert!(diff(&p, &p).unwrap().is_empty());
+	}
+
+	#[test]
+	fn midi_clip_edits_reschedule_their_track() {
+		let (mut p, track, _, _) = project();
+		let clip = cadenza_model::Clip::midi("c", Tick(0), Tick(960 * 4));
+		let clip_id = clip.id;
+		p.tracks[0].clips.push(clip);
+		let n = after(
+			&p,
+			Command::AddNotes {
+				clip: clip_id,
+				notes: vec![cadenza_model::Note::new(60, Tick(0), Tick(480), 0.8)],
+			},
+		);
+		let c = diff(&p, &n).unwrap();
+		assert_eq!(c.clips, vec![track]);
+		assert!(c.params.is_empty() && !c.automation);
+		let moved = after(
+			&n,
+			Command::UpdateClip {
+				clip: clip_id,
+				patch: cadenza_model::ClipPatch {
+					start: Some(Tick(960)),
+					..Default::default()
+				},
+			},
+		);
+		assert_eq!(diff(&n, &moved).unwrap().clips, vec![track]);
+		// A new instrument track is structural.
+		let added = after(
+			&p,
+			Command::AddTrack {
+				track: Track::new("x", TrackKind::Instrument),
+				index: None,
+			},
+		);
+		assert!(diff(&p, &added).is_none());
 	}
 
 	#[test]

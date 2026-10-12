@@ -165,7 +165,7 @@ impl PianoUi {
 		self.grid_rect = Some(g.grid);
 		let Some(t) = target(state) else {
 			self.toolbar(ui, state, &g, None);
-			empty(ui, full.with_min_y(g.toolbar.bottom()));
+			empty(ui, state, full.with_min_y(g.toolbar.bottom()));
 			return;
 		};
 		if state.view.piano.framed != Some(t.clip.id) {
@@ -301,7 +301,15 @@ impl PianoUi {
 				.track(t.track)
 				.map(|t| t.name.clone())
 				.unwrap_or_default();
-			ui.label(RichText::new(&t.clip.name).strong().color(theme::TEXT));
+			clip_selector(ui, state, t);
+			if ui
+				.small_button("+")
+				.on_hover_text("New empty clip on this track (opens it here)")
+				.clicked()
+			{
+				let at = state.position();
+				state.new_clip_in_piano_roll(t.track, at);
+			}
 			ui.label(
 				RichText::new(format!("on {track}"))
 					.font(theme::small())
@@ -1375,6 +1383,17 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 		0.0,
 		t.color,
 	);
+	// Pattern mode: the span Play loops (the clip, at least a bar).
+	let config = state.transport_config().0;
+	if config.pattern == Some(t.clip.id)
+		&& let Some((s, e)) = config.loop_range
+	{
+		let band = Rect::from_min_max(
+			pos2(r.left() + tl.tick_to_x(s), r.top() + 1.0),
+			pos2(r.left() + tl.tick_to_x(e), r.top() + 6.0),
+		);
+		p.rect_filled(band, CornerRadius::same(2), theme::PATTERN);
+	}
 	let grid = tl.grid(ts);
 	let beat = Tick(PPQ * 4 / i64::from(ts.denominator.max(1)));
 	let bar_px = tl.ticks_to_px(grid.bar);
@@ -1510,20 +1529,76 @@ fn scale_picker(ui: &mut Ui, v: &mut PianoView) {
 		.on_hover_text("Rows outside the scale are dimmed");
 }
 
-fn empty(ui: &mut Ui, rect: Rect) {
+/// The track's MIDI clips (in time order, with their bar): switches the edited clip.
+fn clip_selector(ui: &mut Ui, state: &mut AppState, t: &Target) {
+	let ts = state.project().time_signature;
+	let clips: Vec<(cadenza_core::ClipId, String)> = state
+		.project()
+		.track(t.track)
+		.map(|track| {
+			let mut c: Vec<&Clip> = track.clips.iter().filter(|c| c.is_midi()).collect();
+			c.sort_by_key(|c| c.start);
+			c.into_iter()
+				.map(|c| {
+					let bar = c.start.0 / ts.ticks_per_bar().0.max(1) + 1;
+					(c.id, format!("{} · bar {bar}", c.name))
+				})
+				.collect()
+		})
+		.unwrap_or_default();
+	let current = clips
+		.iter()
+		.position(|(id, _)| *id == t.clip.id)
+		.unwrap_or(0);
+	let mut pick = None;
+	egui::ComboBox::from_id_salt("piano-clip")
+		.width(150.0)
+		.selected_text(RichText::new(&t.clip.name).strong().color(theme::TEXT))
+		.show_ui(ui, |ui| {
+			for (i, (id, label)) in clips.iter().enumerate() {
+				if ui.selectable_label(i == current, label).clicked() {
+					pick = Some(*id);
+				}
+			}
+		})
+		.response
+		.on_hover_text("Clips of this track: pick one to edit it here");
+	if let Some(id) = pick.filter(|id| *id != t.clip.id) {
+		state.open_piano_roll(id);
+	}
+}
+
+fn empty(ui: &mut Ui, state: &mut AppState, rect: Rect) {
 	let p = ui.painter_at(rect);
 	p.text(
-		rect.center() - vec2(0.0, 10.0),
+		rect.center() - vec2(0.0, 22.0),
 		Align2::CENTER_CENTER,
 		"No clip open",
 		FontId::proportional(14.0),
 		theme::TEXT_DIM,
 	);
 	p.text(
-		rect.center() + vec2(0.0, 12.0),
+		rect.center(),
 		Align2::CENTER_CENTER,
-		"Double-click a MIDI clip in the arrange view to edit its notes here",
+		"Press F7 or double-click an instrument track to open the piano roll \
+		 (double-click a MIDI clip to edit that one)",
 		theme::small(),
 		theme::TEXT_FAINT,
 	);
+	let track = state.selection.track.and_then(|id| {
+		let t = state.project().track(id)?;
+		(t.kind == cadenza_model::TrackKind::Instrument).then(|| (id, t.name.clone()))
+	});
+	if let Some((id, name)) = track {
+		let button = Rect::from_center_size(rect.center() + vec2(0.0, 30.0), vec2(240.0, 24.0));
+		if ui
+			.put(
+				button,
+				egui::Button::new(format!("Open a clip of '{name}'")),
+			)
+			.clicked()
+		{
+			state.open_track_in_piano_roll(id);
+		}
+	}
 }

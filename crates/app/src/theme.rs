@@ -30,6 +30,10 @@ pub const ACCENT: Color32 = Color32::from_rgb(0x3d, 0x9c, 0xf0);
 pub const ACCENT_DIM: Color32 = Color32::from_rgb(0x24, 0x4f, 0x78);
 pub const PLAYHEAD: Color32 = Color32::from_rgb(0xff, 0x5f, 0x4f);
 pub const PLAYING: Color32 = Color32::from_rgb(0x46, 0xc8, 0x6c);
+/// Pattern mode (the transport switch, the looped clip span).
+pub const PATTERN: Color32 = Color32::from_rgb(0xf0, 0x8c, 0x3c);
+/// The arrange loop region.
+pub const LOOP: Color32 = Color32::from_rgb(0x6f, 0xa8, 0xff);
 pub const MUTE: Color32 = Color32::from_rgb(0xe3, 0x8b, 0x2c);
 pub const SOLO: Color32 = Color32::from_rgb(0xe6, 0xcc, 0x3c);
 pub const BYPASS: Color32 = Color32::from_rgb(0x7a, 0x82, 0x8c);

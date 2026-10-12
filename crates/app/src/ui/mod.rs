@@ -8,6 +8,7 @@ pub mod arrange;
 pub mod audio_editor;
 pub mod automation;
 pub mod browser;
+pub mod chat;
 pub mod dnd;
 pub mod inspector;
 pub mod mixer;
@@ -41,6 +42,7 @@ pub struct CadenzaApp {
 	browser: browser::BrowserUi,
 	piano: piano_roll::PianoUi,
 	audio_editor: audio_editor::AudioEditorUi,
+	chat: chat::ChatUi,
 	title: String,
 	themed: bool,
 	/// Whether the piano roll was visible last frame (to release previews on hide).
@@ -80,6 +82,7 @@ impl CadenzaApp {
 			browser: browser::BrowserUi::default(),
 			piano: piano_roll::PianoUi::default(),
 			audio_editor: audio_editor::AudioEditorUi::default(),
+			chat: chat::ChatUi::default(),
 			title: String::new(),
 			themed: false,
 			piano_was_visible: false,
@@ -167,6 +170,8 @@ impl CadenzaApp {
 			)
 			.show(ui, |ui| status_bar(ui, state));
 
+		// While the AI edits, the editing panels are read-only (see `state::ai`).
+		let locked = state.ai.busy();
 		let panels = state.view.panels.clone();
 		let center = panels.center();
 		let docked =
@@ -182,7 +187,12 @@ impl CadenzaApp {
 						.fill(theme::BG_DEEP)
 						.inner_margin(Margin::symmetric(0, 4)),
 				)
-				.show(ui, |ui| mixer::show(ui, state));
+				.show(ui, |ui| {
+					if locked {
+						ui.disable();
+					}
+					mixer::show(ui, state)
+				});
 			rects.push((PanelKind::Mixer, r.response.rect));
 		}
 		if docked(PanelKind::PianoRoll) {
@@ -194,6 +204,9 @@ impl CadenzaApp {
 				.size_range(200.0..=900.0)
 				.frame(Frame::new().fill(theme::BG_DEEP))
 				.show(ui, |ui| {
+					if locked {
+						ui.disable();
+					}
 					if state.view.audio_editor {
 						audio.show(ui, state)
 					} else {
@@ -213,8 +226,31 @@ impl CadenzaApp {
 						.fill(theme::BG_PANEL)
 						.inner_margin(Margin::symmetric(8, 4)),
 				)
-				.show(ui, |ui| browser.show(ui, state));
+				.show(ui, |ui| {
+					if locked {
+						ui.disable();
+					}
+					browser.show(ui, state)
+				});
 			rects.push((PanelKind::Browser, r.response.rect));
+		}
+		if docked(PanelKind::Chat) {
+			let chat = &mut self.chat;
+			let r = Panel::right("ai-chat")
+				.resizable(true)
+				.default_size(340.0)
+				.size_range(260.0..=620.0)
+				.frame(
+					Frame::new()
+						.fill(theme::BG_PANEL)
+						.inner_margin(Margin::symmetric(8, 4))
+						.stroke(egui::Stroke::new(1.0, theme::BORDER)),
+				)
+				.show(ui, |ui| chat.show(ui, state));
+			rects.push((PanelKind::Chat, r.response.rect));
+		} else {
+			// The settings dialog also opens from errors and menus with the panel hidden.
+			self.chat.settings_dialog(ui.ctx(), state);
 		}
 		if docked(PanelKind::Inspector) {
 			let r = Panel::right("inspector")
@@ -226,36 +262,53 @@ impl CadenzaApp {
 						.fill(theme::BG_PANEL)
 						.inner_margin(Margin::symmetric(8, 4)),
 				)
-				.show(ui, |ui| inspector::show(ui, state));
+				.show(ui, |ui| {
+					if locked {
+						ui.disable();
+					}
+					inspector::show(ui, state)
+				});
 			rects.push((PanelKind::Inspector, r.response.rect));
 		}
 		let arrange = &mut self.arrange;
 		let piano = &mut self.piano;
 		let audio = &mut self.audio_editor;
 		let browser = &mut self.browser;
-		let central = egui::CentralPanel::no_frame().show(ui, |ui| match center {
-			Some(PanelKind::Arrange) => arrange.show(ui, state),
-			Some(PanelKind::PianoRoll) if state.view.audio_editor => audio.show(ui, state),
-			Some(PanelKind::PianoRoll) => piano.show(ui, state),
-			Some(PanelKind::Mixer) => {
-				Frame::new()
-					.fill(theme::BG_DEEP)
-					.inner_margin(Margin::symmetric(0, 4))
-					.show(ui, |ui| mixer::show(ui, state));
+		let chat = &mut self.chat;
+		let central = egui::CentralPanel::no_frame().show(ui, |ui| {
+			if locked && center != Some(PanelKind::Chat) {
+				ui.disable();
 			}
-			Some(PanelKind::Browser) => {
-				Frame::new()
-					.fill(theme::BG_PANEL)
-					.inner_margin(Margin::symmetric(8, 4))
-					.show(ui, |ui| browser.show(ui, state));
+			match center {
+				Some(PanelKind::Arrange) => arrange.show(ui, state),
+				Some(PanelKind::PianoRoll) if state.view.audio_editor => audio.show(ui, state),
+				Some(PanelKind::PianoRoll) => piano.show(ui, state),
+				Some(PanelKind::Mixer) => {
+					Frame::new()
+						.fill(theme::BG_DEEP)
+						.inner_margin(Margin::symmetric(0, 4))
+						.show(ui, |ui| mixer::show(ui, state));
+				}
+				Some(PanelKind::Browser) => {
+					Frame::new()
+						.fill(theme::BG_PANEL)
+						.inner_margin(Margin::symmetric(8, 4))
+						.show(ui, |ui| browser.show(ui, state));
+				}
+				Some(PanelKind::Inspector) => {
+					Frame::new()
+						.fill(theme::BG_PANEL)
+						.inner_margin(Margin::symmetric(8, 4))
+						.show(ui, |ui| inspector::show(ui, state));
+				}
+				Some(PanelKind::Chat) => {
+					Frame::new()
+						.fill(theme::BG_PANEL)
+						.inner_margin(Margin::symmetric(8, 4))
+						.show(ui, |ui| chat.show(ui, state));
+				}
+				None => nothing_open(ui),
 			}
-			Some(PanelKind::Inspector) => {
-				Frame::new()
-					.fill(theme::BG_PANEL)
-					.inner_margin(Margin::symmetric(8, 4))
-					.show(ui, |ui| inspector::show(ui, state));
-			}
-			None => nothing_open(ui),
 		});
 		if let Some(c) = center {
 			rects.push((c, central.response.rect));
@@ -347,6 +400,7 @@ impl CadenzaApp {
 					PanelKind::PianoRoll => Key::F7,
 					PanelKind::Inspector => Key::F8,
 					PanelKind::Mixer => Key::F9,
+					PanelKind::Chat => Key::F10,
 				};
 				if pressed(Modifiers::NONE, key)
 					|| (panel == PanelKind::Browser && pressed(Modifiers::ALT, Key::F8))
@@ -795,6 +849,22 @@ fn menu_bar(ui: &mut Ui, state: &mut AppState) {
 				&mut state.view.track_height,
 				crate::state::MIN_TRACK_HEIGHT..=crate::state::MAX_TRACK_HEIGHT,
 			));
+		});
+		ui.menu_button("AI", |ui| {
+			ui.set_min_width(220.0);
+			let on = state.view.panels.visible(PanelKind::Chat);
+			if check_item(ui, on, "AI producer chat", "F10") {
+				toggle_panel(state, PanelKind::Chat);
+			}
+			if shortcut_button(ui, "AI settings…", "") {
+				state.ai.settings_open = true;
+			}
+			if ui
+				.add_enabled(state.ai.busy(), egui::Button::new("Stop the AI"))
+				.clicked()
+			{
+				state.ai.stop();
+			}
 		});
 		ui.menu_button("Help", |ui| {
 			if shortcut_button(ui, "Keyboard shortcuts", "F1") {

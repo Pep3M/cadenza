@@ -697,6 +697,104 @@ fn ruler_drags_set_the_loop_region() {
 }
 
 /// Renders a few app states to PNG files in `$CADENZA_SCREENSHOT_DIR` (needs a GPU):
+/// A state whose AI chat answers from `turns` (scripted provider, in-memory key, no
+/// network).
+fn chat_app(
+	turns: Vec<cadenza_agent::scripted::ScriptedTurn>,
+	delay_ms: u64,
+	dir: &std::path::Path,
+) -> CadenzaApp {
+	use cadenza_app::state::ai::secrets::{MemorySecretStore, SecretStore};
+	use cadenza_app::state::ai::settings::ProviderKind;
+	let mut a = app();
+	let provider = cadenza_agent::scripted::ScriptedProvider::new(turns)
+		.with_delay(std::time::Duration::from_millis(delay_ms));
+	let store = MemorySecretStore::default();
+	store
+		.set(ProviderKind::OpenRouter.account(), "test-key")
+		.unwrap();
+	a.state.ai = cadenza_app::state::ai::AiChat::with_parts(
+		std::sync::Arc::new(move |_, _| Ok(Box::new(provider.clone()))),
+		std::sync::Arc::new(store),
+		dir.join("session"),
+		dir.to_path_buf(),
+		None,
+	);
+	a
+}
+
+fn chat_turns() -> Vec<cadenza_agent::scripted::ScriptedTurn> {
+	use cadenza_agent::scripted::ScriptedTurn;
+	vec![
+		ScriptedTurn::tools(
+			Some("I'll add a bass track and mark the bridge."),
+			&[
+				(
+					"create_track",
+					r#"{"name":"Bass","kind":"instrument","instrument":{"device":"poly_synth"}}"#,
+				),
+				("add_marker", r#"{"beat":52,"name":"Bridge"}"#),
+				("add_notes", r#"{"clip_id":"missing","notes":[]}"#),
+			],
+		)
+		.with_cost(0.0021),
+		ScriptedTurn::text(
+			"Done:\n- added **Bass** (poly synth)\n- marked the `Bridge` at beat 52\n\nUndo it with Ctrl+Z.",
+		)
+		.with_cost(0.0009),
+	]
+}
+
+#[test]
+fn the_chat_panel_sends_a_request_and_shows_the_reply() {
+	let tmp = tempfile::tempdir().unwrap();
+	let mut h = harness(chat_app(chat_turns(), 0, tmp.path()));
+	h.run_steps(2);
+	assert!(!h.state().state.view.panels.visible(PanelKind::Chat));
+	h.key_press(Key::F10);
+	h.run_steps(2);
+	assert!(h.state().state.view.panels.visible(PanelKind::Chat));
+	assert!(h.query_by_label("AI PRODUCER").is_some());
+	assert!(
+		h.query_by_label("Mix the project").is_some(),
+		"quick actions"
+	);
+
+	let tracks = h.state().state.project().tracks.len();
+	h.state_mut().state.ai.input = "add a bass".into();
+	h.ctx
+		.memory_mut(|m| m.request_focus(egui::Id::new(cadenza_app::ui::chat::INPUT_ID)));
+	h.run_steps(1);
+	h.key_press(Key::Enter);
+	h.run_steps(1);
+	assert!(h.state().state.ai.busy() || !h.state().state.ai.items.is_empty());
+	for _ in 0..500 {
+		h.run_steps(1);
+		if !h.state().state.ai.busy() {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	h.run_steps(3);
+	let s = &h.state().state;
+	assert!(!s.ai.busy());
+	assert!(s.ai.input.is_empty(), "sent");
+	assert_eq!(s.project().tracks.len(), tracks + 1);
+	assert_eq!(s.undo_label(), Some("AI: add a bass"));
+	assert!(h.query_by_label_contains("added Bass").is_some());
+	assert!(h.query_by_label_contains("create_track Bass").is_some());
+	assert!(
+		h.query_by_label_contains("add_notes:").is_some(),
+		"failed tool row"
+	);
+	assert!(h.query_by_label_contains("undo: AI: add a bass").is_some());
+
+	// One Ctrl+Z takes the request back.
+	h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+	h.run_steps(2);
+	assert_eq!(h.state().state.project().tracks.len(), tracks);
+}
+
 /// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
 #[test]
 #[ignore]
@@ -959,6 +1057,88 @@ fn render_screens() {
 		.state
 		.request(cadenza_app::state::Pending::Quit);
 	shot(&mut h, "unsaved_prompt");
+
+	// The AI chat: a finished request, then one in progress, then the settings.
+	let tmp_chat = tempfile::tempdir().unwrap();
+	let mut chat = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.wgpu()
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			{
+				let mut turns = chat_turns();
+				turns.push(cadenza_agent::scripted::ScriptedTurn::tools(
+					Some("Shaping the drums: more attack on the kick and a touch of saturation."),
+					&[("add_marker", r#"{"beat":64,"name":"Outro"}"#)],
+				));
+				turns.push(cadenza_agent::scripted::ScriptedTurn::text("ok"));
+				chat_app(turns, 0, tmp_chat.path())
+			},
+		);
+	chat.state_mut()
+		.state
+		.view
+		.panels
+		.set(PanelKind::Chat, true);
+	chat.state_mut().state.send_ai("add a bass");
+	for _ in 0..500 {
+		chat.run_steps(1);
+		if !chat.state().state.ai.busy() {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	chat.run_steps(3);
+	chat.render()
+		.unwrap()
+		.save(dir.join("ai_chat.png"))
+		.unwrap();
+	{
+		let s = &mut chat.state_mut().state;
+		s.send_ai("make the drums punchier");
+	}
+	// Freeze a mid-request look: wait for the streamed text, then draw.
+	for _ in 0..200 {
+		chat.run_steps(1);
+		if chat
+			.state()
+			.state
+			.ai
+			.items
+			.iter()
+			.any(|i| matches!(i, cadenza_app::state::ai::ChatItem::Assistant { text, .. } if text.contains("drums")))
+		{
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(5));
+	}
+	chat.state_mut().state.ai.running = Some(cadenza_app::state::ai::Running {
+		request: "make the drums punchier".into(),
+		started: std::time::Instant::now(),
+		cost_usd: 0.0012,
+		estimated: false,
+		stopping: false,
+	});
+	chat.run_steps(2);
+	chat.render()
+		.unwrap()
+		.save(dir.join("ai_chat_running.png"))
+		.unwrap();
+	// The scripted request is long done; drop the staged "running" look.
+	std::thread::sleep(std::time::Duration::from_millis(200));
+	chat.run_steps(2);
+	chat.state_mut().state.ai.running = None;
+	chat.state_mut().state.ai.settings_open = true;
+	chat.state_mut().state.ai.settings.provider =
+		cadenza_app::state::ai::settings::ProviderKind::OpenAiCompatible;
+	chat.run_steps(4);
+	chat.render()
+		.unwrap()
+		.save(dir.join("ai_settings.png"))
+		.unwrap();
 
 	// A fresh window without any project (the empty document).
 	let mut empty = Harness::builder()

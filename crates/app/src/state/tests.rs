@@ -713,3 +713,205 @@ fn edits_by_another_owner_of_the_session_go_through_the_same_bookkeeping() {
 	assert!(!s.dirty);
 	assert_eq!(s.path(), Some(path.as_path()));
 }
+
+mod ai_chat {
+	use super::*;
+	use crate::state::ai::secrets::{MemorySecretStore, SecretStore};
+	use crate::state::ai::settings::ProviderKind;
+	use crate::state::ai::{AiChat, ChatItem};
+	use cadenza_agent::scripted::{ScriptedProvider, ScriptedTurn};
+
+	pub struct Chat {
+		pub state: AppState,
+		pub _dir: tempfile::TempDir,
+	}
+
+	/// A state whose chat answers from `turns` (no network); the key is in memory.
+	pub fn chat_state(turns: Vec<ScriptedTurn>, delay_ms: u64, with_key: bool) -> Chat {
+		let (mut state, _) = state_with_song();
+		let dir = tempfile::tempdir().unwrap();
+		let provider =
+			ScriptedProvider::new(turns).with_delay(std::time::Duration::from_millis(delay_ms));
+		let store = MemorySecretStore::default();
+		if with_key {
+			store
+				.set(ProviderKind::OpenRouter.account(), "test-key")
+				.unwrap();
+		}
+		state.ai = AiChat::with_parts(
+			Arc::new(move |_, _| Ok(Box::new(provider.clone()))),
+			Arc::new(store),
+			dir.path().join("session"),
+			dir.path().to_path_buf(),
+			None,
+		);
+		Chat { state, _dir: dir }
+	}
+
+	/// Ticks until the running request ends.
+	pub fn wait(s: &mut AppState) {
+		let start = Instant::now();
+		loop {
+			s.tick(Instant::now());
+			if !s.ai.busy() {
+				return;
+			}
+			assert!(start.elapsed().as_secs() < 20, "request did not finish");
+			std::thread::sleep(std::time::Duration::from_millis(5));
+		}
+	}
+
+	#[test]
+	fn a_request_streams_into_the_chat_and_is_one_undo_step() {
+		let mut c = chat_state(
+			vec![
+				ScriptedTurn::tools(
+					Some("Adding a bass."),
+					&[
+						("create_track", r#"{"name":"Bass","kind":"instrument"}"#),
+						("add_marker", r#"{"beat":16,"name":"Bridge"}"#),
+						("add_notes", r#"{"clip_id":"nope","notes":[]}"#),
+					],
+				)
+				.with_cost(0.002),
+				ScriptedTurn::text("Added **Bass** and a Bridge marker.").with_cost(0.001),
+			],
+			0,
+			true,
+		);
+		let s = &mut c.state;
+		let steps = s.document().history_labels().len();
+		assert!(s.send_ai("add a bass"));
+		assert!(s.ai.busy());
+		wait(s);
+		assert_eq!(s.project().tracks.len(), 2);
+		assert!(s.dirty);
+		assert_eq!(s.document().history_labels().len(), steps + 1);
+		assert_eq!(s.undo_label(), Some("AI: add a bass"));
+		let items = &s.ai.items;
+		assert_eq!(items[0], ChatItem::User("add a bass".into()));
+		assert!(items.contains(&ChatItem::Assistant {
+			text: "Adding a bass.".into(),
+			streaming: false
+		}));
+		let tools: Vec<(&str, Option<bool>)> = items
+			.iter()
+			.filter_map(|i| match i {
+				ChatItem::Tool { name, ok, .. } => Some((name.as_str(), *ok)),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(
+			tools,
+			vec![
+				("create_track", Some(true)),
+				("add_marker", Some(true)),
+				("add_notes", Some(false))
+			]
+		);
+		let Some(ChatItem::Footer {
+			status,
+			cost_usd,
+			undo_label,
+			..
+		}) = items.last()
+		else {
+			panic!("no footer: {items:?}")
+		};
+		assert_eq!(status, "done");
+		assert!((cost_usd - 0.003).abs() < 1e-9);
+		assert_eq!(undo_label.as_deref(), Some("AI: add a bass"));
+		assert!((s.ai.total_usd - 0.003).abs() < 1e-9);
+
+		// One Ctrl+Z takes the whole request back.
+		s.undo();
+		assert_eq!(s.project().tracks.len(), 1);
+		assert!(s.project().markers.is_empty());
+		assert!(s.ai.transcript_path().is_file());
+	}
+
+	#[test]
+	fn user_edits_wait_while_the_ai_works_and_stop_keeps_one_step() {
+		let mut c = chat_state(
+			vec![
+				ScriptedTurn::tools(None, &[("add_marker", r#"{"beat":0,"name":"A"}"#)]),
+				ScriptedTurn::tools(None, &[("add_marker", r#"{"beat":4,"name":"B"}"#)]),
+				ScriptedTurn::tools(None, &[("add_marker", r#"{"beat":8,"name":"C"}"#)]),
+				ScriptedTurn::text("never reached"),
+			],
+			150,
+			true,
+		);
+		let s = &mut c.state;
+		let keys = s.project().tracks[0].id;
+		assert!(s.send_ai("mark sections"));
+		assert!(!s.send_ai("second request"), "one at a time");
+		// User edits are refused while the AI works (with a notice), undo too.
+		assert!(!s.apply(Command::RemoveTrack { track: keys }));
+		s.undo();
+		assert_eq!(s.project().tracks.len(), 1);
+		assert!(s.notices.last().unwrap().text.contains("AI is editing"));
+		// A plugin editor value is queued instead.
+		assert!(s.apply_or_queue(Command::UpdateTrack {
+			track: keys,
+			patch: cadenza_model::TrackPatch {
+				name: Some("Rhodes".into()),
+				..Default::default()
+			},
+		}));
+		// Stop after the first edit lands.
+		let start = Instant::now();
+		while s.project().markers.is_empty() {
+			s.tick(Instant::now());
+			assert!(start.elapsed().as_secs() < 10);
+			std::thread::sleep(std::time::Duration::from_millis(5));
+		}
+		s.ai.stop();
+		wait(s);
+		assert!(s.project().markers.len() < 3, "stopped early");
+		assert!(matches!(
+			s.ai.items.last(),
+			Some(ChatItem::Footer { status, .. }) if status == "stopped"
+		));
+		// The AI's edits are one step, the queued user edit came after it.
+		let labels = s.document().history_labels();
+		assert_eq!(labels[labels.len() - 2], "AI: mark sections");
+		assert_eq!(s.project().tracks[0].name, "Rhodes");
+		s.undo();
+		s.undo();
+		assert!(s.project().markers.is_empty());
+		// Editing works again.
+		assert!(s.apply(Command::RemoveTrack { track: keys }));
+	}
+
+	#[test]
+	fn a_missing_key_is_an_actionable_error_that_opens_the_settings() {
+		if std::env::var_os("OPENROUTER_API_KEY").is_some() {
+			return;
+		}
+		let mut c = chat_state(vec![], 0, false);
+		let s = &mut c.state;
+		assert!(s.send_ai("hello"));
+		wait(s);
+		assert!(s.ai.items.iter().any(|i| matches!(
+			i,
+			ChatItem::Error { text, settings: true } if text.contains("No API key")
+		)));
+		assert!(s.ai.settings_open);
+		assert_eq!(s.document().history_labels().len(), 0);
+	}
+
+	#[test]
+	fn the_context_names_selection_playhead_and_files_root() {
+		let (mut s, keys) = state_with_song();
+		s.selection.select_track(keys);
+		let ctx = s.ai_context();
+		assert!(ctx.selected_tracks[0].contains("\"Keys\""));
+		assert!(ctx.selected_tracks[0].contains("Synth"));
+		assert_eq!(ctx.project_path, None);
+		assert_eq!(ctx.files_root, s.ai.session_dir().display().to_string());
+		let actions = s.ai_quick_actions();
+		assert_eq!(actions[0].0, "Bassline for Keys");
+		assert!(actions.iter().any(|(l, _)| l == "Mix the project"));
+	}
+}

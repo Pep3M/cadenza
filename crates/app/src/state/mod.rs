@@ -10,6 +10,7 @@
 //! [`AppState::sync_session`]: the project is marked dirty, the selection is pruned and the
 //! player follows live or through a debounced reload.
 
+pub mod ai;
 pub mod audio_edit;
 pub mod automation;
 pub mod browser;
@@ -239,6 +240,11 @@ pub struct AppState {
 	pub quit_confirmed: bool,
 	/// Plugin editor windows and the edits made in them.
 	pub editors: PluginEditors,
+	/// The AI producer chat (see [`ai`] for how edits are locked while it works).
+	pub ai: ai::AiChat,
+	/// Plugin editor values and finished background edits that arrived while the AI was
+	/// editing: applied once it is done.
+	ai_queue: Vec<Command>,
 	/// What to continue with once a "Save As" dialog finished.
 	after_save: Option<Pending>,
 	browser_items: Option<Vec<BrowserItem>>,
@@ -264,6 +270,7 @@ impl AppState {
 	/// State with a live audio engine (the app).
 	pub fn new(waker: Option<Waker>) -> Self {
 		let mut s = Self::headless_with(waker.clone());
+		s.ai = ai::AiChat::new(waker.clone());
 		s.audio = Some(AudioEngine::start(waker));
 		s.audio_status = AudioStatus::Starting;
 		s
@@ -299,6 +306,15 @@ impl AppState {
 			confirm: None,
 			quit_confirmed: false,
 			editors: PluginEditors::default(),
+			// Tests and headless renders never touch the OS keyring.
+			ai: ai::AiChat::with_parts(
+				ai::worker::default_factory(),
+				Arc::new(ai::secrets::MemorySecretStore::default()),
+				std::env::temp_dir().join(format!("cadenza-chat-{}", std::process::id())),
+				std::env::current_dir().unwrap_or_default(),
+				waker.clone(),
+			),
+			ai_queue: Vec::new(),
 			after_save: None,
 			browser_items: None,
 			audio: None,
@@ -406,9 +422,136 @@ impl AppState {
 
 	// --- Editing -------------------------------------------------------------------
 
-	/// Executes one edit. Returns false (with an error notice) if the model rejected it.
+	/// Executes one edit. Returns false (with an error notice) if the model rejected it,
+	/// or while the AI is editing the project (see [`ai`]).
 	pub fn apply(&mut self, cmd: Command) -> bool {
+		if self.ai_locked() {
+			return false;
+		}
 		self.apply_inner(cmd)
+	}
+
+	/// Like [`AppState::apply`], but while the AI edits the command waits until it is done
+	/// (plugin editor values, finished background operations: work the user already did).
+	pub fn apply_or_queue(&mut self, cmd: Command) -> bool {
+		if self.ai.busy() {
+			self.ai_queue.push(cmd);
+			return true;
+		}
+		self.apply_inner(cmd)
+	}
+
+	/// Whether the AI is editing (user edits refused, with a notice saying so).
+	fn ai_locked(&mut self) -> bool {
+		if self.ai.busy() {
+			self.notices.info(
+				"The AI is editing the project — wait for it or press Stop in the chat (F10)",
+			);
+			return true;
+		}
+		false
+	}
+
+	// --- AI producer ---------------------------------------------------------------
+
+	/// What the AI is told about the user's view with each request.
+	pub fn ai_context(&self) -> cadenza_agent::AppContext {
+		let p = self.project();
+		let beats = |t: Tick| t.beats();
+		let describe_clip = |id: cadenza_core::ClipId| {
+			p.find_clip(id).map(|(track, c)| {
+				let notes = match &c.content {
+					cadenza_model::ClipContent::Midi { notes } => {
+						format!(", {} notes", notes.len())
+					}
+					cadenza_model::ClipContent::Audio { .. } => ", audio".into(),
+				};
+				format!(
+					"\"{}\" (clip {}, track \"{}\", beats {:.2}-{:.2}{notes})",
+					c.name,
+					c.id,
+					track.name,
+					beats(c.start),
+					beats(c.start + c.length)
+				)
+			})
+		};
+		let selected_tracks = self
+			.selection
+			.track
+			.and_then(|t| p.track(t))
+			.map(|t| {
+				let instrument = t
+					.instrument
+					.as_ref()
+					.map(|d| format!(", instrument {}", d.name))
+					.unwrap_or_default();
+				format!("\"{}\" (track {}, {:?}{instrument})", t.name, t.id, t.kind)
+			})
+			.into_iter()
+			.chain(
+				self.selection
+					.master
+					.then(|| "the master channel".to_owned()),
+			)
+			.collect();
+		let files_root = self
+			.path()
+			.and_then(Path::parent)
+			.map(Path::to_path_buf)
+			.unwrap_or_else(|| self.ai.session_dir().to_path_buf());
+		let loop_beats = (self.view.transport.loop_on)
+			.then_some(self.view.transport.loop_range)
+			.flatten()
+			.map(|(a, b)| (beats(a), beats(b)));
+		cadenza_agent::AppContext {
+			project_path: self.path().map(|p| p.display().to_string()),
+			files_root: files_root.display().to_string(),
+			selected_tracks,
+			selected_clips: self
+				.selection
+				.clips
+				.iter()
+				.filter_map(|c| describe_clip(*c))
+				.collect(),
+			playhead_beats: beats(self.position()),
+			loop_beats,
+			open_clip: self.view.piano.clip.and_then(describe_clip),
+			transport_mode: Some(self.view.transport.mode.name().to_lowercase()),
+		}
+	}
+
+	/// Sends `request` to the AI producer (with the app context).
+	pub fn send_ai(&mut self, request: &str) -> bool {
+		let context = self.ai_context();
+		let session = self.session.clone();
+		self.ai.send(request, context, &session)
+	}
+
+	/// Quick requests for the chat, from the selection.
+	pub fn ai_quick_actions(&self) -> Vec<(String, String)> {
+		ai::quick_actions(
+			self.project(),
+			self.selection.track,
+			self.selection.clips.iter().next().copied(),
+		)
+	}
+
+	/// Chat events of the frame; a finished request brings its edits in and releases the
+	/// queued commands.
+	fn poll_ai(&mut self) {
+		for finished in self.ai.poll() {
+			self.sync_session(true);
+			if finished.edited {
+				self.notices
+					.info(format!("{} — one undo step (Ctrl+Z)", finished.undo_label));
+			}
+		}
+		if !self.ai.busy() && !self.ai_queue.is_empty() {
+			for cmd in std::mem::take(&mut self.ai_queue) {
+				self.apply_inner(cmd);
+			}
+		}
 	}
 
 	fn apply_inner(&mut self, cmd: Command) -> bool {
@@ -431,6 +574,9 @@ impl AppState {
 		&mut self,
 		f: impl FnOnce(&mut Session) -> Result<T, McpError>,
 	) -> Option<T> {
+		if self.ai_locked() {
+			return None;
+		}
 		let result = f(&mut self.session());
 		self.sync_session(true);
 		match result {
@@ -647,6 +793,9 @@ impl AppState {
 	}
 
 	pub fn undo(&mut self) {
+		if self.ai_locked() {
+			return;
+		}
 		let result = self.session().document_mut().undo();
 		match result {
 			Ok(label) => {
@@ -658,6 +807,9 @@ impl AppState {
 	}
 
 	pub fn redo(&mut self) {
+		if self.ai_locked() {
+			return;
+		}
 		let result = self.session().document_mut().redo();
 		match result {
 			Ok(label) => {
@@ -1056,7 +1208,7 @@ impl AppState {
 	/// Applies commands produced by plugin editors and asks for state captures.
 	fn editor_actions(&mut self, actions: editors::Actions) {
 		for cmd in actions.commands {
-			self.apply(cmd);
+			self.apply_or_queue(cmd);
 		}
 		if !actions.capture.is_empty()
 			&& let Some(a) = &self.audio
@@ -1069,7 +1221,7 @@ impl AppState {
 	pub fn store_editor_states(&mut self, states: Vec<cadenza_engine::EditorState>) {
 		let commands = self.editors.store_states(&self.doc.project, states);
 		for cmd in commands {
-			self.apply(cmd);
+			self.apply_or_queue(cmd);
 		}
 	}
 
@@ -1274,6 +1426,11 @@ impl AppState {
 
 	/// Runs `pending` now, or asks first if there are unsaved changes.
 	pub fn request(&mut self, pending: Pending) {
+		if pending == Pending::Quit {
+			self.ai.stop();
+		} else if self.ai_locked() {
+			return;
+		}
 		if self.dirty {
 			self.confirm = Some(pending);
 		} else {
@@ -1924,6 +2081,7 @@ impl AppState {
 				.map(|s| format!("{} {}", s.root.name(false), scale_kind_name(s.kind)))
 				.unwrap_or_default(),
 			bookmarks: v.bookmarks.clone(),
+			ai: self.ai.settings.clone(),
 		}
 	}
 
@@ -1954,6 +2112,7 @@ impl AppState {
 		v.piano.ghosts = p.piano_ghosts;
 		v.piano.scale = cadenza_theory::Scale::parse(&p.piano_scale).ok();
 		v.bookmarks = p.bookmarks;
+		self.ai.settings = p.ai.sanitized();
 		if self.files.dir.is_none() {
 			self.files.dir = v.bookmarks.first().cloned();
 		}
@@ -2104,6 +2263,7 @@ impl AppState {
 		self.last_tick = Some(now);
 		// Edits made by other owners of the session (the AI agent).
 		self.sync_session(false);
+		self.poll_ai();
 		self.poll_audio();
 		if let Some(since) = self.reload_since
 			&& now.saturating_duration_since(since) >= RELOAD_DEBOUNCE
@@ -2124,6 +2284,7 @@ impl AppState {
 			|| self.jobs.scan.is_some()
 			|| self.jobs.export.is_some()
 			|| self.jobs.process.is_some()
+			|| self.ai.busy()
 	}
 
 	fn poll_audio(&mut self) {
@@ -2224,7 +2385,7 @@ impl AppState {
 			match r {
 				Some(Ok(done)) => match audio_edit::swap_in(self.project(), &done) {
 					Some(cmd) => {
-						if self.apply(cmd) {
+						if self.apply_or_queue(cmd) {
 							self.notices.info(format!(
 								"{}: wrote {}",
 								done.op.label(),

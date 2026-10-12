@@ -15,15 +15,18 @@ pub enum PanelKind {
 	PianoRoll,
 	Inspector,
 	Mixer,
+	/// The AI producer chat (docked right).
+	Chat,
 }
 
 impl PanelKind {
-	pub const ALL: [PanelKind; 5] = [
+	pub const ALL: [PanelKind; 6] = [
 		PanelKind::Arrange,
 		PanelKind::Browser,
 		PanelKind::PianoRoll,
 		PanelKind::Inspector,
 		PanelKind::Mixer,
+		PanelKind::Chat,
 	];
 
 	pub fn name(self) -> &'static str {
@@ -33,6 +36,7 @@ impl PanelKind {
 			PanelKind::PianoRoll => "Piano Roll",
 			PanelKind::Inspector => "Inspector",
 			PanelKind::Mixer => "Mixer",
+			PanelKind::Chat => "AI Producer",
 		}
 	}
 
@@ -44,6 +48,7 @@ impl PanelKind {
 			PanelKind::PianoRoll => "F7",
 			PanelKind::Inspector => "F8",
 			PanelKind::Mixer => "F9",
+			PanelKind::Chat => "F10",
 		}
 	}
 }
@@ -79,6 +84,7 @@ pub struct PanelLayout {
 	pub piano_roll: bool,
 	pub inspector: bool,
 	pub mixer: bool,
+	pub chat: bool,
 	#[serde(skip)]
 	pub maximized: Option<PanelKind>,
 	/// Last panel the user interacted with: target of keyboard edits and of "maximize".
@@ -97,6 +103,7 @@ impl Default for PanelLayout {
 			piano_roll: false,
 			inspector: true,
 			mixer: true,
+			chat: false,
 			maximized: None,
 			focus: None,
 			mixer_yielded: false,
@@ -113,6 +120,7 @@ impl PanelLayout {
 			PanelKind::PianoRoll => self.piano_roll,
 			PanelKind::Inspector => self.inspector,
 			PanelKind::Mixer => self.mixer,
+			PanelKind::Chat => self.chat,
 		}
 	}
 
@@ -123,6 +131,7 @@ impl PanelLayout {
 			PanelKind::PianoRoll => &mut self.piano_roll,
 			PanelKind::Inspector => &mut self.inspector,
 			PanelKind::Mixer => &mut self.mixer,
+			PanelKind::Chat => &mut self.chat,
 		}
 	}
 
@@ -196,6 +205,7 @@ impl PanelLayout {
 			PanelKind::PianoRoll,
 			PanelKind::Inspector,
 			PanelKind::Mixer,
+			PanelKind::Chat,
 		] {
 			*self.flag(p) = false;
 		}
@@ -241,6 +251,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Windows", "F7", "Piano roll"),
 	sc("Windows", "F8", "Inspector"),
 	sc("Windows", "F9", "Mixer"),
+	sc("Windows", "F10", "AI producer chat"),
 	sc(
 		"Windows",
 		"F11 / Ctrl+Enter",
@@ -414,6 +425,18 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		"Import at the drop position",
 	),
 	sc("Drag & drop", ".cadenza.json → window", "Open the project"),
+	sc("AI producer", "F10", "Show / hide the chat"),
+	sc("AI producer", "Enter / Shift+Enter", "Send / new line"),
+	sc(
+		"AI producer",
+		"Stop",
+		"Stop at the next step (edits so far stay, one undo step)",
+	),
+	sc(
+		"AI producer",
+		"Ctrl+Z after a request",
+		"Undo the whole request",
+	),
 ];
 
 /// Per-user preferences saved in the eframe storage (not part of the project).
@@ -432,6 +455,8 @@ pub struct Prefs {
 	/// `"<root> <kind>"` (cadenza-theory syntax), empty = no scale.
 	pub piano_scale: String,
 	pub bookmarks: Vec<PathBuf>,
+	/// AI chat settings (no secrets: keys live in the OS keyring).
+	pub ai: super::ai::settings::AiSettings,
 }
 
 impl Default for Prefs {
@@ -450,6 +475,7 @@ impl Default for Prefs {
 			piano_ghosts: piano.ghosts,
 			piano_scale: String::new(),
 			bookmarks: super::files::default_bookmarks(),
+			ai: super::ai::settings::AiSettings::default(),
 		}
 	}
 }

@@ -324,7 +324,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc(
 		"Automation",
 		"Double-click point",
-		"Shape: linear → hold → smooth",
+		"Shape: linear, hold, smooth",
 	),
 	sc(
 		"Automation",

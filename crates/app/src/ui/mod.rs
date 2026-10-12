@@ -533,38 +533,62 @@ fn help_overlay(ctx: &egui::Context, state: &mut AppState) {
 					sections.push(s.section);
 				}
 			}
-			let half = sections.len().div_ceil(2);
-			ui.columns(2, |cols| {
-				for (c, col) in cols.iter_mut().enumerate() {
-					for section in sections.iter().skip(c * half).take(half) {
-						col.label(
-							RichText::new(section.to_uppercase())
-								.font(theme::small())
-								.color(theme::ACCENT),
-						);
-						egui::Grid::new(("help", *section))
-							.num_columns(2)
-							.min_col_width(200.0)
-							.spacing(vec2(14.0, 3.0))
-							.show(col, |ui| {
-								for s in SHORTCUTS.iter().filter(|s| s.section == *section) {
-									ui.label(
-										RichText::new(s.keys)
-											.font(theme::mono(11.0))
-											.color(theme::TEXT),
-									);
-									ui.label(
-										RichText::new(s.action)
-											.font(theme::small())
-											.color(theme::TEXT_DIM),
-									);
-									ui.end_row();
-								}
-							});
-						col.add_space(10.0);
-					}
+			// Two columns of about the same height (sections are kept whole).
+			let rows = |sec: &str| SHORTCUTS.iter().filter(|s| s.section == sec).count() + 2;
+			let total: usize = sections.iter().map(|s| rows(s)).sum();
+			let mut split = sections.len();
+			let mut acc = 0;
+			for (i, sec) in sections.iter().enumerate() {
+				acc += rows(sec);
+				if acc * 2 >= total {
+					split = i + 1;
+					break;
 				}
-			});
+			}
+			let max_h = (ui.ctx().content_rect().height() - 140.0).max(200.0);
+			egui::ScrollArea::vertical()
+				.max_height(max_h)
+				.min_scrolled_height(max_h)
+				.auto_shrink([false, true])
+				.show(ui, |ui| {
+					ui.columns(2, |cols| {
+						for (c, col) in cols.iter_mut().enumerate() {
+							let list = if c == 0 {
+								&sections[..split]
+							} else {
+								&sections[split..]
+							};
+							for section in list {
+								col.label(
+									RichText::new(section.to_uppercase())
+										.font(theme::small())
+										.color(theme::ACCENT),
+								);
+								egui::Grid::new(("help", *section))
+									.num_columns(2)
+									.min_col_width(200.0)
+									.spacing(vec2(14.0, 3.0))
+									.show(col, |ui| {
+										for s in SHORTCUTS.iter().filter(|s| s.section == *section)
+										{
+											ui.label(
+												RichText::new(s.keys)
+													.font(theme::mono(11.0))
+													.color(theme::TEXT),
+											);
+											ui.label(
+												RichText::new(s.action)
+													.font(theme::small())
+													.color(theme::TEXT_DIM),
+											);
+											ui.end_row();
+										}
+									});
+								col.add_space(10.0);
+							}
+						}
+					});
+				});
 		});
 	if modal.should_close() || ctx.input(|i| i.key_pressed(Key::Escape)) {
 		state.view.help = false;

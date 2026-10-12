@@ -23,9 +23,15 @@ cadenza-engine.workspace = true
 cadenza-mcp.workspace = true
 cadenza-agent.workspace = true
 cadenza-plugin-host.workspace = true
+cadenza-midi-io.workspace = true
+cadenza-dsp.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+cadenza-audio-io.workspace = true

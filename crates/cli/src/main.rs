@@ -3,15 +3,17 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use cadenza_engine::{
-	Player, PluginHosting, RenderOptions, analyze_mix, export_options_for_path, render_to_file,
+	Player, PluginHosting, RenderOptions, analyze_mix, export_options_for_path, find_midi_input,
+	midi_input_ports, render_to_file,
 };
-use cadenza_model::Project;
+use cadenza_model::{Device, Project, Track, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 use clap::{Parser, Subcommand};
 
 mod compose;
+mod midi_files;
 
 const PLUGIN_HOSTING_HELP: &str = "\
 Plugin sandbox:
@@ -69,8 +71,59 @@ enum Command {
 		#[arg(long, default_value_t = 48_000)]
 		sample_rate: u32,
 	},
-	/// Play a project on the default audio device until it ends
-	Play { project: PathBuf },
+	/// Play a project on the default audio device until it ends.
+	///
+	/// With --midi-in and --monitor, a MIDI keyboard plays the instrument of a track along
+	/// with the song (see `cadenza midi-ports` for port names).
+	Play {
+		project: PathBuf,
+		/// MIDI input port: index or part of its name (see `cadenza midi-ports`)
+		#[arg(long, requires = "monitor")]
+		midi_in: Option<String>,
+		/// Instrument track (name or id) that plays the MIDI input
+		#[arg(long, requires = "midi_in")]
+		monitor: Option<String>,
+	},
+	/// Play a built-in instrument live from a MIDI input, without a project (Ctrl-C to quit)
+	Monitor {
+		/// MIDI input port: index or part of its name (see `cadenza midi-ports`)
+		#[arg(long)]
+		midi_in: String,
+		/// Built-in instrument id (e.g. poly_synth, electric_piano, drum_machine)
+		#[arg(long, default_value = "poly_synth")]
+		instrument: String,
+	},
+	/// List MIDI input ports
+	MidiPorts,
+	/// Import a standard MIDI file into a new project, or into an existing one with --into
+	ImportMidi {
+		/// The .mid file
+		file: PathBuf,
+		/// Project file to write (default with --into: that project, updated in place)
+		#[arg(short, long, required_unless_present = "into")]
+		output: Option<PathBuf>,
+		/// One track per MIDI channel instead of per file track
+		#[arg(long)]
+		split_by_channel: bool,
+		/// Existing project to import into (tempo map, markers and tracks are added to it)
+		#[arg(long)]
+		into: Option<PathBuf>,
+		/// With --into: put all notes in one clip on this instrument track (name or id)
+		#[arg(long, requires = "into")]
+		track: Option<String>,
+		/// With --track: clip start in beats
+		#[arg(long, default_value_t = 0.0, requires = "track")]
+		at_beats: f64,
+	},
+	/// Export a project's MIDI (all instrument tracks, or one) to a standard MIDI file
+	ExportMidi {
+		project: PathBuf,
+		#[arg(short, long)]
+		output: PathBuf,
+		/// Only this instrument track (name or id)
+		#[arg(long)]
+		track: Option<String>,
+	},
 	/// Scan installed plugins (CLAP and VST3) into the plugin catalog and print the report.
 	///
 	/// Each new or changed plugin file is loaded by the `cadenza-plugin-scanner` helper in a
@@ -98,6 +151,67 @@ enum Command {
 	/// Let the embedded AI producer compose, arrange, mix and render a song from a brief
 	#[command(after_long_help = compose::presets_help())]
 	Compose(compose::ComposeArgs),
+}
+
+/// Finds a track by id or (case-insensitive) name.
+fn find_track<'a>(project: &'a Project, query: &str) -> Result<&'a Track> {
+	let q = query.trim();
+	project
+		.tracks
+		.iter()
+		.find(|t| t.id.to_string() == q)
+		.or_else(|| {
+			project
+				.tracks
+				.iter()
+				.find(|t| t.name.eq_ignore_ascii_case(q))
+		})
+		.with_context(|| {
+			let names: Vec<&str> = project.tracks.iter().map(|t| t.name.as_str()).collect();
+			format!("no track named '{q}'; tracks: {}", names.join(", "))
+		})
+}
+
+/// Plays a built-in instrument from a MIDI input until interrupted.
+fn monitor(port: &str, instrument: &str) -> Result<()> {
+	let known = cadenza_dsp::registry()
+		.iter()
+		.any(|d| d.id == instrument && d.role == cadenza_dsp::DeviceRole::Instrument);
+	if !known {
+		let ids: Vec<&str> = cadenza_dsp::registry()
+			.iter()
+			.filter(|d| d.role == cadenza_dsp::DeviceRole::Instrument)
+			.map(|d| d.id)
+			.collect();
+		bail!(
+			"'{instrument}' is not a built-in instrument; use one of: {}",
+			ids.join(", ")
+		);
+	}
+	let port = find_midi_input(port)?;
+	let mut project = Project::new("Monitor");
+	let track = Track::new(instrument, TrackKind::Instrument)
+		.with_instrument(Device::builtin(instrument, instrument));
+	let id = track.id;
+	project.tracks.push(track);
+	let mut player = Player::new()?;
+	player.load(&project)?;
+	player.set_midi_input(Some(&port))?;
+	player.set_monitor_track(Some(id))?;
+	player.play()?;
+	eprintln!("playing {instrument} from '{}' (Ctrl-C to quit)", port.name);
+	let mut dropped = 0;
+	loop {
+		thread::sleep(Duration::from_millis(250));
+		let now = player.dropped_midi_events();
+		if now > dropped {
+			eprintln!(
+				"warning: {} MIDI events dropped (audio thread too slow)",
+				now - dropped
+			);
+			dropped = now;
+		}
+	}
 }
 
 fn load(path: &PathBuf) -> Result<Project> {
@@ -155,13 +269,30 @@ fn main() -> Result<()> {
 			};
 			print_json(&analyze_mix(&project, &opts)?)
 		}
-		Command::Play { project } => {
+		Command::Play {
+			project,
+			midi_in,
+			monitor,
+		} => {
 			let project = load(&project)?;
 			let mut player = Player::new()?;
 			player.set_plugins(plugins_for(&project));
 			player.set_hosting(hosting);
 			for warning in player.load(&project)? {
 				eprintln!("warning: {warning}");
+			}
+			if let (Some(port), Some(track)) = (midi_in, monitor) {
+				let track = find_track(&project, &track)?;
+				if track.kind != TrackKind::Instrument {
+					bail!(
+						"track '{}' is not an instrument track; --monitor needs one",
+						track.name
+					);
+				}
+				let port = find_midi_input(&port)?;
+				player.set_midi_input(Some(&port))?;
+				player.set_monitor_track(Some(track.id))?;
+				eprintln!("monitoring '{}' on track '{}'", port.name, track.name);
 			}
 			let end = project.end_tick();
 			player.play()?;
@@ -187,6 +318,33 @@ fn main() -> Result<()> {
 			compose::run(args)
 		}
 		Command::ScanPlugins { paths, json } => scan_plugins(paths, json),
+		Command::Monitor {
+			midi_in,
+			instrument,
+		} => monitor(&midi_in, &instrument),
+		Command::MidiPorts => {
+			let ports = midi_input_ports()?;
+			if ports.is_empty() {
+				eprintln!("no MIDI input ports found; connect a device or start a virtual port");
+			}
+			for p in ports {
+				println!("{}: {}", p.index, p.name);
+			}
+			Ok(())
+		}
+		Command::ImportMidi {
+			file,
+			output,
+			split_by_channel,
+			into,
+			track,
+			at_beats,
+		} => midi_files::import(&file, output, split_by_channel, into, track, at_beats),
+		Command::ExportMidi {
+			project,
+			output,
+			track,
+		} => midi_files::export(&project, &output, track),
 		Command::ListPlugins { query, json } => list_plugins(query, json),
 	}
 }

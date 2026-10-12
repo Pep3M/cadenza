@@ -25,6 +25,7 @@ pub mod meters;
 pub mod notices;
 pub mod piano;
 pub mod project_io;
+pub mod record;
 pub mod rows;
 pub mod safety;
 pub mod samples;
@@ -111,6 +112,8 @@ pub struct ViewState {
 	pub transport: transport::TransportView,
 	/// The start screen (recent projects, new, open, demo) is shown.
 	pub start_screen: bool,
+	/// Tracks whose take lanes are expanded.
+	pub takes: Vec<TrackId>,
 }
 
 impl Default for ViewState {
@@ -132,6 +135,7 @@ impl Default for ViewState {
 			instrument_editor: false,
 			transport: transport::TransportView::default(),
 			start_screen: false,
+			takes: Vec::new(),
 		}
 	}
 }
@@ -282,6 +286,8 @@ pub struct AppState {
 	pub quit_confirmed: bool,
 	/// Plugin editor windows and the edits made in them.
 	pub editors: PluginEditors,
+	/// Arm states, record button, metronome/count-in, audio settings, takes view.
+	pub record: record::RecordState,
 	/// The AI producer chat (see [`ai`] for how edits are locked while it works).
 	pub ai: ai::AiChat,
 	/// Plugin editor values and finished background edits that arrived while the AI was
@@ -365,6 +371,7 @@ impl AppState {
 			confirm: None,
 			quit_confirmed: false,
 			editors: PluginEditors::default(),
+			record: record::RecordState::default(),
 			// Tests and headless renders never touch the OS keyring.
 			ai: ai::AiChat::with_parts(
 				ai::worker::default_factory(),
@@ -586,7 +593,7 @@ impl AppState {
 			loop_beats,
 			open_clip: self.view.piano.clip.and_then(describe_clip),
 			transport_mode: Some(self.view.transport.mode.name().to_lowercase()),
-			recording: Default::default(),
+			recording: self.recording_context(),
 		}
 	}
 
@@ -667,6 +674,7 @@ impl AppState {
 		self.view.automation.prune(&self.doc.project);
 		self.view.audio.prune(&self.doc.project);
 		self.view.instrument.prune(&self.doc.project);
+		self.prune_record();
 		if self.view.instrument.device.is_none() {
 			self.view.instrument_editor = false;
 		}
@@ -1351,6 +1359,11 @@ impl AppState {
 	/// Plays in the current mode: the song (looping the loop region when it is on), or
 	/// in pattern mode the clip open in the piano roll, looped and heard alone.
 	pub fn play(&mut self) {
+		// Record mode (R): Play records.
+		if self.record.mode && !self.is_recording() {
+			self.record();
+			return;
+		}
 		// A pending edit must reach the player before it starts.
 		if self.reload_since.is_some() {
 			self.send_reload();
@@ -1387,6 +1400,7 @@ impl AppState {
 
 	/// Stops; pattern mode goes back to the pattern start (FL Studio).
 	pub fn stop(&mut self) {
+		self.stop_recording();
 		self.play_intent = false;
 		self.cued = false;
 		if let Some(a) = &self.audio {
@@ -2275,6 +2289,8 @@ impl AppState {
 			recent: self.recent.clone(),
 			autosave_minutes: self.safety.minutes,
 			export: self.export.settings.clone(),
+			audio: self.record.audio.clone(),
+			record: self.record.settings,
 		}
 	}
 
@@ -2317,6 +2333,8 @@ impl AppState {
 		if self.files.dir.is_none() {
 			self.files.dir = v.bookmarks.first().cloned();
 		}
+		self.record.settings = p.record;
+		self.apply_audio_settings(p.audio);
 	}
 
 	/// Rescans plugins in the background (the scanner loads each new plugin in a helper
@@ -2450,6 +2468,7 @@ impl AppState {
 		self.poll_file_jobs();
 		self.tick_autosave(now);
 		self.sync_transport();
+		self.tick_record(dt);
 		self.peaks.poll();
 		let ids: Vec<TrackId> = self.project().tracks.iter().map(|t| t.id).collect();
 		self.meters.update(self.bank.as_deref(), ids, dt);
@@ -2462,6 +2481,7 @@ impl AppState {
 			|| self.files_jobs.busy()
 			|| self.jobs.process.is_some()
 			|| self.ai.busy()
+			|| self.record_animating()
 	}
 
 	fn poll_audio(&mut self) {
@@ -2472,7 +2492,14 @@ impl AppState {
 		}
 		for event in events {
 			match event {
-				AudioEvent::Ready { clock } => {
+				AudioEvent::Ready {
+					clock,
+					input,
+					status,
+				} => {
+					self.record.input_stats = Some(input);
+					self.record.status = Some(status);
+					self.resend_record_state();
 					self.audio_status = AudioStatus::Ready {
 						sample_rate: clock.sample_rate(),
 					};
@@ -2523,6 +2550,12 @@ impl AppState {
 					self.editors.closed(device);
 					self.notices.error(error);
 				}
+				AudioEvent::Devices { audio, midi } => self.record.devices = Some((audio, midi)),
+				AudioEvent::RecordingStarted(m) => {
+					self.record_event(record::RecordEvent::Started(m));
+				}
+				AudioEvent::Recorded(rec) => self.record_event(record::RecordEvent::Done(rec)),
+				AudioEvent::RecordFailed(e) => self.record_event(record::RecordEvent::Failed(e)),
 				AudioEvent::Error(e) => self.notices.error(format!("Audio: {e}")),
 			}
 		}

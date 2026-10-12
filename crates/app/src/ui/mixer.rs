@@ -382,6 +382,12 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 				.layout(Layout::left_to_right(Align::Center)),
 		);
 		ms.spacing_mut().item_spacing.x = 3.0;
+		let arm = state.can_arm(t.id);
+		let half = if arm {
+			(ms_r.width() - 6.0) / 3.0
+		} else {
+			half
+		};
 		if widgets::toggle(&mut ms, channel.mute, "M", theme::MUTE, vec2(half, 18.0))
 			.on_hover_text("Mute")
 			.clicked()
@@ -407,6 +413,9 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 					..Default::default()
 				},
 			);
+		}
+		if arm {
+			super::record::mixer_arm(&mut ms, state, t.id, half);
 		}
 	}
 }

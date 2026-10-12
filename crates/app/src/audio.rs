@@ -13,6 +13,12 @@
 //! Plugin editors are opened and closed through the player too (they belong to the
 //! loaded instances); while any is open the thread polls them every [`EDITOR_POLL`] and
 //! forwards what happened as [`AudioEvent::Editor`].
+//!
+//! Recording: the thread owns the devices (audio settings reopen the player with the new
+//! [`AudioConfig`], keeping arm states, metronome and MIDI input), starts recordings
+//! ([`AudioEvent::RecordingStarted`] hands the UI the live [`RecordingMonitor`]) and stops
+//! them ([`AudioEvent::Recorded`] carries the files and passes; the UI turns them into
+//! one undoable batch). Device lists are probed here too, never on the UI thread.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
@@ -21,8 +27,9 @@ use std::time::{Duration, Instant};
 
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_engine::{
-	AuditionScope, EditorState, EditorUpdate, MeterBank, Player, PlayerClock, PluginCrash,
-	PluginHosting,
+	AudioConfig, AudioDevices, AuditionScope, EditorState, EditorUpdate, InputInfo, InputStats,
+	MeterBank, MetronomeSettings, Player, PlayerClock, PluginCrash, PluginHosting, RecordSetup,
+	Recording, RecordingMonitor,
 };
 use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
@@ -81,14 +88,55 @@ enum Request {
 		devices: Vec<DeviceId>,
 		reply: Option<SyncSender<Vec<EditorState>>>,
 	},
+	/// Reopen the devices with this configuration.
+	Configure(AudioConfig),
+	/// MIDI input port by name (`None`: closed).
+	MidiInput(Option<String>),
+	/// The instrument track live MIDI plays through.
+	Monitor(Option<TrackId>),
+	Arm(TrackId, bool),
+	Metronome(MetronomeSettings),
+	/// Recording latency offset, frames.
+	LatencyOffset(i64),
+	TestTone(bool),
+	/// List audio devices and MIDI inputs (reported as `Devices`).
+	ListDevices,
+	StartRecording(Box<RecordSetup>),
+	StopRecording,
 	Shutdown,
+}
+
+/// Where the audio runs, as the settings dialog shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceStatus {
+	pub output: String,
+	pub sample_rate: u32,
+	pub input: Option<InputInfo>,
+	/// Why the input (or the MIDI input) could not be opened.
+	pub input_error: Option<String>,
+	pub midi_input: Option<String>,
+	pub midi_error: Option<String>,
+	/// Measured output latency, frames.
+	pub output_latency: u64,
+	/// Latency compensation the next recording would use, frames.
+	pub recording_latency: i64,
 }
 
 /// What the player thread reports back.
 pub enum AudioEvent {
 	Ready {
 		clock: PlayerClock,
+		input: Arc<InputStats>,
+		status: DeviceStatus,
 	},
+	/// Audio devices and MIDI input ports.
+	Devices {
+		audio: AudioDevices,
+		midi: Vec<String>,
+	},
+	RecordingStarted(Arc<RecordingMonitor>),
+	Recorded(Box<Recording>),
+	RecordFailed(String),
 	/// No output device (or it failed to open): the app keeps working without sound.
 	Unavailable(String),
 	Loaded {
@@ -127,13 +175,59 @@ impl AudioEngine {
 	/// Starts the player thread; the device is opened there and reported through
 	/// [`AudioEvent::Ready`] or [`AudioEvent::Unavailable`].
 	pub fn start(waker: Option<Waker>) -> Self {
+		Self::start_with(AudioConfig::default(), None, waker)
+	}
+
+	/// Starts the player thread on `config`'s devices, with `midi` as the MIDI input.
+	pub fn start_with(config: AudioConfig, midi: Option<String>, waker: Option<Waker>) -> Self {
 		let (tx, rx) = mpsc::channel::<Request>();
 		let (event_tx, events) = mpsc::channel::<AudioEvent>();
 		let thread = thread::Builder::new()
 			.name("cadenza-app-player".into())
-			.spawn(move || run(rx, event_tx, waker))
+			.spawn(move || run(rx, event_tx, waker, config, midi))
 			.ok();
 		Self { tx, events, thread }
+	}
+
+	/// Reopens the devices (the project is reloaded once the player is ready again).
+	pub fn configure(&self, config: AudioConfig) {
+		self.send(Request::Configure(config));
+	}
+
+	pub fn midi_input(&self, port: Option<String>) {
+		self.send(Request::MidiInput(port));
+	}
+
+	pub fn monitor(&self, track: Option<TrackId>) {
+		self.send(Request::Monitor(track));
+	}
+
+	pub fn arm(&self, track: TrackId, armed: bool) {
+		self.send(Request::Arm(track, armed));
+	}
+
+	pub fn metronome(&self, settings: MetronomeSettings) {
+		self.send(Request::Metronome(settings));
+	}
+
+	pub fn latency_offset(&self, frames: i64) {
+		self.send(Request::LatencyOffset(frames));
+	}
+
+	pub fn test_tone(&self, on: bool) {
+		self.send(Request::TestTone(on));
+	}
+
+	pub fn list_devices(&self) {
+		self.send(Request::ListDevices);
+	}
+
+	pub fn start_recording(&self, setup: RecordSetup) {
+		self.send(Request::StartRecording(Box::new(setup)));
+	}
+
+	pub fn stop_recording(&self) {
+		self.send(Request::StopRecording);
 	}
 
 	pub fn load(
@@ -266,39 +360,137 @@ impl Drop for AudioEngine {
 	}
 }
 
-fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) {
+/// What the thread re-applies after reopening the devices.
+#[derive(Default)]
+struct Kept {
+	midi: Option<String>,
+	midi_error: Option<String>,
+	monitor: Option<TrackId>,
+	armed: Vec<TrackId>,
+	metronome: Option<MetronomeSettings>,
+	latency_offset: i64,
+}
+
+fn status(player: &Player, kept: &Kept) -> DeviceStatus {
+	DeviceStatus {
+		output: player.output_device().to_owned(),
+		sample_rate: player.sample_rate(),
+		input: player.input_info().cloned(),
+		input_error: player.input_error().map(str::to_owned),
+		midi_input: player.midi_input().map(str::to_owned),
+		midi_error: kept.midi_error.clone(),
+		output_latency: player.output_latency(),
+		recording_latency: player.recording_latency(),
+	}
+}
+
+/// Opens `config`'s devices and re-applies what `kept` remembers.
+fn open(config: &AudioConfig, kept: &mut Kept) -> Result<Player, String> {
+	let mut player = Player::open(config).map_err(|e| e.to_string())?;
+	open_midi(&mut player, kept);
+	let _ = player.set_monitor_track(kept.monitor);
+	for &t in &kept.armed {
+		let _ = player.set_armed(t, true);
+	}
+	if let Some(m) = kept.metronome {
+		let _ = player.set_metronome(m);
+	}
+	player.set_latency_offset(kept.latency_offset);
+	Ok(player)
+}
+
+fn open_midi(player: &mut Player, kept: &mut Kept) {
+	kept.midi_error = None;
+	let result = match &kept.midi {
+		None => player.set_midi_input(None),
+		Some(name) => cadenza_engine::midi_input_ports().and_then(|ports| {
+			let port = ports.iter().find(|p| &p.name == name).ok_or_else(|| {
+				cadenza_engine::EngineError::Midi(format!(
+					"MIDI input '{name}' is not connected; pick another one in the audio settings"
+				))
+			})?;
+			player.set_midi_input(Some(port))
+		}),
+	};
+	if let Err(e) = result {
+		kept.midi_error = Some(e.to_string());
+	}
+}
+
+fn run(
+	rx: Receiver<Request>,
+	events: Sender<AudioEvent>,
+	waker: Option<Waker>,
+	config: AudioConfig,
+	midi: Option<String>,
+) {
 	let emit = |event: AudioEvent| {
 		let _ = events.send(event);
 		if let Some(w) = &waker {
 			w();
 		}
 	};
-	let mut player = match Player::new() {
-		Ok(p) => p,
-		Err(e) => {
-			emit(AudioEvent::Unavailable(e.to_string()));
-			// Keep draining so senders never see a closed channel mid-session.
-			for r in rx {
-				match r {
-					Request::Shutdown => break,
-					Request::OpenEditor { device, .. } => emit(AudioEvent::EditorFailed {
-						device,
-						error: "plugin editors need the audio engine, and there is no audio output"
-							.into(),
-					}),
-					Request::CaptureStates {
-						reply: Some(tx), ..
-					} => {
-						let _ = tx.send(Vec::new());
+	let mut kept = Kept {
+		midi,
+		..Kept::default()
+	};
+	let opened = open(&config, &mut kept).or_else(|e| {
+		// The chosen devices are gone: fall back to the defaults (output only).
+		if config == AudioConfig::default() {
+			Err(e)
+		} else {
+			open(&AudioConfig::default(), &mut kept).map_err(|_| e)
+		}
+	});
+	let mut opened = opened;
+	let mut player = loop {
+		match opened {
+			Ok(p) => break p,
+			Err(e) => {
+				emit(AudioEvent::Unavailable(e));
+				// Keep draining so senders never see a closed channel mid-session; new
+				// audio settings try again.
+				opened = Err(String::new());
+				for r in rx.iter() {
+					match r {
+						Request::Shutdown => return,
+						Request::Configure(config) => {
+							opened = open(&config, &mut kept);
+							break;
+						}
+						Request::ListDevices => emit(AudioEvent::Devices {
+							audio: cadenza_engine::audio_devices(),
+							midi: cadenza_engine::midi_input_ports()
+								.map(|ports| ports.into_iter().map(|p| p.name).collect())
+								.unwrap_or_default(),
+						}),
+						Request::StartRecording(_) => emit(AudioEvent::RecordFailed(
+							"there is no audio device; choose one in the audio settings".into(),
+						)),
+						Request::OpenEditor { device, .. } => emit(AudioEvent::EditorFailed {
+							device,
+							error:
+								"plugin editors need the audio engine, and there is no audio output"
+									.into(),
+						}),
+						Request::CaptureStates {
+							reply: Some(tx), ..
+						} => {
+							let _ = tx.send(Vec::new());
+						}
+						_ => {}
 					}
-					_ => {}
+				}
+				if matches!(&opened, Err(e) if e.is_empty()) {
+					return;
 				}
 			}
-			return;
 		}
 	};
 	emit(AudioEvent::Ready {
 		clock: player.clock(),
+		input: player.input_stats(),
+		status: status(&player, &kept),
 	});
 	let mut next_crash_poll = Instant::now() + CRASH_POLL;
 	let mut next_editor_poll = Instant::now() + EDITOR_POLL;
@@ -446,7 +638,101 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 					}
 					Ok(())
 				}
+				Request::Configure(config) => {
+					if player.is_recording() {
+						emit(AudioEvent::Error(
+							"stop recording before changing the audio settings".into(),
+						));
+						continue;
+					}
+					// The old stream must close before the device can be reopened.
+					drop(player);
+					player = match open(&config, &mut kept) {
+						Ok(p) => p,
+						Err(e) => {
+							emit(AudioEvent::Error(format!(
+								"{e}; back to the default output"
+							)));
+							match open(&AudioConfig::default(), &mut kept) {
+								Ok(p) => p,
+								Err(e) => {
+									emit(AudioEvent::Unavailable(e));
+									return;
+								}
+							}
+						}
+					};
+					emit(AudioEvent::Ready {
+						clock: player.clock(),
+						input: player.input_stats(),
+						status: status(&player, &kept),
+					});
+					Ok(())
+				}
+				Request::MidiInput(port) => {
+					kept.midi = port;
+					open_midi(&mut player, &mut kept);
+					emit(AudioEvent::Ready {
+						clock: player.clock(),
+						input: player.input_stats(),
+						status: status(&player, &kept),
+					});
+					Ok(())
+				}
+				Request::Monitor(track) => {
+					kept.monitor = track;
+					player.set_monitor_track(track)
+				}
+				Request::Arm(track, on) => {
+					kept.armed.retain(|t| *t != track);
+					if on {
+						kept.armed.push(track);
+					}
+					player.set_armed(track, on)
+				}
+				Request::Metronome(m) => {
+					kept.metronome = Some(m);
+					player.set_metronome(m)
+				}
+				Request::LatencyOffset(frames) => {
+					kept.latency_offset = frames;
+					player.set_latency_offset(frames);
+					Ok(())
+				}
+				Request::TestTone(on) => player.set_test_tone(on),
+				Request::ListDevices => {
+					let audio = cadenza_engine::audio_devices();
+					let midi = cadenza_engine::midi_input_ports()
+						.map(|ports| ports.into_iter().map(|p| p.name).collect())
+						.unwrap_or_default();
+					emit(AudioEvent::Devices { audio, midi });
+					emit(AudioEvent::Ready {
+						clock: player.clock(),
+						input: player.input_stats(),
+						status: status(&player, &kept),
+					});
+					Ok(())
+				}
+				Request::StartRecording(setup) => {
+					match player.start_recording(&setup) {
+						Ok(monitor) => emit(AudioEvent::RecordingStarted(monitor)),
+						Err(e) => emit(AudioEvent::RecordFailed(e.to_string())),
+					}
+					Ok(())
+				}
+				Request::StopRecording => {
+					if player.is_recording() {
+						match player.stop_recording() {
+							Ok(rec) => emit(AudioEvent::Recorded(Box::new(rec))),
+							Err(e) => emit(AudioEvent::RecordFailed(e.to_string())),
+						}
+					}
+					Ok(())
+				}
 				Request::Shutdown => {
+					if player.is_recording() {
+						let _ = player.stop_recording();
+					}
 					let _ = player.stop();
 					return;
 				}

@@ -15,6 +15,7 @@ pub mod instrument_editor;
 pub mod mixer;
 pub mod piano_roll;
 pub mod project_dialogs;
+pub mod record;
 pub mod transport;
 pub mod widgets;
 
@@ -362,6 +363,7 @@ impl CadenzaApp {
 		toasts(ui.ctx(), state);
 		unsaved_prompt(ui.ctx(), state);
 		project_dialogs::show(ui.ctx(), state);
+		record::audio_settings(ui.ctx(), state);
 		help_overlay(ui.ctx(), state);
 		busy_overlay(ui.ctx(), state);
 	}
@@ -476,6 +478,11 @@ impl CadenzaApp {
 		let s = &mut self.state;
 		if pressed(Modifiers::NONE, Key::Space) {
 			s.toggle_play();
+		}
+		if pressed(cmd, Key::R) {
+			s.toggle_record();
+		} else if pressed(Modifiers::NONE, Key::R) {
+			s.toggle_record_mode();
 		}
 		if pressed(cmd, Key::L) {
 			s.toggle_loop();
@@ -816,6 +823,9 @@ fn menu_bar(ui: &mut Ui, state: &mut AppState) {
 					}
 				}
 			});
+			if shortcut_button(ui, "Audio Settings…", "") {
+				state.open_audio_settings();
+			}
 			ui.separator();
 			if shortcut_button(ui, "Quit", "") {
 				state.request(Pending::Quit);

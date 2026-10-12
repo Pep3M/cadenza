@@ -1986,3 +1986,323 @@ fn render_project_screens() {
 	});
 	shot(&mut h, "recovery_prompt");
 }
+
+/// The example song plus an audio track "Vox" holding a three-take loop recording over
+/// bars 1-2 (written to a real WAV so waveforms draw).
+fn takes_app() -> (CadenzaApp, cadenza_core::TrackId) {
+	use cadenza_engine::{RecordedAudio, RecordedPass, Recording};
+	let mut a = app();
+	let vox =
+		cadenza_model::Track::new("Vox", cadenza_model::TrackKind::Audio).with_color("#E05C8C");
+	let id = vox.id;
+	a.state.apply(cadenza_model::Command::AddTrack {
+		track: vox,
+		index: Some(0),
+	});
+	let dir = std::env::temp_dir().join(format!("cadenza-ui-takes-{}", std::process::id()));
+	std::fs::create_dir_all(&dir).unwrap();
+	let file = dir.join("vox.wav");
+	let sr = 48_000u32;
+	let tempo = a.state.project().tempo.bpm_at(Tick::ZERO);
+	let bar = (4.0 * 60.0 / tempo * f64::from(sr)) as u64;
+	let len = 2 * bar;
+	let mut w = hound::WavWriter::create(
+		&file,
+		hound::WavSpec {
+			channels: 1,
+			sample_rate: sr,
+			bits_per_sample: 32,
+			sample_format: hound::SampleFormat::Float,
+		},
+	)
+	.unwrap();
+	for i in 0..3 * len {
+		let pass = (i / len) as f32;
+		let t = i as f32 / sr as f32;
+		let env = 0.3 + 0.25 * (t * (1.5 + pass)).sin().abs();
+		w.write_sample(env * (t * 220.0 * std::f32::consts::TAU).sin())
+			.unwrap();
+	}
+	w.finalize().unwrap();
+	let rec = Recording {
+		sample_rate: sr,
+		start: 0,
+		punch_out: None,
+		stop: 0,
+		latency: 0,
+		midi_latency: 0,
+		passes: (0..3)
+			.map(|k| RecordedPass {
+				tag: 0,
+				file_start: k * len,
+				frames: len,
+				wrapped_at: (k < 2).then_some(len as i64),
+			})
+			.collect(),
+		audio: vec![RecordedAudio {
+			track: id,
+			name: "Vox".into(),
+			file,
+			frames: 3 * len,
+			channels: 1,
+		}],
+		midi_tracks: Vec::new(),
+		midi: Vec::new(),
+		dropouts: 0,
+		warnings: Vec::new(),
+	};
+	assert!(a.state.finish_recording(&rec));
+	(a, id)
+}
+
+#[test]
+fn transport_record_button_arm_and_record_mode() {
+	let (a, vox) = takes_app();
+	let mut h = harness(a);
+	h.run_steps(2);
+	// Nothing armed: Ctrl+R explains what to do.
+	h.key_press_modifiers(Modifiers::COMMAND, Key::R);
+	h.run_steps(2);
+	assert!(
+		h.state()
+			.state
+			.notices
+			.last()
+			.unwrap()
+			.text
+			.contains("Arm a track")
+	);
+	// The track header's arm button.
+	h.get_by_label("Arm Vox").click();
+	h.run_steps(2);
+	assert!(h.state().state.is_armed(vox));
+	assert!(
+		h.state()
+			.state
+			.project()
+			.track(vox)
+			.unwrap()
+			.input
+			.is_some(),
+		"armed audio tracks get an input"
+	);
+	// R: record mode; the record button (no audio device here) says why it cannot.
+	h.key_press(Key::R);
+	h.run_steps(2);
+	assert!(h.state().state.record.mode);
+	h.get_by_label("Record (Ctrl+R)").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert!(!s.is_recording());
+	assert!(s.notices.last().unwrap().text.contains("No audio device"));
+	// The metronome button toggles the click while playing.
+	h.get_by_label("Metronome").click();
+	h.run_steps(2);
+	assert!(h.state().state.record.settings.metronome.on_play);
+	assert!(
+		h.state().state.prefs().record.metronome.on_play,
+		"persisted"
+	);
+}
+
+#[test]
+fn audio_settings_dialog_applies_and_persists() {
+	let mut h = harness(app());
+	h.run_steps(2);
+	h.get_by_label("File").click();
+	h.run_steps(2);
+	h.get_by_label("Audio Settings… ").click();
+	h.run_steps(2);
+	assert!(h.state().state.record.dialog.is_some());
+	h.get_by_label("Audio settings");
+	assert!(
+		h.query_by_label("Test tone (440 Hz, -20 dBFS)").is_some(),
+		"test tone offered, off by default"
+	);
+	assert!(!h.state().state.record.test_tone);
+	// Edit the draft as the widgets would, then OK.
+	h.state_mut()
+		.state
+		.record
+		.dialog
+		.as_mut()
+		.unwrap()
+		.draft
+		.latency_offset_ms = 4.5;
+	h.get_by_label("Record and monitor audio input").click();
+	h.run_steps(1);
+	h.get_by_label("OK").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert!(s.record.dialog.is_none());
+	let prefs = s.prefs().audio;
+	assert_eq!(prefs.latency_offset_ms, 4.5);
+	assert!(prefs.config.input_enabled);
+}
+
+#[test]
+fn take_lanes_pick_and_swipe_comp_takes() {
+	let (mut a, vox) = takes_app();
+	a.state.toggle_takes(vox);
+	let mut h = harness(a);
+	h.run_steps(3);
+	let index = h.state().state.project().track_index(vox).unwrap();
+	let lane = h.state().track_rect(index).expect("vox lane drawn");
+	let take_y = |k: f32| lane.bottom() + (k + 0.5) * cadenza_app::state::rows::TAKE_LANE_HEIGHT;
+	let x = |h: &Harness<'_, CadenzaApp>, beats: f64| {
+		lane.left()
+			+ h.state()
+				.state
+				.view
+				.timeline
+				.tick_to_x(Tick::from_beats(beats))
+	};
+	let playing = |h: &Harness<'_, CadenzaApp>| -> Vec<(u32, Tick)> {
+		h.state()
+			.state
+			.project()
+			.track(vox)
+			.unwrap()
+			.clips
+			.iter()
+			.filter(|c| c.plays())
+			.map(|c| (c.take.unwrap().lane, c.start))
+			.collect()
+	};
+	assert_eq!(playing(&h), vec![(2, Tick::ZERO)]);
+	// Click take 1: it plays for the whole region.
+	let p = pos2(x(&h, 2.0), take_y(0.0));
+	h.hover_at(p);
+	h.run_steps(1);
+	h.drag_at(p);
+	h.run_steps(1);
+	h.drop_at(p);
+	h.run_steps(2);
+	assert_eq!(playing(&h), vec![(0, Tick::ZERO)]);
+	assert_eq!(h.state().state.undo_label(), Some("Select take"));
+	// Swipe take 2 over beats 4-6 (snapped): comped in, one undo step.
+	let (from, to) = (pos2(x(&h, 4.0), take_y(1.0)), pos2(x(&h, 6.0), take_y(1.0)));
+	h.hover_at(from);
+	h.drag_at(from);
+	for i in 1..=8 {
+		h.hover_at(from + (to - from) * (i as f32 / 8.0));
+		h.run_steps(1);
+	}
+	h.drop_at(to);
+	h.run_steps(2);
+	assert_eq!(h.state().state.undo_label(), Some("Comp take"));
+	let comp = playing(&h);
+	assert_eq!(comp.len(), 3, "{comp:?}");
+	assert_eq!(comp[1], (1, Tick(PPQ * 4)));
+}
+
+/// Recording screens: armed tracks, take lanes and a recording in progress (fed by the
+/// engine's virtual device, no hardware), and the audio settings dialog.
+/// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
+#[test]
+#[ignore]
+fn render_recording_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let (mut a, vox) = takes_app();
+	let keys = a
+		.state
+		.project()
+		.tracks
+		.iter()
+		.find(|t| t.name == "Keys")
+		.unwrap()
+		.id;
+	a.state.toggle_arm(vox);
+	a.state.toggle_arm(keys);
+	a.state.toggle_takes(vox);
+	a.state.record.mode = true;
+	a.state.record.input_levels = vec![0.5, 0.2];
+	let project = a.state.project().clone();
+	let mut h = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.wgpu()
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			a,
+		);
+	let shot = |h: &mut Harness<'_, CadenzaApp>, name: &str| {
+		h.run_steps(3);
+		h.render()
+			.unwrap()
+			.save(dir.join(format!("{name}.png")))
+			.unwrap();
+	};
+	shot(&mut h, "record_armed_takes");
+
+	// A recording in progress: the engine's virtual device records a synthetic voice.
+	let (mut player, mut dev) = cadenza_engine::Player::virtual_device(48_000, 2);
+	player.load(&project).unwrap();
+	let rec_dir = std::env::temp_dir().join(format!("cadenza-ui-rec-{}", std::process::id()));
+	let setup = cadenza_engine::RecordSetup::new(
+		&rec_dir,
+		Tick(PPQ * 8),
+		vec![
+			cadenza_engine::RecordTrack {
+				track: vox,
+				name: "Vox".into(),
+				input: Some(cadenza_model::TrackInput::mono(0)),
+			},
+			cadenza_engine::RecordTrack {
+				track: keys,
+				name: "Keys".into(),
+				input: None,
+			},
+		],
+	);
+	player.seek(Tick(PPQ * 8)).unwrap();
+	let (mut midi_tx, midi_rx) = cadenza_midi_io::new_queue(64);
+	player.set_midi_queue(midi_rx).unwrap();
+	let monitor = player.start_recording(&setup).unwrap();
+	let mut out = vec![0.0f32; 512];
+	let mut input = vec![0.0f32; 512];
+	let mut n = 0usize;
+	for block in 0..700 {
+		for i in 0..256 {
+			let t = (n + i) as f32 / 48_000.0;
+			input[2 * i] = (0.2 + 0.6 * (t * 2.1).sin().abs()) * (t * 330.0).sin();
+		}
+		if block % 60 == 0 {
+			let pitch = 60 + (block / 60 % 5) as u8 * 2;
+			let _ = midi_tx.push(cadenza_midi_io::TimedMessage {
+				host_micros: 0,
+				message: cadenza_midi_io::RawMessage::from_bytes(&[0x90, pitch, 100]).unwrap(),
+			});
+		}
+		if block % 60 == 40 {
+			let pitch = 60 + (block / 60 % 5) as u8 * 2;
+			let _ = midi_tx.push(cadenza_midi_io::TimedMessage {
+				host_micros: 0,
+				message: cadenza_midi_io::RawMessage::from_bytes(&[0x80, pitch, 0]).unwrap(),
+			});
+		}
+		dev.process(&mut out, &input);
+		n += 256;
+	}
+	std::thread::sleep(std::time::Duration::from_millis(100));
+	let now = player.position();
+	{
+		let s = &mut h.state_mut().state;
+		s.record.phase = cadenza_app::state::record::Phase::Recording(monitor);
+		s.seek(now);
+	}
+	shot(&mut h, "record_in_progress");
+	player.request_stop_recording().unwrap();
+	dev.process(&mut out, &input);
+	let _ = player.finish_recording(std::time::Duration::from_secs(2));
+	h.state_mut().state.record.phase = cadenza_app::state::record::Phase::Idle;
+	let _ = std::fs::remove_dir_all(&rec_dir);
+
+	h.state_mut().state.open_audio_settings();
+	shot(&mut h, "audio_settings");
+}

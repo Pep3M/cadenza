@@ -11,12 +11,30 @@ use super::automation::LANE_HEIGHT;
 /// Height of the master row (it only holds the automation toggle).
 pub const MASTER_ROW_HEIGHT: f32 = 26.0;
 
+/// Height of a take lane (expanded takes under a track).
+pub const TAKE_LANE_HEIGHT: f32 = 30.0;
+
+/// Number of take lanes of `track` (highest lane + 1; 0 without takes).
+pub fn take_lanes(track: &cadenza_model::Track) -> u32 {
+	track
+		.clips
+		.iter()
+		.filter_map(|c| c.take.map(|t| t.lane + 1))
+		.max()
+		.unwrap_or(0)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowKind {
 	/// The clip lane of a track (`index` in display order).
 	Track {
 		id: TrackId,
 		index: usize,
+	},
+	/// Take lane `lane` of a track (its takes stacked, expanded by the header's T).
+	Take {
+		track: TrackId,
+		lane: u32,
 	},
 	/// An automation lane under its channel (`None` owner = master).
 	Lane {
@@ -69,6 +87,15 @@ impl Rows {
 				view.track_height,
 				&mut rows,
 			);
+			if view.takes.contains(&t.id) {
+				for lane in 0..take_lanes(t) {
+					push(
+						RowKind::Take { track: t.id, lane },
+						TAKE_LANE_HEIGHT,
+						&mut rows,
+					);
+				}
+			}
 			if auto.is_open(Some(t.id)) {
 				for address in auto.visible(project, Some(t.id)) {
 					push(
@@ -117,7 +144,7 @@ impl Rows {
 			match r.kind {
 				RowKind::Track { id, index } => return Some((id, index)),
 				RowKind::Master => return None,
-				RowKind::Lane { .. } => {}
+				RowKind::Lane { .. } | RowKind::Take { .. } => {}
 			}
 		}
 		None

@@ -41,6 +41,8 @@ pub const SOLO: Color32 = Color32::from_rgb(0xe6, 0xcc, 0x3c);
 pub const BYPASS: Color32 = Color32::from_rgb(0x7a, 0x82, 0x8c);
 pub const WARNING: Color32 = Color32::from_rgb(0xe6, 0xb4, 0x3c);
 pub const ERROR: Color32 = Color32::from_rgb(0xf0, 0x55, 0x55);
+/// Record buttons, arm states and the clip being recorded.
+pub const RECORD: Color32 = Color32::from_rgb(0xe8, 0x3b, 0x3b);
 pub const MARKER: Color32 = Color32::from_rgb(0xc7, 0x8b, 0xf0);
 /// Automation curves and points.
 pub const AUTOMATION: Color32 = Color32::from_rgb(0x5c, 0xd6, 0xc4);

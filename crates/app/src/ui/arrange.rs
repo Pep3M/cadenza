@@ -699,6 +699,9 @@ impl ArrangeUi {
 				RowKind::Lane { address, .. } => {
 					self.auto.lane_header(&mut child, state, address, rect)
 				}
+				RowKind::Take { track, lane } => {
+					super::record::take_header(&mut child, state, *track, *lane, rect)
+				}
 				RowKind::Master => self.auto.master_header(&mut child, state, rect),
 			}
 		}
@@ -790,9 +793,10 @@ impl ArrangeUi {
 		let solo_rect = Rect::from_min_size(pos2(right - 18.0, row1), vec2(18.0, 16.0));
 		let mute_rect = solo_rect.translate(vec2(-21.0, 0.0));
 		let auto_rect = mute_rect.translate(vec2(-21.0, 0.0));
+		let record_left = super::record::header_buttons(ui, state, track, id, auto_rect);
 		let name_rect = Rect::from_min_max(
 			pos2(left + 16.0, row1),
-			pos2(auto_rect.left() - 4.0, row1 + 16.0),
+			pos2(record_left - 4.0, row1 + 16.0),
 		);
 		match &mut self.rename {
 			Some((t, text)) if *t == track.id => {
@@ -885,17 +889,21 @@ impl ArrangeUi {
 			let instrument_rect =
 				Rect::from_min_max(pos2(left, row2), pos2(right - 62.0, row2 + 14.0));
 			let ir = ui.interact(instrument_rect, id.with("instrument"), Sense::click());
-			ui.painter_at(instrument_rect).text(
-				pos2(left, row2 + 7.0),
-				Align2::LEFT_CENTER,
-				format!("{} {what}", kind_glyph(track.kind)),
-				theme::small(),
-				if ir.hovered() {
-					theme::TEXT
-				} else {
-					theme::TEXT_DIM
-				},
-			);
+			if track.kind == TrackKind::Audio {
+				super::record::input_controls(ui, state, track, id, instrument_rect);
+			} else {
+				ui.painter_at(instrument_rect).text(
+					pos2(left, row2 + 7.0),
+					Align2::LEFT_CENTER,
+					format!("{} {what}", kind_glyph(track.kind)),
+					theme::small(),
+					if ir.hovered() {
+						theme::TEXT
+					} else {
+						theme::TEXT_DIM
+					},
+				);
+			}
 			if ir.clicked()
 				&& let Some(d) = &track.instrument
 			{
@@ -1007,7 +1015,7 @@ impl ArrangeUi {
 						theme::LANE_ALT
 					}
 				}
-				RowKind::Lane { .. } => theme::AUTO_LANE,
+				RowKind::Lane { .. } | RowKind::Take { .. } => theme::AUTO_LANE,
 				RowKind::Master => theme::BG_PANEL,
 			};
 			painter.rect_filled(r, 0.0, fill);
@@ -1044,6 +1052,19 @@ impl ArrangeUi {
 			if r.intersects(area) || self.auto.dragging(address) {
 				self.auto.lane_body(ui, state, address, r, area);
 			}
+		}
+
+		// Take lanes (comping).
+		for row in self.rows.rows.clone() {
+			let RowKind::Take { track, lane } = row.kind else {
+				continue;
+			};
+			let Some(t) = tracks.iter().find(|t| t.id == track) else {
+				continue;
+			};
+			let y = layout.body_top + row.top - scroll;
+			let r = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row.height));
+			super::record::take_lane(ui, state, t, lane, r, area, &tl);
 		}
 
 		// Lane clicks: select / create clips.
@@ -1101,7 +1122,8 @@ impl ArrangeUi {
 				// Clips scrolled out of view still process an in-flight drag.
 				continue;
 			}
-			for c in &t.clips {
+			// Takes that do not play live in the take lanes.
+			for c in t.clips.iter().filter(|c| c.plays()) {
 				self.clip(ui, state, &painter, layout, t, i, c);
 			}
 		}
@@ -1113,6 +1135,15 @@ impl ArrangeUi {
 			let stroke = Stroke::new(1.0, Color32::from_white_alpha(150));
 			painter.line_segment([r.left_bottom(), r.right_top()], stroke);
 			painter.line_segment([r.left_top(), r.right_bottom()], stroke);
+		}
+		// The clip being recorded, and take badges.
+		for (i, t) in tracks.iter().enumerate() {
+			let y = self.top(layout, i, scroll);
+			if y > area.bottom() || y + h < area.top() {
+				continue;
+			}
+			let lane = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), h));
+			super::record::paint_track_overlay(&painter, state, t, lane, &tl);
 		}
 		self.rubber_band(ui, state, layout);
 	}

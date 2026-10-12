@@ -394,14 +394,20 @@ pub fn clips_in(project: &Project, tracks: &[TrackId], t0: Tick, t1: Tick) -> Ve
 		.iter()
 		.filter(|t| tracks.contains(&t.id))
 		.flat_map(|t| t.clips.iter())
-		.filter(|c| c.start < t1 && c.end() > t0)
+		// Takes that do not play are not on screen (they live in the take lanes).
+		.filter(|c| c.plays() && c.start < t1 && c.end() > t0)
 		.map(|c| c.id)
 		.collect()
 }
 
 /// Time ranges where audio clips of one track overlap (they sum; drawn as crossfades).
 pub fn overlaps(track: &Track) -> Vec<(Tick, Tick)> {
-	let audio: Vec<&Clip> = track.clips.iter().filter(|c| !c.is_midi()).collect();
+	// Takes that do not play never sum.
+	let audio: Vec<&Clip> = track
+		.clips
+		.iter()
+		.filter(|c| !c.is_midi() && c.plays())
+		.collect();
 	let mut out = Vec::new();
 	for (i, a) in audio.iter().enumerate() {
 		for b in &audio[i + 1..] {

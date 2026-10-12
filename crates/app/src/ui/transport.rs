@@ -1,5 +1,5 @@
-//! Transport bar: play/stop, return to start, position, tempo, time signature, master
-//! meter and audio status.
+//! Transport bar: play/stop, record (with record mode), return to start, metronome,
+//! count-in and punch, position, tempo, time signature, master meter and audio status.
 
 use cadenza_core::{Tick, TimeSignature};
 use cadenza_model::Command;
@@ -36,9 +36,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 		{
 			state.toggle_play();
 		}
+		record_button(ui, state);
 		ui.add_space(4.0);
 		mode_switch(ui, state);
 		loop_button(ui, state);
+		record_controls(ui, state);
 		ui.add_space(8.0);
 		position_display(ui, state);
 		ui.add_space(8.0);
@@ -185,6 +187,152 @@ fn loop_button(ui: &mut Ui, state: &mut AppState) {
 	}
 }
 
+/// The red record button: filled while recording, outlined in record mode (R).
+fn record_button(ui: &mut Ui, state: &mut AppState) {
+	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Record (Ctrl+R)")
+	});
+	let recording = state.is_recording();
+	let p = ui.painter();
+	let bg = if recording {
+		theme::mix(theme::RECORD, theme::BG_DEEP, 0.45)
+	} else if resp.hovered() {
+		theme::BG_HOVER
+	} else {
+		theme::BG_WIDGET
+	};
+	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
+	if state.record.mode && !recording {
+		p.rect_stroke(
+			rect.shrink(1.0),
+			CornerRadius::same(theme::RADIUS),
+			Stroke::new(1.5, theme::RECORD),
+			egui::StrokeKind::Inside,
+		);
+	}
+	let c = rect.center();
+	p.circle_filled(c, 6.0, theme::RECORD);
+	if recording {
+		p.circle_stroke(c, 8.5, Stroke::new(1.0, theme::RECORD));
+	}
+	let resp = resp.on_hover_text(
+		"Record the armed tracks (Ctrl+R; again to stop). R: record mode, so Play records",
+	);
+	if resp.clicked() {
+		state.toggle_record();
+	}
+	resp.context_menu(|ui| {
+		if ui
+			.checkbox(&mut state.record.mode, "Record mode (R): Play records")
+			.clicked()
+		{
+			ui.close();
+		}
+	});
+}
+
+/// Metronome toggle, count-in and punch, and the recording options menu.
+fn record_controls(ui: &mut Ui, state: &mut AppState) {
+	let mut s = state.record.settings;
+	// Metronome: the button is "click while playing"; recording has its own switch.
+	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
+	resp.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::Checkbox,
+			true,
+			s.metronome.on_play,
+			"Metronome",
+		)
+	});
+	let on = s.metronome.on_play;
+	let p = ui.painter();
+	let bg = if on {
+		theme::mix(theme::ACCENT, theme::BG_DEEP, 0.55)
+	} else if resp.hovered() {
+		theme::BG_HOVER
+	} else {
+		theme::BG_WIDGET
+	};
+	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
+	let c = rect.center();
+	let fg = if on { theme::ACCENT } else { theme::TEXT };
+	let body = [
+		pos2(c.x - 6.0, c.y + 8.0),
+		pos2(c.x - 2.5, c.y - 8.0),
+		pos2(c.x + 2.5, c.y - 8.0),
+		pos2(c.x + 6.0, c.y + 8.0),
+	];
+	p.add(Shape::closed_line(body.to_vec(), Stroke::new(1.3, fg)));
+	p.line_segment(
+		[pos2(c.x, c.y + 5.0), pos2(c.x + 5.0, c.y - 6.0)],
+		Stroke::new(1.3, fg),
+	);
+	let resp = resp
+		.on_hover_text("Metronome while playing (right-click: level, while recording, count-in)");
+	if resp.clicked() {
+		s.metronome.on_play = !s.metronome.on_play;
+	}
+	resp.context_menu(|ui| {
+		ui.checkbox(&mut s.metronome.on_play, "Click while playing");
+		ui.checkbox(
+			&mut s.metronome.on_record,
+			"Click while recording / counting in",
+		);
+		ui.add(
+			egui::Slider::new(&mut s.metronome.level_db, -40.0..=0.0)
+				.text("Level")
+				.suffix(" dB"),
+		);
+	});
+	egui::ComboBox::from_id_salt("count-in")
+		.width(84.0)
+		.selected_text(match s.count_in_bars {
+			0 => "No count-in".to_owned(),
+			1 => "Count-in 1 bar".to_owned(),
+			n => format!("Count-in {n} bars"),
+		})
+		.show_ui(ui, |ui| {
+			for n in crate::state::record::COUNT_IN_CHOICES {
+				let label = match n {
+					0 => "None".to_owned(),
+					1 => "1 bar".to_owned(),
+					n => format!("{n} bars"),
+				};
+				ui.selectable_value(&mut s.count_in_bars, n, label);
+			}
+		})
+		.response
+		.on_hover_text("Metronome bars before recording starts");
+	if widgets::toggle(ui, s.punch, "PUNCH", theme::RECORD, vec2(48.0, 22.0))
+		.on_hover_text(
+			"Punch in/out: record only inside the loop region (with the loop on: a take per 			 pass)",
+		)
+		.clicked()
+	{
+		s.punch = !s.punch;
+	}
+	ui.menu_button("MIDI rec", |ui| {
+		ui.set_min_width(240.0);
+		ui.checkbox(&mut s.midi_merge, "Merge into the clip under the playhead");
+		ui.add_enabled_ui(s.midi_merge, |ui| {
+			ui.checkbox(&mut s.midi_overdub, "Overdub (keep existing notes)");
+		});
+		ui.checkbox(&mut s.midi_takes, "Loop recording: a new take per pass");
+		ui.horizontal(|ui| {
+			ui.label("Input quantize");
+			egui::ComboBox::from_id_salt("midi-quantize")
+				.selected_text(s.quantize.name())
+				.show_ui(ui, |ui| {
+					for q in crate::state::record::InputQuantize::ALL {
+						ui.selectable_value(&mut s.quantize, q, q.name());
+					}
+				});
+		});
+	});
+	state.set_record_settings(s);
+}
+
 #[derive(Clone, Copy)]
 enum Icon {
 	ToStart,
@@ -252,12 +400,25 @@ fn position_display(ui: &mut Ui, state: &mut AppState) {
 	let (rect, _) = ui.allocate_exact_size(vec2(210.0, 34.0), Sense::hover());
 	let p = ui.painter();
 	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::BG_DEEP);
+	let recording = state.is_recording();
+	if recording {
+		p.rect_stroke(
+			rect,
+			CornerRadius::same(theme::RADIUS),
+			Stroke::new(1.0, theme::RECORD),
+			egui::StrokeKind::Inside,
+		);
+	}
 	p.text(
 		pos2(rect.left() + 10.0, rect.center().y),
 		Align2::LEFT_CENTER,
 		bbt,
 		theme::mono(19.0),
-		theme::ACCENT,
+		if recording {
+			theme::RECORD
+		} else {
+			theme::ACCENT
+		},
 	);
 	p.text(
 		pos2(rect.right() - 8.0, rect.center().y),

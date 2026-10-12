@@ -271,6 +271,22 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Transport", "L", "Pattern / Song mode"),
 	sc(
 		"Transport",
+		"Ctrl+R",
+		"Record the armed tracks (again: stop)",
+	),
+	sc("Transport", "R", "Record mode: Play records"),
+	sc(
+		"Recording",
+		"● on a track",
+		"Arm for recording (audio: In + monitor off/auto/on)",
+	),
+	sc(
+		"Recording",
+		"T on a track / take lane",
+		"Show takes; click a take plays it, drag comps a range",
+	),
+	sc(
+		"Transport",
 		"Ctrl+L",
 		"Loop region on / off (piano roll: legato)",
 	),
@@ -527,6 +543,10 @@ pub struct Prefs {
 	pub autosave_minutes: u32,
 	/// The export dialog's last settings.
 	pub export: super::export::ExportSettings,
+	/// Audio devices, MIDI input and latency offset.
+	pub audio: super::record::AudioPrefs,
+	/// Metronome, count-in, punch and MIDI recording options.
+	pub record: super::record::RecordSettings,
 }
 
 impl Default for Prefs {
@@ -550,6 +570,8 @@ impl Default for Prefs {
 			recent: Vec::new(),
 			autosave_minutes: super::safety::DEFAULT_AUTOSAVE_MINUTES,
 			export: super::export::ExportSettings::default(),
+			audio: super::record::AudioPrefs::default(),
+			record: super::record::RecordSettings::default(),
 		}
 	}
 }

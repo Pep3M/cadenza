@@ -5,6 +5,7 @@
 //! methods, so every edit becomes a `Command`.
 
 pub mod arrange;
+pub mod automation;
 pub mod browser;
 pub mod dnd;
 pub mod inspector;
@@ -80,6 +81,11 @@ impl CadenzaApp {
 			themed: false,
 			piano_was_visible: false,
 		}
+	}
+
+	/// Automation lane `address` in the arrange view in the last frame (headless tests).
+	pub fn lane_rect(&self, address: &cadenza_core::ParamAddress) -> Option<Rect> {
+		self.arrange.lane_rect(self.state.view.scroll_y, address)
 	}
 
 	/// Note grid of the piano roll in the last frame (headless tests).
@@ -392,14 +398,20 @@ impl CadenzaApp {
 		if pressed(cmd, Key::D) {
 			duplicate_selection(s);
 		}
-		if pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace) {
+		if (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
+			&& !s.delete_selected_points()
+		{
 			delete_selection(s);
+		}
+		if pressed(Modifiers::NONE, Key::A) {
+			s.toggle_lanes();
 		}
 		if pressed(Modifiers::NONE, Key::S) {
 			split_at_playhead(s);
 		}
 		if pressed(Modifiers::NONE, Key::Escape) {
 			s.selection.clear_clips();
+			s.view.automation.selected.clear();
 		}
 	}
 }

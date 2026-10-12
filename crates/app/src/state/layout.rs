@@ -279,6 +279,31 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Clips", "Alt+drag", "Move or resize without snapping"),
 	sc("Clips", "Double-click lane", "New MIDI clip"),
 	sc("Clips", "Double-click MIDI clip", "Open in the piano roll"),
+	sc("Automation", "A", "Show / hide the selected track's lanes"),
+	sc("Automation", "Click lane", "Add a point"),
+	sc(
+		"Automation",
+		"Drag point",
+		"Move (snapped; Alt: free; Shift: vertical only)",
+	),
+	sc("Automation", "Drag empty lane", "Rubber band (Shift adds)"),
+	sc("Automation", "Ctrl+drag lane", "Draw a ramp"),
+	sc("Automation", "Right-click / Del", "Delete points"),
+	sc(
+		"Automation",
+		"Double-click point",
+		"Shape: linear → hold → smooth",
+	),
+	sc(
+		"Automation",
+		"Right-click a control",
+		"Automate (mixer, inspector)",
+	),
+	sc(
+		"Automation",
+		"♩ (transport)",
+		"Tempo lane: click adds a change",
+	),
 	sc("Piano roll", "P / E", "Draw tool / select tool"),
 	sc(
 		"Piano roll",

@@ -102,7 +102,11 @@ pub fn edit_value(
 	} else if r.dragged() {
 		ui.data_mut(|d| d.insert_temp(id, v));
 		Gesture::Preview(v)
-	} else if r.changed() {
+	} else if r.changed()
+		&& (r.has_focus() || r.lost_focus() || r.clicked() || r.is_pointer_button_down_on())
+	{
+		// Only a user edit commits: a widget may also report a change when it rounds or
+		// clamps a value shown from elsewhere (e.g. automation at the playhead).
 		ui.data_mut(|d| d.remove_temp::<f32>(id));
 		Gesture::Commit(v)
 	} else {
@@ -112,7 +116,7 @@ pub fn edit_value(
 }
 
 /// Vertical fader. Drag (Shift: fine), double-click: 0 dB.
-pub fn fader(ui: &mut Ui, id: Id, db: f32, size: Vec2) -> Gesture {
+pub fn fader(ui: &mut Ui, id: Id, db: f32, size: Vec2) -> (Gesture, Response) {
 	let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 	let response = response.on_hover_cursor(CursorIcon::ResizeVertical);
 	let travel = rect.height() - 18.0;
@@ -175,11 +179,11 @@ pub fn fader(ui: &mut Ui, id: Id, db: f32, size: Vec2) -> Gesture {
 			Stroke::new(2.0, if active { theme::ACCENT } else { theme::TEXT }),
 		);
 	}
-	gesture
+	(gesture, response)
 }
 
 /// Horizontal pan control (-1..1). Drag, double-click: center.
-pub fn pan(ui: &mut Ui, id: Id, pan: f32, size: Vec2) -> Gesture {
+pub fn pan(ui: &mut Ui, id: Id, pan: f32, size: Vec2) -> (Gesture, Response) {
 	let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 	let response = response.on_hover_cursor(CursorIcon::ResizeHorizontal);
 	let fine = if ui.input(|i| i.modifiers.shift) {
@@ -230,7 +234,7 @@ pub fn pan(ui: &mut Ui, id: Id, pan: f32, size: Vec2) -> Gesture {
 			);
 		}
 	}
-	gesture
+	(gesture, response)
 }
 
 fn meter_color(db: f32) -> Color32 {

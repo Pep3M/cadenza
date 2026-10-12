@@ -159,7 +159,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 		.spacing([8.0, 4.0])
 		.show(ui, |ui| {
 			ui.label("Volume");
-			let (g, _) = widgets::edit_value(
+			let (g, vol_resp) = widgets::edit_value(
 				ui,
 				Id::new(("insp-vol", track)),
 				state.volume_db(track),
@@ -171,6 +171,9 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 					)
 				},
 			);
+			vol_resp.context_menu(|ui| {
+				crate::ui::automation::automate_item(ui, state, crate::state::volume_address(track))
+			});
 			match g {
 				Gesture::Preview(v) => state.preview_volume(track, v),
 				Gesture::Commit(v) => state.commit_volume(track, v),
@@ -178,12 +181,15 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 			}
 			ui.end_row();
 			ui.label("Pan");
-			let (g, _) = widgets::edit_value(
+			let (g, pan_resp) = widgets::edit_value(
 				ui,
 				Id::new(("insp-pan", track)),
 				state.pan(track),
 				|ui, v| ui.add(egui::Slider::new(v, -1.0..=1.0).max_decimals(2)),
 			);
+			pan_resp.context_menu(|ui| {
+				crate::ui::automation::automate_item(ui, state, crate::state::pan_address(track))
+			});
 			match g {
 				Gesture::Preview(v) => state.preview_pan(track, v),
 				Gesture::Commit(v) => state.commit_pan(track, v),
@@ -471,6 +477,11 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 					}
 					ui.add(s)
 				});
+			let address = ParamAddress::device(r.track, d.id, pid.clone());
+			if state.is_automated(&address) {
+				crate::ui::automation::automated_badge(ui, resp.rect);
+			}
+			resp.context_menu(|ui| crate::ui::automation::automate_item(ui, state, address));
 			if resp.double_clicked() {
 				state.apply(Command::ResetParam {
 					address: ParamAddress::device(r.track, d.id, pid.clone()),

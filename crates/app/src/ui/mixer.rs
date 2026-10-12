@@ -265,16 +265,22 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 	}
 
 	let mut pan_ui = ui.new_child(egui::UiBuilder::new().max_rect(pan_r));
-	match widgets::pan(
+	let (gesture, pan_resp) = widgets::pan(
 		&mut pan_ui,
 		Id::new(("pan", id)),
 		state.pan(id),
 		pan_r.size(),
-	) {
+	);
+	match gesture {
 		Gesture::Preview(v) => state.preview_pan(id, v),
 		Gesture::Commit(v) => state.commit_pan(id, v),
 		Gesture::Idle => {}
 	}
+	let pan_addr = crate::state::pan_address(id);
+	if state.is_automated(&pan_addr) {
+		super::automation::automated_badge(ui, pan_r);
+	}
+	pan_resp.context_menu(|ui| super::automation::automate_item(ui, state, pan_addr));
 
 	let db = state.volume_db(id);
 	let levels = state.meters.get(id);
@@ -287,11 +293,18 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		vec2(mw, fader_r.height()),
 	);
 	let mut f_ui = ui.new_child(egui::UiBuilder::new().max_rect(fader_rect));
-	match widgets::fader(&mut f_ui, Id::new(("fader", id)), db, fader_rect.size()) {
+	let (gesture, fader_resp) =
+		widgets::fader(&mut f_ui, Id::new(("fader", id)), db, fader_rect.size());
+	match gesture {
 		Gesture::Preview(v) => state.preview_volume(id, v),
 		Gesture::Commit(v) => state.commit_volume(id, v),
 		Gesture::Idle => {}
 	}
+	let vol_addr = crate::state::volume_address(id);
+	if state.is_automated(&vol_addr) {
+		super::automation::automated_badge(ui, fader_rect);
+	}
+	fader_resp.context_menu(|ui| super::automation::automate_item(ui, state, vol_addr));
 	let mut m_ui = ui.new_child(egui::UiBuilder::new().max_rect(meter_rect));
 	if widgets::meter(
 		&mut m_ui,
@@ -646,7 +659,7 @@ fn send_row(ui: &mut Ui, state: &mut AppState, track: TrackId, s: &Send, w: f32)
 			}
 		});
 		let level = state.send_level(track, s.id);
-		let (gesture, _) = widgets::edit_value(ui, Id::new(("send", s.id)), level, |ui, v| {
+		let (gesture, resp) = widgets::edit_value(ui, Id::new(("send", s.id)), level, |ui, v| {
 			ui.add_sized(
 				[44.0, 16.0],
 				egui::DragValue::new(v)
@@ -656,6 +669,11 @@ fn send_row(ui: &mut Ui, state: &mut AppState, track: TrackId, s: &Send, w: f32)
 					.max_decimals(1),
 			)
 		});
+		let address = cadenza_core::ParamAddress::send(track, s.id);
+		if state.is_automated(&address) {
+			super::automation::automated_badge(ui, resp.rect);
+		}
+		resp.context_menu(|ui| super::automation::automate_item(ui, state, address));
 		match gesture {
 			Gesture::Preview(db) => state.preview_send(s.id, db),
 			Gesture::Commit(db) => state.commit_send(track, s.id, db),

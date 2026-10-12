@@ -285,6 +285,102 @@ fn inspector_shows_the_selected_device() {
 	assert_eq!(h.state().state.undo_label(), Some("Bypass device"));
 }
 
+#[test]
+fn automation_lanes_add_move_and_delete_points() {
+	let mut a = app();
+	let keys = a
+		.state
+		.project()
+		.tracks
+		.iter()
+		.find(|t| t.name == "Keys")
+		.unwrap()
+		.id;
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	a.state.selection.select_track(keys);
+	let mut h = harness(a);
+	h.run_steps(2);
+	h.state_mut().state.view.panels.focus = Some(PanelKind::Arrange);
+	h.key_press(Key::A);
+	h.run_steps(3);
+	let vol = cadenza_core::ParamAddress::track_volume(keys);
+	let lane = h.state().lane_rect(&vol).expect("A shows the volume lane");
+	assert!(h.state().state.project().automation_lane(&vol).is_none());
+
+	// Click: a point at the snapped beat, one undo step.
+	let x_of = |h: &Harness<'_, CadenzaApp>, beat: f64| {
+		lane.left() + h.state().state.view.timeline.beat_to_x(beat)
+	};
+	let at = pos2(x_of(&h, 4.0) + 1.0, lane.center().y);
+	h.hover_at(at);
+	h.run_steps(1);
+	h.drag_at(at);
+	h.run_steps(1);
+	h.drop_at(at);
+	h.run_steps(3);
+	let points = |h: &Harness<'_, CadenzaApp>| {
+		h.state()
+			.state
+			.project()
+			.automation_lane(&vol)
+			.map(|l| l.points.clone())
+			.unwrap_or_default()
+	};
+	assert_eq!(points(&h).len(), 1);
+	assert_eq!(points(&h)[0].tick, Tick(PPQ * 4));
+	assert_eq!(h.state().state.undo_label(), Some("Write automation"));
+
+	// Drag it two beats later and up: one more undo step.
+	let from = pos2(
+		x_of(&h, 4.0),
+		lane.bottom()
+			- 5.0 - h
+			.state()
+			.state
+			.view
+			.automation
+			.selected
+			.first()
+			.map(|_| (lane.height() - 10.0) * 0.5)
+			.unwrap(),
+	);
+	let steps = h.state().state.document().history_labels().len();
+	h.drag_at(from);
+	h.run_steps(1);
+	h.hover_at(pos2(x_of(&h, 6.0) + 1.0, lane.top() + 8.0));
+	h.run_steps(2);
+	h.drop_at(pos2(x_of(&h, 6.0) + 1.0, lane.top() + 8.0));
+	h.run_steps(3);
+	let p = points(&h);
+	assert_eq!(p.len(), 1);
+	assert_eq!(p[0].tick, Tick(PPQ * 6));
+	assert!(p[0].value > -1.0, "moved up: {}", p[0].value);
+	assert_eq!(h.state().state.document().history_labels().len(), steps + 1);
+
+	// Del removes the selected point (and the lane with it); undo brings it back.
+	h.key_press(Key::Delete);
+	h.run_steps(2);
+	assert!(points(&h).is_empty());
+	h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+	h.run_steps(2);
+	assert_eq!(points(&h).len(), 1);
+	// A again hides the lanes.
+	h.key_press(Key::A);
+	h.run_steps(2);
+	assert!(h.state().lane_rect(&vol).is_none());
+}
+
+#[test]
+fn empty_project_starts_and_shows_master_automation() {
+	let mut h = harness(CadenzaApp::with_state(AppState::headless()));
+	h.run_steps(3);
+	h.state_mut().state.selection.select_master();
+	h.key_press(Key::A);
+	h.run_steps(3);
+	let vol = cadenza_app::state::volume_address(None);
+	assert!(h.state().lane_rect(&vol).is_some());
+}
+
 /// Renders a few app states to PNG files in `$CADENZA_SCREENSHOT_DIR` (needs a GPU):
 /// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
 #[test]
@@ -351,6 +447,7 @@ fn render_screens() {
 	shot(&mut h, "arrange_mixer");
 	h.get_by_label("View").click();
 	shot(&mut h, "view_menu");
+	h.get_by_label("View").click();
 	h.key_press(Key::Escape);
 	h.state_mut().state.view.panels.toggle(PanelKind::Browser);
 	shot(&mut h, "browser_hidden");
@@ -371,9 +468,85 @@ fn render_screens() {
 	egui::DragAndDrop::clear_payload(&h.ctx);
 	h.remove_cursor();
 
+	// Automation lanes (volume ramp + filter sweep) under Keys, master volume, tempo lane.
+	{
+		let s = &mut h.state_mut().state;
+		let synth = s
+			.project()
+			.track(track)
+			.unwrap()
+			.instrument
+			.clone()
+			.unwrap();
+		let param = cadenza_app::state::automation::device_params(&synth, None)
+			.into_iter()
+			.find(|(id, _)| id.contains("cutoff"))
+			.map(|(id, _)| id)
+			.unwrap_or_else(|| "gain".into());
+		let vol = cadenza_core::ParamAddress::track_volume(track);
+		let cut = cadenza_core::ParamAddress::device(Some(track), synth.id, param);
+		let pt = cadenza_model::AutomationPoint::new;
+		s.apply(cadenza_model::Command::SetAutomation {
+			address: vol.clone(),
+			points: vec![
+				pt(Tick(0), -24.0),
+				pt(Tick(PPQ * 8), -3.0).with_shape(cadenza_model::PointShape::Hold),
+				pt(Tick(PPQ * 16), -10.0).with_shape(cadenza_model::PointShape::Smooth),
+				pt(Tick(PPQ * 28), 0.0),
+			],
+		});
+		let meta = s.lane_meta(&cut).unwrap();
+		s.apply(cadenza_model::Command::SetAutomation {
+			address: cut.clone(),
+			points: vec![
+				pt(Tick(0), meta.from_norm(0.2)).with_shape(cadenza_model::PointShape::Smooth),
+				pt(Tick(PPQ * 12), meta.from_norm(0.9)),
+				pt(Tick(PPQ * 20), meta.from_norm(0.4)),
+			],
+		});
+		s.apply(cadenza_model::Command::SetTempo {
+			tick: Tick(PPQ * 16),
+			bpm: 96.0,
+		});
+		s.view.automation.show(vol.clone());
+		s.view.automation.show(cut);
+		s.view.automation.selected = vec![(vol, Tick(PPQ * 8))];
+		s.view.automation.tempo = true;
+		s.automate(cadenza_app::state::volume_address(None));
+		s.view.panels.set(PanelKind::PianoRoll, false);
+		s.selection.select_track(track);
+		s.seek(Tick(PPQ * 20));
+		s.view.panels.set(PanelKind::Mixer, false);
+		let index = s.project().track_index(track).unwrap();
+		s.view.scroll_y =
+			cadenza_app::state::rows::Rows::new(s.project(), &s.view).track_top(index) - 20.0;
+	}
+	shot(&mut h, "automation_lanes");
+	h.hover_at(pos2(752.0, 578.0));
+	shot(&mut h, "automation_hover");
+	h.remove_cursor();
+
 	h.state_mut().state.dirty = true;
 	h.state_mut()
 		.state
 		.request(cadenza_app::state::Pending::Quit);
 	shot(&mut h, "unsaved_prompt");
+
+	// A fresh window without any project (the empty document).
+	let mut empty = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.wgpu()
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			CadenzaApp::with_state(AppState::headless()),
+		);
+	empty.run_steps(3);
+	empty
+		.render()
+		.unwrap()
+		.save(dir.join("empty_project.png"))
+		.unwrap();
 }

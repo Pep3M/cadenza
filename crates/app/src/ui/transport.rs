@@ -163,7 +163,8 @@ fn position_display(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn tempo(ui: &mut Ui, state: &mut AppState) {
-	let bpm = state.project().tempo.bpm_at(Tick::ZERO) as f32;
+	// The tempo in effect at the playhead; editing it changes that segment.
+	let bpm = state.project().tempo.bpm_at(state.position()) as f32;
 	ui.label(
 		RichText::new("BPM")
 			.font(theme::small())
@@ -181,10 +182,15 @@ fn tempo(ui: &mut Ui, state: &mut AppState) {
 	if let Gesture::Commit(v) = g
 		&& (f64::from(v) - f64::from(bpm)).abs() > 1e-6
 	{
-		state.apply(Command::SetTempo {
-			tick: Tick::ZERO,
-			bpm: f64::from(v),
-		});
+		state.set_tempo_at_playhead(f64::from(v));
+	}
+	let tempo_lane = state.view.automation.tempo;
+	if ui
+		.selectable_label(tempo_lane, "♩")
+		.on_hover_text("Show the tempo lane (tempo changes)")
+		.clicked()
+	{
+		state.view.automation.tempo = !tempo_lane;
 	}
 }
 

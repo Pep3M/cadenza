@@ -8,6 +8,7 @@
 //! marked dirty, the selection is pruned and a debounced player reload is scheduled.
 //! Views only read state and call these methods.
 
+pub mod automation;
 pub mod browser;
 pub mod dnd;
 pub mod edits;
@@ -17,6 +18,7 @@ pub mod live;
 pub mod meters;
 pub mod notices;
 pub mod piano;
+pub mod rows;
 pub mod selection;
 pub mod timeline;
 
@@ -84,6 +86,8 @@ pub struct ViewState {
 	pub bookmarks: Vec<PathBuf>,
 	/// The F1 keyboard-shortcut overlay is open.
 	pub help: bool,
+	/// Automation and tempo lanes of the arrange view.
+	pub automation: automation::AutomationView,
 }
 
 impl Default for ViewState {
@@ -98,6 +102,7 @@ impl Default for ViewState {
 			piano: PianoView::default(),
 			bookmarks: Vec::new(),
 			help: false,
+			automation: automation::AutomationView::default(),
 		}
 	}
 }
@@ -173,6 +178,8 @@ pub struct AppState {
 	loaded_generation: u64,
 	waker: Option<Waker>,
 	last_tick: Option<Instant>,
+	/// Lane points last sent to the player by a running gesture.
+	lane_preview: Option<(ParamAddress, Vec<cadenza_model::AutomationPoint>)>,
 }
 
 impl AppState {
@@ -219,6 +226,7 @@ impl AppState {
 			loaded_generation: 0,
 			waker,
 			last_tick: None,
+			lane_preview: None,
 		}
 	}
 
@@ -297,6 +305,9 @@ impl AppState {
 		self.dirty = true;
 		self.selection.prune(self.session.document().project());
 		self.view.piano.prune(self.session.document().project());
+		self.view
+			.automation
+			.prune(self.session.document().project());
 		let project = self.session.document().project();
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
@@ -330,10 +341,152 @@ impl AppState {
 		}
 	}
 
-	/// Sends the given lanes (a gesture preview, not in the project yet) to the player.
-	pub fn preview_automation(&self, lanes: Vec<cadenza_model::AutomationLane>) {
+	/// Plays `points` for the lane `address` while a gesture runs (not in the project
+	/// yet); repeated identical previews are not resent.
+	pub fn preview_lane(
+		&mut self,
+		address: &ParamAddress,
+		points: Vec<cadenza_model::AutomationPoint>,
+	) {
+		let key = (address.clone(), points);
+		if self.lane_preview.as_ref() == Some(&key) {
+			return;
+		}
+		let mut lanes = self.project().automation.clone();
+		lanes.retain(|l| &l.address != address);
+		if !key.1.is_empty() {
+			lanes.push(cadenza_model::AutomationLane::new(
+				address.clone(),
+				key.1.clone(),
+			));
+		}
 		if let Some(a) = &self.audio {
 			a.automation(lanes, self.project().tempo.clone());
+		}
+		self.lane_preview = Some(key);
+	}
+
+	/// Ends a lane preview: the player goes back to the project's lanes (a committed
+	/// edit has already sent them).
+	pub fn end_lane_preview(&mut self) {
+		if self.lane_preview.take().is_some()
+			&& let Some(a) = &self.audio
+		{
+			let p = self.project();
+			a.automation(p.automation.clone(), p.tempo.clone());
+		}
+	}
+
+	/// The plugin catalog (loaded on first use).
+	pub fn catalog(&mut self) -> Arc<PluginCatalog> {
+		self.session.plugins()
+	}
+
+	/// What the lane `address` controls (range, unit, name).
+	pub fn lane_meta(&mut self, address: &ParamAddress) -> Option<automation::ParamMeta> {
+		let catalog = self.catalog();
+		automation::meta(self.project(), Some(&catalog), address)
+	}
+
+	/// Every automatable parameter of a channel, for the lane picker.
+	pub fn lane_choices(&mut self, owner: Option<TrackId>) -> Vec<automation::Choice> {
+		let catalog = self.catalog();
+		automation::choices(self.project(), Some(&catalog), owner)
+	}
+
+	/// Static (non-automated) value of `address`.
+	pub fn static_value(&mut self, address: &ParamAddress) -> Option<f32> {
+		let catalog = self.catalog();
+		automation::static_value(self.project(), Some(&catalog), address)
+	}
+
+	/// "Automate this": shows the lane for `address` under its channel in the arrange
+	/// view, creating it (one point at the start, at the current value) if needed.
+	pub fn automate(&mut self, address: ParamAddress) {
+		if !self.is_automated(&address) {
+			let Some(value) = self.static_value(&address) else {
+				return;
+			};
+			let cmd = Command::SetAutomation {
+				address: address.clone(),
+				points: vec![cadenza_model::AutomationPoint::new(Tick::ZERO, value)],
+			};
+			if !self.apply(cmd) {
+				return;
+			}
+		}
+		match address.track {
+			Some(t) => self.selection.select_track(t),
+			None => self.selection.select_master(),
+		}
+		self.view.automation.show(address);
+		if !self.view.panels.visible(PanelKind::Arrange) {
+			self.view.panels.set(PanelKind::Arrange, true);
+		}
+	}
+
+	/// Toggles the automation lanes of the selected track (or the master): the A key.
+	pub fn toggle_lanes(&mut self) {
+		let owner = if self.selection.master {
+			None
+		} else if let Some(t) = self.selection.track {
+			Some(t)
+		} else {
+			self.notices
+				.info("Select a track to show its automation lanes");
+			return;
+		};
+		let project = self.project().clone();
+		self.view.automation.toggle(&project, owner);
+	}
+
+	/// Deletes the selected automation points (one undo step). Returns false when none
+	/// are selected.
+	pub fn delete_selected_points(&mut self) -> bool {
+		let selected = std::mem::take(&mut self.view.automation.selected);
+		if selected.is_empty() {
+			return false;
+		}
+		let mut addresses: Vec<ParamAddress> = Vec::new();
+		for (a, _) in &selected {
+			if !addresses.contains(a) {
+				addresses.push(a.clone());
+			}
+		}
+		let mut commands: Vec<Command> = addresses
+			.iter()
+			.filter_map(|a| {
+				let ticks: Vec<Tick> = selected
+					.iter()
+					.filter(|(x, _)| x == a)
+					.map(|(_, t)| *t)
+					.collect();
+				automation::delete_points(self.project(), a, &ticks)
+			})
+			.collect();
+		match commands.len() {
+			0 => {}
+			1 => {
+				self.apply(commands.remove(0));
+			}
+			_ => {
+				self.apply(Command::Batch {
+					label: "Delete automation points".into(),
+					commands,
+				});
+			}
+		}
+		true
+	}
+
+	/// The BPM field: sets the tempo of the segment the playhead is in.
+	pub fn set_tempo_at_playhead(&mut self, bpm: f64) {
+		let segment = automation::tempo_segment(self.project(), self.position());
+		if (segment.bpm - bpm).abs() > 1e-9 {
+			self.apply(Command::SetTempo {
+				tick: segment.tick,
+				bpm,
+			});
 		}
 	}
 
@@ -780,6 +933,7 @@ impl AppState {
 		self.view.piano.clip = None;
 		self.view.piano.selected.clear();
 		self.view.piano.framed = None;
+		self.view.automation = automation::AutomationView::default();
 		self.load_warnings.clear();
 		self.seek(Tick::ZERO);
 		self.schedule_reload();

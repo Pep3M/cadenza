@@ -453,4 +453,17 @@ mod tests {
 		assert_eq!(format_time(Tick(PPQ * 2 * 61), &tempo), "1:01.000");
 		assert_eq!(format_time(Tick(PPQ / 4), &tempo), "0:00.125");
 	}
+
+	#[test]
+	fn positions_across_tempo_changes() {
+		// 120 bpm for 4 bars (8 s), then 60 bpm.
+		let mut tempo = TempoMap::constant(120.0);
+		tempo.set_point(Tick(PPQ * 16), 60.0);
+		assert_eq!(format_time(Tick(PPQ * 16), &tempo), "0:08.000");
+		assert_eq!(format_time(Tick(PPQ * 18), &tempo), "0:10.000");
+		// Bars and beats count musical time: unaffected by the tempo.
+		assert_eq!(format_bbt(Tick(PPQ * 18), FOUR_FOUR), "5.3.000");
+		// Seconds -> position round-trips through the change.
+		assert_eq!(tempo.seconds_to_tick(10.0), Tick(PPQ * 18));
+	}
 }

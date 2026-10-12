@@ -14,10 +14,12 @@ use egui::{
 };
 
 use crate::jobs::Peaks;
+use crate::state::automation::LANE_HEIGHT;
 use crate::state::dnd::{DropTarget, Payload};
 use crate::state::edits::{self, TRACK_PALETTE};
 use crate::state::files::{FileKind, classify};
 use crate::state::layout::FollowMode;
+use crate::state::rows::{RowKind, Rows};
 use crate::state::selection::DeviceRef;
 use crate::state::timeline::{self, Overview, Timeline};
 use crate::state::{AppState, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT};
@@ -74,6 +76,10 @@ pub struct ArrangeUi {
 	pub lanes_width: f32,
 	pub lanes_height: f32,
 	last: Option<Layout>,
+	/// Row layout of this frame (tracks, automation lanes, master).
+	pub rows: Rows,
+	/// Automation lane gestures.
+	pub auto: super::automation::AutoUi,
 }
 
 /// Geometry shared by the painting helpers.
@@ -87,17 +93,13 @@ struct Layout {
 	hbar: Rect,
 	vbar: Rect,
 	body_top: f32,
-}
-
-impl Layout {
-	fn track_top(&self, index: usize, height: f32, scroll: f32) -> f32 {
-		self.body_top + index as f32 * height - scroll
-	}
+	/// Tempo lane (pinned under the markers) when shown, timeline part.
+	tempo: Option<Rect>,
 }
 
 /// Total height of the track list (with the room below the last track).
 pub fn content_height(state: &AppState) -> f32 {
-	state.project().tracks.len() as f32 * state.view.track_height + BELOW_TRACKS
+	Rows::new(state.project(), &state.view).height + BELOW_TRACKS
 }
 
 impl ArrangeUi {
@@ -109,13 +111,22 @@ impl ArrangeUi {
 		let bottom = full.bottom() - theme::SCROLLBAR;
 		let ov_bottom = full.top() + theme::OVERVIEW_HEIGHT;
 		let ruler_bottom = ov_bottom + theme::RULER_HEIGHT;
-		let top = ruler_bottom + theme::MARKER_LANE_HEIGHT;
+		let markers_bottom = ruler_bottom + theme::MARKER_LANE_HEIGHT;
+		let tempo_h = if state.view.automation.tempo {
+			LANE_HEIGHT
+		} else {
+			0.0
+		};
+		let top = markers_bottom + tempo_h;
+		self.rows = Rows::new(state.project(), &state.view);
 		let layout = Layout {
 			header: Rect::from_min_max(pos2(full.left(), top), pos2(x0, bottom)),
 			lanes: Rect::from_min_max(pos2(x0, top), pos2(right, bottom)),
 			overview: Rect::from_min_max(pos2(x0, full.top()), pos2(right, ov_bottom)),
 			ruler: Rect::from_min_max(pos2(x0, ov_bottom), pos2(right, ruler_bottom)),
-			markers: Rect::from_min_max(pos2(x0, ruler_bottom), pos2(right, top)),
+			markers: Rect::from_min_max(pos2(x0, ruler_bottom), pos2(right, markers_bottom)),
+			tempo: (tempo_h > 0.0)
+				.then(|| Rect::from_min_max(pos2(x0, markers_bottom), pos2(right, top))),
 			hbar: Rect::from_min_max(pos2(x0, bottom), pos2(right, full.bottom())),
 			vbar: Rect::from_min_max(pos2(right, top), pos2(full.right(), bottom)),
 			body_top: top,
@@ -150,6 +161,10 @@ impl ArrangeUi {
 		self.overview(ui, state, &layout);
 		ruler(ui, state, &layout);
 		markers(ui, state, &layout);
+		if let Some(r) = layout.tempo {
+			let header = Rect::from_min_max(pos2(full.left(), r.top()), pos2(x0, r.bottom()));
+			self.auto.tempo_lane(ui, state, header, r);
+		}
 		scrollbars(ui, state, &layout, full);
 		self.drop_zone(ui, state, &layout);
 
@@ -463,6 +478,16 @@ impl ArrangeUi {
 		}
 	}
 
+	/// Screen y of the top of track `index`'s group (`tracks.len()`: after the last).
+	fn top(&self, layout: &Layout, index: usize, scroll: f32) -> f32 {
+		layout.body_top + self.rows.track_top(index) - scroll
+	}
+
+	/// Content y (before scrolling) of screen y.
+	fn content_y(layout: &Layout, state: &AppState, y: f32) -> f32 {
+		y - layout.body_top + state.view.scroll_y
+	}
+
 	/// Song position (snapped when snap is on) at screen x inside the lanes.
 	fn tick_at(&self, state: &AppState, layout: &Layout, x: f32) -> Tick {
 		let tl = state.view.timeline;
@@ -472,6 +497,17 @@ impl ArrangeUi {
 		} else {
 			Tick(t.0.max(0))
 		}
+	}
+
+	/// Screen rect of the automation lane `address` in the last drawn frame.
+	pub fn lane_rect(&self, scroll_y: f32, address: &cadenza_core::ParamAddress) -> Option<Rect> {
+		let layout = self.last?;
+		let row = self.rows.lane(address)?;
+		let y = layout.body_top + row.top - scroll_y;
+		Some(Rect::from_min_size(
+			pos2(layout.lanes.left(), y),
+			vec2(layout.lanes.width(), row.height),
+		))
 	}
 
 	/// The drop target under `pos` in the last drawn frame (`None` outside the view).
@@ -485,16 +521,13 @@ impl ArrangeUi {
 		if !in_lanes && !layout.header.contains(pos) {
 			return None;
 		}
-		let row =
-			((pos.y - layout.body_top + state.view.scroll_y) / state.view.track_height).floor();
-		let tracks = &state.project().tracks;
+		let y = Self::content_y(layout, state, pos.y);
 		let at = if in_lanes {
 			self.tick_at(state, layout, pos.x)
 		} else {
 			state.position()
 		};
-		if row >= 0.0 && (row as usize) < tracks.len() {
-			let track = tracks[row as usize].id;
+		if let Some((track, _)) = self.rows.track_at(y) {
 			return Some(if in_lanes {
 				DropTarget::Lane { track, at }
 			} else {
@@ -531,11 +564,10 @@ impl ArrangeUi {
 		};
 		let h = state.view.track_height;
 		let scroll = state.view.scroll_y;
-		let n = state.project().tracks.len();
 		let clip = Rect::from_min_max(layout.header.min, layout.lanes.max);
 		let p = ui.painter_at(clip);
 		let row_rect = |i: usize| {
-			let y = layout.track_top(i, h, scroll);
+			let y = self.top(layout, i, scroll);
 			Rect::from_min_max(
 				pos2(layout.header.left(), y),
 				pos2(layout.lanes.right(), y + h),
@@ -547,7 +579,7 @@ impl ArrangeUi {
 				(row_rect(i), Some(row_rect(i)))
 			}
 			_ => {
-				let y = layout.track_top(n, h, scroll);
+				let y = layout.body_top + self.rows.height - scroll;
 				let zone = Rect::from_min_max(
 					pos2(layout.header.left(), y),
 					pos2(layout.lanes.right(), layout.lanes.bottom().max(y + h)),
@@ -613,32 +645,39 @@ impl ArrangeUi {
 	}
 
 	fn headers(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
-		let h = state.view.track_height;
 		let scroll = state.view.scroll_y;
 		let clip = layout.header;
 		ui.painter_at(clip).rect_filled(clip, 0.0, theme::BG_PANEL);
 		let tracks: Vec<Track> = state.project().tracks.clone();
-		for (i, track) in tracks.iter().enumerate() {
-			let y = layout.track_top(i, h, scroll);
-			let rect = Rect::from_min_size(pos2(clip.left(), y), vec2(clip.width(), h));
+		for row in self.rows.rows.clone() {
+			let y = layout.body_top + row.top - scroll;
+			let rect = Rect::from_min_size(pos2(clip.left(), y), vec2(clip.width(), row.height));
 			if rect.bottom() < clip.top() || rect.top() > clip.bottom() {
 				continue;
 			}
 			let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
 			child.set_clip_rect(rect.intersect(clip));
-			self.header(&mut child, state, track, i, rect);
+			match &row.kind {
+				RowKind::Track { index, .. } => {
+					self.header(&mut child, state, &tracks[*index], *index, rect)
+				}
+				RowKind::Lane { address, .. } => {
+					self.auto.lane_header(&mut child, state, address, rect)
+				}
+				RowKind::Master => self.auto.master_header(&mut child, state, rect),
+			}
 		}
 		// Reorder feedback.
 		if let Some(d) = &self.track_drag
 			&& d.to != d.from
 		{
 			let row = if d.to > d.from { d.to + 1 } else { d.to };
-			let y = layout.track_top(row, h, scroll);
+			let y = self.top(layout, row, scroll);
 			ui.painter_at(clip)
 				.hline(clip.x_range(), y, Stroke::new(2.0, theme::ACCENT));
 		}
 		// Add-track buttons under the last track.
-		let below = layout.track_top(tracks.len(), h, scroll) + 8.0;
+		let below = layout.body_top + self.rows.height - scroll + 8.0;
 		if below + 24.0 < clip.bottom() && below > clip.top() - 24.0 {
 			let rect = Rect::from_min_size(
 				pos2(clip.left() + 8.0, below),
@@ -715,9 +754,10 @@ impl ArrangeUi {
 		);
 		let solo_rect = Rect::from_min_size(pos2(right - 18.0, row1), vec2(18.0, 16.0));
 		let mute_rect = solo_rect.translate(vec2(-21.0, 0.0));
+		let auto_rect = mute_rect.translate(vec2(-21.0, 0.0));
 		let name_rect = Rect::from_min_max(
 			pos2(left + 16.0, row1),
-			pos2(mute_rect.left() - 4.0, row1 + 16.0),
+			pos2(auto_rect.left() - 4.0, row1 + 16.0),
 		);
 		match &mut self.rename {
 			Some((t, text)) if *t == track.id => {
@@ -760,6 +800,15 @@ impl ArrangeUi {
 		}
 		let ch = &track.channel;
 		{
+			let open = state.view.automation.is_open(Some(track.id));
+			let a = ui.interact(auto_rect, id.with("auto"), Sense::click());
+			widgets::paint_toggle(&p, auto_rect, open, "A", theme::AUTOMATION, a.hovered());
+			if a.on_hover_text("Show / hide automation lanes (A)")
+				.clicked()
+			{
+				let project = state.project().clone();
+				state.view.automation.toggle(&project, Some(track.id));
+			}
 			let m = ui.interact(mute_rect, id.with("mute"), Sense::click());
 			widgets::paint_toggle(&p, mute_rect, ch.mute, "M", theme::MUTE, m.hovered());
 			if m.on_hover_text("Mute").clicked() {
@@ -849,8 +898,13 @@ impl ArrangeUi {
 		{
 			if let Some(pos) = ui.ctx().pointer_interact_pos() {
 				let n = state.project().tracks.len();
-				let row = ((pos.y - rect.top()) / rect.height()).floor() as i64 + index as i64;
-				d.to = row.clamp(0, n as i64 - 1) as usize;
+				let own = self.rows.track(index).map_or(0.0, |r| r.top);
+				let y = own + pos.y - rect.top();
+				d.to = match self.rows.track_at(y) {
+					Some((_, i)) => i,
+					None if y < 0.0 => 0,
+					None => n.saturating_sub(1),
+				};
 			}
 			if response.drag_stopped() || ui.input(|i| i.pointer.any_released()) {
 				let d = self.track_drag.take().expect("track drag");
@@ -874,28 +928,30 @@ impl ArrangeUi {
 		let painter = ui.painter_at(area);
 		let tracks: Vec<Track> = state.project().tracks.clone();
 
-		// Lane backgrounds.
-		for (i, t) in tracks.iter().enumerate() {
-			let y = layout.track_top(i, h, scroll);
-			let r = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), h));
+		// Row backgrounds: clip lanes alternate, automation lanes are a step darker.
+		for row in &self.rows.rows {
+			let y = layout.body_top + row.top - scroll;
+			let r = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row.height));
 			if !r.intersects(area) {
 				continue;
 			}
-			let selected = state.selection.track == Some(t.id);
-			painter.rect_filled(
-				r,
-				0.0,
-				if selected {
-					theme::LANE_SELECTED
-				} else if i % 2 == 0 {
-					theme::LANE
-				} else {
-					theme::LANE_ALT
-				},
-			);
+			let fill = match row.kind {
+				RowKind::Track { id, index } => {
+					if state.selection.track == Some(id) {
+						theme::LANE_SELECTED
+					} else if index % 2 == 0 {
+						theme::LANE
+					} else {
+						theme::LANE_ALT
+					}
+				}
+				RowKind::Lane { .. } => theme::AUTO_LANE,
+				RowKind::Master => theme::BG_PANEL,
+			};
+			painter.rect_filled(r, 0.0, fill);
 		}
 		// The area below the tracks is a little darker: it is a drop zone, not a lane.
-		let below = layout.track_top(tracks.len(), h, scroll);
+		let below = layout.body_top + self.rows.height - scroll;
 		if below < area.bottom() {
 			painter.rect_filled(
 				Rect::from_min_max(pos2(area.left(), below), area.max),
@@ -905,14 +961,32 @@ impl ArrangeUi {
 		}
 		let grid_area = Rect::from_min_max(area.min, pos2(area.right(), below.min(area.bottom())));
 		grid(&painter, grid_area, &tl, ts);
-		for i in 0..=tracks.len() {
-			let y = layout.track_top(i, h, scroll);
-			painter.hline(area.x_range(), y - 0.5, Stroke::new(1.0, theme::BORDER));
+		for row in &self.rows.rows {
+			let y = layout.body_top + row.top - scroll;
+			let c = if matches!(row.kind, RowKind::Lane { .. }) {
+				theme::GRID_BEAT
+			} else {
+				theme::BORDER
+			};
+			painter.hline(area.x_range(), y - 0.5, Stroke::new(1.0, c));
+		}
+		painter.hline(area.x_range(), below - 0.5, Stroke::new(1.0, theme::BORDER));
+
+		// Automation lanes.
+		for row in self.rows.rows.clone() {
+			let RowKind::Lane { address, .. } = &row.kind else {
+				continue;
+			};
+			let y = layout.body_top + row.top - scroll;
+			let r = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row.height));
+			if r.intersects(area) || self.auto.dragging(address) {
+				self.auto.lane_body(ui, state, address, r, area);
+			}
 		}
 
 		// Lane clicks: select / create clips.
 		for (i, t) in tracks.iter().enumerate() {
-			let y = layout.track_top(i, h, scroll);
+			let y = self.top(layout, i, scroll);
 			let r =
 				Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), h)).intersect(area);
 			if r.height() <= 0.0 {
@@ -940,7 +1014,7 @@ impl ArrangeUi {
 
 		// Clips.
 		for (i, t) in tracks.iter().enumerate() {
-			let y = layout.track_top(i, h, scroll);
+			let y = self.top(layout, i, scroll);
 			if (y > area.bottom() || y + h < area.top()) && self.drag.is_none() {
 				// Clips scrolled out of view still process an in-flight drag.
 				continue;
@@ -966,7 +1040,7 @@ impl ArrangeUi {
 		let h = state.view.track_height;
 		let tl = state.view.timeline;
 		let ts = state.project().time_signature;
-		let y = layout.track_top(index, h, state.view.scroll_y);
+		let y = self.top(layout, index, state.view.scroll_y);
 		let x0 = area.left() + tl.tick_to_x(clip.start);
 		let x1 = area.left() + tl.tick_to_x(clip.end());
 		let rect = Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1.max(x0 + 2.0), y + h - 1.0));
@@ -1053,11 +1127,12 @@ impl ArrangeUi {
 				d.delta = snapped - d.origin;
 				d.copy = d.kind == DragKind::Move && ctrl;
 				if d.kind == DragKind::Move {
-					let row = ((pos.y - layout.body_top + state.view.scroll_y) / h).floor();
+					let y = Self::content_y(layout, state, pos.y);
 					let tracks = &state.project().tracks;
-					d.target = (row >= 0.0)
-						.then(|| tracks.get(row as usize))
-						.flatten()
+					d.target = self
+						.rows
+						.track_at(y)
+						.and_then(|(_, i)| tracks.get(i))
 						.filter(|t| t.id != track.id && edits::compatible(track.kind, t.kind))
 						.map(|t| t.id);
 				}
@@ -1118,7 +1193,8 @@ impl ArrangeUi {
 					if let Some(target) = d.target
 						&& let Some(row) = state.project().track_index(target)
 					{
-						draw_rect = draw_rect.translate(vec2(0.0, (row as f32 - index as f32) * h));
+						let dy = self.rows.track_top(row) - self.rows.track_top(index);
+						draw_rect = draw_rect.translate(vec2(0.0, dy));
 					}
 				}
 				DragKind::Resize => {
@@ -1175,6 +1251,7 @@ pub fn zoom_to_fit(state: &mut AppState, width: f32) {
 /// a selection, zooms to fit.
 pub fn zoom_to_selection(state: &mut AppState, width: f32, height: f32) {
 	let p = state.project();
+	let rows = Rows::new(p, &state.view);
 	let found: Vec<(usize, Tick, Tick)> = state
 		.selection
 		.clips
@@ -1197,7 +1274,7 @@ pub fn zoom_to_selection(state: &mut AppState, width: f32, height: f32) {
 		.timeline
 		.zoom_to_range(start.beats(), end.beats(), width);
 	let h = state.view.track_height;
-	let top = row as f32 * h;
+	let top = rows.track_top(row);
 	if top < state.view.scroll_y || top + h > state.view.scroll_y + height {
 		state.view.scroll_y = (top - h * 0.5).max(0.0);
 	}
@@ -1348,6 +1425,36 @@ fn track_menu(
 				ui.close();
 			}
 		}
+	});
+	ui.separator();
+	let open = state.view.automation.is_open(Some(track.id));
+	if ui
+		.add(
+			egui::Button::new(if open {
+				"Hide automation"
+			} else {
+				"Show automation"
+			})
+			.shortcut_text("A"),
+		)
+		.clicked()
+	{
+		let project = state.project().clone();
+		state.view.automation.toggle(&project, Some(track.id));
+		ui.close();
+	}
+	ui.menu_button("Automate", |ui| {
+		let choices = state.lane_choices(Some(track.id));
+		egui::ScrollArea::vertical()
+			.max_height(360.0)
+			.show(ui, |ui| {
+				for c in choices {
+					if ui.button(format!("{} · {}", c.group, c.name)).clicked() {
+						state.automate(c.address);
+						ui.close();
+					}
+				}
+			});
 	});
 	ui.separator();
 	if ui.button("Move up").clicked() {

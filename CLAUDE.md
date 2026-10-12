@@ -236,6 +236,18 @@ hangs is bypassed (instrument silent, effect pass-through), the render completes
 `MixReport.warnings` names track, device, reason and approximate time. The `Player` polls
 sandbox monitors off the audio thread; `load` re-creates every device, which restarts crashed
 plugins (MCP: `transport_status.plugin_crashes`, `restart_plugins`).
+Sandbox realtime policy (`SandboxOptions`): late is not dead — a round trip that misses its
+deadline (`max(realtime_timeout 2 ms, chunk duration)`) only drops that chunk (instrument
+silent, effect dry), the late reply is retired by sequence number, busy chunks are skipped
+without waiting (note-offs and param changes carried over), and `SandboxStats` / engine
+`PluginXruns` (`Graph/Player::plugin_xruns`) count it; only no on-time answer for
+`hang_timeout` (2 s) is a hang (offline: any miss of `offline_timeout`, 30 s). Realtime
+batching: `realtime_chunk` (128) = 4 engine quanta per round trip as 4 sub-blocks in the shm
+(events/params/transport stay per quantum), +96 frames of latency reported through
+`latency()` so PDC absorbs it; offline is not batched (`offline_chunk` 0). The child's audio
+thread asks for `SCHED_FIFO` (`realtime_priority` 10, direct or RealtimeKit via `busctl`;
+`RLIMIT_RTTIME` soft limit demotes it on `SIGXCPU`), shm is `mlock`ed. Surge XT stress test:
+`cargo test -p cadenza-plugin-host --release --test sandbox_realtime -- --ignored --nocapture`.
 Plugin state is captured explicitly (MCP `capture_plugin_state`, automatically on `save_project`,
 and after loading a plugin preset) from a fresh instance, then stored with `SetDeviceState`.
 MCP preset tools: `list_presets`/`load_preset`/`save_preset` (user presets in

@@ -10,7 +10,7 @@
 //! reflects edits made while the transport is running.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
@@ -25,7 +25,7 @@ use rmcp::{
 
 use crate::error::ServeError;
 use crate::player::PlayerHandle;
-use crate::session::Session;
+use crate::session::{Session, SharedSession};
 use crate::tools::{
 	arrange, audio, clips, compose, devices, midi, playback, presets, project, render, tracks,
 };
@@ -68,7 +68,8 @@ Positions and durations are always in beats (quarter notes); pitches are note na
 (\"C4\") or MIDI numbers (60 = C4); velocity is 0..1; volume is dB; pan is -1..1.";
 
 pub struct CadenzaServer {
-	session: Mutex<Session>,
+	/// Possibly shared with other owners (the app): every tool locks it per call.
+	session: SharedSession,
 	player: Mutex<Option<PlayerHandle>>,
 	tool_router: ToolRouter<Self>,
 	/// Peer handed to tools called in-process (see [`CadenzaServer::call_tool_json`]).
@@ -96,8 +97,15 @@ impl CadenzaServer {
 
 	/// A server around an existing session (e.g. one with a custom plugin cache).
 	pub fn with_session(session: Session) -> Self {
+		Self::with_shared_session(session.into_shared())
+	}
+
+	/// A server working on a session someone else also edits (the desktop app hands its
+	/// session to the embedded AI agent this way). Each tool call locks the session only
+	/// for its own duration; renders and analysis work on a copy.
+	pub fn with_shared_session(session: SharedSession) -> Self {
 		Self {
-			session: Mutex::new(session),
+			session,
 			player: Mutex::new(None),
 			tool_router: Self::tool_router(),
 			local_peer: OnceLock::new(),
@@ -183,6 +191,11 @@ impl CadenzaServer {
 				running.peer().clone()
 			})
 			.clone()
+	}
+
+	/// The session the tools act on.
+	pub fn shared_session(&self) -> SharedSession {
+		Arc::clone(&self.session)
 	}
 
 	fn session(&self) -> std::sync::MutexGuard<'_, Session> {

@@ -2,14 +2,26 @@
 //! and the catalog of installed third-party plugins.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cadenza_engine::PluginHosting;
 use cadenza_model::{Document, Project};
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 
+/// A session several owners edit together (the app's state and the embedded AI agent):
+/// lock it for short critical sections only.
+pub type SharedSession = Arc<Mutex<Session>>;
+
+/// Identifies one state of a session: `(epoch, document revision)`. The epoch changes
+/// whenever the document is replaced (new/open project).
+pub type ChangeKey = (u64, u64);
+
 pub struct Session {
 	document: Document,
+	/// Bumped by [`Session::reset`]: document revisions restart with a new document.
+	epoch: u64,
+	/// The state last saved to or loaded from disk.
+	clean: ChangeKey,
 	path: Option<PathBuf>,
 	plugin_cache: PathBuf,
 	/// Loaded from `plugin_cache` on first use.
@@ -30,6 +42,8 @@ impl Session {
 	pub fn with_plugin_cache(cache_path: impl Into<PathBuf>) -> Self {
 		Self {
 			document: Document::new(Project::new("Untitled")),
+			epoch: 0,
+			clean: (0, 0),
 			path: None,
 			plugin_cache: cache_path.into(),
 			plugins: None,
@@ -59,10 +73,34 @@ impl Session {
 		self.path.as_deref()
 	}
 
-	/// Replaces the whole session with a freshly opened/created document.
+	/// Replaces the whole session with a freshly opened/created document (which counts
+	/// as clean).
 	pub fn reset(&mut self, document: Document, path: Option<PathBuf>) {
 		self.document = document;
 		self.path = path;
+		self.epoch += 1;
+		self.clean = self.change_key();
+	}
+
+	/// The current state's key: compare it with an earlier one to know whether anything
+	/// changed (document edits, undo/redo, a new document).
+	pub fn change_key(&self) -> ChangeKey {
+		(self.epoch, self.document.revision())
+	}
+
+	/// Records that the current state is what is on disk (after a save).
+	pub fn mark_clean(&mut self) {
+		self.clean = self.change_key();
+	}
+
+	/// Whether nothing changed since the last save/open.
+	pub fn is_clean(&self) -> bool {
+		self.clean == self.change_key()
+	}
+
+	/// Wraps the session for shared use.
+	pub fn into_shared(self) -> SharedSession {
+		Arc::new(Mutex::new(self))
 	}
 
 	pub fn set_path(&mut self, path: PathBuf) {

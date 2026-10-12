@@ -100,6 +100,7 @@ pub fn save_project(
 	}
 	session.document().project().save_json(&path)?;
 	session.set_path(path.clone());
+	session.mark_clean();
 	Ok(SaveProjectOutput {
 		path: path.display().to_string(),
 		captured_plugin_states: captured,

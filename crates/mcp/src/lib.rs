@@ -14,4 +14,4 @@ pub mod tools;
 
 pub use error::{McpError, ServeError};
 pub use server::{CadenzaServer, ToolDefinition, serve_stdio};
-pub use session::Session;
+pub use session::{ChangeKey, Session, SharedSession};

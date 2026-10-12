@@ -98,3 +98,41 @@ async fn call_tool_json_runs_tools_and_reports_errors_as_text() {
 		.unwrap_err();
 	assert!(not_object.contains("object"), "{not_object}");
 }
+
+#[tokio::test]
+async fn a_shared_session_sees_tool_edits_and_tracks_saves() {
+	let dir = tempfile::tempdir().unwrap();
+	let shared = Session::with_plugin_cache(dir.path().join("plugins.json")).into_shared();
+	let server = CadenzaServer::with_shared_session(shared.clone());
+	assert!(std::sync::Arc::ptr_eq(&server.shared_session(), &shared));
+	let start = shared.lock().unwrap().change_key();
+	assert!(shared.lock().unwrap().is_clean());
+
+	server
+		.call_tool_json(
+			"create_track",
+			json!({"name": "Bass", "kind": "instrument"}),
+		)
+		.await
+		.unwrap();
+	{
+		let session = shared.lock().unwrap();
+		assert_eq!(session.document().project().tracks[0].name, "Bass");
+		assert_ne!(session.change_key(), start);
+		assert!(!session.is_clean());
+	}
+	let path = dir.path().join("song.cadenza.json");
+	server
+		.call_tool_json("save_project", json!({"path": path.display().to_string()}))
+		.await
+		.unwrap();
+	assert!(shared.lock().unwrap().is_clean());
+	// Replacing the document changes the key even though revisions restart.
+	server
+		.call_tool_json("new_project", json!({"name": "Other"}))
+		.await
+		.unwrap();
+	let session = shared.lock().unwrap();
+	assert_eq!(session.document().revision(), 1, "history cleared once");
+	assert!(session.is_clean());
+}

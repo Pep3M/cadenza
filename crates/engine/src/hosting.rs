@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use cadenza_core::{DeviceId, TrackId};
 use cadenza_plugin_host::{
 	CrashReason, HostingMode, PluginEditor, PluginError, SandboxMonitor, SandboxOptions,
+	SandboxStats,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -160,6 +161,35 @@ impl PluginWatch {
 			message,
 		})
 	}
+
+	/// The device's realtime dropouts, if it had any. Wait-free.
+	pub fn xruns(&self) -> Option<PluginXruns> {
+		let stats = self.monitor.stats();
+		(stats.late_blocks > 0 || stats.dropped_frames > 0).then(|| PluginXruns {
+			track_id: self.track_id,
+			location: self.location.clone(),
+			device_id: self.device_id,
+			device_name: self.device_name.clone(),
+			plugin_id: self.monitor.plugin_id().to_string(),
+			stats,
+		})
+	}
+}
+
+/// Non-fatal realtime trouble of a sandboxed plugin device: it answered late (or was
+/// still busy) a few times, and that audio was replaced by silence (instruments) or the
+/// dry signal (effects) while the rest of the mix kept playing. Plugins that stop
+/// answering for good are reported as [`PluginCrash`] instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginXruns {
+	/// Track holding the device; `None` for the master channel.
+	pub track_id: Option<TrackId>,
+	/// e.g. "track 'Lead'" or "master".
+	pub location: String,
+	pub device_id: DeviceId,
+	pub device_name: String,
+	pub plugin_id: String,
+	pub stats: SandboxStats,
 }
 
 fn describe(reason: &CrashReason) -> String {

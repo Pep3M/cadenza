@@ -25,13 +25,13 @@ pub use automation::AutomationBindings;
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 pub use cadenza_midi_io::PortInfo as MidiPort;
 pub use cadenza_plugin_host::PluginCatalog;
-pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions};
+pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions, SandboxStats};
 pub use cadenza_plugin_host::{EDITORS_SUPPORTED, EditorEvent};
 pub use compile::{compile, compile_hosted, compile_with};
 pub use devices::{capture_state, plugin_presets, preset_state};
 pub use error::EngineError;
 pub use graph::{Graph, ScheduleSwap};
-pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting};
+pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting, PluginXruns};
 pub use meter::{MeterBank, MeterReading};
 pub use player::{
 	AuditionScope, EditorState, EditorUpdate, Player, PlayerClock, find_midi_input,

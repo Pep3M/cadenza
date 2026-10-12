@@ -57,7 +57,7 @@ use crate::automation::{AutoTarget, AutomationSet, Resolver};
 use crate::compile_hosted;
 use crate::error::EngineError;
 use crate::graph::{Audition, Graph, ScheduleSwap};
-use crate::hosting::{PluginCrash, PluginEditorSlot, PluginHosting, PluginWatch};
+use crate::hosting::{PluginCrash, PluginEditorSlot, PluginHosting, PluginWatch, PluginXruns};
 use crate::meter::MeterBank;
 use crate::schedule::MidiSchedule;
 
@@ -1000,6 +1000,13 @@ impl Player {
 			.iter()
 			.filter_map(|(w, _)| w.crash(PLAYBACK_CRASH_HINT))
 			.collect()
+	}
+
+	/// Sandboxed plugins of the loaded project that answered late at least once since it
+	/// was loaded: each late answer is a short dropout of that plugin only (silence for
+	/// instruments, the dry signal for effects), not a crash. Cheap (atomic reads).
+	pub fn plugin_xruns(&self) -> Vec<PluginXruns> {
+		self.watches.iter().filter_map(|(w, _)| w.xruns()).collect()
 	}
 
 	/// Like [`Player::plugin_crashes`], but returns each crash only once (for

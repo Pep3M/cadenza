@@ -151,6 +151,38 @@ fn a_hanging_plugin_times_out_and_the_render_completes() {
 }
 
 #[test]
+fn late_plugin_blocks_are_xruns_not_crashes() {
+	// Every 300th plugin call stalls 20 ms: far past the 2 ms deadline, far below the
+	// hang timeout.
+	let fx = crash_fx().with_param("1", 20.0).with_param("3", 300.0);
+	let mut lead = synth_track("lead", NOTES, 4.0);
+	lead.channel.inserts.push(fx.clone());
+	let p = project(vec![lead.clone()]);
+	let mut hosting = sandboxed();
+	hosting.sandbox.realtime_timeout = Duration::from_millis(2);
+	let mut graph = compile_hosted(&p, 48_000, 512, Some(&crash_catalog()), &hosting).unwrap();
+	graph.play();
+	let mut l = vec![0.0f32; 512];
+	let mut r = vec![0.0f32; 512];
+	// Paced like an audio callback, so the stalled plugin catches up in between.
+	for _ in 0..200 {
+		graph.process(&mut l, &mut r);
+		std::thread::sleep(Duration::from_millis(3));
+	}
+	assert!(
+		graph.plugin_crashes().is_empty(),
+		"{:?}",
+		graph.plugin_crashes()
+	);
+	let xruns = graph.plugin_xruns();
+	assert_eq!(xruns.len(), 1, "{xruns:?}");
+	assert_eq!(xruns[0].device_id, fx.id);
+	assert_eq!(xruns[0].track_id, Some(lead.id));
+	assert!(xruns[0].stats.late_blocks >= 2, "{xruns:?}");
+	assert!(xruns[0].stats.dropped_frames > 0, "{xruns:?}");
+}
+
+#[test]
 fn realtime_graphs_expose_crashes_off_the_audio_thread() {
 	let fx = crash_fx().with_param("0", 1.0);
 	let mut lead = synth_track("lead", NOTES, 4.0);

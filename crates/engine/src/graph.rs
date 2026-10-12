@@ -12,7 +12,7 @@ use cadenza_model::AutomationLane;
 use crate::QUANTUM;
 use crate::audio_clip::ClipPlayback;
 use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Resolver};
-use crate::hosting::{PluginCrash, PluginEditorSlot, PluginWatch};
+use crate::hosting::{PluginCrash, PluginEditorSlot, PluginWatch, PluginXruns};
 use crate::meter::{MeterBank, Meters};
 use crate::schedule::MidiSchedule;
 
@@ -531,6 +531,15 @@ impl Graph {
 		self.plugin_watches
 			.iter()
 			.filter_map(|w| w.crash(""))
+			.collect()
+	}
+
+	/// Sandboxed plugin devices that answered late at least once (non-fatal
+	/// dropouts; see [`PluginXruns`]). Cheap: atomic reads only.
+	pub fn plugin_xruns(&self) -> Vec<PluginXruns> {
+		self.plugin_watches
+			.iter()
+			.filter_map(PluginWatch::xruns)
 			.collect()
 	}
 

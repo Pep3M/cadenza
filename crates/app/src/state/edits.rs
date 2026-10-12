@@ -2,7 +2,7 @@
 //! project: the result goes through [`super::AppState::apply`] like every other edit (and
 //! like the AI's edits), so it is validated, undoable and reloaded into the player.
 
-use cadenza_core::{ClipId, NoteId, PPQ, Tick, TrackId};
+use cadenza_core::{ClipId, DeviceId, NoteId, PPQ, Tick, TrackId};
 use cadenza_model::{
 	Clip, ClipContent, ClipPatch, Command, Device, Note, NotePatch, Project, Track, TrackKind,
 };
@@ -92,6 +92,100 @@ pub fn move_clips(
 			"Move clips"
 		},
 		commands,
+	)
+}
+
+/// Copies `clips` shifted by `delta` (the earliest copy clamps at 0) and, when
+/// `to_track` is given, onto that track (Ctrl+drag). Returns the command and the ids of
+/// the copies.
+pub fn copy_clips(
+	project: &Project,
+	clips: &[ClipId],
+	delta: Tick,
+	to_track: Option<TrackId>,
+) -> Option<(Command, Vec<ClipId>)> {
+	let found: Vec<(&Track, &Clip)> = clips.iter().filter_map(|c| project.find_clip(*c)).collect();
+	let earliest = found.iter().map(|(_, c)| c.start).min()?;
+	let delta = Tick(delta.0.max(-earliest.0));
+	let target = to_track.and_then(|t| project.track(t));
+	let mut ids = Vec::new();
+	let commands = found
+		.iter()
+		.map(|(track, clip)| {
+			let mut copy = (*clip).clone();
+			copy.id = ClipId::new();
+			copy.start = clip.start + delta;
+			if let ClipContent::Midi { notes } = &mut copy.content {
+				for n in notes {
+					n.id = NoteId::new();
+				}
+			}
+			ids.push(copy.id);
+			let track = target
+				.filter(|t| compatible(track.kind, t.kind))
+				.map_or(track.id, |t| t.id);
+			Command::AddClip { track, clip: copy }
+		})
+		.collect();
+	Some((
+		batch(
+			if ids.len() == 1 {
+				"Copy clip"
+			} else {
+				"Copy clips"
+			},
+			commands,
+		)?,
+		ids,
+	))
+}
+
+/// Drops the insert `device` of channel `from` (`None` = master) into slot `slot`
+/// (0..=len, before the insert currently there) of channel `to`: reorders within a
+/// chain, moves to another chain, or with `copy` inserts a copy with a new id.
+pub fn drop_insert(
+	project: &Project,
+	from: Option<TrackId>,
+	device: DeviceId,
+	to: Option<TrackId>,
+	slot: usize,
+	copy: bool,
+) -> Option<Command> {
+	let source = project.channel(from)?;
+	let index = source.inserts.iter().position(|d| d.id == device)?;
+	let d = source.inserts[index].clone();
+	let target = project.channel(to)?;
+	let slot = slot.min(target.inserts.len());
+	if copy {
+		let mut d = d;
+		d.id = DeviceId::new();
+		return Some(Command::InsertDevice {
+			track: to,
+			device: d,
+			index: Some(slot),
+		});
+	}
+	if from == to {
+		let final_index = if slot > index { slot - 1 } else { slot };
+		return (final_index != index).then_some(Command::MoveDevice {
+			track: to,
+			device,
+			index: final_index,
+		});
+	}
+	batch(
+		"Move device",
+		vec![
+			Command::RemoveDevice {
+				track: from,
+				device,
+			},
+			Command::InsertDevice {
+				track: to,
+				device: d,
+				index: Some(slot),
+			},
+		],
 	)
 }
 
@@ -267,7 +361,7 @@ pub fn new_midi_clip(
 }
 
 /// One command, or a labelled batch of several; `None` for nothing to do.
-fn batch(label: &str, mut commands: Vec<Command>) -> Option<Command> {
+pub(crate) fn batch(label: &str, mut commands: Vec<Command>) -> Option<Command> {
 	match commands.len() {
 		0 => None,
 		1 => commands.pop(),
@@ -433,6 +527,75 @@ mod tests {
 		assert!(fx.doc.project().tracks[0].clips.is_empty());
 		fx.doc.undo().unwrap();
 		assert_eq!(fx.doc.project().tracks[0].clips.len(), 2);
+	}
+
+	#[test]
+	fn ctrl_drag_copies_clips() {
+		let mut fx = fixture();
+		let (cmd, ids) =
+			copy_clips(fx.doc.project(), &[fx.riff], beats(4.0), Some(fx.keys2)).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		let (track, copy) = clip(&fx.doc, ids[0]);
+		assert_eq!((track, copy.start), (fx.keys2, beats(8.0)));
+		assert_eq!(clip(&fx.doc, fx.riff).0, fx.keys, "original stays");
+		// Incompatible target: copied on its own track.
+		let (cmd, ids) =
+			copy_clips(fx.doc.project(), &[fx.riff], beats(-40.0), Some(fx.audio)).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		assert_eq!(clip(&fx.doc, ids[0]), (fx.keys, clip(&fx.doc, ids[0]).1));
+		assert_eq!(clip(&fx.doc, ids[0]).1.start, Tick::ZERO);
+	}
+
+	#[test]
+	fn inserts_reorder_move_and_copy_between_strips() {
+		let mut fx = fixture();
+		let (a, b, c) = (
+			Device::builtin("eq", "EQ"),
+			Device::builtin("compressor", "Comp"),
+			Device::builtin("reverb", "Verb"),
+		);
+		for d in [&a, &b, &c] {
+			fx.doc
+				.execute(Command::InsertDevice {
+					track: Some(fx.keys),
+					device: d.clone(),
+					index: None,
+				})
+				.unwrap();
+		}
+		let names = |doc: &Document, t: Option<TrackId>| -> Vec<String> {
+			doc.project()
+				.channel(t)
+				.unwrap()
+				.inserts
+				.iter()
+				.map(|d| d.name.clone())
+				.collect()
+		};
+		let k = Some(fx.keys);
+		// Dropping into its own slot (or the one after) does nothing.
+		assert!(drop_insert(fx.doc.project(), k, a.id, k, 0, false).is_none());
+		assert!(drop_insert(fx.doc.project(), k, a.id, k, 1, false).is_none());
+		let cmd = drop_insert(fx.doc.project(), k, a.id, k, 3, false).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		assert_eq!(names(&fx.doc, k), ["Comp", "Verb", "EQ"]);
+		let cmd = drop_insert(fx.doc.project(), k, a.id, k, 0, false).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		assert_eq!(names(&fx.doc, k), ["EQ", "Comp", "Verb"]);
+		// Move to the master (one undo step), copy to another track.
+		let cmd = drop_insert(fx.doc.project(), k, c.id, None, 0, false).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		assert_eq!(names(&fx.doc, k), ["EQ", "Comp"]);
+		assert_eq!(names(&fx.doc, None), ["Verb"]);
+		let cmd = drop_insert(fx.doc.project(), k, b.id, Some(fx.keys2), 5, true).unwrap();
+		fx.doc.execute(cmd).unwrap();
+		assert_eq!(names(&fx.doc, k), ["EQ", "Comp"]);
+		assert_eq!(names(&fx.doc, Some(fx.keys2)), ["Comp"]);
+		let copied = fx.doc.project().channel(Some(fx.keys2)).unwrap().inserts[0].id;
+		assert_ne!(copied, b.id, "a copy gets a new id");
+		fx.doc.undo().unwrap();
+		fx.doc.undo().unwrap();
+		assert_eq!(names(&fx.doc, k), ["EQ", "Comp", "Verb"]);
 	}
 
 	#[test]

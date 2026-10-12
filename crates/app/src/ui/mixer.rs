@@ -1,4 +1,7 @@
-//! Mixer: one strip per track (tracks, then buses) and the master strip pinned right.
+//! Mixer: one strip per track (tracks, then buses) and the master strip, right after the
+//! last strip (pinned to the right edge once the strips scroll). Inserts can be
+//! reordered by dragging, dragged to another strip (Ctrl: copy), and effects from the
+//! browser dropped into a slot.
 
 use cadenza_core::TrackId;
 use cadenza_dsp::DeviceRole;
@@ -9,9 +12,10 @@ use egui::{
 };
 
 use crate::state::AppState;
+use crate::state::dnd::{DropTarget, Payload};
 use crate::state::selection::DeviceRef;
 use crate::theme;
-use crate::ui::browser::DraggedDevice;
+use crate::ui::dnd;
 use crate::ui::widgets::{self, Gesture};
 
 const INSERT_ROWS: usize = 3;
@@ -21,11 +25,6 @@ const ROW: f32 = 18.0;
 pub fn show(ui: &mut Ui, state: &mut AppState) {
 	let full = ui.available_rect_before_wrap();
 	ui.painter().rect_filled(full, 0.0, theme::BG_DEEP);
-	let master_rect = Rect::from_min_max(
-		pos2(full.right() - theme::STRIP_WIDTH - 6.0, full.top()),
-		full.max,
-	);
-	let strips_rect = Rect::from_min_max(full.min, pos2(master_rect.left() - 4.0, full.bottom()));
 
 	let mut order: Vec<Track> = state
 		.project()
@@ -42,6 +41,15 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			.filter(|t| t.kind == TrackKind::Bus)
 			.cloned(),
 	);
+	// The master follows the last strip; once the strips overflow it pins to the right.
+	let master_w = theme::STRIP_WIDTH + 6.0;
+	let strips_w = 4.0 + order.len() as f32 * (theme::STRIP_WIDTH + 2.0) + 8.0;
+	let master_left = (full.left() + strips_w).min(full.right() - master_w);
+	let master_rect = Rect::from_min_max(pos2(master_left + 6.0, full.top()), full.max);
+	let strips_rect = Rect::from_min_max(full.min, pos2(master_left, full.bottom()));
+	// Strips fill the height; the horizontal scrollbar only appears when needed.
+	let overflow = strips_w > strips_rect.width();
+	let strip_h = full.height() - if overflow { 12.0 } else { 0.0 };
 
 	let mut strips_ui = ui.new_child(egui::UiBuilder::new().max_rect(strips_rect));
 	egui::ScrollArea::horizontal()
@@ -52,7 +60,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 				ui.spacing_mut().item_spacing.x = 2.0;
 				ui.add_space(4.0);
 				for t in &order {
-					strip(ui, state, Some(t), full.height());
+					strip(ui, state, Some(t), strip_h);
 				}
 				if order.is_empty() {
 					ui.add_space(12.0);
@@ -62,8 +70,8 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 		});
 	let mut master_ui = ui.new_child(egui::UiBuilder::new().max_rect(master_rect));
 	master_ui.painter().vline(
-		master_rect.left() - 2.0,
-		master_rect.y_range(),
+		master_rect.left() - 3.0,
+		master_rect.top() + 4.0..=master_rect.bottom() - 4.0,
 		Stroke::new(1.0, theme::BORDER_STRONG),
 	);
 	strip(&mut master_ui, state, None, full.height());
@@ -105,19 +113,6 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 			Some(t) => state.selection.select_track(t),
 			None => state.selection.select_master(),
 		}
-	}
-	if let Some(dev) = bg.dnd_release_payload::<DraggedDevice>() {
-		if dev.0.role == DeviceRole::Effect && id.is_none() {
-			state.selection.select_master();
-		}
-		state.use_device(&dev.0, id);
-	} else if bg.dnd_hover_payload::<DraggedDevice>().is_some() {
-		ui.painter().rect_stroke(
-			rect,
-			CornerRadius::same(theme::RADIUS),
-			Stroke::new(1.5, theme::ACCENT),
-			StrokeKind::Inside,
-		);
 	}
 
 	// Fixed regions so every strip lines up, top to bottom.
@@ -207,16 +202,18 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 			.max_rect(inserts_r.shrink(1.0))
 			.layout(Layout::top_down(Align::Min)),
 	);
+	let mut row_rects = Vec::with_capacity(channel.inserts.len());
 	egui::ScrollArea::vertical()
 		.id_salt(("inserts", id))
 		.auto_shrink([false, false])
 		.show(&mut rows, |ui| {
 			ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
 			for d in &channel.inserts {
-				insert_row(ui, state, id, d, w - 2.0);
+				row_rects.push(insert_row(ui, state, id, d, w - 2.0));
 			}
 			insert_menu(ui, state, id, w - 2.0);
 		});
+	drop_zone(ui, state, id, rect, inserts_r, &row_rects);
 
 	if let Some(t) = track {
 		section_label(&p, sends_label, "SENDS");
@@ -375,6 +372,95 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 	}
 }
 
+/// Drop target of the strip: an insert slot over the inserts area, the strip elsewhere.
+fn drop_zone(
+	ui: &Ui,
+	state: &mut AppState,
+	track: Option<TrackId>,
+	strip: Rect,
+	inserts: Rect,
+	rows: &[Rect],
+) {
+	let ctx = ui.ctx().clone();
+	let Some(payload) = egui::DragAndDrop::payload::<Payload>(&ctx).map(|p| (*p).clone()) else {
+		return;
+	};
+	let Some(pos) = ctx.pointer_latest_pos() else {
+		return;
+	};
+	if !strip.contains(pos) || !ui.clip_rect().contains(pos) {
+		return;
+	}
+	let slot_target = matches!(&payload, Payload::Insert { .. })
+		|| matches!(&payload, Payload::Device(i) if i.role == DeviceRole::Effect);
+	let target = if slot_target && inserts.contains(pos) {
+		let slot = rows.iter().filter(|r| r.center().y < pos.y).count();
+		DropTarget::InsertSlot { track, slot }
+	} else {
+		DropTarget::Strip(track)
+	};
+	let copy = ctx.input(|i| i.modifiers.command);
+	let action = state.drop_action(&payload, target, copy);
+	let color = if action.accepted() {
+		theme::ACCENT
+	} else {
+		theme::ERROR
+	};
+	let p = ui.painter();
+	p.rect_stroke(
+		strip,
+		CornerRadius::same(theme::RADIUS),
+		Stroke::new(1.5, color),
+		StrokeKind::Inside,
+	);
+	if let DropTarget::InsertSlot { slot, .. } = target {
+		let y = match (
+			rows.get(slot),
+			slot.checked_sub(1).and_then(|i| rows.get(i)),
+		) {
+			(Some(r), _) => r.top() - 1.0,
+			(None, Some(r)) => r.bottom() + 1.0,
+			(None, None) => inserts.top() + 2.0,
+		};
+		p.hline(
+			inserts.left() + 2.0..=inserts.right() - 2.0,
+			y.clamp(inserts.top() + 1.0, inserts.bottom() - 1.0),
+			Stroke::new(2.0, color),
+		);
+	}
+	dnd::set_hint(&ctx, action.describe(state.project()), action.accepted());
+	if ctx.input(|i| i.pointer.any_released()) {
+		egui::DragAndDrop::clear_payload(&ctx);
+		state.drop_payload(&payload, target, copy);
+	}
+}
+
+/// `text` shortened with an ellipsis to fit `max_width` in `font`.
+pub fn elide(ui: &Ui, text: &str, font: &FontId, max_width: f32) -> String {
+	let width = |s: &str| {
+		ui.fonts_mut(|f| {
+			f.layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::WHITE)
+				.size()
+				.x
+		})
+	};
+	if width(text) <= max_width {
+		return text.to_owned();
+	}
+	let chars: Vec<char> = text.chars().collect();
+	let (mut lo, mut hi) = (0, chars.len());
+	while lo < hi {
+		let mid = (lo + hi).div_ceil(2);
+		let candidate: String = chars[..mid].iter().collect::<String>() + "…";
+		if width(&candidate) <= max_width {
+			lo = mid;
+		} else {
+			hi = mid - 1;
+		}
+	}
+	chars[..lo].iter().collect::<String>().trim_end().to_owned() + "…"
+}
+
 fn section_label(p: &egui::Painter, r: Rect, text: &str) {
 	p.text(
 		r.left_center(),
@@ -395,12 +481,16 @@ fn insert_row(
 	track: Option<TrackId>,
 	d: &cadenza_model::Device,
 	w: f32,
-) {
+) -> Rect {
 	let r = DeviceRef {
 		track,
 		device: d.id,
 	};
 	let (rect, _) = ui.allocate_exact_size(vec2(w - 4.0, ROW), Sense::hover());
+	let dragging_me = matches!(
+		egui::DragAndDrop::payload::<Payload>(ui.ctx()).as_deref(),
+		Some(Payload::Insert { device, .. }) if *device == d.id
+	);
 	let selected = state.selection.device == Some(r);
 	let p = ui.painter();
 	p.rect_filled(
@@ -437,13 +527,41 @@ fn insert_row(
 			bypass: !d.bypass,
 		});
 	}
-	let nr = ui.interact(name, Id::new(("insert", d.id)), Sense::click());
+	let nr = ui.interact(name, Id::new(("insert", d.id)), Sense::click_and_drag());
+	let font = FontId::proportional(10.5);
+	let shown = elide(ui, &d.name, &font, name.width() - 4.0);
+	let nr = if shown != d.name {
+		nr.on_hover_text(format!(
+			"{}\n\nDrag to reorder or onto another strip (Ctrl: copy)",
+			d.name
+		))
+	} else {
+		nr.on_hover_text("Drag to reorder or onto another strip (Ctrl: copy)")
+	};
+	if nr.drag_started_by(egui::PointerButton::Primary) {
+		egui::DragAndDrop::set_payload(
+			ui.ctx(),
+			Payload::Insert {
+				track,
+				device: d.id,
+			},
+		);
+	}
+	let p = ui.painter();
+	if dragging_me {
+		p.rect_stroke(
+			rect,
+			CornerRadius::same(2),
+			Stroke::new(1.0, theme::ACCENT),
+			StrokeKind::Inside,
+		);
+	}
 	p.with_clip_rect(name).text(
 		pos2(name.left() + 2.0, name.center().y),
 		Align2::LEFT_CENTER,
-		&d.name,
-		FontId::proportional(10.5),
-		if d.bypass {
+		shown,
+		font,
+		if d.bypass || dragging_me {
 			theme::TEXT_FAINT
 		} else {
 			theme::TEXT
@@ -469,6 +587,7 @@ fn insert_row(
 	if cr.clicked() {
 		state.remove_device(track, d.id);
 	}
+	rect
 }
 
 /// "+" button listing insertable effects.

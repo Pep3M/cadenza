@@ -20,7 +20,7 @@ use cadenza_plugin_host::{
 	HostingMode, PluginCatalog, PluginError, PluginFormat, ProcessMode, SandboxMonitor,
 };
 
-use crate::audio_clip::{AudioData, ClipPlayback, load_wav};
+use crate::audio_clip::{self, ClipPlayback};
 use crate::automation::{AutoTarget, Binding, Curve, DeviceSlot};
 use crate::error::EngineError;
 use crate::graph::{
@@ -30,6 +30,7 @@ use crate::hosting::{PluginHosting, PluginWatch, sandbox_unavailable};
 use crate::pdc::{PdcEdge, PdcNode, PdcStage, Tap, plan};
 use crate::schedule::MidiSchedule;
 use crate::{MAX_TAIL_SECONDS, QUANTUM};
+use cadenza_audio_io::{AudioBuffer, ClipRegion};
 
 /// Compiles `project` for `sample_rate` with built-in devices only; plugin devices are
 /// bypassed with a warning. See [`compile_with`].
@@ -123,7 +124,7 @@ struct Compiler<'a> {
 	mode: ProcessMode,
 	sample_rate: u32,
 	warnings: Vec<String>,
-	files: HashMap<PathBuf, Option<Arc<AudioData>>>,
+	files: HashMap<PathBuf, Option<Arc<AudioBuffer>>>,
 	tail: f32,
 }
 
@@ -384,14 +385,16 @@ impl<'a> Compiler<'a> {
 			.collect()
 	}
 
-	fn audio(&mut self, path: &PathBuf, owner: &str) -> Option<Arc<AudioData>> {
+	fn audio(&mut self, path: &PathBuf, owner: &str) -> Option<Arc<AudioBuffer>> {
 		if let Some(cached) = self.files.get(path) {
 			return cached.clone();
 		}
-		let loaded = match load_wav(path, self.sample_rate) {
-			Ok(data) => Some(Arc::new(data)),
+		let loaded = match audio_clip::load(path, self.sample_rate) {
+			Ok(data) => Some(data),
 			Err(e) => {
-				self.warnings.push(format!("{owner}: {e}; clip is silent"));
+				self.warnings.push(format!(
+					"{owner}: {e}; its clips are silent (fix the path or re-import the file)"
+				));
 				None
 			}
 		};
@@ -444,23 +447,32 @@ impl<'a> Compiler<'a> {
 						file,
 						offset_seconds,
 						gain_db,
+						fade_in,
+						fade_out,
 					} = &clip.content
 					else {
 						continue;
 					};
-					let Some(data) = self.audio(file, owner) else {
+					let Some(source) = self.audio(file, owner) else {
 						continue;
 					};
 					let tempo = &self.project.tempo;
+					let start = tempo.tick_to_sample(clip.start, sr);
+					let length = tempo.tick_to_sample(clip.end(), sr).saturating_sub(start);
+					let (fade_in, fade_out) = audio_clip::fades(*fade_in, *fade_out, length, sr);
 					clips.push(ClipPlayback {
-						data,
-						start: tempo.tick_to_sample(clip.start, sr) as i64,
-						end: tempo.tick_to_sample(clip.end(), sr) as i64,
-						offset: (offset_seconds * sr).round() as i64,
-						gain: cadenza_core::db_to_gain(*gain_db),
+						source,
+						start: start as i64,
+						region: ClipRegion {
+							source_offset: (offset_seconds.max(0.0) * sr).round() as u64,
+							length,
+							gain: cadenza_core::db_to_gain(*gain_db),
+							fade_in,
+							fade_out,
+						},
 					});
 				}
-				let mono = !clips.is_empty() && clips.iter().all(|c| !c.data.is_stereo());
+				let mono = !clips.is_empty() && clips.iter().all(ClipPlayback::is_mono);
 				(Source::Audio { clips }, mono)
 			}
 			TrackKind::Bus => (Source::Bus { accumulator: 0 }, false),

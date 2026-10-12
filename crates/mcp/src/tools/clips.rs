@@ -379,16 +379,8 @@ pub fn duplicate_clip(
 					.map(|n| Note::new(n.pitch, n.start, n.length, n.velocity)),
 			);
 		}
-		cadenza_model::ClipContent::Audio {
-			file,
-			offset_seconds,
-			gain_db,
-		} => {
-			clip.content = cadenza_model::ClipContent::Audio {
-				file: file.clone(),
-				offset_seconds: *offset_seconds,
-				gain_db: *gain_db,
-			};
+		audio @ cadenza_model::ClipContent::Audio { .. } => {
+			clip.content = audio.clone();
 		}
 	}
 	let clip_id = clip.id;

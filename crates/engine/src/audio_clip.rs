@@ -1,173 +1,77 @@
-//! Audio clips: WAV loading (at compile time) and sample-accurate playback.
-//!
-//! Files are converted once to the engine rate. Resampling uses 4-point cubic Hermite
-//! (Catmull-Rom) interpolation; when downsampling, a 64-tap Blackman-windowed sinc low-pass
-//! at 0.45 x the target rate is applied first to limit aliasing. That is transparent for
-//! typical material but not mastering-grade (no polyphase/band-limited kernel).
+//! Audio clips: files are decoded and resampled to the engine rate at compile time
+//! through the shared [`AudioCache`] (so recompiles and repeated renders don't decode
+//! again), then played sample-accurately with [`render_clip`], which is realtime safe.
 
-use std::f64::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Decoded audio at the engine rate; one (mono) or two (stereo) channels.
-#[derive(Debug)]
-pub(crate) struct AudioData {
-	pub channels: Vec<Vec<f32>>,
+use cadenza_audio_io::{AudioBuffer, AudioCache, ClipRegion, Fade, render_clip};
+use cadenza_model::{ClipFade, FadeCurve};
+
+/// Loads `path` at `sample_rate` through the process-wide cache. Errors are
+/// human-readable (they become warnings).
+pub(crate) fn load(path: &Path, sample_rate: u32) -> Result<Arc<AudioBuffer>, String> {
+	AudioCache::global()
+		.get_or_load(path, sample_rate)
+		.map_err(|e| e.to_string())
 }
 
-impl AudioData {
-	pub fn is_stereo(&self) -> bool {
-		self.channels.len() > 1
-	}
-
-	pub fn len(&self) -> usize {
-		self.channels.first().map_or(0, Vec::len)
+pub(crate) fn curve(curve: FadeCurve) -> cadenza_audio_io::FadeCurve {
+	match curve {
+		FadeCurve::Linear => cadenza_audio_io::FadeCurve::Linear,
+		FadeCurve::EqualPower => cadenza_audio_io::FadeCurve::EqualPower,
+		FadeCurve::Exponential => cadenza_audio_io::FadeCurve::Exponential,
+		FadeCurve::SCurve => cadenza_audio_io::FadeCurve::SCurve,
 	}
 }
 
-/// Loads a WAV (8/16/24/32-bit int or 32-bit float) and converts it to `target_rate`.
-/// Channels beyond the first two are ignored. Errors are human-readable warnings.
-pub(crate) fn load_wav(path: &Path, target_rate: u32) -> Result<AudioData, String> {
-	let mut reader = hound::WavReader::open(path)
-		.map_err(|e| format!("cannot open audio file '{}': {e}", path.display()))?;
-	let spec = reader.spec();
-	let n_ch = spec.channels.max(1) as usize;
-	let samples: Vec<f32> = match spec.sample_format {
-		hound::SampleFormat::Float => reader
-			.samples::<f32>()
-			.collect::<Result<_, _>>()
-			.map_err(|e| format!("cannot decode '{}': {e}", path.display()))?,
-		hound::SampleFormat::Int => {
-			let scale = 1.0 / (1u64 << (spec.bits_per_sample.clamp(1, 32) - 1)) as f32;
-			reader
-				.samples::<i32>()
-				.map(|s| s.map(|v| v as f32 * scale))
-				.collect::<Result<_, _>>()
-				.map_err(|e| format!("cannot decode '{}': {e}", path.display()))?
-		}
+/// Converts model fades to frames for a clip of `length` frames. Fades that no longer
+/// fit (the clip was shortened or the tempo changed after they were set) are scaled down
+/// proportionally so they never overlap.
+pub(crate) fn fades(
+	fade_in: Option<ClipFade>,
+	fade_out: Option<ClipFade>,
+	length: u64,
+	sample_rate: f64,
+) -> (Fade, Fade) {
+	let frames =
+		|f: Option<ClipFade>| f.map_or(0, |f| (f.seconds.max(0.0) * sample_rate).round() as u64);
+	let (mut fin, mut fout) = (frames(fade_in), frames(fade_out));
+	let total = fin + fout;
+	if total > length {
+		fin = (fin as f64 * length as f64 / total as f64).floor() as u64;
+		fout = (length - fin).min(fout);
+	}
+	let make = |frames: u64, f: Option<ClipFade>| match f {
+		Some(f) if frames > 0 => Fade::new(frames, curve(f.curve)),
+		_ => Fade::NONE,
 	};
-	let keep = n_ch.min(2);
-	let frames = samples.len() / n_ch;
-	let mut channels: Vec<Vec<f32>> = (0..keep).map(|_| Vec::with_capacity(frames)).collect();
-	for frame in samples.chunks_exact(n_ch) {
-		for (c, ch) in channels.iter_mut().enumerate() {
-			ch.push(frame[c]);
-		}
-	}
-	if spec.sample_rate != target_rate && spec.sample_rate > 0 {
-		for ch in &mut channels {
-			*ch = resample(ch, spec.sample_rate, target_rate);
-		}
-	}
-	Ok(AudioData { channels })
+	(make(fin, fade_in), make(fout, fade_out))
 }
 
-/// Converts `input` from `from` Hz to `to` Hz.
-pub(crate) fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
-	if from == to || input.is_empty() {
-		return input.to_vec();
-	}
-	let filtered;
-	let src = if to < from {
-		filtered = lowpass(input, 0.45 * to as f64 / from as f64);
-		&filtered[..]
-	} else {
-		input
-	};
-	let step = from as f64 / to as f64;
-	let out_len = ((input.len() as f64) / step).ceil() as usize;
-	let at = |i: isize| -> f32 {
-		if i < 0 || i as usize >= src.len() {
-			0.0
-		} else {
-			src[i as usize]
-		}
-	};
-	(0..out_len)
-		.map(|i| {
-			let x = i as f64 * step;
-			let idx = x.floor() as isize;
-			let t = (x - idx as f64) as f32;
-			hermite(at(idx - 1), at(idx), at(idx + 1), at(idx + 2), t)
-		})
-		.collect()
-}
-
-#[inline]
-fn hermite(y0: f32, y1: f32, y2: f32, y3: f32, t: f32) -> f32 {
-	let c1 = 0.5 * (y2 - y0);
-	let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-	let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-	((c3 * t + c2) * t + c1) * t + y1
-}
-
-/// Zero-phase (centered) windowed-sinc low-pass; `cutoff` in cycles per sample.
-fn lowpass(input: &[f32], cutoff: f64) -> Vec<f32> {
-	const TAPS: usize = 64;
-	let center = (TAPS - 1) as f64 / 2.0;
-	let mut kernel: Vec<f64> = (0..TAPS)
-		.map(|k| {
-			let x = k as f64 - center;
-			let sinc = if x == 0.0 {
-				2.0 * cutoff
-			} else {
-				(2.0 * PI * cutoff * x).sin() / (PI * x)
-			};
-			let w = 0.42 - 0.5 * (2.0 * PI * k as f64 / (TAPS - 1) as f64).cos()
-				+ 0.08 * (4.0 * PI * k as f64 / (TAPS - 1) as f64).cos();
-			sinc * w
-		})
-		.collect();
-	let sum: f64 = kernel.iter().sum();
-	kernel.iter_mut().for_each(|k| *k /= sum);
-	let half = TAPS as isize / 2;
-	(0..input.len() as isize)
-		.map(|n| {
-			let mut acc = 0.0f64;
-			for (k, &h) in kernel.iter().enumerate() {
-				let i = n + half - k as isize;
-				if i >= 0 && (i as usize) < input.len() {
-					acc += h * input[i as usize] as f64;
-				}
-			}
-			acc as f32
-		})
-		.collect()
-}
-
-/// One audio clip placed on the timeline (all positions in engine samples).
+/// One audio clip placed on the timeline (positions in engine samples).
 #[derive(Debug, Clone)]
 pub(crate) struct ClipPlayback {
-	pub data: Arc<AudioData>,
+	pub source: Arc<AudioBuffer>,
+	/// Timeline sample of the clip's first frame.
 	pub start: i64,
-	pub end: i64,
-	/// Source sample played at `start`.
-	pub offset: i64,
-	pub gain: f32,
+	pub region: ClipRegion,
 }
 
 impl ClipPlayback {
 	/// Adds the clip's contribution for the block starting at timeline sample `pos`.
-	/// Mono files feed both channels.
+	/// Overlapping clips simply sum. Realtime safe.
+	#[inline]
 	pub fn mix(&self, pos: i64, left: &mut [f32], right: &mut [f32]) {
 		let n = left.len() as i64;
-		let from = self.start.max(pos);
-		let to = self.end.min(pos + n);
-		if from >= to {
+		if pos + n <= self.start || pos >= self.start + self.region.length as i64 {
 			return;
 		}
-		let len = self.data.len() as i64;
-		let l = &self.data.channels[0];
-		let r = self.data.channels.get(1).unwrap_or(l);
-		for s in from..to {
-			let src = s - self.start + self.offset;
-			if src < 0 || src >= len {
-				continue;
-			}
-			let i = (s - pos) as usize;
-			left[i] += l[src as usize] * self.gain;
-			right[i] += r[src as usize] * self.gain;
-		}
+		render_clip(&self.source, &self.region, pos - self.start, left, right);
+	}
+
+	pub fn is_mono(&self) -> bool {
+		self.source.num_channels() == 1
 	}
 }
 
@@ -175,40 +79,65 @@ impl ClipPlayback {
 mod tests {
 	use super::*;
 
-	#[test]
-	fn hermite_passes_through_points() {
-		assert_eq!(hermite(0.0, 1.0, 2.0, 3.0, 0.0), 1.0);
-		assert!((hermite(0.0, 1.0, 2.0, 3.0, 0.5) - 1.5).abs() < 1e-6);
+	fn clip(
+		frames: usize,
+		value: f32,
+		start: i64,
+		region: impl FnOnce(&AudioBuffer) -> ClipRegion,
+	) -> ClipPlayback {
+		let source = Arc::new(AudioBuffer::from_planar(48_000, vec![vec![value; frames]]).unwrap());
+		ClipPlayback {
+			region: region(&source),
+			source,
+			start,
+		}
 	}
 
 	#[test]
-	fn resampled_sine_keeps_frequency_and_level() {
-		let from = 44_100;
-		let to = 48_000;
-		let input: Vec<f32> = (0..from)
-			.map(|i| (2.0 * PI * 1000.0 * i as f64 / from as f64).sin() as f32 * 0.5)
-			.collect();
-		let out = resample(&input, from, to);
-		assert_eq!(out.len(), to as usize);
-		let max_err = (100..out.len() - 100)
-			.map(|i| {
-				let want = (2.0 * PI * 1000.0 * i as f64 / to as f64).sin() as f32 * 0.5;
-				(out[i] - want).abs()
-			})
-			.fold(0.0f32, f32::max);
-		assert!(max_err < 2e-3, "max error {max_err}");
+	fn fades_are_scaled_to_fit_the_clip() {
+		let f = |s| Some(ClipFade::new(s, FadeCurve::Linear));
+		let (fin, fout) = fades(f(1.0), f(1.0), 1000, 1000.0);
+		assert_eq!((fin.frames, fout.frames), (500, 500));
+		let (fin, fout) = fades(f(0.1), None, 1000, 1000.0);
+		assert_eq!((fin.frames, fout.frames), (100, 0));
+		assert_eq!(fout, Fade::NONE);
 	}
 
 	#[test]
-	fn downsampling_attenuates_above_new_nyquist() {
-		let from = 96_000;
-		let input: Vec<f32> = (0..from)
-			.map(|i| (2.0 * PI * 30_000.0 * i as f64 / from as f64).sin() as f32)
-			.collect();
-		let out = resample(&input, from, 48_000);
-		let peak = out[1000..out.len() - 1000]
-			.iter()
-			.fold(0.0f32, |m, x| m.max(x.abs()));
-		assert!(peak < 0.05, "alias peak {peak}");
+	fn overlapping_clips_sum() {
+		let a = clip(100, 0.25, 0, ClipRegion::whole);
+		let b = clip(100, 0.5, 50, ClipRegion::whole);
+		let mut l = [0.0f32; 160];
+		let mut r = [0.0f32; 160];
+		a.mix(0, &mut l, &mut r);
+		b.mix(0, &mut l, &mut r);
+		assert_eq!(l[10], 0.25);
+		assert_eq!(l[60], 0.75);
+		assert_eq!(l[120], 0.5);
+		assert_eq!(l[155], 0.0);
+		assert_eq!(l, r);
+	}
+
+	#[test]
+	fn block_split_matches_whole_block() {
+		let c = clip(200, 1.0, 7, |_| ClipRegion {
+			source_offset: 20,
+			length: 150,
+			gain: 0.5,
+			fade_in: Fade::new(30, cadenza_audio_io::FadeCurve::SCurve),
+			fade_out: Fade::new(40, cadenza_audio_io::FadeCurve::EqualPower),
+		});
+		let mut whole_l = vec![0.0f32; 192];
+		let mut whole_r = vec![0.0f32; 192];
+		c.mix(0, &mut whole_l, &mut whole_r);
+		let mut l = vec![0.0f32; 192];
+		let mut r = vec![0.0f32; 192];
+		for (i, (bl, br)) in l.chunks_mut(32).zip(r.chunks_mut(32)).enumerate() {
+			c.mix(i as i64 * 32, bl, br);
+		}
+		assert_eq!(whole_l, l);
+		assert_eq!(l[7], 0.0);
+		assert!(l[100] > 0.49);
+		assert_eq!(l[160], 0.0);
 	}
 }

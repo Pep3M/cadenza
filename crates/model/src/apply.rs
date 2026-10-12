@@ -518,6 +518,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.ok_or(ModelError::TrackNotFound(*track))?;
 			validate::clip_on_track(t, clip)?;
 			validate::clip(clip)?;
+			validate::clip_fades(clip, &project.tempo)?;
 			if project.clip_id_in_use(clip.id) {
 				return Err(ModelError::DuplicateClipId(clip.id));
 			}
@@ -556,6 +557,41 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 		}
 
 		Command::UpdateClip { clip, patch } => update_clip(project, *clip, patch),
+
+		Command::SetClipFades {
+			clip,
+			fade_in,
+			fade_out,
+		} => {
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			if c.is_midi() {
+				return Err(ModelError::NotAnAudioClip(*clip));
+			}
+			let mut updated = c.clone();
+			if let ClipContent::Audio {
+				fade_in: fi,
+				fade_out: fo,
+				..
+			} = &mut updated.content
+			{
+				*fi = *fade_in;
+				*fo = *fade_out;
+			}
+			validate::clip(&updated)?;
+			validate::clip_fades(&updated, &project.tempo)?;
+			let (old_in, old_out) = c.fades();
+			let target = project
+				.find_clip_mut(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			*target = updated;
+			Ok(vec![Command::SetClipFades {
+				clip: *clip,
+				fade_in: old_in,
+				fade_out: old_out,
+			}])
+		}
 
 		Command::AddNotes { clip, notes } => {
 			if notes.is_empty() {

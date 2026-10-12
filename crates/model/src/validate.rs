@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 
-use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TimeSignature, TrackId};
+use cadenza_core::{
+	ClipId, DeviceId, ParamAddress, ParamTarget, TempoMap, Tick, TimeSignature, TrackId,
+};
 
 use crate::error::ModelError;
 use crate::project::{
@@ -193,7 +195,20 @@ pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
 			file,
 			offset_seconds,
 			gain_db,
+			fade_in,
+			fade_out,
 		} => {
+			for (what, fade) in [("fade_in", fade_in), ("fade_out", fade_out)] {
+				if let Some(f) = fade
+					&& !(f.seconds.is_finite() && f.seconds > 0.0)
+				{
+					return Err(ModelError::invalid(
+						format!("audio clip {what} seconds"),
+						f.seconds,
+						"must be > 0 (use null for no fade)",
+					));
+				}
+			}
 			if file.as_os_str().is_empty() {
 				return Err(ModelError::invalid(
 					"audio clip file",
@@ -210,6 +225,35 @@ pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
 			}
 			volume(*gain_db)?;
 		}
+	}
+	Ok(())
+}
+
+/// Checks that an audio clip's fades fit in its duration under `tempo`.
+pub(crate) fn clip_fades(clip: &Clip, tempo: &TempoMap) -> Result<(), ModelError> {
+	let (fade_in, fade_out) = clip.fades();
+	let duration = clip.duration_seconds(tempo);
+	let fin = fade_in.map_or(0.0, |f| f.seconds);
+	let fout = fade_out.map_or(0.0, |f| f.seconds);
+	// A microsecond of slack absorbs rounding when a fade is meant to span the clip.
+	const EPS: f64 = 1e-6;
+	for (what, len) in [("fade_in", fin), ("fade_out", fout)] {
+		if len > duration + EPS {
+			return Err(ModelError::invalid(
+				format!("clip {} {what} seconds", clip.id),
+				len,
+				format!("the clip lasts {duration:.3} s; use a shorter fade or lengthen the clip"),
+			));
+		}
+	}
+	if fin + fout > duration + EPS {
+		return Err(ModelError::invalid(
+			format!("clip {} fades", clip.id),
+			format!("{fin} s + {fout} s"),
+			format!(
+				"fade_in + fade_out must not exceed the clip duration ({duration:.3} s); shorten one of them"
+			),
+		));
 	}
 	Ok(())
 }

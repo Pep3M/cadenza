@@ -7,7 +7,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::project::{
-	AutomationPoint, Clip, Device, Marker, Note, Output, OutputRoute, Send, SidechainSource, Track,
+	AutomationPoint, Clip, ClipFade, Device, Marker, Note, Output, OutputRoute, Send,
+	SidechainSource, Track,
 };
 
 /// Every mutation of a [`crate::Project`]. Commands carry every id they create, so
@@ -132,6 +133,15 @@ pub enum Command {
 		clip: ClipId,
 		#[serde(flatten)]
 		patch: ClipPatch,
+	},
+	/// Replaces both fades of an audio clip (`null` = no fade). Each fade, and their sum,
+	/// must fit in the clip's duration at its current position and tempo.
+	SetClipFades {
+		clip: ClipId,
+		#[serde(default)]
+		fade_in: Option<ClipFade>,
+		#[serde(default)]
+		fade_out: Option<ClipFade>,
 	},
 	AddNotes {
 		clip: ClipId,
@@ -269,6 +279,7 @@ impl Command {
 			Self::AddClip { .. } => "add_clip",
 			Self::RemoveClip { .. } => "remove_clip",
 			Self::UpdateClip { .. } => "update_clip",
+			Self::SetClipFades { .. } => "set_clip_fades",
 			Self::AddNotes { .. } => "add_notes",
 			Self::RemoveNotes { .. } => "remove_notes",
 			Self::UpdateNotes { .. } => "update_notes",
@@ -359,6 +370,12 @@ impl Command {
 					_ => "Edit clip".into(),
 				}
 			}
+			Self::SetClipFades {
+				fade_in: None,
+				fade_out: None,
+				..
+			} => "Remove clip fades".into(),
+			Self::SetClipFades { .. } => "Set clip fades".into(),
 			Self::AddNotes { notes, .. } => plural("Add", notes.len(), "note"),
 			Self::RemoveNotes { notes, .. } => plural("Remove", notes.len(), "note"),
 			Self::UpdateNotes { notes, .. } => plural("Edit", notes.len(), "note"),

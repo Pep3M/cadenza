@@ -326,8 +326,10 @@ version = "0.1.0"
 name = "cadenza-engine"
 version = "0.1.0"
 dependencies = [
+ "cadenza-audio-io",
  "cadenza-core",
  "cadenza-dsp",
+ "cadenza-midi-io",
  "cadenza-model",
  "cadenza-plugin-host",
  "cpal",

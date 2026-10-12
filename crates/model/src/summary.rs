@@ -114,6 +114,9 @@ pub struct ClipSummary {
 	pub pitch_range: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub file: Option<String>,
+	/// Audio clip fades, e.g. "in 0.010 s linear, out 2.000 s exponential".
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub fades: Option<String>,
 }
 
 impl Project {
@@ -240,6 +243,23 @@ fn clip_summary(clip: &Clip) -> ClipSummary {
 		}
 		ClipContent::Audio { file, .. } => ("audio", None, None, Some(file.display().to_string())),
 	};
+	let fades = match clip.fades() {
+		(None, None) => None,
+		(fade_in, fade_out) => {
+			let describe = |dir: &str, f: crate::ClipFade| {
+				let curve = serde_json::to_value(f.curve)
+					.ok()
+					.and_then(|v| v.as_str().map(str::to_owned))
+					.unwrap_or_default();
+				format!("{dir} {:.3} s {curve}", f.seconds)
+			};
+			let parts: Vec<String> = [("in", fade_in), ("out", fade_out)]
+				.into_iter()
+				.filter_map(|(d, f)| f.map(|f| describe(d, f)))
+				.collect();
+			Some(parts.join(", "))
+		}
+	};
 	ClipSummary {
 		id: clip.id,
 		name: clip.name.clone(),
@@ -249,6 +269,7 @@ fn clip_summary(clip: &Clip) -> ClipSummary {
 		note_count,
 		pitch_range,
 		file,
+		fades,
 	}
 }
 

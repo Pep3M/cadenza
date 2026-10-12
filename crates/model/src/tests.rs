@@ -1739,3 +1739,95 @@ fn routing_fields_persist_and_old_files_load() {
 		Err(ModelError::RoutingCycle { .. })
 	));
 }
+
+#[test]
+fn clip_fades_round_trip_and_validate() {
+	let fx = fixture();
+	let fade = |s| Some(ClipFade::new(s, FadeCurve::EqualPower));
+	// The vocal clip spans beats 4..12 at 120 bpm = 4 s.
+	let after = round_trip(
+		&fx.project,
+		Command::SetClipFades {
+			clip: fx.vox,
+			fade_in: fade(0.01),
+			fade_out: fade(2.0),
+		},
+	);
+	let (_, clip) = after.find_clip(fx.vox).unwrap();
+	assert_eq!(clip.fades(), (fade(0.01), fade(2.0)));
+	let summary = serde_json::to_string(&after.summary()).unwrap();
+	assert!(
+		summary.contains("in 0.010 s equal_power, out 2.000 s equal_power"),
+		"{summary}"
+	);
+	round_trip(
+		&after,
+		Command::SetClipFades {
+			clip: fx.vox,
+			fade_in: None,
+			fade_out: None,
+		},
+	);
+
+	let too_long = exec_err(
+		&fx.project,
+		Command::SetClipFades {
+			clip: fx.vox,
+			fade_in: fade(5.0),
+			fade_out: None,
+		},
+	)
+	.to_string();
+	assert!(too_long.contains("lasts 4.000 s"), "{too_long}");
+	let sum = exec_err(
+		&fx.project,
+		Command::SetClipFades {
+			clip: fx.vox,
+			fade_in: fade(2.5),
+			fade_out: fade(2.0),
+		},
+	)
+	.to_string();
+	assert!(sum.contains("must not exceed"), "{sum}");
+	let zero = exec_err(
+		&fx.project,
+		Command::SetClipFades {
+			clip: fx.vox,
+			fade_in: fade(0.0),
+			fade_out: None,
+		},
+	)
+	.to_string();
+	assert!(zero.contains("null for no fade"), "{zero}");
+	assert!(matches!(
+		exec_err(
+			&fx.project,
+			Command::SetClipFades {
+				clip: fx.riff,
+				fade_in: fade(0.1),
+				fade_out: None,
+			},
+		),
+		ModelError::NotAnAudioClip(_)
+	));
+}
+
+#[test]
+fn audio_clips_without_fades_keep_the_old_json_shape() {
+	let clip = Clip::audio("Vox", beats(0.0), beats(4.0), "vox.wav");
+	let json = serde_json::to_value(&clip).unwrap();
+	assert!(json["content"].get("fade_in").is_none());
+	let old = json!({
+		"id": clip.id, "name": "Vox", "start": 0, "length": 3840,
+		"content": {"type": "audio", "file": "vox.wav", "offset_seconds": 0.0, "gain_db": 0.0}
+	});
+	let parsed: Clip = serde_json::from_value(old).unwrap();
+	assert_eq!(parsed.fades(), (None, None));
+	let with: Clip = serde_json::from_value(json!({
+		"id": clip.id, "name": "Vox", "start": 0, "length": 3840,
+		"content": {"type": "audio", "file": "vox.wav", "offset_seconds": 0.0, "gain_db": 0.0,
+			"fade_out": {"seconds": 1.5}}
+	}))
+	.unwrap();
+	assert_eq!(with.fades().1, Some(ClipFade::new(1.5, FadeCurve::Linear)));
+}

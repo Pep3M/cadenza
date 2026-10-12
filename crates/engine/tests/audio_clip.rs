@@ -3,7 +3,7 @@
 mod common;
 
 use cadenza_engine::{analyze_mix, render_offline};
-use cadenza_model::{Clip, ClipContent, Track, TrackKind};
+use cadenza_model::{Clip, ClipContent, ClipFade, FadeCurve, Track, TrackKind};
 use common::*;
 use hound::SampleFormat;
 
@@ -36,6 +36,8 @@ fn mono_44k_clip_is_resampled_positioned_and_panned() {
 		file: path,
 		offset_seconds: 0.25,
 		gain_db: -6.0,
+		fade_in: None,
+		fade_out: None,
 	};
 	let out = render_offline(&project(vec![audio_track(clip)]), &opts(4.0)).unwrap();
 	assert!(
@@ -87,4 +89,113 @@ fn missing_file_warns_and_renders_silence() {
 		"{}",
 		report.warnings[0]
 	);
+}
+
+fn with_fades(mut clip: Clip, fade_in: Option<ClipFade>, fade_out: Option<ClipFade>) -> Clip {
+	if let ClipContent::Audio {
+		fade_in: fi,
+		fade_out: fo,
+		..
+	} = &mut clip.content
+	{
+		*fi = fade_in;
+		*fo = fade_out;
+	}
+	clip
+}
+
+#[test]
+fn fades_shape_the_clip_edges() {
+	let path = write_sine_wav(
+		"fades.wav",
+		48_000,
+		2,
+		(SampleFormat::Float, 32),
+		1_000.0,
+		0.5,
+		2.0,
+	);
+	// 2 beats at 120 bpm = 1 s; 0.25 s linear fade-in, 0.5 s equal-power fade-out.
+	let clip = with_fades(
+		Clip::audio("c", beats(0.0), beats(2.0), &path),
+		Some(ClipFade::new(0.25, FadeCurve::Linear)),
+		Some(ClipFade::new(0.5, FadeCurve::EqualPower)),
+	);
+	let out = render_offline(&project(vec![audio_track(clip)]), &opts(2.0)).unwrap();
+	let start = peak(&out.left[0..48]);
+	let mid_in = peak(&out.left[5_760..6_240]); // around 0.125 s: half the fade-in
+	let body = peak(&out.left[12_500..23_500]);
+	let tail = peak(&out.left[47_000..48_000]);
+	assert!(start < 0.003, "fade-in starts silent: {start}");
+	assert!(
+		(mid_in - 0.25).abs() < 0.02,
+		"linear fade-in is halfway: {mid_in}"
+	);
+	assert!((body - 0.5).abs() < 0.01, "body at full level: {body}");
+	assert!(tail < 0.05, "fade-out ends near silence: {tail}");
+}
+
+#[test]
+fn overlapping_clips_on_one_track_sum() {
+	let a = write_sine_wav(
+		"ovl_a.wav",
+		48_000,
+		1,
+		(SampleFormat::Float, 32),
+		500.0,
+		0.25,
+		1.0,
+	);
+	let mut t = Track::new("audio", TrackKind::Audio);
+	t.clips.push(Clip::audio("a", beats(0.0), beats(2.0), &a));
+	t.clips.push(Clip::audio("b", beats(0.0), beats(2.0), &a));
+	let both = render_offline(&project(vec![t]), &opts(2.0)).unwrap();
+	let single = render_offline(
+		&project(vec![audio_track(Clip::audio(
+			"a",
+			beats(0.0),
+			beats(2.0),
+			&a,
+		))]),
+		&opts(2.0),
+	)
+	.unwrap();
+	for i in (0..48_000).step_by(997) {
+		assert!((both.left[i] - 2.0 * single.left[i]).abs() < 1e-6);
+	}
+}
+
+#[test]
+fn flac_files_play() {
+	let src = write_sine_wav(
+		"to_flac.wav",
+		48_000,
+		2,
+		(SampleFormat::Int, 16),
+		1_000.0,
+		0.25,
+		1.0,
+	);
+	let buf = cadenza_audio_io::decode_file(&src).unwrap();
+	let flac = tmp_path("clip.flac");
+	cadenza_audio_io::export(
+		&buf,
+		&flac,
+		&cadenza_audio_io::ExportOptions::flac(cadenza_audio_io::FlacBitDepth::Bits16),
+	)
+	.unwrap();
+	let clip = Clip::audio("c", beats(0.0), beats(2.0), &flac);
+	let out = render_offline(&project(vec![audio_track(clip)]), &opts(2.0)).unwrap();
+	assert!((peak(&out.left[1_000..47_000]) - 0.25).abs() < 0.005);
+}
+
+#[test]
+fn undecodable_file_warns_with_a_fix() {
+	let path = tmp_path("garbage.wav");
+	std::fs::write(&path, b"this is not audio at all").unwrap();
+	let clip = Clip::audio("c", beats(0.0), beats(2.0), &path);
+	let report = analyze_mix(&project(vec![audio_track(clip)]), &opts(2.0)).unwrap();
+	assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+	assert!(report.warnings[0].contains("garbage.wav"));
+	assert!(report.warnings[0].contains("silent"));
 }

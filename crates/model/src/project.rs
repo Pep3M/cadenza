@@ -160,7 +160,45 @@ pub enum ClipContent {
 		file: PathBuf,
 		offset_seconds: f64,
 		gain_db: f32,
+		/// Fade at the clip start (missing = none).
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		fade_in: Option<ClipFade>,
+		/// Fade at the clip end (missing = none).
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		fade_out: Option<ClipFade>,
 	},
+}
+
+/// A clip fade. Its length is in seconds, not beats: like `offset_seconds` it shapes the
+/// recording itself (de-click, natural decay), so a tempo change must not stretch it.
+/// AI-facing tools also accept beats and convert at the clip position.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ClipFade {
+	/// Fade length in seconds (> 0).
+	pub seconds: f64,
+	#[serde(default)]
+	pub curve: FadeCurve,
+}
+
+impl ClipFade {
+	pub fn new(seconds: f64, curve: FadeCurve) -> Self {
+		Self { seconds, curve }
+	}
+}
+
+/// Shape of a clip fade.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FadeCurve {
+	/// Straight gain ramp; crossfades of correlated material keep their level.
+	#[default]
+	Linear,
+	/// Sine/cosine quarter wave; crossfades of unrelated material keep their loudness.
+	EqualPower,
+	/// Even-sounding in dB (60 dB range); best for long fade-outs.
+	Exponential,
+	/// Slow start and end (raised cosine).
+	SCurve,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -436,6 +474,8 @@ impl Clip {
 				file: file.into(),
 				offset_seconds: 0.0,
 				gain_db: 0.0,
+				fade_in: None,
+				fade_out: None,
 			},
 		}
 	}
@@ -458,6 +498,21 @@ impl Clip {
 		match &self.content {
 			ClipContent::Midi { notes } => notes,
 			ClipContent::Audio { .. } => &[],
+		}
+	}
+
+	/// Clip length in seconds under `tempo`.
+	pub fn duration_seconds(&self, tempo: &TempoMap) -> f64 {
+		tempo.tick_to_seconds(self.end()) - tempo.tick_to_seconds(self.start)
+	}
+
+	/// `(fade_in, fade_out)` of an audio clip; `(None, None)` for MIDI clips.
+	pub fn fades(&self) -> (Option<ClipFade>, Option<ClipFade>) {
+		match &self.content {
+			ClipContent::Audio {
+				fade_in, fade_out, ..
+			} => (*fade_in, *fade_out),
+			ClipContent::Midi { .. } => (None, None),
 		}
 	}
 

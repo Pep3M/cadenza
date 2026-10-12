@@ -16,9 +16,9 @@ pub use command::{ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackP
 pub use document::Document;
 pub use error::ModelError;
 pub use project::{
-	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, Device, DeviceKind,
-	FORMAT_VERSION, Marker, Note, Output, OutputRoute, Project, Send, SidechainSource, Track,
-	TrackKind,
+	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
+	FORMAT_VERSION, FadeCurve, Marker, Note, Output, OutputRoute, Project, Send, SidechainSource,
+	Track, TrackKind,
 };
 pub use summary::{
 	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,

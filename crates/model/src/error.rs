@@ -83,6 +83,8 @@ pub enum ModelError {
 	},
 	#[error("clip {0} is an audio clip; note operations require a MIDI clip")]
 	NotAMidiClip(ClipId),
+	#[error("clip {0} is a MIDI clip; fades require an audio clip")]
+	NotAnAudioClip(ClipId),
 	#[error("track {track} is a {kind:?} track; outputs and sends can only target Bus tracks")]
 	NotABus { track: TrackId, kind: TrackKind },
 	#[error(

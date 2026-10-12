@@ -199,3 +199,59 @@ fn stopped_note_preview_does_not_allocate() {
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
 	assert!(loudest > 0.0, "the stopped preview sounded");
 }
+
+#[test]
+fn looping_auditioning_and_rescheduling_do_not_allocate() {
+	let p = mini_song();
+	let chords = p.tracks[2].id;
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	// Prepared off the audio thread: the audition mask and rescheduled clips (a note
+	// removed, then restored).
+	graph.set_audition(Some(&[chords]));
+	let mut edited = p.tracks[2].clips.clone();
+	if let cadenza_model::ClipContent::Midi { notes } = &mut edited[0].content {
+		notes.retain(|n| n.start.0 % (4 * PPQ_I) != 0 || n.pitch % 2 == 0);
+	}
+	let mut swaps: Vec<_> = (0..4)
+		.map(|i| {
+			let clips = if i % 2 == 0 {
+				&edited
+			} else {
+				&p.tracks[2].clips
+			};
+			graph.prepare_schedule(chords, clips, &p.tempo).unwrap()
+		})
+		.collect();
+	graph.play();
+
+	TRACKING.with(|t| t.set(true));
+	// A 1-bar loop that ends mid-quantum, wrapping many times.
+	graph.set_loop(Some((beats(4.0), cadenza_core::Tick(8 * PPQ_I + 1))));
+	graph.seek(beats(4.0));
+	let mut loudest = 0.0f32;
+	for (i, block) in [1usize, 37, 512, 1024]
+		.into_iter()
+		.cycle()
+		.take(600)
+		.enumerate()
+	{
+		if i % 150 == 75 {
+			graph.swap_schedule(&mut swaps[i / 150]);
+		}
+		graph.process(&mut left[..block], &mut right[..block]);
+		loudest = loudest.max(left[..block].iter().fold(0.0f32, |m, x| m.max(x.abs())));
+	}
+	graph.set_loop(None);
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+
+	graph.set_audition(None);
+	TRACKING.with(|t| t.set(true));
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+
+	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(loudest > 0.0, "the auditioned loop sounded");
+}

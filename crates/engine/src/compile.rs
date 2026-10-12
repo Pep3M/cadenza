@@ -427,15 +427,7 @@ impl<'a> Compiler<'a> {
 					.as_ref()
 					.is_none_or(|d| matches!(d.kind, DeviceKind::Builtin { .. }));
 				let schedule = MidiSchedule::from_clips(&track.clips, &self.project.tempo, sr);
-				// +1 for a possible `AllNotesOff` on reset, plus room for every note that
-				// could be chased back in at that same instant, plus live input (monitoring)
-				// and its release.
-				let events = Vec::with_capacity(
-					schedule.max_events_per_quantum()
-						+ schedule.max_chase_notes()
-						+ crate::LIVE_EVENT_CAPACITY
-						+ 2,
-				);
+				let events = Vec::with_capacity(event_capacity(&schedule));
 				(
 					Source::Instrument {
 						device,
@@ -443,6 +435,7 @@ impl<'a> Compiler<'a> {
 						events,
 						notes_off_on_reset,
 						midi_delay: 0,
+						release: [0; 2],
 					},
 					false,
 				)
@@ -643,6 +636,7 @@ impl<'a> Compiler<'a> {
 				inserts,
 				fader: Fader::new(track.channel.volume_db, track.channel.pan, mono, sr as f32),
 				audible,
+				muted: track.channel.mute,
 				edges,
 				aux_edges,
 				buf: StereoBuf::new(),
@@ -721,6 +715,7 @@ impl<'a> Compiler<'a> {
 			&mut self.warnings,
 		);
 		let meters = crate::meter::Meters::new(nodes.iter().map(|n| n.track_id), sr);
+		let audition = Arc::new(crate::graph::Audition::new(nodes.len()));
 
 		Ok(Graph {
 			sample_rate: sr,
@@ -748,6 +743,10 @@ impl<'a> Compiler<'a> {
 			held: [0; 2],
 			previewed: false,
 			meters,
+			loop_range: None,
+			wrap_pending: None,
+			out_wrap: None,
+			audition,
 		})
 	}
 
@@ -947,15 +946,44 @@ fn resolver(nodes: &[Node], master: &Master, tempo: &TempoMap, sample_rate: f64)
 	for (k, d) in master.inserts.iter().enumerate() {
 		add(None, DeviceSlot::Insert(k), d);
 	}
+	let bus_nodes: HashMap<usize, usize> = nodes
+		.iter()
+		.enumerate()
+		.filter_map(|(i, n)| match n.source {
+			Source::Bus { accumulator } => Some((accumulator, i)),
+			_ => None,
+		})
+		.collect();
 	for (i, n) in nodes.iter().enumerate() {
 		r.nodes.insert(n.track_id, i);
+		if matches!(n.source, Source::Instrument { .. }) {
+			r.instruments.insert(i);
+		}
 		for (k, e) in n.edges.iter().enumerate() {
 			if let Some(send) = e.send {
 				r.sends.insert(send, (i, k));
 			}
 		}
+		let feeds = n
+			.edges
+			.iter()
+			.map(|e| e.accumulator)
+			.chain(n.aux_edges.iter().filter_map(|e| e.accumulator))
+			.filter_map(|a| bus_nodes.get(&a).copied())
+			.collect();
+		r.feeds.push(feeds);
 	}
 	r
+}
+
+/// Room for one quantum of a schedule's events: a possible `AllNotesOff` on reset, every
+/// note that could be chased back in at that instant, live input (monitoring) and its
+/// release, and twice the scheduled events and chased notes for a loop wrap (both sides
+/// of the jump), plus the releases of a schedule swap.
+pub(crate) fn event_capacity(schedule: &MidiSchedule) -> usize {
+	2 * (schedule.max_events_per_quantum() + schedule.max_chase_notes())
+		+ crate::LIVE_EVENT_CAPACITY
+		+ 2 + 128
 }
 
 fn stage(d: &Device) -> PdcStage {

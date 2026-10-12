@@ -37,7 +37,7 @@ use std::collections::HashSet;
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_dsp::MidiEvent;
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
-use cadenza_model::{AutomationLane, Project};
+use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
@@ -46,9 +46,10 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use crate::automation::{AutoTarget, AutomationSet, Resolver};
 use crate::compile_hosted;
 use crate::error::EngineError;
-use crate::graph::Graph;
+use crate::graph::{Audition, Graph, ScheduleSwap};
 use crate::hosting::{PluginCrash, PluginHosting, PluginWatch};
 use crate::meter::MeterBank;
+use crate::schedule::MidiSchedule;
 
 const GRAPH_SLOTS: usize = 4;
 const GARBAGE_SLOTS: usize = 8;
@@ -56,6 +57,9 @@ const COMMAND_SLOTS: usize = 256;
 /// Automation sets in flight (and coming back to be dropped).
 const AUTOMATION_SLOTS: usize = 4;
 const AUTOMATION_GARBAGE_SLOTS: usize = 8;
+/// Rescheduled tracks in flight (and coming back to be dropped).
+const SCHEDULE_SLOTS: usize = 16;
+const SCHEDULE_GARBAGE_SLOTS: usize = 32;
 const MIDI_INPUT_SLOTS: usize = 2;
 /// Capacity of the hardware MIDI queue, and of the per-block drain buffer (so draining
 /// can never outgrow it).
@@ -83,6 +87,14 @@ enum Cmd {
 	SendLevel(DeviceId, f32),
 	/// A note for `track`'s instrument (it becomes the monitored track).
 	Preview(TrackId, MidiEvent),
+	/// Loop range (song ticks), kept across loads.
+	Loop(Option<(Tick, Tick)>),
+}
+
+/// The tracks an audition plays (see [`Player::set_audition`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditionScope {
+	pub tracks: Vec<TrackId>,
 }
 
 #[derive(Debug, Default)]
@@ -101,9 +113,14 @@ struct AudioCore {
 	automation_garbage: Producer<Box<AutomationSet>>,
 	/// A set for a graph that is queued but not swapped in yet.
 	pending_automation: Option<Box<AutomationSet>>,
+	schedules: Consumer<Box<ScheduleSwap>>,
+	schedule_garbage: Producer<Box<ScheduleSwap>>,
+	/// A schedule for a graph that is queued but not swapped in yet.
+	pending_schedule: Option<Box<ScheduleSwap>>,
 	shared: Arc<Shared>,
 	playing: bool,
 	position: Tick,
+	loop_range: Option<(Tick, Tick)>,
 	scratch_l: Vec<f32>,
 	scratch_r: Vec<f32>,
 	/// Live MIDI input queue, if a port is attached.
@@ -122,6 +139,8 @@ struct Control {
 	commands: Producer<Cmd>,
 	automations: Producer<Box<AutomationSet>>,
 	automation_garbage: Consumer<Box<AutomationSet>>,
+	schedules: Producer<Box<ScheduleSwap>>,
+	schedule_garbage: Consumer<Box<ScheduleSwap>>,
 	shared: Arc<Shared>,
 	midi_inputs: Producer<Consumer<TimedMessage>>,
 	midi_garbage: Consumer<Consumer<TimedMessage>>,
@@ -133,6 +152,8 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 	let (cmd_tx, cmd_rx) = RingBuffer::new(COMMAND_SLOTS);
 	let (auto_tx, auto_rx) = RingBuffer::new(AUTOMATION_SLOTS);
 	let (auto_garbage_tx, auto_garbage_rx) = RingBuffer::new(AUTOMATION_GARBAGE_SLOTS);
+	let (sched_tx, sched_rx) = RingBuffer::new(SCHEDULE_SLOTS);
+	let (sched_garbage_tx, sched_garbage_rx) = RingBuffer::new(SCHEDULE_GARBAGE_SLOTS);
 	let (midi_tx, midi_rx) = RingBuffer::new(MIDI_INPUT_SLOTS);
 	let (midi_garbage_tx, midi_garbage_rx) = RingBuffer::new(MIDI_INPUT_SLOTS + 1);
 	let shared = Arc::new(Shared::default());
@@ -143,6 +164,8 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			commands: cmd_tx,
 			automations: auto_tx,
 			automation_garbage: auto_garbage_rx,
+			schedules: sched_tx,
+			schedule_garbage: sched_garbage_rx,
 			shared: shared.clone(),
 			midi_inputs: midi_tx,
 			midi_garbage: midi_garbage_rx,
@@ -155,9 +178,13 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			automations: auto_rx,
 			automation_garbage: auto_garbage_tx,
 			pending_automation: None,
+			schedules: sched_rx,
+			schedule_garbage: sched_garbage_tx,
+			pending_schedule: None,
 			shared,
 			playing: false,
 			position: Tick::ZERO,
+			loop_range: None,
 			scratch_l: vec![0.0; SCRATCH_FRAMES],
 			scratch_r: vec![0.0; SCRATCH_FRAMES],
 			midi: None,
@@ -176,6 +203,7 @@ impl AudioCore {
 		if self.garbage.slots() > 0
 			&& let Ok(mut next) = self.graphs.pop()
 		{
+			next.set_loop(self.loop_range);
 			next.seek(self.position);
 			if self.playing {
 				next.play();
@@ -233,6 +261,12 @@ impl AudioCore {
 						g.set_send_level(send, db);
 					}
 				}
+				Cmd::Loop(range) => {
+					self.loop_range = range;
+					if let Some(g) = &mut self.graph {
+						g.set_loop(range);
+					}
+				}
 				Cmd::Preview(track, event) => {
 					if self.monitor != Some(track) {
 						self.monitor = Some(track);
@@ -247,6 +281,7 @@ impl AudioCore {
 			}
 		}
 		self.receive_automation();
+		self.receive_schedules();
 		// A new input replaces the old one only when the old can be handed back.
 		if self.midi_garbage.slots() > 0
 			&& let Ok(input) = self.midi_inputs.pop()
@@ -290,6 +325,41 @@ impl AudioCore {
 		if let Err(rtrb::PushError::Full(set)) = self.automation_garbage.push(set) {
 			// Only reachable if the control side stopped collecting; keep it alive.
 			self.pending_automation = Some(set);
+		}
+	}
+
+	/// Swaps in rescheduled tracks for the current graph, like
+	/// [`AudioCore::receive_automation`]: swaps for a queued graph wait, stale ones go
+	/// back, and every box leaves through the garbage ring.
+	fn receive_schedules(&mut self) {
+		if let Some(swap) = self.pending_schedule.take() {
+			self.apply_schedule(swap);
+		}
+		while self.pending_schedule.is_none() && self.schedule_garbage.slots() >= 2 {
+			let Ok(swap) = self.schedules.pop() else {
+				break;
+			};
+			self.apply_schedule(swap);
+		}
+	}
+
+	fn apply_schedule(&mut self, mut swap: Box<ScheduleSwap>) {
+		let current = self.graph.as_ref().map(|g| g.load_id);
+		match current {
+			Some(id) if id == swap.load_id => {
+				if let Some(g) = &mut self.graph {
+					g.swap_schedule(&mut swap);
+				}
+			}
+			Some(id) if id < swap.load_id => {
+				self.pending_schedule = Some(swap);
+				return;
+			}
+			_ => {}
+		}
+		if let Err(rtrb::PushError::Full(swap)) = self.schedule_garbage.push(swap) {
+			// Only reachable if the control side stopped collecting; keep it alive.
+			self.pending_schedule = Some(swap);
 		}
 	}
 
@@ -371,6 +441,7 @@ impl Control {
 	fn collect_garbage(&mut self) {
 		while self.garbage.pop().is_ok() {}
 		while self.automation_garbage.pop().is_ok() {}
+		while self.schedule_garbage.pop().is_ok() {}
 		while self.midi_garbage.pop().is_ok() {}
 	}
 
@@ -389,6 +460,13 @@ impl Control {
 		self.collect_garbage();
 		self.automations
 			.push(Box::new(set))
+			.map_err(|_| EngineError::Busy)
+	}
+
+	fn send_schedule(&mut self, swap: ScheduleSwap) -> Result<(), EngineError> {
+		self.collect_garbage();
+		self.schedules
+			.push(Box::new(swap))
 			.map_err(|_| EngineError::Busy)
 	}
 
@@ -453,6 +531,10 @@ pub struct Player {
 	automated: HashSet<AutoTarget>,
 	/// Id of the last loaded graph.
 	load_id: u64,
+	/// Audition switch of the last loaded graph, and the scope it plays.
+	audition_state: Option<Arc<Audition>>,
+	audition: Option<AuditionScope>,
+	loop_range: Option<(Tick, Tick)>,
 	_stream: cpal::Stream,
 }
 
@@ -534,6 +616,9 @@ impl Player {
 			resolver: None,
 			automated: HashSet::new(),
 			load_id: 0,
+			audition_state: None,
+			audition: None,
+			loop_range: None,
 			_stream: stream,
 		})
 	}
@@ -653,8 +738,16 @@ impl Player {
 		let resolver = graph.resolver.clone();
 		let automated = crate::automation::targets(&graph.automation);
 		graph.load_id = self.load_id + 1;
+		let audition = graph.audition.clone();
+		audition.set(
+			self.audition
+				.as_ref()
+				.map(|a| resolver.audition_mask(&a.tracks))
+				.as_deref(),
+		);
 		self.control.load_graph(graph)?;
 		self.load_id += 1;
+		self.audition_state = Some(audition);
 		self.watches = watches.into_iter().map(|w| (w, false)).collect();
 		self.meters = Some(meters);
 		self.resolver = Some(resolver);
@@ -775,6 +868,73 @@ impl Player {
 	pub fn preview_all_notes_off(&mut self, track: TrackId) -> Result<(), EngineError> {
 		self.control
 			.send(Cmd::Preview(track, MidiEvent::AllNotesOff { offset: 0 }))
+	}
+
+	/// Loops playback over `[start, end)` in song ticks (`None`: no loop), sample
+	/// accurately: notes held at the end are released, notes covering the start are
+	/// chased, tempo and automation follow the timeline. Kept across [`Player::load`].
+	/// Ranges shorter than a few samples are ignored.
+	pub fn set_loop(&mut self, range: Option<(Tick, Tick)>) -> Result<(), EngineError> {
+		let range = range.filter(|(s, e)| e > s);
+		self.loop_range = range;
+		self.control.send(Cmd::Loop(range))
+	}
+
+	/// The loop set with [`Player::set_loop`].
+	pub fn loop_range(&self) -> Option<(Tick, Tick)> {
+		self.loop_range
+	}
+
+	/// Plays only the tracks of `scope` and the buses they feed (outputs, sends, extra
+	/// outputs), without changing the project's mute/solo (`None`: the whole song as
+	/// mixed). The mask is built here, off the audio thread; the switch is a few atomic
+	/// stores the callback reads once per quantum. Kept across [`Player::load`].
+	pub fn set_audition(&mut self, scope: Option<AuditionScope>) {
+		if let (Some(state), Some(resolver)) = (&self.audition_state, &self.resolver) {
+			state.set(
+				scope
+					.as_ref()
+					.map(|a| resolver.audition_mask(&a.tracks))
+					.as_deref(),
+			);
+		}
+		self.audition = scope;
+	}
+
+	/// The scope set with [`Player::set_audition`].
+	pub fn audition(&self) -> Option<&AuditionScope> {
+		self.audition.as_ref()
+	}
+
+	/// Replaces the MIDI clips of instrument track `track` in the running graph without
+	/// recompiling (the instrument and its effects keep playing; notes removed under the
+	/// playhead are released). `clips` are the track's clips after the edit. Returns
+	/// `Ok(false)` when that is not possible and the project must be reloaded: nothing
+	/// loaded, a different tempo map, or not an instrument track of the loaded graph.
+	pub fn set_track_clips(
+		&mut self,
+		track: TrackId,
+		clips: &[Clip],
+		tempo: &TempoMap,
+	) -> Result<bool, EngineError> {
+		let Some(resolver) = &self.resolver else {
+			return Ok(false);
+		};
+		let Some(&node) = resolver.nodes.get(&track) else {
+			return Ok(false);
+		};
+		if *tempo != resolver.tempo || !resolver.instruments.contains(&node) {
+			return Ok(false);
+		}
+		let schedule = MidiSchedule::from_clips(clips, tempo, resolver.sample_rate);
+		let events = Vec::with_capacity(crate::compile::event_capacity(&schedule));
+		self.control.send_schedule(ScheduleSwap {
+			load_id: self.load_id,
+			node,
+			schedule,
+			events,
+		})?;
+		Ok(true)
 	}
 
 	pub fn play(&mut self) -> Result<(), EngineError> {
@@ -1235,6 +1395,84 @@ mod tests {
 		core.fill_interleaved(&mut out, 2);
 		core.fill_interleaved(&mut out, 2);
 		assert!(energy(&out) > 0.0);
+	}
+
+	#[test]
+	fn the_loop_survives_reloads_and_wraps_the_position() {
+		let p = project();
+		let (mut control, mut core) = channel_pair(48_000);
+		control
+			.load_graph(compile(&p, 48_000, 256).unwrap())
+			.unwrap();
+		// One beat = 24_000 frames at 120 bpm.
+		control
+			.send(Cmd::Loop(Some((Tick::ZERO, Tick(PPQ)))))
+			.unwrap();
+		control.send(Cmd::Play).unwrap();
+		let mut out = vec![0.0f32; 2 * 1000];
+		for _ in 0..30 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		// 30_000 frames played: 6_000 into the second pass (= 240 ticks).
+		assert_eq!(control.shared.position.load(Ordering::Relaxed), PPQ / 4);
+		control
+			.load_graph(compile(&p, 48_000, 256).unwrap())
+			.unwrap();
+		for _ in 0..20 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		let graph = core.graph.as_ref().unwrap();
+		assert_eq!(graph.loop_samples(), Some((0, 24_000)), "kept on reload");
+		assert!(control.shared.position.load(Ordering::Relaxed) < PPQ);
+		control.send(Cmd::Loop(None)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert_eq!(core.graph.as_ref().unwrap().loop_samples(), None);
+	}
+
+	#[test]
+	fn rescheduled_tracks_swap_in_without_reloading() {
+		let p = project();
+		let track = p.tracks[0].id;
+		let (mut control, mut core) = channel_pair(48_000);
+		let graph = compile(&p, 48_000, 256).unwrap();
+		let mut edited = p.tracks[0].clips.clone();
+		if let cadenza_model::ClipContent::Midi { notes } = &mut edited[0].content {
+			notes.clear();
+		}
+		let swap = graph.prepare_schedule(track, &edited, &p.tempo).unwrap();
+		control.load_graph(graph).unwrap();
+		control.send(Cmd::Play).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		core.fill_interleaved(&mut out, 2);
+		assert!(energy(&out) > 0.0);
+		control.send_schedule(swap).unwrap();
+		// The removed note is released (no reload: the graph keeps playing).
+		for _ in 0..20 {
+			core.fill_interleaved(&mut out, 2);
+		}
+		assert!(energy(&out) < 1e-9, "{}", energy(&out));
+		assert_eq!(control.garbage.slots(), 0, "no graph swapped");
+		assert_eq!(control.schedule_garbage.slots(), 1, "old schedule returned");
+		control.collect_garbage();
+
+		// A swap for a graph still queued waits for it; a stale one goes back.
+		let mut next = compile(&p, 48_000, 256).unwrap();
+		next.load_id = 5;
+		let mut swap = next.prepare_schedule(track, &edited, &p.tempo).unwrap();
+		swap.load_id = 5;
+		control.send_schedule(swap).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(core.pending_schedule.is_some());
+		control.load_graph(next).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(core.pending_schedule.is_none());
+		let stale = compile(&p, 48_000, 256)
+			.unwrap()
+			.prepare_schedule(track, &edited, &p.tempo)
+			.unwrap();
+		control.send_schedule(stale).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(control.schedule_garbage.slots() > 0);
 	}
 
 	/// Needs a MIDI input device; run with `cargo test -- --ignored`.

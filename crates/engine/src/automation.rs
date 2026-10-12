@@ -118,12 +118,33 @@ pub(crate) struct Resolver {
 	pub nodes: HashMap<TrackId, usize>,
 	pub devices: HashMap<DeviceId, DeviceEntry>,
 	pub sends: HashMap<DeviceId, (usize, usize)>,
+	/// Nodes with an instrument source (MIDI schedules).
+	pub instruments: HashSet<usize>,
+	/// Per node: the bus nodes it feeds directly (output, sends, extra outputs).
+	pub feeds: Vec<Vec<usize>>,
 	/// Tempo the graph's curves were computed with.
 	pub tempo: TempoMap,
 	pub sample_rate: f64,
 }
 
 impl Resolver {
+	/// One flag per node: `tracks` and every bus they reach downstream.
+	pub fn audition_mask(&self, tracks: &[TrackId]) -> Vec<bool> {
+		let mut on = vec![false; self.feeds.len()];
+		let mut stack: Vec<usize> = tracks
+			.iter()
+			.filter_map(|t| self.nodes.get(t).copied())
+			.collect();
+		while let Some(i) = stack.pop() {
+			if on.get(i).copied().unwrap_or(true) {
+				continue;
+			}
+			on[i] = true;
+			stack.extend(&self.feeds[i]);
+		}
+		on
+	}
+
 	pub fn target(&self, address: &ParamAddress) -> Result<AutoTarget, Unresolved> {
 		let node = match address.track {
 			None => None,

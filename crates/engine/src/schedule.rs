@@ -144,12 +144,13 @@ impl MidiSchedule {
 		best
 	}
 
-	/// Appends a note-on at offset 0 for every note that is already sounding at `sample`
-	/// (started strictly before it and not yet ended), so a start/seek landing inside a note
-	/// re-triggers it instead of leaving it silent for its remaining length. Does not touch
-	/// the cursor: call alongside [`Self::seek`], not instead of it. `self.notes` is sorted
-	/// by `start`, so the scan can stop as soon as it passes `sample`; it never allocates.
-	pub fn chase(&self, sample: i64, out: &mut Vec<MidiEvent>) {
+	/// Appends a note-on at `offset` for every note that is already sounding at `sample`
+	/// (started strictly before it and not yet ended), so a start/seek (or a loop wrap)
+	/// landing inside a note re-triggers it instead of leaving it silent for its remaining
+	/// length. Does not touch the cursor: call alongside [`Self::seek`], not instead of
+	/// it. `self.notes` is sorted by `start`, so the scan can stop as soon as it passes
+	/// `sample`; it never allocates.
+	pub fn chase(&self, sample: i64, offset: u32, out: &mut Vec<MidiEvent>) {
 		for n in &self.notes {
 			if n.start >= sample {
 				break;
@@ -159,7 +160,7 @@ impl MidiSchedule {
 					break;
 				}
 				out.push(MidiEvent::NoteOn {
-					offset: 0,
+					offset,
 					pitch: n.pitch,
 					velocity: n.velocity,
 				});
@@ -167,9 +168,45 @@ impl MidiSchedule {
 		}
 	}
 
-	/// Appends the events in `[start, start + len)` with block-relative offsets. Never
-	/// grows `out` beyond its capacity.
-	pub fn collect(&mut self, start: i64, len: usize, out: &mut Vec<MidiEvent>) {
+	/// Appends a note-off at `offset` for every note that started before `sample` and
+	/// has not been released before it (its note-off is at or after `sample`): playback
+	/// jumps away from `sample` (a loop wrap) and those offs would never be collected.
+	/// Never allocates.
+	pub fn release(&self, sample: i64, offset: u32, out: &mut Vec<MidiEvent>) {
+		for n in &self.notes {
+			if n.start >= sample {
+				break;
+			}
+			if n.end >= sample {
+				if out.len() == out.capacity() {
+					break;
+				}
+				out.push(MidiEvent::NoteOff {
+					offset,
+					pitch: n.pitch,
+				});
+			}
+		}
+	}
+
+	/// Pitches sounding at `sample` (bit per MIDI pitch), as in [`Self::chase`]. Never
+	/// allocates.
+	pub fn sounding(&self, sample: i64) -> [u64; 2] {
+		let mut bits = [0u64; 2];
+		for n in &self.notes {
+			if n.start >= sample {
+				break;
+			}
+			if n.end > sample {
+				bits[usize::from(n.pitch >> 6) & 1] |= 1 << (n.pitch & 63);
+			}
+		}
+		bits
+	}
+
+	/// Appends the events in `[start, start + len)` with offsets relative to `start` plus
+	/// `base` (the segment's place in the quantum). Never grows `out` beyond its capacity.
+	pub fn collect(&mut self, start: i64, len: usize, base: u32, out: &mut Vec<MidiEvent>) {
 		let end = start + len as i64;
 		while let Some(e) = self.events.get(self.cursor) {
 			if e.sample >= end {
@@ -179,7 +216,7 @@ impl MidiSchedule {
 			if e.sample < start || out.len() == out.capacity() {
 				continue;
 			}
-			let offset = (e.sample - start) as u32;
+			let offset = base + (e.sample - start) as u32;
 			out.push(match e.kind {
 				EventKind::NoteOn { pitch, velocity } => MidiEvent::NoteOn {
 					offset,
@@ -225,7 +262,7 @@ mod tests {
 		let mut s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
 		let mut out = Vec::with_capacity(8);
 		s.seek(0);
-		s.collect(0, 32, &mut out);
+		s.collect(0, 32, 0, &mut out);
 		assert_eq!(
 			out,
 			vec![MidiEvent::NoteOn {
@@ -235,7 +272,7 @@ mod tests {
 			}]
 		);
 		out.clear();
-		s.collect(32, 32, &mut out);
+		s.collect(32, 32, 0, &mut out);
 		assert_eq!(
 			out,
 			vec![MidiEvent::NoteOn {
@@ -245,7 +282,7 @@ mod tests {
 			}]
 		);
 		out.clear();
-		s.collect(64, 32, &mut out);
+		s.collect(64, 32, 0, &mut out);
 		assert_eq!(
 			out,
 			vec![
@@ -268,7 +305,7 @@ mod tests {
 		let mut s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
 		s.seek(10_000);
 		let mut out = Vec::with_capacity(4);
-		s.collect(10_000, 48_000, &mut out);
+		s.collect(10_000, 48_000, 0, &mut out);
 		assert_eq!(
 			out,
 			vec![MidiEvent::NoteOff {
@@ -286,7 +323,7 @@ mod tests {
 		let mut out = Vec::with_capacity(4);
 		// Same position as `seek_into_a_note_skips_its_note_on`: `collect` alone would never
 		// replay this note's note-on, so `chase` must supply it instead.
-		s.chase(10_000, &mut out);
+		s.chase(10_000, 0, &mut out);
 		assert_eq!(
 			out,
 			vec![MidiEvent::NoteOn {
@@ -305,7 +342,7 @@ mod tests {
 		let clip = clip_with(0, PPQ * 4, &[(60, 0, PPQ * 2)]);
 		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
 		let mut out = Vec::with_capacity(4);
-		s.chase(0, &mut out);
+		s.chase(0, 0, &mut out);
 		assert!(out.is_empty(), "{out:?}");
 	}
 
@@ -315,8 +352,61 @@ mod tests {
 		let clip = clip_with(0, PPQ * 4, &[(60, 0, PPQ)]); // ends at sample 24_000
 		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
 		let mut out = Vec::with_capacity(4);
-		s.chase(30_000, &mut out);
+		s.chase(30_000, 0, &mut out);
 		assert!(out.is_empty(), "{out:?}");
+	}
+
+	#[test]
+	fn release_ends_every_note_still_held_at_a_jump() {
+		let tempo = TempoMap::constant(120.0);
+		// 1 beat = 24_000 samples. Ends exactly at the jump, crosses it, ended before,
+		// starts at it.
+		let clip = clip_with(
+			0,
+			PPQ * 4,
+			&[
+				(60, 0, PPQ),
+				(62, 0, PPQ * 2),
+				(64, 0, PPQ / 2),
+				(67, PPQ, PPQ),
+			],
+		);
+		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
+		let mut out = Vec::with_capacity(8);
+		s.release(24_000, 5, &mut out);
+		assert_eq!(
+			out,
+			vec![
+				MidiEvent::NoteOff {
+					offset: 5,
+					pitch: 60
+				},
+				MidiEvent::NoteOff {
+					offset: 5,
+					pitch: 62
+				},
+			]
+		);
+		let bits = s.sounding(24_000);
+		assert_eq!(bits[0], 1 << 62);
+		out.clear();
+		let mut s = s;
+		s.seek(24_000);
+		s.collect(24_000, 32, 7, &mut out);
+		assert_eq!(
+			out,
+			vec![
+				MidiEvent::NoteOff {
+					offset: 7,
+					pitch: 60
+				},
+				MidiEvent::NoteOn {
+					offset: 7,
+					pitch: 67,
+					velocity: 0.8
+				},
+			]
+		);
 	}
 
 	#[test]

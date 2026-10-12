@@ -2,6 +2,9 @@
 //! render loop, which uses exactly the same code): no allocation, locks or I/O after
 //! [`crate::compile`] returns.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use cadenza_core::{DeviceId, PPQ, TempoMap, Tick, TrackId};
 use cadenza_dsp::{MidiEvent, Processor, Transport};
 use cadenza_model::AutomationLane;
@@ -12,6 +15,68 @@ use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Res
 use crate::hosting::{PluginCrash, PluginWatch};
 use crate::meter::{MeterBank, Meters};
 use crate::schedule::MidiSchedule;
+
+/// Which tracks are heard while auditioning (see [`Graph::set_audition`]): written by the
+/// control side, read by the audio thread once per quantum. Wait-free and allocation
+/// free on both sides; a change lands at the next quantum.
+#[derive(Debug)]
+pub(crate) struct Audition {
+	active: AtomicBool,
+	nodes: Box<[AtomicBool]>,
+}
+
+impl Audition {
+	pub fn new(nodes: usize) -> Self {
+		Self {
+			active: AtomicBool::new(false),
+			nodes: (0..nodes).map(|_| AtomicBool::new(false)).collect(),
+		}
+	}
+
+	/// `None` plays the song as mixed; `Some(mask)` (one flag per node in processing
+	/// order) plays only the flagged nodes.
+	pub fn set(&self, mask: Option<&[bool]>) {
+		match mask {
+			None => self.active.store(false, Ordering::Release),
+			Some(mask) => {
+				for (node, &on) in self.nodes.iter().zip(mask) {
+					node.store(on, Ordering::Relaxed);
+				}
+				self.active.store(true, Ordering::Release);
+			}
+		}
+	}
+
+	fn active(&self) -> bool {
+		self.active.load(Ordering::Acquire)
+	}
+
+	fn contains(&self, node: usize) -> bool {
+		self.nodes
+			.get(node)
+			.is_some_and(|n| n.load(Ordering::Relaxed))
+	}
+}
+
+/// A loop wrap inside (or at the start of) the quantum being rendered.
+#[derive(Debug, Clone, Copy)]
+struct Wrap {
+	/// Offset in the quantum where playback jumps.
+	at: usize,
+	/// Timeline sample playback leaves (the loop end)...
+	from: i64,
+	/// ...and the one it continues from (the loop start).
+	to: i64,
+}
+
+/// A track's clips rescheduled off the audio thread for [`Graph::swap_schedule`]: only
+/// MIDI notes changed, so the running instrument keeps playing.
+pub struct ScheduleSwap {
+	pub(crate) load_id: u64,
+	pub(crate) node: usize,
+	pub(crate) schedule: MidiSchedule,
+	pub(crate) events: Vec<MidiEvent>,
+}
 
 /// Stereo scratch buffer of exactly [`QUANTUM`] samples.
 #[derive(Debug, Clone)]
@@ -306,6 +371,9 @@ pub(crate) enum Source {
 		/// Samples the notes are played late by, so the instrument meets a sidechain key
 		/// that arrives later than the timeline (PDC).
 		midi_delay: u32,
+		/// Pitches to release at the next quantum (notes a schedule swap removed while
+		/// they were sounding).
+		release: [u64; 2],
 	},
 	Audio {
 		clips: Vec<ClipPlayback>,
@@ -340,6 +408,8 @@ pub(crate) struct Node {
 	pub fader: Fader,
 	/// False when muted or silenced by another track's solo.
 	pub audible: bool,
+	/// The channel's mute alone (auditioning ignores solos).
+	pub muted: bool,
 	pub edges: Vec<Edge>,
 	/// Extra instrument outputs in use.
 	pub aux_edges: Vec<AuxEdge>,
@@ -424,6 +494,13 @@ pub struct Graph {
 	pub(crate) previewed: bool,
 	/// Per-track and master levels for the UI.
 	pub(crate) meters: Meters,
+	/// Loop range in timeline samples (at least one quantum long).
+	pub(crate) loop_range: Option<(i64, i64)>,
+	/// The last quantum ended exactly at the loop end: the next one starts with the wrap.
+	pub(crate) wrap_pending: Option<i64>,
+	/// The engine wrapped from `.0` to `.1`; the output follows when it reaches `.0`.
+	pub(crate) out_wrap: Option<(i64, i64)>,
+	pub(crate) audition: Arc<Audition>,
 }
 
 impl Graph {
@@ -667,6 +744,8 @@ impl Graph {
 			self.fifo_pos = QUANTUM;
 			self.engine_pos = self.out_pos;
 			self.discard = self.latency;
+			self.wrap_pending = None;
+			self.out_wrap = None;
 		}
 		self.preview_frames = 0;
 		self.playing = true;
@@ -682,6 +761,8 @@ impl Graph {
 		self.fifo_pos = QUANTUM;
 		self.engine_pos = self.out_pos;
 		self.discard = self.latency;
+		self.wrap_pending = None;
+		self.out_wrap = None;
 	}
 
 	/// Moves the playhead to timeline sample `sample`. Sends AllNotesOff and clears all
@@ -692,6 +773,8 @@ impl Graph {
 		self.discard = self.latency;
 		self.fifo_pos = QUANTUM;
 		self.needs_reset = true;
+		self.wrap_pending = None;
+		self.out_wrap = None;
 	}
 
 	pub fn seek(&mut self, tick: Tick) {
@@ -766,6 +849,12 @@ impl Graph {
 			done += take;
 		}
 		self.out_pos += n as i64;
+		if let Some((from, to)) = self.out_wrap
+			&& self.out_pos >= from
+		{
+			self.out_pos = to + (self.out_pos - from);
+			self.out_wrap = None;
+		}
 		self.meters.publish();
 	}
 
@@ -885,6 +974,24 @@ impl Graph {
 		self.render_quantum_inner(false);
 	}
 
+	/// The loop wrap falling in the quantum that starts at `engine_pos`, if any.
+	fn take_wrap(&mut self) -> Option<Wrap> {
+		if let Some(from) = self.wrap_pending.take() {
+			return Some(Wrap {
+				at: 0,
+				from,
+				to: self.engine_pos,
+			});
+		}
+		let (start, end) = self.loop_range?;
+		let pos = self.engine_pos;
+		(pos < end && pos + QUANTUM as i64 > end).then(|| Wrap {
+			at: (end - pos) as usize,
+			from: end,
+			to: start,
+		})
+	}
+
 	/// `preview`: stopped-transport note preview; only live events play (no clip notes,
 	/// no audio clips, no chase) and `engine_pos` stays put.
 	fn render_quantum_inner(&mut self, preview: bool) {
@@ -894,6 +1001,7 @@ impl Graph {
 			self.needs_reset = false;
 		}
 		self.apply_automation();
+		let wrap = if preview { None } else { self.take_wrap() };
 		let pos = self.engine_pos;
 		let seg = self.segment_at(pos as f64);
 		let transport = Transport {
@@ -904,6 +1012,7 @@ impl Graph {
 		for acc in &mut self.accumulators {
 			acc.clear();
 		}
+		let auditioning = self.audition.active();
 		let Self {
 			nodes,
 			accumulators,
@@ -912,11 +1021,15 @@ impl Graph {
 			monitor_release,
 			live,
 			meters,
+			audition,
 			..
 		} = self;
 		for i in 0..nodes.len() {
 			let (done, rest) = nodes.split_at_mut(i);
 			let node = &mut rest[0];
+			// Outside the auditioned tracks: still rendered (it may key a sidechain) but
+			// never mixed into a bus or the master.
+			let scoped = !auditioning || audition.contains(i);
 			let buf = &mut node.buf;
 			buf.clear();
 			match &mut node.source {
@@ -926,18 +1039,31 @@ impl Graph {
 					events,
 					notes_off_on_reset,
 					midi_delay,
+					release,
 				} => {
-					let pos = pos - i64::from(*midi_delay);
+					let delay = i64::from(*midi_delay);
+					let pos = pos - delay;
 					events.clear();
 					if all_notes_off {
+						*release = [0; 2];
 						if *notes_off_on_reset {
 							events.push(MidiEvent::AllNotesOff { offset: 0 });
 						}
 						// Chase notes that should already be sounding at `pos` so a
 						// start/seek landing mid-note doesn't leave it silent.
 						if !preview {
-							schedule.chase(pos, events);
+							schedule.chase(pos, 0, events);
 						}
+					}
+					if *release != [0; 2] {
+						for pitch in 0..128u8 {
+							if release[usize::from(pitch >> 6)] & (1 << (pitch & 63)) != 0
+								&& events.len() < events.capacity()
+							{
+								events.push(MidiEvent::NoteOff { offset: 0, pitch });
+							}
+						}
+						*release = [0; 2];
 					}
 					if *monitor_release == Some(i) {
 						*monitor_release = None;
@@ -952,7 +1078,19 @@ impl Graph {
 						}
 					}
 					if !preview {
-						schedule.collect(pos, QUANTUM, events);
+						match wrap {
+							None => schedule.collect(pos, QUANTUM, 0, events),
+							Some(w) => {
+								// Up to the loop end, release what is held there, then
+								// continue from the loop start (chasing notes that cover it).
+								let at = w.at as u32;
+								schedule.collect(pos, w.at, 0, events);
+								schedule.release(w.from - delay, at, events);
+								schedule.seek(w.to - delay);
+								schedule.chase(w.to - delay, at, events);
+								schedule.collect(w.to - delay, QUANTUM - w.at, at, events);
+							}
+						}
 					}
 					if let Some(d) = device {
 						d.run(buf, events, &transport, done);
@@ -961,17 +1099,30 @@ impl Graph {
 								continue;
 							};
 							match e.accumulator {
-								Some(a) => e.delay.mix(l, r, 1.0, &mut accumulators[a]),
+								Some(a) if scoped => e.delay.mix(l, r, 1.0, &mut accumulators[a]),
+								Some(_) => {}
 								None => e.delay.mix(l, r, 1.0, buf),
 							}
 						}
 					}
 				}
-				Source::Audio { clips } if !preview => {
-					for c in clips.iter() {
-						c.mix(pos, &mut buf.l, &mut buf.r);
+				Source::Audio { clips } if !preview => match wrap {
+					None => {
+						for c in clips.iter() {
+							c.mix(pos, &mut buf.l, &mut buf.r);
+						}
 					}
-				}
+					Some(w) => {
+						let (l0, l1) = buf.l.split_at_mut(w.at);
+						let (r0, r1) = buf.r.split_at_mut(w.at);
+						for c in clips.iter() {
+							if w.at > 0 {
+								c.mix(pos, l0, r0);
+							}
+							c.mix(w.to, l1, r1);
+						}
+					}
+				},
 				Source::Audio { .. } => {}
 				Source::Bus { accumulator } => {
 					let acc = &accumulators[*accumulator];
@@ -986,7 +1137,22 @@ impl Graph {
 				node.pre.l.copy_from_slice(&buf.l);
 				node.pre.r.copy_from_slice(&buf.r);
 			}
-			if !node.audible {
+			if !scoped {
+				if node.audible {
+					node.fader.apply(buf);
+				} else {
+					buf.clear();
+				}
+				meters.measure_silence(i);
+				continue;
+			}
+			// Auditioned tracks play whatever is soloed elsewhere; mute still holds.
+			let audible = if auditioning {
+				!node.muted
+			} else {
+				node.audible
+			};
+			if !audible {
 				buf.clear();
 				meters.measure_silence(i);
 				continue;
@@ -1008,9 +1174,112 @@ impl Graph {
 		}
 		master.fader.apply(&mut master.buf);
 		meters.measure(None, &master.buf.l, &master.buf.r);
-		if !preview {
-			self.engine_pos += QUANTUM as i64;
+		if preview {
+			return;
 		}
+		match wrap {
+			Some(w) => {
+				self.engine_pos = w.to + (QUANTUM - w.at) as i64;
+				if w.at > 0 || self.out_wrap.is_none() {
+					self.out_wrap = Some((w.from, w.to));
+				}
+			}
+			None => {
+				self.engine_pos += QUANTUM as i64;
+				if let Some((start, end)) = self.loop_range
+					&& self.engine_pos == end
+				{
+					// Ended exactly on the loop end: wrap at the start of the next one.
+					self.engine_pos = start;
+					self.wrap_pending = Some(end);
+					self.out_wrap = Some((end, start));
+				}
+			}
+		}
+	}
+
+	/// Loops playback over `[start, end)` (song ticks; `None` plays straight on). The
+	/// wrap is sample accurate: notes held at the loop end are released there, notes
+	/// covering the loop start are chased, effect tails ring on. Playback that is past
+	/// the end when the loop is set continues without wrapping. Ranges shorter than one
+	/// quantum are ignored. Realtime safe.
+	pub fn set_loop(&mut self, range: Option<(Tick, Tick)>) {
+		self.loop_range = range.and_then(|(start, end)| {
+			let (s, e) = (
+				self.tick_to_sample(start.max(Tick::ZERO)),
+				self.tick_to_sample(end),
+			);
+			(e - s >= QUANTUM as i64).then_some((s, e))
+		});
+		if self.loop_range.is_none() {
+			self.wrap_pending = None;
+		}
+	}
+
+	/// The loop range in timeline samples, if looping.
+	pub fn loop_samples(&self) -> Option<(i64, i64)> {
+		self.loop_range
+	}
+
+	/// Plays only `tracks` (and the buses they feed, through outputs, sends and extra
+	/// instrument outputs) without touching the project's mute/solo: auditioned tracks
+	/// ignore other tracks' solos, a muted one stays muted. Tracks outside the scope are
+	/// still rendered (sidechain keys keep working) but not heard. `None` plays the
+	/// song as mixed. Not realtime (builds the mask); the [`crate::Player`] prepares it on
+	/// the control side and the audio thread only reads atomics.
+	pub fn set_audition(&mut self, tracks: Option<&[TrackId]>) {
+		let mask = tracks.map(|t| self.resolver.audition_mask(t));
+		self.audition.set(mask.as_deref());
+	}
+
+	/// Reschedules `clips` (the track's clips after an edit that only changed MIDI
+	/// clips/notes) for [`Graph::swap_schedule`]. `None` when `track` is not an instrument
+	/// track of this graph or the tempo map differs: recompile instead. Not realtime.
+	pub fn prepare_schedule(
+		&self,
+		track: TrackId,
+		clips: &[cadenza_model::Clip],
+		tempo: &TempoMap,
+	) -> Option<ScheduleSwap> {
+		let node = *self.resolver.nodes.get(&track)?;
+		if *tempo != self.resolver.tempo || !self.resolver.instruments.contains(&node) {
+			return None;
+		}
+		let schedule = MidiSchedule::from_clips(clips, tempo, f64::from(self.sample_rate));
+		let events = Vec::with_capacity(crate::compile::event_capacity(&schedule));
+		Some(ScheduleSwap {
+			load_id: self.load_id,
+			node,
+			schedule,
+			events,
+		})
+	}
+
+	/// Replaces a track's MIDI schedule (prepared off the audio thread) without touching
+	/// its instrument: sounding notes that the new schedule no longer has at the playhead
+	/// are released at the next quantum, the others keep sounding. The old schedule is
+	/// left in `swap` to be dropped elsewhere. Realtime safe.
+	pub fn swap_schedule(&mut self, swap: &mut ScheduleSwap) -> bool {
+		let pos = self.engine_pos;
+		let Some(Source::Instrument {
+			schedule,
+			events,
+			midi_delay,
+			release,
+			..
+		}) = self.nodes.get_mut(swap.node).map(|n| &mut n.source)
+		else {
+			return false;
+		};
+		let pos = pos - i64::from(*midi_delay);
+		let before = schedule.sounding(pos);
+		let after = swap.schedule.sounding(pos);
+		std::mem::swap(schedule, &mut swap.schedule);
+		std::mem::swap(events, &mut swap.events);
+		schedule.seek(pos);
+		release[0] |= before[0] & !after[0];
+		release[1] |= before[1] & !after[1];
+		true
 	}
 }
 
@@ -1035,6 +1304,180 @@ mod tests {
 		let right = Fader::new(0.0, 0.5, false, 48_000.0);
 		assert_eq!(right.target.1, 1.0);
 		assert!(right.target.0 < 1.0 && right.target.0 > 0.0);
+	}
+
+	use cadenza_model::{Clip, Device, Note, Project, Track, TrackKind};
+
+	/// One synth track with `(pitch, start tick, length ticks)` notes in a 4-beat clip.
+	fn song(notes: &[(u8, i64, i64)]) -> Project {
+		let mut p = Project::new("loop");
+		let mut t = Track::new("synth", TrackKind::Instrument)
+			.with_instrument(Device::builtin("poly_synth", "Synth"));
+		t.clips.push(
+			Clip::midi("c", Tick::ZERO, Tick(PPQ * 4)).with_notes(
+				notes
+					.iter()
+					.map(|&(p, s, l)| Note::new(p, Tick(s), Tick(l), 0.8)),
+			),
+		);
+		p.tracks.push(t);
+		p
+	}
+
+	/// Note events of the first node over `quanta` quanta, as (stream sample, event):
+	/// the stream sample counts output samples from the start, across wraps.
+	fn played(g: &mut Graph, quanta: usize) -> Vec<(i64, MidiEvent)> {
+		let mut out = Vec::new();
+		for q in 0..quanta {
+			g.render_quantum();
+			let Source::Instrument { events, .. } = &g.nodes[0].source else {
+				unreachable!()
+			};
+			for e in events {
+				let offset = match *e {
+					MidiEvent::NoteOn { offset, .. }
+					| MidiEvent::NoteOff { offset, .. }
+					| MidiEvent::AllNotesOff { offset } => offset,
+				};
+				if !matches!(e, MidiEvent::AllNotesOff { .. }) {
+					out.push(((q * QUANTUM) as i64 + i64::from(offset), *e));
+				}
+			}
+		}
+		out
+	}
+
+	fn on(pitch: u8) -> impl Fn(&(i64, MidiEvent)) -> Option<i64> {
+		move |(t, e)| matches!(e, MidiEvent::NoteOn { pitch: p, .. } if *p == pitch).then_some(*t)
+	}
+
+	fn off(pitch: u8) -> impl Fn(&(i64, MidiEvent)) -> Option<i64> {
+		move |(t, e)| matches!(e, MidiEvent::NoteOff { pitch: p, .. } if *p == pitch).then_some(*t)
+	}
+
+	/// 1 tick = 25 samples at 120 bpm / 48 kHz. Loop ends of 961 ticks (24_025 samples,
+	/// mid-quantum) and 960 ticks (24_000, on a quantum boundary).
+	#[test]
+	fn loop_wrap_releases_held_notes_and_replays_boundary_notes() {
+		for end in [961i64, 960] {
+			let len = end * 25;
+			let p = song(&[
+				// Starts at the loop start and crosses the loop end.
+				(60, 0, PPQ * 2),
+				// Starts exactly at the loop end: never plays.
+				(64, end, PPQ),
+				// Ends exactly at the loop end.
+				(67, PPQ / 2, end - PPQ / 2),
+			]);
+			let mut g = crate::compile(&p, 48_000, 256).unwrap();
+			g.set_loop(Some((Tick::ZERO, Tick(end))));
+			g.play();
+			let quanta = (3 * len as usize).div_ceil(QUANTUM) - 1;
+			let ev = played(&mut g, quanta);
+			let ons: Vec<i64> = ev.iter().filter_map(on(60)).collect();
+			let offs: Vec<i64> = ev.iter().filter_map(off(60)).collect();
+			assert_eq!(ons, vec![0, len, 2 * len], "end {end}");
+			assert_eq!(offs, vec![len, 2 * len], "released at the wrap, end {end}");
+			assert!(ev.iter().filter_map(on(64)).next().is_none(), "end {end}");
+			let ons: Vec<i64> = ev.iter().filter_map(on(67)).collect();
+			let offs: Vec<i64> = ev.iter().filter_map(off(67)).collect();
+			assert_eq!(ons, vec![12_000, len + 12_000, 2 * len + 12_000]);
+			assert_eq!(offs, vec![len, 2 * len], "one note-off per pass, end {end}");
+			// The off of a held note precedes the next on of the same pitch at the wrap.
+			let at_wrap: Vec<&MidiEvent> = ev
+				.iter()
+				.filter(|(t, _)| *t == len)
+				.map(|(_, e)| e)
+				.collect();
+			let first_on = at_wrap
+				.iter()
+				.position(|e| matches!(e, MidiEvent::NoteOn { pitch: 60, .. }))
+				.unwrap();
+			let first_off = at_wrap
+				.iter()
+				.position(|e| matches!(e, MidiEvent::NoteOff { pitch: 60, .. }))
+				.unwrap();
+			assert!(first_off < first_on);
+			assert!(g.engine_pos < len, "engine stays inside the loop");
+		}
+	}
+
+	#[test]
+	fn loop_wrap_chases_notes_covering_the_loop_start() {
+		// Loop [1 beat, 2 beats): a note from beat 0 to 3 covers the whole loop.
+		let p = song(&[(60, 0, PPQ * 3)]);
+		let mut g = crate::compile(&p, 48_000, 256).unwrap();
+		g.set_loop(Some((Tick(PPQ), Tick(PPQ * 2))));
+		g.seek(Tick(PPQ));
+		g.play();
+		let ev = played(&mut g, 24_000 * 2 / QUANTUM + 4);
+		let ons: Vec<i64> = ev.iter().filter_map(on(60)).collect();
+		let offs: Vec<i64> = ev.iter().filter_map(off(60)).collect();
+		// Chased at the start, then released and chased at each wrap.
+		assert_eq!(ons, vec![0, 24_000, 48_000]);
+		assert_eq!(offs, vec![24_000, 48_000]);
+	}
+
+	#[test]
+	fn output_position_wraps_with_the_loop_and_tempo_changes() {
+		let mut p = song(&[(60, 0, PPQ)]);
+		// 120 bpm for a beat, then 60 bpm: beat 2 is at 24_000 + 48_000 samples.
+		p.tempo.set_point(Tick(PPQ), 60.0);
+		let mut g = crate::compile(&p, 48_000, 256).unwrap();
+		g.set_loop(Some((Tick::ZERO, Tick(PPQ * 2))));
+		assert_eq!(g.loop_samples(), Some((0, 72_000)));
+		g.play();
+		let mut l = vec![0.0; 1000];
+		let mut r = vec![0.0; 1000];
+		let mut max = 0;
+		for _ in 0..200 {
+			g.process(&mut l, &mut r);
+			max = max.max(g.position_sample());
+		}
+		assert!(max < 72_000);
+		// 200_000 samples played: 2 passes of 72_000 and 56_000 into the third.
+		assert_eq!(g.position_sample(), 200_000 - 2 * 72_000);
+		// Clearing the loop plays on from there.
+		g.set_loop(None);
+		g.process(&mut l, &mut r);
+		assert_eq!(g.position_sample(), 57_000);
+		// Too short to loop: ignored.
+		g.set_loop(Some((Tick::ZERO, Tick(1))));
+		assert_eq!(g.loop_samples(), None);
+	}
+
+	#[test]
+	fn schedule_swaps_release_only_removed_notes() {
+		let p = song(&[(60, 0, PPQ * 4), (64, 0, PPQ * 4)]);
+		let track = p.tracks[0].id;
+		let mut g = crate::compile(&p, 48_000, 256).unwrap();
+		g.play();
+		played(&mut g, 100);
+		// Remove 64, keep 60.
+		let mut edited = p.tracks[0].clips.clone();
+		if let cadenza_model::ClipContent::Midi { notes } = &mut edited[0].content {
+			notes.retain(|n| n.pitch == 60);
+		}
+		let mut swap = g.prepare_schedule(track, &edited, &p.tempo).unwrap();
+		assert!(g.swap_schedule(&mut swap));
+		let ev = played(&mut g, 2);
+		assert_eq!(
+			ev.iter().map(|(_, e)| *e).collect::<Vec<_>>(),
+			vec![MidiEvent::NoteOff {
+				offset: 0,
+				pitch: 64
+			}],
+			"60 keeps sounding, 64 is released"
+		);
+		// Another tempo or a non-instrument track cannot be swapped.
+		assert!(
+			g.prepare_schedule(track, &edited, &TempoMap::constant(90.0))
+				.is_none()
+		);
+		assert!(
+			g.prepare_schedule(TrackId::new(), &edited, &p.tempo)
+				.is_none()
+		);
 	}
 
 	#[test]

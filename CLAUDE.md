@@ -136,7 +136,9 @@ Events are sorted by `offset` within the block.
 ### cadenza-engine
 
 ```rust
-pub struct RenderOptions { sample_rate: u32, block_size: usize, start: Tick, end: Option<Tick> /* None = song end + tail */ }
+pub struct RenderOptions { sample_rate: u32, block_size: usize, start: Tick, end: Option<Tick> /* None = song end + tail */,
+	plugins: Option<Arc<PluginCatalog>>, hosting: PluginHosting }
+pub struct PluginHosting { mode: HostingMode /* Sandboxed | InProcess */, sandbox: SandboxOptions } // default: from_env()
 pub fn render_offline(project: &Project, opts: &RenderOptions) -> Result<StereoBuffer, EngineError>;
 pub fn render_to_wav(project: &Project, opts: &RenderOptions, path: &Path) -> Result<MixReport, EngineError>;
 pub fn analyze_mix(project: &Project, opts: &RenderOptions) -> Result<MixReport, EngineError>;
@@ -145,8 +147,18 @@ pub struct MixReport { sample_rate, duration_seconds, latency_samples, warnings:
 	master: LevelStats, tracks: Vec<TrackLevel { track_id, name, stats }> }
 pub struct LevelStats { peak_db, true_peak_db, rms_db, lufs_integrated /* BS.1770-4 */, lufs_short_term_max,
 	crest_factor_db, clipped_samples, band_energy_db: BandEnergy, stereo_correlation } // silence = -144
-pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing()
+pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing(),
+	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>
+pub fn compile_hosted(project, sample_rate, max_block, plugins, &PluginHosting) -> Result<Graph, EngineError>; // Graph::plugin_crashes()
 ```
+Plugin hosting: CLAP/VST3 devices run **sandboxed by default** (one `cadenza-plugin-sandbox`
+process each, found via `CADENZA_PLUGIN_SANDBOX` or next to the executable); opt out with
+`PluginHosting::in_process()` / `CADENZA_PLUGIN_HOSTING=in-process` (debugging, benchmarks). A
+missing sandbox falls back to in-process with one actionable warning. A plugin that crashes or
+hangs is bypassed (instrument silent, effect pass-through), the render completes, and
+`MixReport.warnings` names track, device, reason and approximate time. The `Player` polls
+sandbox monitors off the audio thread; `load` re-creates every device, which restarts crashed
+plugins (MCP: `transport_status.plugin_crashes`, `restart_plugins`).
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.

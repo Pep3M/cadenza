@@ -16,6 +16,8 @@ pub struct Session {
 	plugins: Option<Arc<PluginCatalog>>,
 	/// Where plugin devices run in renders, analysis and playback.
 	plugin_hosting: PluginHosting,
+	/// User presets (`<dir>/<device id>/<name>.json`).
+	preset_dir: PathBuf,
 }
 
 impl Session {
@@ -32,7 +34,17 @@ impl Session {
 			plugin_cache: cache_path.into(),
 			plugins: None,
 			plugin_hosting: PluginHosting::default(),
+			preset_dir: crate::tools::presets::default_preset_dir(),
 		}
+	}
+
+	/// Where user presets are stored (see [`crate::tools::presets::default_preset_dir`]).
+	pub fn preset_dir(&self) -> &Path {
+		&self.preset_dir
+	}
+
+	pub fn set_preset_dir(&mut self, dir: impl Into<PathBuf>) {
+		self.preset_dir = dir.into();
 	}
 
 	pub fn document(&self) -> &Document {

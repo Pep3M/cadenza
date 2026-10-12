@@ -26,7 +26,7 @@ use rmcp::{
 use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::Session;
-use crate::tools::{arrange, clips, compose, devices, playback, project, render, tracks};
+use crate::tools::{arrange, clips, compose, devices, playback, presets, project, render, tracks};
 
 const INSTRUCTIONS: &str = "\
 Cadenza: you are the arranger and mix engineer for this project. Everything you do goes \
@@ -48,6 +48,10 @@ like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_no
 `transpose_notes` to shape them.\n\
 4. Route tracks to reverb/delay buses with `create_track` (kind: bus) + `add_send`; shape \
 tone with `insert_device`/`set_device_params` on a track or the master.\n\
+Devices have presets: `list_presets`/`load_preset` for a quick starting sound, \
+`save_preset` to keep one for later. Duck a pad or bass under the kick with a compressor \
+keyed by it (`set_sidechain`); give the separate outputs of a multi-output drum plugin \
+their own buses with `set_output_routes`.\n\
 5. Balance the mix with `set_channel` (volume/pan/mute/solo) and mark song sections with \
 `add_marker`. Use `analyze_mix` to get loudness/peak/band readings plus plain-language \
 mix observations before committing to a `render`. `play`/`stop` audition on the default \
@@ -262,7 +266,11 @@ impl CadenzaServer {
 		Ok(Json(self.run_mut(|s| project::open_project(s, args))?))
 	}
 
-	#[tool(description = "Saves the current project to disk as JSON.")]
+	#[tool(
+		description = "Saves the current project to disk as JSON. By default it first captures \
+			every plugin's current state into the project (capture_plugin_states: true) so \
+			reopening it sounds exactly the same; the capture is one undoable step."
+	)]
 	fn save_project(
 		&self,
 		Parameters(args): Parameters<project::SaveProjectArgs>,
@@ -408,6 +416,98 @@ impl CadenzaServer {
 		Parameters(args): Parameters<tracks::RemoveSendArgs>,
 	) -> Result<(), ErrorData> {
 		self.run_mut(|s| tracks::remove_send(s, args))
+	}
+
+	// -- presets / plugin state ---------------------------------------------------------
+
+	#[tool(
+		description = "Lists the presets of a device already in the project (track_id + \
+			device_id from get_project; omit track_id for a master insert): factory presets \
+			(built-in devices ship a few named starting points; plugins expose their own) and \
+			user presets saved with save_preset. Plugins are loaded to list theirs, so this can \
+			take a moment."
+	)]
+	fn list_presets(
+		&self,
+		Parameters(args): Parameters<presets::ListPresetsArgs>,
+	) -> Result<Json<presets::ListPresetsOutput>, ErrorData> {
+		Ok(Json(presets::list_presets(&mut self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Loads a preset (by name from list_presets) into a device in one undo \
+			step. It replaces the device's explicit params (built-ins: the preset's values, \
+			others at defaults) and, for plugins, its stored state. Tweak afterwards with \
+			set_device_params."
+	)]
+	fn load_preset(
+		&self,
+		Parameters(args): Parameters<presets::LoadPresetArgs>,
+	) -> Result<Json<presets::LoadPresetOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| presets::load_preset(s, args))?))
+	}
+
+	#[tool(
+		description = "Saves a device's current settings (explicit params, plus the plugin's \
+			full state for plugins) as a user preset named `name`, reusable in any project \
+			with load_preset. Files live in the user preset folder (one JSON per preset)."
+	)]
+	fn save_preset(
+		&self,
+		Parameters(args): Parameters<presets::SavePresetArgs>,
+	) -> Result<Json<presets::SavePresetOutput>, ErrorData> {
+		Ok(Json(presets::save_preset(&mut self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Captures the current internal state of plugin devices (as the plugin \
+			itself serializes it, including settings that are not exposed as params) and \
+			stores it in the project in one undoable step. Pass device_id (+ track_id) for one \
+			device, or nothing for every plugin. save_project does this automatically."
+	)]
+	fn capture_plugin_state(
+		&self,
+		Parameters(args): Parameters<presets::CapturePluginStateArgs>,
+	) -> Result<Json<presets::CapturePluginStateOutput>, ErrorData> {
+		Ok(Json(
+			self.run_mut(|s| presets::capture_plugin_state(s, args))?,
+		))
+	}
+
+	// -- routing ----------------------------------------------------------------------
+
+	#[tool(
+		description = "Feeds a device's sidechain (key) input from another track: e.g. a \
+			compressor on the bass or pads keyed by the kick ducks them on every kick (EDM \
+			pump, kick/bass separation); a de-esser or gate keyed by a guide track. track_id + \
+			device_id select the keyed device (omit track_id for a master insert); \
+			source_track_id is the trigger track (omit/null to disconnect). pre_fader: true \
+			taps the source before its fader and mute, so a muted 'ghost' kick track can key \
+			without being heard. Works with the built-in compressor (try its 'Sidechain Pump' \
+			preset) and plugins with a sidechain input (see get_device_info). Delay \
+			compensation keeps the key aligned; routes that would form a feedback loop are \
+			rejected."
+	)]
+	fn set_sidechain(
+		&self,
+		Parameters(args): Parameters<tracks::SetSidechainArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| tracks::set_sidechain(s, args))
+	}
+
+	#[tool(
+		description = "Chooses which extra outputs of a multi-output instrument plugin (e.g. a \
+			drum sampler with separate kick/snare/hat outputs; see get_device_info aux_outputs) \
+			are heard and where: each route sends output `port` (1-based) to a Bus track \
+			(bus_track_id) for its own inserts and fader, or mixes it into the instrument's \
+			track (no bus). The main output always plays on the track; unlisted extra outputs \
+			are silent. Replaces the previous routes; [] = main output only."
+	)]
+	fn set_output_routes(
+		&self,
+		Parameters(args): Parameters<tracks::SetOutputRoutesArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| tracks::set_output_routes(s, args))
 	}
 
 	// -- devices on a channel -----------------------------------------------------------

@@ -524,3 +524,131 @@ mod tests {
 		assert!(matches!(err, McpError::Model(_)), "{err}");
 	}
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetSidechainArgs {
+	/// Track holding the keyed device; omit for a master insert.
+	#[serde(default)]
+	pub track_id: Option<TrackId>,
+	/// The device whose sidechain (key) input is fed, e.g. a compressor on the bass.
+	pub device_id: DeviceId,
+	/// Track whose signal drives it (e.g. the kick); null or omitted disconnects the
+	/// sidechain.
+	#[serde(default)]
+	pub source_track_id: Option<TrackId>,
+	/// Tap the source before its fader/pan/mute (a muted "ghost" kick still keys).
+	/// Default false: the source as it is heard.
+	#[serde(default)]
+	pub pre_fader: bool,
+}
+
+/// Whether the device can take a sidechain: built-ins that implement it, plugins whose
+/// scan found a sidechain input. `None` when unknown (plugin not in the catalog).
+fn has_sidechain(session: &mut Session, device: &cadenza_model::Device) -> Option<bool> {
+	match &device.kind {
+		cadenza_model::DeviceKind::Builtin { id } => {
+			Some(cadenza_dsp::create(id).is_some_and(|p| p.has_sidechain()))
+		}
+		_ => {
+			let catalog = session.plugins();
+			crate::convert::plugin_ref_of(device, &catalog).map(|d| d.sidechain_channels > 0)
+		}
+	}
+}
+
+pub fn set_sidechain(session: &mut Session, args: SetSidechainArgs) -> Result<(), McpError> {
+	let device = session
+		.document()
+		.project()
+		.device(args.track_id, args.device_id)
+		.cloned();
+	if let (Some(device), Some(_)) = (&device, args.source_track_id)
+		&& has_sidechain(session, device) == Some(false)
+	{
+		return Err(McpError::Invalid(format!(
+			"device '{}' has no sidechain input; key a built-in 'compressor' instead (insert \
+			 one with insert_device) or a plugin whose get_device_info mentions a sidechain input",
+			device.name
+		)));
+	}
+	session.document_mut().execute(Command::SetSidechain {
+		track: args.track_id,
+		device: args.device_id,
+		source: args
+			.source_track_id
+			.map(|track| cadenza_model::SidechainSource {
+				track,
+				pre_fader: args.pre_fader,
+			}),
+	})?;
+	Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OutputRouteArg {
+	/// Extra output of the instrument, 1-based (as numbered by get_device_info's
+	/// aux_outputs); the main output is always mixed into the track.
+	pub port: u32,
+	/// Bus track receiving this output; omit to mix it into the instrument's own track.
+	#[serde(default)]
+	pub bus_track_id: Option<TrackId>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetOutputRoutesArgs {
+	/// Instrument track whose (multi-output) instrument is routed.
+	pub track_id: TrackId,
+	/// Every extra output to use; outputs not listed are not heard. Empty = main only.
+	pub routes: Vec<OutputRouteArg>,
+}
+
+pub fn set_output_routes(session: &mut Session, args: SetOutputRoutesArgs) -> Result<(), McpError> {
+	let instrument = session
+		.document()
+		.project()
+		.track(args.track_id)
+		.and_then(|t| t.instrument.clone());
+	if let Some(instrument) = &instrument {
+		let outputs = match &instrument.kind {
+			cadenza_model::DeviceKind::Builtin { .. } => Some(Vec::new()),
+			_ => {
+				let catalog = session.plugins();
+				crate::convert::plugin_ref_of(instrument, &catalog).map(|d| d.aux_outputs.clone())
+			}
+		};
+		if let Some(outputs) = outputs
+			&& let Some(bad) = args.routes.iter().find(|r| r.port as usize > outputs.len())
+		{
+			let available = if outputs.is_empty() {
+				"it has no extra outputs (only multi-output plugins such as drum samplers do)"
+					.to_string()
+			} else {
+				format!(
+					"its extra outputs are {}",
+					outputs
+						.iter()
+						.enumerate()
+						.map(|(i, o)| format!("{} '{}' ({} ch)", i + 1, o.name, o.channels))
+						.collect::<Vec<_>>()
+						.join(", ")
+				)
+			};
+			return Err(McpError::Invalid(format!(
+				"instrument '{}' has no extra output {}; {available}",
+				instrument.name, bad.port
+			)));
+		}
+	}
+	session.document_mut().execute(Command::SetOutputRoutes {
+		track: args.track_id,
+		routes: args
+			.routes
+			.iter()
+			.map(|r| cadenza_model::OutputRoute {
+				port: r.port,
+				bus: r.bus_track_id,
+			})
+			.collect(),
+	})?;
+	Ok(())
+}

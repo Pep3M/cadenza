@@ -64,11 +64,21 @@ pub struct SaveProjectArgs {
 	/// Path to save to; defaults to the path the project was opened/last saved from.
 	#[serde(default)]
 	pub path: Option<String>,
+	/// Capture every plugin's current state into the project first, so reopening it
+	/// sounds exactly the same (default true; an undoable "Capture plugin state" step when
+	/// something changed).
+	#[serde(default)]
+	pub capture_plugin_states: Option<bool>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SaveProjectOutput {
 	pub path: String,
+	/// Plugin devices whose state changed and was stored before saving.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub captured_plugin_states: Option<usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub warnings: Vec<String>,
 }
 
 pub fn save_project(
@@ -79,10 +89,21 @@ pub fn save_project(
 		Some(p) => PathBuf::from(p),
 		None => session.path().ok_or(McpError::NoPath)?.to_path_buf(),
 	};
+	let mut captured = None;
+	let mut warnings = Vec::new();
+	if args.capture_plugin_states.unwrap_or(true)
+		&& crate::session::uses_plugins(session.document().project())
+	{
+		let out = crate::tools::presets::capture_all(session)?;
+		captured = Some(out.captured.iter().filter(|c| c.changed).count());
+		warnings = out.warnings;
+	}
 	session.document().project().save_json(&path)?;
 	session.set_path(path.clone());
 	Ok(SaveProjectOutput {
 		path: path.display().to_string(),
+		captured_plugin_states: captured,
+		warnings,
 	})
 }
 

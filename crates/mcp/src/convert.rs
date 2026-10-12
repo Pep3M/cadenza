@@ -361,6 +361,8 @@ pub fn build_device(
 		bypass: false,
 		params,
 		state: None,
+		sidechain: None,
+		aux_outputs: Vec::new(),
 	})
 }
 
@@ -411,6 +413,22 @@ pub fn device_ref_for<'a>(
 			.filter(|p| p.format == PluginFormat::Vst3)
 			.map(DeviceRef::Plugin),
 	}
+}
+
+/// The catalog descriptor of a plugin device (exact file first, then the same id).
+pub fn plugin_ref_of<'a>(
+	device: &Device,
+	catalog: &'a PluginCatalog,
+) -> Option<&'a PluginDescriptor> {
+	let (format, id, path) = match &device.kind {
+		DeviceKind::Builtin { .. } => return None,
+		DeviceKind::Clap { plugin_id, path } => (PluginFormat::Clap, plugin_id, path),
+		DeviceKind::Vst3 { class_id, path } => (PluginFormat::Vst3, class_id, path),
+	};
+	catalog
+		.find_at(id, path)
+		.filter(|d| d.format == format)
+		.or_else(|| find_plugin(Some(catalog), format, id))
 }
 
 /// Validates `value` for `param` against `info`'s declared range, if known.
@@ -491,6 +509,8 @@ mod plugin_param_tests {
 			audio_outputs: 2,
 			note_input: true,
 			latency_samples: 0,
+			sidechain_channels: 0,
+			aux_outputs: Vec::new(),
 		}
 	}
 

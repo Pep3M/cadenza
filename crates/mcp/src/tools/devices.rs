@@ -319,6 +319,16 @@ pub struct DeviceInfoOutput {
 	pub params: Vec<ParamDetail>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub next_offset: Option<usize>,
+	/// Has a sidechain (key) input: feed it from another track with set_sidechain.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub sidechain_input: bool,
+	/// Extra outputs of a multi-output instrument, numbered from 1 for set_output_routes.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub aux_outputs: Vec<String>,
+	/// Factory presets of a built-in device (apply with load_preset once it is on a
+	/// track); plugin presets are listed by list_presets.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub presets: Vec<String>,
 }
 
 /// Full description of one device with a filtered, paginated parameter list.
@@ -399,6 +409,12 @@ pub fn get_device_info(
 			offset,
 			params,
 			next_offset,
+			sidechain_input: cadenza_dsp::create(info.id).is_some_and(|p| p.has_sidechain()),
+			aux_outputs: Vec::new(),
+			presets: cadenza_dsp::factory_presets(info.id)
+				.iter()
+				.map(|p| format!("{}: {}", p.name, p.description))
+				.collect(),
 		},
 		DeviceRef::Plugin(desc) => DeviceInfoOutput {
 			id: plugin_device_id(desc),
@@ -416,6 +432,25 @@ pub fn get_device_info(
 			offset,
 			params,
 			next_offset,
+			sidechain_input: desc.sidechain_channels > 0,
+			aux_outputs: desc
+				.aux_outputs
+				.iter()
+				.enumerate()
+				.map(|(i, o)| {
+					let channels = match o.channels {
+						1 => "mono".to_string(),
+						2 => "stereo".to_string(),
+						n => format!("{n} ch"),
+					};
+					if o.name.is_empty() {
+						format!("{} ({channels})", i + 1)
+					} else {
+						format!("{} '{}' ({channels})", i + 1, o.name)
+					}
+				})
+				.collect(),
+			presets: Vec::new(),
 		},
 	})
 }

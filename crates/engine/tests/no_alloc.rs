@@ -301,3 +301,93 @@ fn looping_auditioning_and_rescheduling_do_not_allocate() {
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
 	assert!(loudest > 0.0, "the auditioned loop sounded");
 }
+
+#[test]
+fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
+	use cadenza_engine::{MetronomeSettings, Player, RecordSetup, RecordTrack};
+	use cadenza_model::{MonitorMode, Track, TrackInput, TrackKind};
+
+	let mut p = mini_song();
+	let keys = p.tracks[2].id;
+	let mut vox = Track::new("Vox", TrackKind::Audio);
+	vox.input = Some(TrackInput {
+		channel: 0,
+		stereo: true,
+		monitor: MonitorMode::Auto,
+	});
+	vox.channel
+		.inserts
+		.push(cadenza_model::Device::builtin("compressor", "Comp"));
+	let vox_id = vox.id;
+	p.tracks.push(vox);
+	let dir = std::env::temp_dir().join(format!("cadenza-noalloc-rec-{}", std::process::id()));
+	let (mut player, mut dev) = Player::virtual_device(48_000, 2);
+	player.load(&p).unwrap();
+	let (mut midi_tx, midi_rx) = cadenza_midi_io::new_queue(256);
+	player.set_midi_queue(midi_rx).unwrap();
+	player.set_monitor_track(Some(keys)).unwrap();
+	player.set_armed(vox_id, true).unwrap();
+	player.set_armed(keys, true).unwrap();
+	player
+		.set_metronome(MetronomeSettings {
+			on_play: true,
+			on_record: true,
+			level_db: -6.0,
+		})
+		.unwrap();
+	player.set_loop(Some((beats(0.0), beats(2.0)))).unwrap();
+	let mut setup = RecordSetup::new(
+		&dir,
+		beats(0.0),
+		vec![
+			RecordTrack {
+				track: vox_id,
+				name: "Vox".into(),
+				input: Some(TrackInput::stereo(0)),
+			},
+			RecordTrack {
+				track: keys,
+				name: "Keys".into(),
+				input: None,
+			},
+		],
+	);
+	setup.count_in_bars = 1;
+	player.start_recording(&setup).unwrap();
+	let mut out = vec![0.0f32; 2 * 1024];
+	let input: Vec<f32> = (0..2 * 1024)
+		.map(|i| ((i as f32) * 0.01).sin() * 0.3)
+		.collect();
+	let note = |bytes: &[u8]| cadenza_midi_io::TimedMessage {
+		host_micros: 0,
+		message: cadenza_midi_io::RawMessage::from_bytes(bytes).unwrap(),
+	};
+
+	TRACKING.with(|t| t.set(true));
+	// Count-in (one bar), then four passes of the two-beat loop, in odd block sizes.
+	for (i, block) in [64usize, 256, 333, 1024]
+		.into_iter()
+		.cycle()
+		.take(900)
+		.enumerate()
+	{
+		if i % 40 == 0 {
+			let _ = midi_tx.push(note(&[0x90, 60 + (i % 12) as u8, 100]));
+		}
+		if i % 40 == 20 {
+			let _ = midi_tx.push(note(&[0x80, 60 + (i % 12) as u8, 0]));
+		}
+		dev.process(&mut out[..2 * block], &input[..2 * block]);
+	}
+	TRACKING.with(|t| t.set(false));
+	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+
+	player.request_stop_recording().unwrap();
+	dev.process(&mut out, &input);
+	let rec = player
+		.finish_recording(std::time::Duration::from_secs(5))
+		.unwrap();
+	assert!(rec.passes.len() >= 3, "{:?}", rec.passes.len());
+	assert_eq!(rec.audio[0].channels, 2);
+	let _ = std::fs::remove_dir_all(&dir);
+}

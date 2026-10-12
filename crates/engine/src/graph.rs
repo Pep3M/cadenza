@@ -7,13 +7,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cadenza_core::{DeviceId, PPQ, TempoMap, Tick, TrackId};
 use cadenza_dsp::{MidiEvent, Processor, Transport};
-use cadenza_model::AutomationLane;
+use cadenza_model::{AutomationLane, MonitorMode};
 
 use crate::QUANTUM;
 use crate::audio_clip::ClipPlayback;
 use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Resolver};
 use crate::hosting::{PluginCrash, PluginEditorSlot, PluginWatch, PluginXruns};
+use crate::input::{InputFifo, MAX_INPUT_CHANNELS};
 use crate::meter::{MeterBank, Meters};
+use crate::metronome::{Click, MAX_CLICKS, Metronome, MetronomeSettings, clicks_between};
 use crate::schedule::MidiSchedule;
 
 /// Which tracks are heard while auditioning (see [`Graph::set_audition`]): written by the
@@ -56,6 +58,40 @@ impl Audition {
 			.get(node)
 			.is_some_and(|n| n.load(Ordering::Relaxed))
 	}
+}
+
+/// Where an audio track's live input comes from (indexes into the input channels).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NodeInput {
+	pub left: usize,
+	/// Same as `left` for a mono input.
+	pub right: usize,
+	pub mode: MonitorMode,
+}
+
+/// A metronome count-in in progress (the transport waits while it runs).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CountIn {
+	/// Output frames still to count in.
+	pub left: u64,
+	pub total: u64,
+	/// Frames rendered so far (quanta run ahead of the output).
+	pub rendered: u64,
+	/// Frames per click.
+	pub beat_frames: f64,
+	pub per_bar: u32,
+}
+
+/// Most segments one [`Graph::process`] call produces (a block split by a wrap).
+pub(crate) const MAX_SEGMENTS: usize = 4;
+
+/// A stretch of a processed block and the timeline samples it plays: output frames
+/// `offset..offset + len` of the block were heard as timeline samples `tag..tag + len`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Segment {
+	pub offset: usize,
+	pub tag: i64,
+	pub len: usize,
 }
 
 /// A loop wrap inside (or at the start of) the quantum being rendered.
@@ -420,6 +456,12 @@ pub(crate) struct Node {
 	pub pre: StereoBuf,
 	/// Latency of this node's output relative to the timeline.
 	pub out_latency: u32,
+	/// Audio tracks with an input: where it comes from and when it is monitored.
+	pub input: Option<NodeInput>,
+	/// Armed for recording (auto input monitoring follows it).
+	pub armed: bool,
+	/// The input replaces the clips in the current block.
+	pub monitoring: bool,
 }
 
 pub(crate) struct Master {
@@ -503,6 +545,18 @@ pub struct Graph {
 	/// The engine wrapped from `.0` to `.1`; the output follows when it reaches `.0`.
 	pub(crate) out_wrap: Option<(i64, i64)>,
 	pub(crate) audition: Arc<Audition>,
+	/// Live input of the quantum being rendered, one quantum per input channel.
+	pub(crate) input_block: Box<[[f32; QUANTUM]; MAX_INPUT_CHANNELS]>,
+	/// A recording runs (metronome and auto monitoring follow it).
+	pub(crate) recording: bool,
+	pub(crate) metronome: Metronome,
+	/// Clicks per bar and click length in quarter notes (from the time signature).
+	pub(crate) beats_per_bar: u32,
+	pub(crate) beat_unit: f64,
+	pub(crate) count_in: CountIn,
+	/// What the last `process` call played (see [`Graph::segments`]).
+	pub(crate) segments: [Segment; MAX_SEGMENTS],
+	pub(crate) segment_count: usize,
 }
 
 impl Graph {
@@ -709,6 +763,119 @@ impl Graph {
 		self.monitor.map(|i| self.nodes[i].track_id)
 	}
 
+	/// Arms or disarms `track` for recording (auto input monitoring follows). Realtime
+	/// safe. Returns false for an unknown track.
+	pub fn set_armed(&mut self, track: TrackId, armed: bool) -> bool {
+		match self.nodes.iter_mut().find(|n| n.track_id == track) {
+			Some(n) => {
+				n.armed = armed;
+				true
+			}
+			None => false,
+		}
+	}
+
+	pub fn clear_armed(&mut self) {
+		for n in &mut self.nodes {
+			n.armed = false;
+		}
+	}
+
+	/// Whether a recording runs (metronome "on record", auto input monitoring).
+	pub fn set_recording(&mut self, recording: bool) {
+		self.recording = recording;
+	}
+
+	pub fn set_metronome(&mut self, settings: MetronomeSettings) {
+		self.metronome.settings = settings;
+	}
+
+	/// Counts in `bars` bars of metronome clicks (at the tempo of the playhead) before
+	/// the transport moves; call it right after [`Graph::play`]. Realtime safe.
+	pub fn start_count_in(&mut self, bars: u32) {
+		if bars == 0 {
+			self.count_in = CountIn::default();
+			return;
+		}
+		let seg = self.segment_at(self.out_pos as f64);
+		let beat_frames = self.beat_unit * 60.0 / seg.bpm * f64::from(self.sample_rate);
+		let total = (f64::from(bars * self.beats_per_bar) * beat_frames).round() as u64;
+		self.count_in = CountIn {
+			left: total,
+			total,
+			rendered: 0,
+			beat_frames,
+			per_bar: self.beats_per_bar,
+		};
+	}
+
+	/// Whether a count-in is running.
+	pub fn counting_in(&self) -> bool {
+		self.count_in.left > 0
+	}
+
+	/// What the last [`Graph::process`] call played: output stretches and the timeline
+	/// samples they were heard at (none while stopped or counting in; two around a loop
+	/// wrap). Used to tag recorded input.
+	pub fn segments(&self) -> &[Segment] {
+		&self.segments[..self.segment_count]
+	}
+
+	/// Which audio tracks hear their input now (see `MonitorMode`).
+	fn update_monitoring(&mut self) {
+		let live = !self.playing || self.recording || self.count_in.left > 0;
+		for n in &mut self.nodes {
+			n.monitoring = match n.input {
+				Some(i) => match i.mode {
+					MonitorMode::Off => false,
+					MonitorMode::On => true,
+					MonitorMode::Auto => n.armed && live,
+				},
+				None => false,
+			};
+		}
+	}
+
+	fn monitors_input(&self) -> bool {
+		self.nodes.iter().any(|n| n.monitoring)
+	}
+
+	/// Exact (unrounded) timeline sample of `beat` quarter notes.
+	fn sample_at_beat(&self, beat: f64) -> f64 {
+		let i = self.tempo.partition_point(|s| s.start_beat <= beat);
+		let seg = self.tempo[i.saturating_sub(1)];
+		seg.start_sample + (beat - seg.start_beat) * 60.0 / seg.bpm * self.sample_rate as f64
+	}
+
+	/// Metronome clicks of the quantum rendered at `pos` (split at a loop wrap).
+	fn clicks(&self, pos: i64, wrap: Option<Wrap>) -> ([Click; MAX_CLICKS], usize) {
+		let mut out = [Click {
+			offset: 0,
+			accent: false,
+		}; MAX_CLICKS];
+		let mut n = 0;
+		let parts = match wrap {
+			None => [(0, pos, QUANTUM), (0, 0, 0)],
+			Some(w) => [(0, pos, w.at), (w.at, w.to, QUANTUM - w.at)],
+		};
+		for (offset, start, len) in parts {
+			if len == 0 {
+				continue;
+			}
+			let (b0, b1) = (self.beat_at(start), self.beat_at(start + len as i64));
+			clicks_between(
+				b0,
+				b1,
+				self.beat_unit,
+				self.beats_per_bar,
+				|b| self.sample_at_beat(b).floor() as i64 - start + offset as i64,
+				&mut out,
+				&mut n,
+			);
+		}
+		(out, n)
+	}
+
 	/// Queues a live event for the monitored instrument; it plays at the start of the next
 	/// rendered quantum (its offset is ignored). Returns false when nothing is monitored or
 	/// the buffer is full. Realtime safe (never allocates).
@@ -765,6 +932,8 @@ impl Graph {
 	/// Stops output; sounding notes are released (AllNotesOff) and tails cleared on resume.
 	pub fn stop(&mut self) {
 		self.playing = false;
+		self.count_in = CountIn::default();
+		self.metronome.reset();
 		self.live.clear();
 		self.held = [0; 2];
 		self.preview_frames = 0;
@@ -779,6 +948,7 @@ impl Graph {
 	/// Moves the playhead to timeline sample `sample`. Sends AllNotesOff and clears all
 	/// device state at the next quantum.
 	pub fn seek_sample(&mut self, sample: i64) {
+		self.metronome.reset();
 		self.out_pos = sample;
 		self.engine_pos = sample;
 		self.discard = self.latency;
@@ -824,12 +994,25 @@ impl Graph {
 	/// Fills `left`/`right` (equal length, any size) with the next output samples. When
 	/// stopped, writes silence and does not advance.
 	pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+		self.process_live(left, right, None);
+	}
+
+	/// [`Graph::process`] with the live input of this block (realtime playback): audio
+	/// tracks that monitor their input hear `input` instead of their clips.
+	pub(crate) fn process_live(
+		&mut self,
+		left: &mut [f32],
+		right: &mut [f32],
+		mut input: Option<&mut InputFifo>,
+	) {
 		let n = left.len().min(right.len());
+		self.segment_count = 0;
+		self.update_monitoring();
 		if !self.playing {
 			self.idle_devices();
 		}
-		if !self.playing && self.preview_frames > 0 {
-			self.process_preview(&mut left[..n], &mut right[..n]);
+		if !self.playing && (self.preview_frames > 0 || self.monitors_input()) {
+			self.process_preview(&mut left[..n], &mut right[..n], input);
 			return;
 		}
 		if !self.playing {
@@ -839,9 +1022,21 @@ impl Graph {
 			self.meters.publish();
 			return;
 		}
+		let mut start = 0;
+		if self.count_in.left > 0 {
+			let k = (self.count_in.left as usize).min(n);
+			self.process_count_in(&mut left[..k], &mut right[..k], input.as_deref_mut());
+			if k == n {
+				self.meters.publish();
+				return;
+			}
+			start = k;
+		}
+		let (left, right) = (&mut left[start..n], &mut right[start..n]);
+		let n = left.len();
 		while self.discard > 0 {
 			if self.fifo_pos == QUANTUM {
-				self.render_quantum();
+				self.render_quantum_inner(false, input.as_deref_mut());
 				self.fifo_pos = 0;
 			}
 			let skip = (self.discard as usize).min(QUANTUM - self.fifo_pos);
@@ -851,7 +1046,7 @@ impl Graph {
 		let mut done = 0;
 		while done < n {
 			if self.fifo_pos == QUANTUM {
-				self.render_quantum();
+				self.render_quantum_inner(false, input.as_deref_mut());
 				self.fifo_pos = 0;
 			}
 			let take = (n - done).min(QUANTUM - self.fifo_pos);
@@ -862,6 +1057,18 @@ impl Graph {
 			self.fifo_pos += take;
 			done += take;
 		}
+		let first = match self.out_wrap {
+			Some((from, _)) if self.out_pos + n as i64 >= from => {
+				(from - self.out_pos).clamp(0, n as i64) as usize
+			}
+			_ => n,
+		};
+		self.push_segment(start, self.out_pos, first);
+		if first < n
+			&& let Some((_, to)) = self.out_wrap
+		{
+			self.push_segment(start + first, to, n - first);
+		}
 		self.out_pos += n as i64;
 		if let Some((from, to)) = self.out_wrap
 			&& self.out_pos >= from
@@ -870,6 +1077,80 @@ impl Graph {
 			self.out_wrap = None;
 		}
 		self.meters.publish();
+	}
+
+	fn push_segment(&mut self, offset: usize, tag: i64, len: usize) {
+		if len > 0 && self.segment_count < MAX_SEGMENTS {
+			self.segments[self.segment_count] = Segment { offset, tag, len };
+			self.segment_count += 1;
+		}
+	}
+
+	/// The count-in: the transport waits while the metronome counts (live input and
+	/// notes still play through their tracks). When it ends the song starts cleanly
+	/// from the playhead.
+	fn process_count_in(
+		&mut self,
+		left: &mut [f32],
+		right: &mut [f32],
+		mut input: Option<&mut InputFifo>,
+	) {
+		if !self.previewed {
+			self.previewed = true;
+			self.fifo_pos = QUANTUM;
+		}
+		let n = left.len();
+		let mut done = 0;
+		while done < n {
+			if self.fifo_pos == QUANTUM {
+				self.render_quantum_inner(true, input.as_deref_mut());
+				let c = self.count_in;
+				let mut clicks = [Click {
+					offset: 0,
+					accent: false,
+				}; MAX_CLICKS];
+				let mut count = 0;
+				if c.beat_frames > 0.0 {
+					let b0 = c.rendered as f64 / c.beat_frames;
+					let b1 = (c.rendered + QUANTUM as u64).min(c.total) as f64 / c.beat_frames;
+					clicks_between(
+						b0,
+						b1,
+						1.0,
+						c.per_bar,
+						|b| (b * c.beat_frames).floor() as i64 - c.rendered as i64,
+						&mut clicks,
+						&mut count,
+					);
+				}
+				self.count_in.rendered += QUANTUM as u64;
+				let Self {
+					metronome, master, ..
+				} = self;
+				metronome.mix_direct(&clicks[..count], &mut master.buf.l, &mut master.buf.r);
+				self.fifo_pos = 0;
+			}
+			let take = (n - done).min(QUANTUM - self.fifo_pos);
+			left[done..done + take]
+				.copy_from_slice(&self.master.buf.l[self.fifo_pos..self.fifo_pos + take]);
+			right[done..done + take]
+				.copy_from_slice(&self.master.buf.r[self.fifo_pos..self.fifo_pos + take]);
+			self.fifo_pos += take;
+			done += take;
+		}
+		self.count_in.left = self.count_in.left.saturating_sub(n as u64);
+		if self.count_in.left == 0 {
+			// Like `play` after a preview: start from a clean state at the playhead.
+			self.count_in = CountIn::default();
+			self.previewed = false;
+			self.needs_reset = true;
+			self.fifo_pos = QUANTUM;
+			self.engine_pos = self.out_pos;
+			self.discard = self.latency;
+			self.wrap_pending = None;
+			self.out_wrap = None;
+			self.metronome.reset();
+		}
 	}
 
 	/// The editor handle of plugin device `device` (`None` for built-ins and plugins that
@@ -900,9 +1181,14 @@ impl Graph {
 		}
 	}
 
-	/// Stopped transport with live notes: renders quanta without song content and
-	/// without moving the playhead.
-	fn process_preview(&mut self, left: &mut [f32], right: &mut [f32]) {
+	/// Stopped transport with live notes (or monitored input): renders quanta without
+	/// song content and without moving the playhead.
+	fn process_preview(
+		&mut self,
+		left: &mut [f32],
+		right: &mut [f32],
+		mut input: Option<&mut InputFifo>,
+	) {
 		if !self.previewed {
 			self.previewed = true;
 			self.fifo_pos = QUANTUM;
@@ -911,7 +1197,7 @@ impl Graph {
 		let mut done = 0;
 		while done < n {
 			if self.fifo_pos == QUANTUM {
-				self.render_quantum_inner(true);
+				self.render_quantum_inner(true, input.as_deref_mut());
 				self.fifo_pos = 0;
 			}
 			let take = (n - done).min(QUANTUM - self.fifo_pos);
@@ -1013,7 +1299,7 @@ impl Graph {
 	/// Renders one quantum starting at `engine_pos` into `master.buf` (and every node's
 	/// post-fader `buf`), then advances `engine_pos`.
 	pub(crate) fn render_quantum(&mut self) {
-		self.render_quantum_inner(false);
+		self.render_quantum_inner(false, None);
 	}
 
 	/// The loop wrap falling in the quantum that starts at `engine_pos`, if any.
@@ -1035,8 +1321,12 @@ impl Graph {
 	}
 
 	/// `preview`: stopped-transport note preview; only live events play (no clip notes,
-	/// no audio clips, no chase) and `engine_pos` stays put.
-	fn render_quantum_inner(&mut self, preview: bool) {
+	/// no audio clips, no chase) and `engine_pos` stays put. `input`: the live input
+	/// (realtime only), read one quantum per call.
+	fn render_quantum_inner(&mut self, preview: bool, input: Option<&mut InputFifo>) {
+		if let Some(fifo) = input {
+			fifo.read_quantum(&mut self.input_block[..]);
+		}
 		let all_notes_off = self.needs_reset;
 		if self.needs_reset {
 			self.reset_state();
@@ -1045,6 +1335,18 @@ impl Graph {
 		self.apply_automation();
 		let wrap = if preview { None } else { self.take_wrap() };
 		let pos = self.engine_pos;
+		let click_on = !preview && self.metronome.enabled(self.recording);
+		let (clicks, click_count) = if click_on {
+			self.clicks(pos, wrap)
+		} else {
+			(
+				[Click {
+					offset: 0,
+					accent: false,
+				}; MAX_CLICKS],
+				0,
+			)
+		};
 		let seg = self.segment_at(pos as f64);
 		let transport = Transport {
 			bpm: seg.bpm,
@@ -1064,6 +1366,8 @@ impl Graph {
 			live,
 			meters,
 			audition,
+			input_block,
+			metronome,
 			..
 		} = self;
 		for i in 0..nodes.len() {
@@ -1148,6 +1452,12 @@ impl Graph {
 						}
 					}
 				}
+				Source::Audio { .. } if node.monitoring => {
+					if let Some(i) = node.input {
+						buf.l.copy_from_slice(&input_block[i.left]);
+						buf.r.copy_from_slice(&input_block[i.right]);
+					}
+				}
 				Source::Audio { clips } if !preview => match wrap {
 					None => {
 						for c in clips.iter() {
@@ -1219,6 +1529,12 @@ impl Graph {
 		if preview {
 			return;
 		}
+		metronome.process(
+			click_on,
+			&clicks[..click_count],
+			&mut master.buf.l,
+			&mut master.buf.r,
+		);
 		match wrap {
 			Some(w) => {
 				self.engine_pos = w.to + (QUANTUM - w.at) as i64;

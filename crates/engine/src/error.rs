@@ -21,4 +21,6 @@ pub enum EngineError {
 	Cancelled,
 	#[error("MIDI input: {0}")]
 	Midi(String),
+	#[error("recording: {0}")]
+	Record(String),
 }

@@ -610,6 +610,27 @@ impl<'a> Compiler<'a> {
 			let owner = format!("track '{}'", track.name);
 			self.current_track = Some(track.id);
 			let (mut source, mono) = self.source(track, &owner);
+			let input = (track.kind == TrackKind::Audio)
+				.then_some(track.input)
+				.flatten()
+				.map(|i| {
+					let left = usize::from(i.channel).min(crate::input::MAX_INPUT_CHANNELS - 1);
+					crate::graph::NodeInput {
+						left,
+						right: if i.stereo {
+							(left + 1).min(crate::input::MAX_INPUT_CHANNELS - 1)
+						} else {
+							left
+						},
+						mode: i.monitor,
+					}
+				});
+			// A mono input pans like a mono clip (only when the clips agree).
+			let mono = match input {
+				Some(i) if track.clips.is_empty() => i.left == i.right,
+				Some(i) => mono && i.left == i.right,
+				None => mono,
+			};
 			if let Source::Bus { accumulator } = &mut source {
 				*accumulator = bus_acc[&track.id];
 			}
@@ -698,6 +719,9 @@ impl<'a> Compiler<'a> {
 				tap_pre: false,
 				pre: StereoBuf::new(),
 				out_latency: 0,
+				input,
+				armed: false,
+				monitoring: false,
 			});
 		}
 
@@ -803,6 +827,14 @@ impl<'a> Compiler<'a> {
 			wrap_pending: None,
 			out_wrap: None,
 			audition,
+			input_block: Box::new([[0.0; QUANTUM]; crate::input::MAX_INPUT_CHANNELS]),
+			recording: false,
+			metronome: crate::metronome::Metronome::new(sr, latency),
+			beats_per_bar: project.time_signature.numerator.max(1),
+			beat_unit: 4.0 / f64::from(project.time_signature.denominator.max(1)),
+			count_in: crate::graph::CountIn::default(),
+			segments: [crate::graph::Segment::default(); crate::graph::MAX_SEGMENTS],
+			segment_count: 0,
 		})
 	}
 

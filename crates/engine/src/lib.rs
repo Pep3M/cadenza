@@ -16,9 +16,12 @@ pub mod export;
 pub mod factory;
 mod graph;
 pub mod hosting;
+pub mod input;
 mod meter;
+pub mod metronome;
 mod pdc;
 mod player;
+pub mod record;
 mod render;
 mod samples;
 mod schedule;
@@ -38,12 +41,18 @@ pub use export::{
 	ExportProgress, ExportReport, ExportSpec, ExportedFile, Normalize, StemSet, export_project,
 	format_extension, normalize_gain, stem_tracks,
 };
-pub use graph::{Graph, ScheduleSwap};
+pub use graph::{Graph, ScheduleSwap, Segment};
 pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting, PluginXruns};
+pub use input::{AudioDeviceInfo, AudioDevices, InputInfo, InputMode, InputStats, audio_devices};
 pub use meter::{MeterBank, MeterReading};
+pub use metronome::MetronomeSettings;
 pub use player::{
-	AuditionScope, EditorState, EditorUpdate, Player, PlayerClock, find_midi_input,
-	midi_input_ports,
+	AudioConfig, AuditionScope, EditorState, EditorUpdate, Player, PlayerClock, VirtualDevice,
+	find_midi_input, midi_input_ports,
+};
+pub use record::{
+	LiveRecording, MidiItem, RecordOptions, RecordSetup, RecordTrack, RecordedAudio, RecordedPass,
+	Recording, RecordingMonitor, record_commands,
 };
 pub use render::{
 	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,

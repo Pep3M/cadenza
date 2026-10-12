@@ -28,6 +28,15 @@
 //! [`Player::take_plugin_crashes`]). Crashed plugins are restarted by the next
 //! [`Player::load`], which re-creates every device from the project.
 //!
+//! Audio input and recording ([`Player::set_audio_input`], [`Player::start_recording`]):
+//! the input stream feeds the output callback through a lock-free ring (see
+//! [`crate::input`]); each callback reads one input frame per output frame, lends them to
+//! the graph for input monitoring and, while recording, hands them with the timeline
+//! position they were heard at to the recording tap (see [`crate::record`]). Arming,
+//! the metronome and the count-in are plain commands; the tap and input readers are
+//! handed over boxed through their own rings and come back to be dropped here.
+//! [`VirtualDevice`] drives the very same callback without hardware (tests).
+//!
 //! Plugin editors ([`Player::open_editor`]) show the GUI of a plugin device of the loaded
 //! project, in the process that runs it. [`Player::poll_editors`] returns what the user
 //! did there (parameter gestures and values, state changes, closed windows); the caller
@@ -37,7 +46,7 @@
 //! reported by [`Player::take_editor_states`] so it can be stored in the project.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
@@ -49,7 +58,7 @@ use cadenza_dsp::MidiEvent;
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
 use cadenza_model::{AutomationLane, Clip, Command, Document, Project};
 use cadenza_plugin_host::{EditorEvent, PluginCatalog};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -58,7 +67,10 @@ use crate::compile_hosted;
 use crate::error::EngineError;
 use crate::graph::{Audition, Graph, ScheduleSwap};
 use crate::hosting::{PluginCrash, PluginEditorSlot, PluginHosting, PluginWatch, PluginXruns};
+use crate::input::{InputFifo, InputInfo, InputMode, InputReader, InputStats, MAX_INPUT_CHANNELS};
 use crate::meter::MeterBank;
+use crate::metronome::MetronomeSettings;
+use crate::record::{RecordSession, RecordSetup, RecordTap, Recording, RecordingMonitor};
 use crate::schedule::MidiSchedule;
 
 const GRAPH_SLOTS: usize = 4;
@@ -80,6 +92,28 @@ const MIDI_QUEUE: usize = 512;
 const DRAIN_ALL: u64 = u64::MAX / 2;
 /// Frames rendered per inner step of the callback (scratch buffer size).
 const SCRATCH_FRAMES: usize = 1024;
+/// Audio input readers / recording taps in flight (and coming back to be dropped).
+const HANDOVER_SLOTS: usize = 2;
+/// Tracks that can be armed at once.
+const ARM_SLOTS: usize = 256;
+/// Level of the settings dialog's test tone (dBFS).
+const TEST_TONE_DB: f32 = -20.0;
+
+/// Output (and optional input) device configuration of a [`Player`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+	/// Output device name (`None`: the system default).
+	pub output: Option<String>,
+	/// Open an audio input (for recording and input monitoring).
+	pub input_enabled: bool,
+	/// Input device name (`None`: the system default input).
+	pub input: Option<String>,
+	/// Sample rate to ask the output for (`None`: the device default).
+	pub sample_rate: Option<u32>,
+	/// Buffer size in frames (`None`: the device default).
+	pub buffer_frames: Option<u32>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Cmd {
@@ -99,6 +133,20 @@ enum Cmd {
 	Preview(TrackId, MidiEvent),
 	/// Loop range (song ticks), kept across loads.
 	Loop(Option<(Tick, Tick)>),
+	/// Arm / disarm a track for recording (kept across loads).
+	Arm(TrackId, bool),
+	DisarmAll,
+	Metronome(MetronomeSettings),
+	/// Take the reader waiting in the input ring.
+	AttachInput,
+	DetachInput,
+	/// Take the recording tap waiting in its ring.
+	StartRecord,
+	/// Hand the recording tap back.
+	EndRecord,
+	/// Play after a count-in of this many bars.
+	PlayCountIn(u32),
+	TestTone(bool),
 }
 
 /// Something that happened in the editor of a plugin device (see [`Player::poll_editors`]).
@@ -156,6 +204,21 @@ struct AudioCore {
 	mapped: Vec<MappedEvent>,
 	monitor: Option<TrackId>,
 	sample_rate: f64,
+	input: Option<Box<InputReader>>,
+	inputs: Consumer<Box<InputReader>>,
+	input_garbage: Producer<Box<InputReader>>,
+	fifo: InputFifo,
+	/// The block's input frames, one buffer per channel.
+	in_frames: Vec<Vec<f32>>,
+	armed: Vec<TrackId>,
+	metronome: MetronomeSettings,
+	tap: Option<Box<RecordTap>>,
+	taps: Consumer<Box<RecordTap>>,
+	tap_garbage: Producer<Box<RecordTap>>,
+	/// Test tone phase (radians) while it plays.
+	test_tone: Option<f32>,
+	/// When the first frame of the current block will be heard (backend clock).
+	playback_ns: Option<u64>,
 }
 
 /// Control side: everything except the cpal stream, so it can be tested without a device.
@@ -170,6 +233,10 @@ struct Control {
 	shared: Arc<Shared>,
 	midi_inputs: Producer<Consumer<TimedMessage>>,
 	midi_garbage: Consumer<Consumer<TimedMessage>>,
+	inputs: Producer<Box<InputReader>>,
+	input_garbage: Consumer<Box<InputReader>>,
+	taps: Producer<Box<RecordTap>>,
+	tap_garbage: Consumer<Box<RecordTap>>,
 }
 
 fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
@@ -182,6 +249,10 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 	let (sched_garbage_tx, sched_garbage_rx) = RingBuffer::new(SCHEDULE_GARBAGE_SLOTS);
 	let (midi_tx, midi_rx) = RingBuffer::new(MIDI_INPUT_SLOTS);
 	let (midi_garbage_tx, midi_garbage_rx) = RingBuffer::new(MIDI_INPUT_SLOTS + 1);
+	let (input_tx, input_rx) = RingBuffer::new(HANDOVER_SLOTS);
+	let (input_garbage_tx, input_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 1);
+	let (tap_tx, tap_rx) = RingBuffer::new(HANDOVER_SLOTS);
+	let (tap_garbage_tx, tap_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 1);
 	let shared = Arc::new(Shared::default());
 	(
 		Control {
@@ -195,6 +266,10 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			shared: shared.clone(),
 			midi_inputs: midi_tx,
 			midi_garbage: midi_garbage_rx,
+			inputs: input_tx,
+			input_garbage: input_garbage_rx,
+			taps: tap_tx,
+			tap_garbage: tap_garbage_rx,
 		},
 		AudioCore {
 			graph: None,
@@ -219,6 +294,20 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			mapped: Vec::with_capacity(MIDI_QUEUE),
 			monitor: None,
 			sample_rate: f64::from(sample_rate),
+			input: None,
+			inputs: input_rx,
+			input_garbage: input_garbage_tx,
+			fifo: InputFifo::new(),
+			in_frames: (0..MAX_INPUT_CHANNELS)
+				.map(|_| vec![0.0; SCRATCH_FRAMES])
+				.collect(),
+			armed: Vec::with_capacity(ARM_SLOTS),
+			metronome: MetronomeSettings::default(),
+			tap: None,
+			taps: tap_rx,
+			tap_garbage: tap_garbage_tx,
+			test_tone: None,
+			playback_ns: None,
 		},
 	)
 }
@@ -235,6 +324,11 @@ impl AudioCore {
 				next.play();
 			}
 			next.set_monitor_track(self.monitor);
+			for &t in &self.armed {
+				next.set_armed(t, true);
+			}
+			next.set_metronome(self.metronome);
+			next.set_recording(self.tap.is_some());
 			if let Some(old) = self.graph.replace(next) {
 				// Cannot fail: a slot was checked above and only this thread pushes.
 				let _ = self.garbage.push(old);
@@ -292,6 +386,69 @@ impl AudioCore {
 					if let Some(g) = &mut self.graph {
 						g.set_loop(range);
 					}
+				}
+				Cmd::Arm(track, on) => {
+					if on && !self.armed.contains(&track) && self.armed.len() < ARM_SLOTS {
+						self.armed.push(track);
+					} else if !on {
+						self.armed.retain(|t| *t != track);
+					}
+					if let Some(g) = &mut self.graph {
+						g.set_armed(track, on);
+					}
+				}
+				Cmd::DisarmAll => {
+					self.armed.clear();
+					if let Some(g) = &mut self.graph {
+						g.clear_armed();
+					}
+				}
+				Cmd::Metronome(settings) => {
+					self.metronome = settings;
+					if let Some(g) = &mut self.graph {
+						g.set_metronome(settings);
+					}
+				}
+				Cmd::AttachInput => {
+					// Only when the old reader can be handed back.
+					if self.input_garbage.slots() > 0
+						&& let Ok(reader) = self.inputs.pop()
+					{
+						self.retire_input();
+						self.input = Some(reader);
+					}
+				}
+				Cmd::DetachInput => self.retire_input(),
+				Cmd::StartRecord => {
+					if self.tap_garbage.slots() > 0
+						&& let Ok(tap) = self.taps.pop()
+					{
+						self.retire_tap();
+						self.tap = Some(tap);
+						if let Some(g) = &mut self.graph {
+							g.set_recording(true);
+						}
+					}
+				}
+				Cmd::EndRecord => {
+					self.retire_tap();
+					if let Some(g) = &mut self.graph {
+						g.set_recording(false);
+					}
+				}
+				Cmd::PlayCountIn(bars) => {
+					self.playing = true;
+					if let Some(g) = &mut self.graph {
+						g.play();
+						g.start_count_in(bars);
+					}
+				}
+				Cmd::TestTone(on) => {
+					self.test_tone = match (on, self.test_tone) {
+						(true, Some(p)) => Some(p),
+						(true, None) => Some(0.0),
+						(false, _) => None,
+					};
 				}
 				Cmd::Preview(track, event) => {
 					if self.monitor != Some(track) {
@@ -389,6 +546,24 @@ impl AudioCore {
 		}
 	}
 
+	/// Hands the audio input reader back to the control thread (never dropped here).
+	fn retire_input(&mut self) {
+		if let Some(old) = self.input.take()
+			&& let Err(rtrb::PushError::Full(old)) = self.input_garbage.push(old)
+		{
+			self.input = Some(old);
+		}
+	}
+
+	/// Hands the recording tap back to the control thread (never dropped here).
+	fn retire_tap(&mut self) {
+		if let Some(old) = self.tap.take()
+			&& let Err(rtrb::PushError::Full(old)) = self.tap_garbage.push(old)
+		{
+			self.tap = Some(old);
+		}
+	}
+
 	/// Hands the current MIDI queue back to the control thread (never dropped here).
 	fn retire_midi(&mut self) {
 		if let Some(old) = self.midi.take()
@@ -422,14 +597,62 @@ impl AudioCore {
 			.store(self.position.0, Ordering::Relaxed);
 	}
 
+	/// Reads `frames` input frames (if an input is open) into `in_frames` and the
+	/// graph's input FIFO. `at`: frames into the callback (for the latency measurement).
+	fn read_input(&mut self, frames: usize, at: usize) {
+		let Some(reader) = &mut self.input else {
+			return;
+		};
+		let playback = self
+			.playback_ns
+			.map(|ns| ns + (at as f64 * 1e9 / self.sample_rate) as u64);
+		reader.read(&mut self.in_frames, frames, playback);
+		self.fifo.push(&self.in_frames, reader.channels(), frames);
+	}
+
 	/// Renders `frames` frames into the scratch buffers, `SCRATCH_FRAMES` at most.
 	fn render(&mut self, frames: usize) {
 		let (l, r) = (&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
+		let fifo = self.input.is_some().then_some(&mut self.fifo);
 		match &mut self.graph {
-			Some(g) => g.process(l, r),
+			Some(g) => g.process_live(l, r, fifo),
 			None => {
 				l.fill(0.0);
 				r.fill(0.0);
+			}
+		}
+	}
+
+	/// Hands what the block played to the recording tap: the input frames with the
+	/// timeline samples they were heard at, and (first chunk only) the MIDI input.
+	fn record(&mut self, first_chunk: bool) {
+		let (Some(tap), Some(g)) = (&mut self.tap, &self.graph) else {
+			return;
+		};
+		for seg in g.segments() {
+			tap.audio(&self.in_frames, seg.offset, seg.len, seg.tag);
+		}
+		if first_chunk && let Some(seg) = g.segments().first() {
+			for m in &self.mapped {
+				tap.midi(seg.tag, m.raw);
+			}
+		}
+	}
+
+	/// Adds the settings dialog's test tone (440 Hz) to the scratch buffers.
+	fn add_test_tone(&mut self, frames: usize) {
+		let Some(phase) = &mut self.test_tone else {
+			return;
+		};
+		let gain = cadenza_core::db_to_gain(TEST_TONE_DB);
+		let step = std::f32::consts::TAU * 440.0 / self.sample_rate as f32;
+		for i in 0..frames {
+			let v = phase.sin() * gain;
+			self.scratch_l[i] += v;
+			self.scratch_r[i] += v;
+			*phase += step;
+			if *phase > std::f32::consts::TAU {
+				*phase -= std::f32::consts::TAU;
 			}
 		}
 	}
@@ -441,9 +664,14 @@ impl AudioCore {
 	) {
 		self.begin_block();
 		let channels = channels.max(1);
+		let mut at = 0;
 		for chunk in data.chunks_mut(SCRATCH_FRAMES * channels) {
 			let frames = chunk.len() / channels;
+			self.read_input(frames, at);
 			self.render(frames);
+			self.record(at == 0);
+			self.add_test_tone(frames);
+			at += frames;
 			for (i, frame) in chunk.chunks_mut(channels).enumerate() {
 				let (l, r) = (self.scratch_l[i], self.scratch_r[i]);
 				if channels == 1 {
@@ -469,6 +697,16 @@ impl Control {
 		while self.automation_garbage.pop().is_ok() {}
 		while self.schedule_garbage.pop().is_ok() {}
 		while self.midi_garbage.pop().is_ok() {}
+		while self.input_garbage.pop().is_ok() {}
+	}
+
+	/// Hands an audio input reader to the audio thread (replacing the current one).
+	fn attach_input(&mut self, reader: InputReader) -> Result<(), EngineError> {
+		self.collect_garbage();
+		self.inputs
+			.push(Box::new(reader))
+			.map_err(|_| EngineError::Busy)?;
+		self.send(Cmd::AttachInput)
 	}
 
 	/// Hands a MIDI input queue to the audio thread (replacing the current one).
@@ -562,7 +800,49 @@ pub struct Player {
 	audition: Option<AuditionScope>,
 	loop_range: Option<(Tick, Tick)>,
 	editors: Editors,
-	_stream: cpal::Stream,
+	/// Output device name (`virtual` for a [`VirtualDevice`]).
+	output_device: String,
+	/// The open audio input stream and what it is.
+	input_stream: Option<cpal::Stream>,
+	input_info: Option<InputInfo>,
+	input_error: Option<String>,
+	input_channels: usize,
+	input_stats: Arc<InputStats>,
+	/// Measured output latency (callback -> playback), frames.
+	output_latency: Arc<AtomicU64>,
+	/// User latency offset added to the measured recording latency, frames.
+	latency_offset: i64,
+	metronome: MetronomeSettings,
+	armed: Vec<TrackId>,
+	recording: Option<RecordSession>,
+	_stream: Option<cpal::Stream>,
+}
+
+/// Drives a [`Player`]'s audio callback without hardware: tests feed input frames and
+/// pull output frames exactly like a duplex sound card would (same clock, no latency).
+pub struct VirtualDevice {
+	core: AudioCore,
+	input: Option<Producer<f32>>,
+	input_channels: usize,
+}
+
+impl VirtualDevice {
+	/// One callback: `input` (interleaved, the device's input channels) arrives, then
+	/// `output` (interleaved stereo) is rendered. Never allocates.
+	pub fn process(&mut self, output: &mut [f32], input: &[f32]) {
+		if let Some(tx) = &mut self.input {
+			let n = input.len().min(tx.slots());
+			if let Ok(chunk) = tx.write_chunk_uninit(n) {
+				chunk.fill_from_iter(input[..n].iter().copied());
+			}
+		}
+		self.core.fill_interleaved(output, 2);
+	}
+
+	/// Input channels the device delivers.
+	pub fn input_channels(&self) -> usize {
+		self.input_channels
+	}
 }
 
 /// Plugin editors of the loaded graph and the ones the user opened.
@@ -625,23 +905,50 @@ impl Player {
 	/// Opens the default output device and starts a (silent) output stream.
 	/// Fails with [`EngineError::NoOutputDevice`] when the system has no output device.
 	pub fn new() -> Result<Self, EngineError> {
-		let host = cpal::default_host();
-		let device = host
-			.default_output_device()
-			.ok_or(EngineError::NoOutputDevice)?;
-		let supported = device
+		Self::open(&AudioConfig::default())
+	}
+
+	/// Opens the output (and, if enabled, input) devices of `config`. A failing input
+	/// does not fail the player: see [`Player::input_error`].
+	pub fn open(config: &AudioConfig) -> Result<Self, EngineError> {
+		let device = crate::input::find_device(config.output.as_deref(), false)?;
+		let output_device = crate::input::device_name(&device);
+		let default = device
 			.default_output_config()
 			.map_err(|e| EngineError::Audio(e.to_string()))?;
+		let supported = match config.sample_rate {
+			Some(rate) if rate != default.sample_rate() => device
+				.supported_output_configs()
+				.map_err(|e| EngineError::Audio(e.to_string()))?
+				.filter(|c| {
+					c.channels() >= 2 && (c.min_sample_rate()..=c.max_sample_rate()).contains(&rate)
+				})
+				.max_by_key(|c| c.sample_format() == SampleFormat::F32)
+				.map(|c| c.with_sample_rate(rate))
+				.unwrap_or(default),
+			_ => default,
+		};
 		let format = supported.sample_format();
-		let config: cpal::StreamConfig = supported.config();
-		let channels = config.channels as usize;
-		let (control, core) = channel_pair(config.sample_rate);
+		let mut config_out: cpal::StreamConfig = supported.config();
+		if let Some(frames) = config.buffer_frames.filter(|f| *f > 0) {
+			let ok = match supported.buffer_size() {
+				cpal::SupportedBufferSize::Range { min, max } => (*min..=*max).contains(&frames),
+				cpal::SupportedBufferSize::Unknown => true,
+			};
+			if ok {
+				config_out.buffer_size = cpal::BufferSize::Fixed(frames);
+			}
+		}
+		let channels = config_out.channels as usize;
+		let (control, core) = channel_pair(config_out.sample_rate);
+		let output_latency = Arc::new(AtomicU64::new(0));
+		let lat = output_latency.clone();
 		let stream = match format {
-			SampleFormat::F32 => build::<f32>(&device, config, channels, core),
-			SampleFormat::F64 => build::<f64>(&device, config, channels, core),
-			SampleFormat::I16 => build::<i16>(&device, config, channels, core),
-			SampleFormat::I32 => build::<i32>(&device, config, channels, core),
-			SampleFormat::U16 => build::<u16>(&device, config, channels, core),
+			SampleFormat::F32 => build::<f32>(&device, config_out, channels, core, lat),
+			SampleFormat::F64 => build::<f64>(&device, config_out, channels, core, lat),
+			SampleFormat::I16 => build::<i16>(&device, config_out, channels, core, lat),
+			SampleFormat::I32 => build::<i32>(&device, config_out, channels, core, lat),
+			SampleFormat::U16 => build::<u16>(&device, config_out, channels, core, lat),
 			other => Err(EngineError::Audio(format!(
 				"unsupported output sample format {other}"
 			))),
@@ -649,9 +956,75 @@ impl Player {
 		stream
 			.play()
 			.map_err(|e| EngineError::Audio(e.to_string()))?;
-		Ok(Self {
+		let mut player = Self::with_parts(
 			control,
-			sample_rate: config.sample_rate,
+			config_out.sample_rate,
+			output_device,
+			Some(stream),
+			output_latency,
+		);
+		if config.input_enabled
+			&& let Err(e) = player.set_audio_input(Some(config.input.as_deref()))
+		{
+			player.input_error = Some(e.to_string());
+		}
+		Ok(player)
+	}
+
+	/// A player whose callback is driven by hand through the returned [`VirtualDevice`]
+	/// (no sound card): `input_channels` channels of input at `sample_rate`, read 1:1
+	/// like a duplex device. For tests.
+	pub fn virtual_device(sample_rate: u32, input_channels: u16) -> (Self, VirtualDevice) {
+		let (control, mut core) = channel_pair(sample_rate);
+		let channels = usize::from(input_channels).min(MAX_INPUT_CHANNELS);
+		let mut player = Self::with_parts(
+			control,
+			sample_rate,
+			"virtual".into(),
+			None,
+			Arc::new(AtomicU64::new(0)),
+		);
+		let mut input = None;
+		if channels > 0 {
+			let ((tx, _stamps), (rx, srx)) = crate::input::input_rings(channels, sample_rate);
+			core.input = Some(Box::new(InputReader::new(
+				rx,
+				srx,
+				channels,
+				sample_rate,
+				InputMode::Exact,
+				Some(0),
+				player.input_stats.clone(),
+			)));
+			input = Some(tx);
+			player.input_channels = channels;
+			player.input_info = Some(InputInfo {
+				device: "virtual".into(),
+				channels: input_channels,
+				sample_rate,
+				mode: InputMode::Exact,
+			});
+		}
+		(
+			player,
+			VirtualDevice {
+				core,
+				input,
+				input_channels: channels,
+			},
+		)
+	}
+
+	fn with_parts(
+		control: Control,
+		sample_rate: u32,
+		output_device: String,
+		stream: Option<cpal::Stream>,
+		output_latency: Arc<AtomicU64>,
+	) -> Self {
+		Self {
+			control,
+			sample_rate,
 			plugins: None,
 			hosting: PluginHosting::default(),
 			watches: Vec::new(),
@@ -664,8 +1037,264 @@ impl Player {
 			audition: None,
 			loop_range: None,
 			editors: Editors::default(),
+			output_device,
+			input_stream: None,
+			input_info: None,
+			input_error: None,
+			input_channels: 0,
+			input_stats: Arc::new(InputStats::default()),
+			output_latency,
+			latency_offset: 0,
+			metronome: MetronomeSettings::default(),
+			armed: Vec::new(),
+			recording: None,
 			_stream: stream,
+		}
+	}
+
+	/// Name of the output device.
+	pub fn output_device(&self) -> &str {
+		&self.output_device
+	}
+
+	/// Opens audio input device `device` (`Some(None)`: the default input) for input
+	/// monitoring and recording, or closes the input (`None`). The input follows the
+	/// output's clock when it is the same device at the same rate; otherwise it is
+	/// resampled with drift correction (see [`crate::input`]).
+	pub fn set_audio_input(&mut self, device: Option<Option<&str>>) -> Result<(), EngineError> {
+		if self.recording.is_some() {
+			return Err(EngineError::Record(
+				"stop recording before changing the audio input".into(),
+			));
+		}
+		self.control.send(Cmd::DetachInput)?;
+		self.input_stream = None;
+		self.input_info = None;
+		self.input_channels = 0;
+		self.input_error = None;
+		let Some(name) = device else {
+			return Ok(());
+		};
+		let open = crate::input::open_input(
+			name,
+			self.sample_rate,
+			&self.output_device,
+			self.input_stats.clone(),
+		)?;
+		let channels = usize::from(open.info.channels).min(MAX_INPUT_CHANNELS);
+		let reader = InputReader::new(
+			open.ring,
+			open.stamps,
+			usize::from(open.info.channels),
+			open.info.sample_rate,
+			open.info.mode,
+			None,
+			self.input_stats.clone(),
+		);
+		self.control.attach_input(reader)?;
+		self.input_stream = Some(open.stream);
+		self.input_channels = channels;
+		self.input_info = Some(open.info);
+		Ok(())
+	}
+
+	/// The open audio input, if any.
+	pub fn input_info(&self) -> Option<&InputInfo> {
+		self.input_info.as_ref()
+	}
+
+	/// Why the input of [`Player::open`] could not be opened.
+	pub fn input_error(&self) -> Option<&str> {
+		self.input_error.as_deref()
+	}
+
+	/// Input levels and dropout counters (lock-free; poll from any thread).
+	pub fn input_stats(&self) -> Arc<InputStats> {
+		self.input_stats.clone()
+	}
+
+	/// Measured output latency (callback to playback), frames (0 when unknown).
+	pub fn output_latency(&self) -> u64 {
+		self.output_latency.load(Ordering::Relaxed)
+	}
+
+	/// Extra recording latency compensation, frames (positive moves recordings
+	/// earlier). Added to the measured latency.
+	pub fn set_latency_offset(&mut self, frames: i64) {
+		self.latency_offset = frames;
+	}
+
+	pub fn latency_offset(&self) -> i64 {
+		self.latency_offset
+	}
+
+	/// The recording latency compensation the next recording would use, frames.
+	pub fn recording_latency(&self) -> i64 {
+		(self.input_stats.delay_frames(self.sample_rate).round() as i64 + self.latency_offset)
+			.max(0)
+	}
+
+	/// Plays a 440 Hz test tone (-20 dBFS) over everything else.
+	pub fn set_test_tone(&mut self, on: bool) -> Result<(), EngineError> {
+		self.control.send(Cmd::TestTone(on))
+	}
+
+	pub fn set_metronome(&mut self, settings: MetronomeSettings) -> Result<(), EngineError> {
+		self.metronome = settings;
+		self.control.send(Cmd::Metronome(settings))
+	}
+
+	pub fn metronome(&self) -> MetronomeSettings {
+		self.metronome
+	}
+
+	/// Arms (or disarms) `track` for recording; kept across loads. Audio tracks in auto
+	/// monitoring hear their input while armed and stopped or recording.
+	pub fn set_armed(&mut self, track: TrackId, armed: bool) -> Result<(), EngineError> {
+		if armed && !self.armed.contains(&track) {
+			if self.armed.len() >= ARM_SLOTS {
+				return Err(EngineError::Record(format!(
+					"at most {ARM_SLOTS} tracks can be armed at once"
+				)));
+			}
+			self.armed.push(track);
+		} else if !armed {
+			self.armed.retain(|t| *t != track);
+		}
+		self.control.send(Cmd::Arm(track, armed))
+	}
+
+	pub fn disarm_all(&mut self) -> Result<(), EngineError> {
+		self.armed.clear();
+		self.control.send(Cmd::DisarmAll)
+	}
+
+	pub fn armed(&self) -> &[TrackId] {
+		&self.armed
+	}
+
+	/// Starts recording `setup.tracks` and playback from the current playhead (after
+	/// the count-in): audio tracks write their input to WAV files in `setup.folder`,
+	/// instrument tracks capture the MIDI input. Recording captures from `setup.start`
+	/// (punch-in) to `setup.punch_out`. Stop with [`Player::stop_recording`].
+	pub fn start_recording(
+		&mut self,
+		setup: &RecordSetup,
+	) -> Result<Arc<RecordingMonitor>, EngineError> {
+		if self.recording.is_some() {
+			return Err(EngineError::Record("already recording".into()));
+		}
+		if setup.tracks.is_empty() {
+			return Err(EngineError::Record(
+				"no track is armed; arm an audio or instrument track first".into(),
+			));
+		}
+		let Some(resolver) = &self.resolver else {
+			return Err(EngineError::Record(
+				"no project is loaded into the player yet".into(),
+			));
+		};
+		if setup.tracks.iter().any(|t| t.input.is_some()) && self.input_channels == 0 {
+			return Err(EngineError::Record(
+				"no audio input is open; choose an input device in the audio settings".into(),
+			));
+		}
+		let (tap, mut session) = crate::record::start(
+			setup,
+			&resolver.tempo,
+			self.sample_rate,
+			self.input_channels,
+		)?;
+		self.control.collect_garbage();
+		self.control.taps.push(tap).map_err(|_| EngineError::Busy)?;
+		self.input_stats.reset_latency();
+		session.input_dropouts_at_start = self.input_stats.dropouts();
+		let monitor = session.monitor.clone();
+		self.recording = Some(session);
+		self.control.send(Cmd::StartRecord)?;
+		self.control.shared.playing.store(true, Ordering::Relaxed);
+		self.control.send(Cmd::PlayCountIn(setup.count_in_bars))?;
+		Ok(monitor)
+	}
+
+	/// The recording in progress, if any (for drawing it live).
+	pub fn recording_monitor(&self) -> Option<Arc<RecordingMonitor>> {
+		self.recording.as_ref().map(|r| r.monitor.clone())
+	}
+
+	pub fn is_recording(&self) -> bool {
+		self.recording.is_some()
+	}
+
+	/// Stops capturing and the transport; finish with [`Player::finish_recording`].
+	pub fn request_stop_recording(&mut self) -> Result<(), EngineError> {
+		self.control.shared.playing.store(false, Ordering::Relaxed);
+		self.control.send(Cmd::EndRecord)?;
+		self.control.send(Cmd::Stop)
+	}
+
+	/// Waits (at most `timeout`) for the audio thread to hand the recording back, lets
+	/// the writer finish the files and returns what was recorded (build the project
+	/// edit with [`crate::record_commands`]).
+	pub fn finish_recording(&mut self, timeout: Duration) -> Result<Recording, EngineError> {
+		if self.recording.is_none() {
+			return Err(EngineError::Record("not recording".into()));
+		}
+		let deadline = Instant::now() + timeout;
+		let tap = loop {
+			if let Ok(tap) = self.control.tap_garbage.pop() {
+				break tap;
+			}
+			if Instant::now() > deadline {
+				return Err(EngineError::Record(
+					"the audio thread did not hand the recording back; is the output device 					 still running?"
+						.into(),
+				));
+			}
+			std::thread::sleep(Duration::from_millis(1));
+		};
+		let mut session = self.recording.take().expect("recording");
+		let stop = tap.next_tag.unwrap_or(session.monitor.start);
+		drop(tap);
+		let output = session
+			.writer
+			.take()
+			.and_then(|w| w.join().ok())
+			.unwrap_or_default();
+		let mut warnings = Vec::new();
+		if let Some(e) = output.error {
+			warnings.push(e);
+		}
+		let dropouts = self
+			.input_stats
+			.dropouts()
+			.saturating_sub(session.input_dropouts_at_start)
+			+ session.stats.dropped_frames();
+		if dropouts > 0 {
+			warnings.push(format!(
+				"{dropouts} frame(s) were lost while recording (dropouts); try a larger buffer 				 size in the audio settings"
+			));
+		}
+		Ok(Recording {
+			sample_rate: self.sample_rate,
+			start: session.monitor.start,
+			punch_out: session.punch_out,
+			stop,
+			latency: self.recording_latency(),
+			midi_latency: self.output_latency() as i64,
+			passes: output.passes,
+			audio: output.audio,
+			midi_tracks: session.midi_tracks,
+			midi: output.midi,
+			dropouts,
+			warnings,
 		})
+	}
+
+	/// [`Player::request_stop_recording`] + [`Player::finish_recording`].
+	pub fn stop_recording(&mut self) -> Result<Recording, EngineError> {
+		self.request_stop_recording()?;
+		self.finish_recording(crate::record::FINISH_TIMEOUT)
 	}
 
 	/// Output device sample rate; projects are compiled at this rate.
@@ -1041,6 +1670,15 @@ impl Player {
 		Ok(())
 	}
 
+	/// Feeds the monitored track (and recordings) from `queue` instead of a hardware
+	/// port: virtual keyboards, tests.
+	pub fn set_midi_queue(&mut self, queue: Consumer<TimedMessage>) -> Result<(), EngineError> {
+		if let Some(old) = self.midi_input.take() {
+			old.close();
+		}
+		self.control.attach_midi(queue)
+	}
+
 	/// Name of the open MIDI input port.
 	pub fn midi_input(&self) -> Option<&str> {
 		self.midi_input.as_ref().map(MidiInputConnection::port_name)
@@ -1209,11 +1847,20 @@ fn build<T: SizedSample + FromSample<f32>>(
 	config: cpal::StreamConfig,
 	channels: usize,
 	mut core: AudioCore,
+	output_latency: Arc<AtomicU64>,
 ) -> Result<cpal::Stream, EngineError> {
+	let rate = f64::from(config.sample_rate);
 	device
 		.build_output_stream(
 			config,
-			move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+			move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+				let ts = info.timestamp();
+				let playback = u64::try_from(ts.playback.as_nanos()).unwrap_or(0);
+				core.playback_ns = (playback > 0).then_some(playback);
+				if let Some(d) = ts.playback.checked_duration_since(ts.callback) {
+					let frames = (d.as_secs_f64() * rate) as u64;
+					output_latency.store(frames, Ordering::Relaxed);
+				}
 				core.fill_interleaved(data, channels)
 			},
 			|_err| {},

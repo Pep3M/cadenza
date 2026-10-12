@@ -5,7 +5,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use cadenza_dsp::{DeviceRole, MidiEvent, Transport, create, registry};
+use cadenza_dsp::{
+	DeviceRole, LoopMode, MidiEvent, SampleBuffer, Transport, Zone, create, registry, uses_samples,
+};
 
 struct CountingAlloc;
 
@@ -93,6 +95,9 @@ fn process_and_set_param_never_allocate() {
 	for info in registry() {
 		let mut device = create(info.id).unwrap();
 		device.prepare(48_000.0, max_block);
+		if uses_samples(info.id) {
+			assert!(device.set_zones(zones()));
+		}
 		let mut total = 0;
 		for (round, &block) in [1usize, 7, 64, 333, 1024, 128].iter().enumerate() {
 			for (l, r) in left.iter_mut().zip(right.iter_mut()) {
@@ -124,4 +129,55 @@ fn process_and_set_param_never_allocate() {
 			info.id
 		);
 	}
+}
+
+/// Every playback path: loops (forward with crossfade, ping-pong), reverse, choke groups,
+/// round robin, velocity layers, aux outputs, a missing sample, mono and stereo data at
+/// another rate (resampled reads, sinc when transposing up).
+fn zones() -> Vec<Zone> {
+	let tone = |sr: f32, channels: usize| {
+		let frames = (sr * 0.3) as usize;
+		let ch: Vec<Vec<f32>> = (0..channels)
+			.map(|c| {
+				(0..frames)
+					.map(|n| ((n as f32 * 0.03) + c as f32).sin() * 0.5)
+					.collect()
+			})
+			.collect();
+		SampleBuffer::new(sr, ch).shared()
+	};
+	let mono = tone(44_100.0, 1);
+	let stereo = tone(48_000.0, 2);
+	let mut z = Vec::new();
+	let mut looped = Zone::new(mono.clone(), 0, 127, 60);
+	looped.loop_mode = LoopMode::Forward;
+	looped.loop_start = 0.05;
+	looped.loop_end = Some(0.25);
+	looped.loop_crossfade = 0.02;
+	looped.vel_high = 0.85;
+	z.push(looped);
+	let mut pp = Zone::new(stereo.clone(), 0, 127, 48);
+	pp.loop_mode = LoopMode::PingPong;
+	pp.loop_start = 0.1;
+	pp.vel_low = 0.5;
+	pp.round_robin = 1;
+	pp.output = 2;
+	z.push(pp);
+	let mut rev = Zone::new(stereo.clone(), 30, 60, 40);
+	rev.reverse = true;
+	rev.round_robin = 1;
+	rev.choke = 1;
+	rev.decay_ms = Some(80.0);
+	rev.attack_ms = 3.0;
+	z.push(rev);
+	let mut choke = Zone::new(mono, 42, 46, 44);
+	choke.choke = 1;
+	choke.output = 5;
+	z.push(choke);
+	z.push(Zone {
+		key_low: 60,
+		key_high: 72,
+		..Zone::default()
+	});
+	z
 }

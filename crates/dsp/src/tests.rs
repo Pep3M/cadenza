@@ -8,7 +8,30 @@ const SR: f32 = 48_000.0;
 fn prepared(id: &str, sr: f32, max_block: usize) -> Box<dyn Processor> {
 	let mut p = create(id).expect("registry id must be creatable");
 	p.prepare(sr, max_block);
+	if crate::uses_samples(id) {
+		assert!(p.set_zones(test_zones(id)));
+	}
 	p
+}
+
+/// Sample instruments are silent without samples: a decaying 220 Hz tone (root A3) on
+/// the whole keyboard (sampler) or on every note as its own pad (drum_sampler).
+pub(crate) fn test_zones(id: &str) -> Vec<crate::Zone> {
+	let sr = 44_100.0;
+	let tone: Vec<f32> = (0..(sr * 0.4) as usize)
+		.map(|n| {
+			let t = n as f32 / sr;
+			(std::f32::consts::TAU * 220.0 * t).sin() * (-t * 8.0).exp() * 0.8
+		})
+		.collect();
+	let sample = crate::SampleBuffer::mono(sr, tone).shared();
+	if id == "drum_sampler" {
+		(0..=127)
+			.map(|n| crate::Zone::new(sample.clone(), n, n, n))
+			.collect()
+	} else {
+		vec![crate::Zone::new(sample, 0, 127, 57)]
+	}
 }
 
 fn render(

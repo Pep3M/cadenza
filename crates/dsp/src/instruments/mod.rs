@@ -1,8 +1,11 @@
 //! Built-in instruments and shared voice management.
 
 pub mod drum_machine;
+pub mod drum_sampler;
 pub mod electric_piano;
 pub mod poly_synth;
+pub mod sample_voice;
+pub mod sampler;
 
 /// Bookkeeping every polyphonic voice carries for allocation/stealing.
 #[derive(Debug, Clone, Copy, Default)]

@@ -193,6 +193,13 @@ pub trait Processor: Send {
 	fn aux_output(&self, _index: usize) -> Option<(&[f32], &[f32])> {
 		None
 	}
+	/// Sample-based built-ins ([`crate::sample::uses_samples`]): replaces the zone map
+	/// (sample references are shared, never copied). Non-realtime: hosts call it after
+	/// `prepare` and never concurrently with `process`; sounding voices are stopped.
+	/// Returns `false` for devices that do not play samples.
+	fn set_zones(&mut self, _zones: Vec<crate::sample::Zone>) -> bool {
+		false
+	}
 	/// Factory presets the device itself exposes (third-party plugins).
 	/// Built-in presets are listed by [`crate::factory_presets`] instead.
 	/// Non-realtime.

@@ -1,13 +1,15 @@
 //! Catalogue of built-in devices and their factory.
 
 use crate::effects::{chorus, compressor, delay, eq, gain, limiter, reverb, saturator};
-use crate::instruments::{drum_machine, electric_piano, poly_synth};
+use crate::instruments::{drum_machine, drum_sampler, electric_piano, poly_synth, sampler};
 use crate::processor::{DeviceInfo, Processor};
 
-static REGISTRY: [&DeviceInfo; 11] = [
+static REGISTRY: [&DeviceInfo; 13] = [
 	&poly_synth::INFO,
 	&drum_machine::INFO,
 	&electric_piano::INFO,
+	&sampler::INFO,
+	&drum_sampler::INFO,
 	&eq::INFO,
 	&compressor::INFO,
 	&limiter::INFO,
@@ -34,6 +36,8 @@ pub fn create(id: &str) -> Option<Box<dyn Processor>> {
 		"poly_synth" => Box::new(poly_synth::PolySynth::new()),
 		"drum_machine" => Box::new(drum_machine::DrumMachine::new()),
 		"electric_piano" => Box::new(electric_piano::ElectricPiano::new()),
+		"sampler" => Box::new(sampler::Sampler::new()),
+		"drum_sampler" => Box::new(drum_sampler::DrumSampler::new()),
 		"eq" => Box::new(eq::Eq::new()),
 		"compressor" => Box::new(compressor::Compressor::new()),
 		"limiter" => Box::new(limiter::Limiter::new()),

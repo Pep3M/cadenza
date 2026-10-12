@@ -41,6 +41,26 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			Ok(vec![Command::RemoveTrack { track: id }])
 		}
 
+		Command::MoveTrack { track, index } => {
+			let from = project
+				.track_index(*track)
+				.ok_or(ModelError::TrackNotFound(*track))?;
+			let max = project.tracks.len() - 1;
+			if *index > max {
+				return Err(ModelError::InvalidIndex {
+					what: "track position",
+					index: *index,
+					max,
+				});
+			}
+			let t = project.tracks.remove(from);
+			project.tracks.insert(*index, t);
+			Ok(vec![Command::MoveTrack {
+				track: *track,
+				index: from,
+			}])
+		}
+
 		Command::RemoveTrack { track } => {
 			let id = *track;
 			let index = project

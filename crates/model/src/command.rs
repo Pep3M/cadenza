@@ -27,6 +27,11 @@ pub enum Command {
 	RemoveTrack {
 		track: TrackId,
 	},
+	/// Moves a track to display position `index` (0 = top); routing is unaffected.
+	MoveTrack {
+		track: TrackId,
+		index: usize,
+	},
 	UpdateTrack {
 		track: TrackId,
 		#[serde(flatten)]
@@ -261,6 +266,7 @@ impl Command {
 		match self {
 			Self::AddTrack { .. } => "add_track",
 			Self::RemoveTrack { .. } => "remove_track",
+			Self::MoveTrack { .. } => "move_track",
 			Self::UpdateTrack { .. } => "update_track",
 			Self::SetChannel { .. } => "set_channel",
 			Self::SetInstrument { .. } => "set_instrument",
@@ -298,6 +304,7 @@ impl Command {
 		match self {
 			Self::AddTrack { track, .. } => format!("Add track '{}'", track.name),
 			Self::RemoveTrack { .. } => "Remove track".into(),
+			Self::MoveTrack { .. } => "Move track".into(),
 			Self::UpdateTrack { patch, .. } => match &patch.name {
 				Some(name) => format!("Rename track to '{name}'"),
 				None => "Change track color".into(),

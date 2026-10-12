@@ -198,6 +198,10 @@ fn every_command_round_trips() {
 				.with_instrument(Device::builtin("strings", "Strings")),
 			index: Some(1),
 		},
+		Command::MoveTrack {
+			track: fx.lead,
+			index: 2,
+		},
 		Command::RemoveTrack { track: fx.lead },
 		Command::RemoveTrack { track: fx.reverb },
 		Command::RemoveTrack { track: fx.drum_bus },
@@ -456,6 +460,28 @@ fn every_command_round_trips() {
 			.validate()
 			.unwrap_or_else(|e| panic!("{} left an invalid project: {e}", cmd.op()));
 	}
+}
+
+#[test]
+fn move_track_reorders_and_validates() {
+	let fx = fixture();
+	let mut doc = Document::new(fx.project.clone());
+	let last = fx.project.tracks.len() - 1;
+	doc.execute(Command::MoveTrack {
+		track: fx.lead,
+		index: last,
+	})
+	.unwrap();
+	assert_eq!(doc.project().tracks[last].id, fx.lead);
+	assert_eq!(doc.project().tracks.len(), fx.project.tracks.len());
+	let err = exec_err(
+		&fx.project,
+		Command::MoveTrack {
+			track: fx.lead,
+			index: last + 1,
+		},
+	);
+	assert!(err.to_string().contains("out of range"), "{err}");
 }
 
 #[test]

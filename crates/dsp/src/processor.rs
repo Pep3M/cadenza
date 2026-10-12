@@ -148,6 +148,10 @@ pub trait Processor: Send {
 	);
 	/// Clears all internal state (voices, delay lines, envelopes).
 	fn reset(&mut self);
+	/// Called on the audio thread, about once per output buffer, while the host does
+	/// not `process` the device (transport stopped). Plugins use it to exchange pending
+	/// parameter changes with their editor. Realtime rules apply, as for `process`.
+	fn idle(&mut self) {}
 	/// Processing latency in samples that the host should compensate.
 	fn latency(&self) -> u32 {
 		0

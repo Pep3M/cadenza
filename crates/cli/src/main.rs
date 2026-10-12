@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 
 mod chat;
 mod compose;
+mod export;
 mod midi_files;
 mod portable;
 
@@ -67,6 +68,10 @@ enum Command {
 		#[arg(long)]
 		bitrate: Option<u16>,
 	},
+	/// Export the mixdown and/or stems: range, format, sample rate, normalization and
+	/// metadata, like the app's export dialog (e.g. `--stems tracks --range bars:9-24
+	/// --normalize lufs:-14:-1 --format flac`). Prints the export report as JSON.
+	Export(export::ExportArgs),
 	/// Analyze a project's mix (loudness, peaks, band energy) without writing audio
 	Analyze {
 		project: PathBuf,
@@ -203,7 +208,7 @@ enum Command {
 }
 
 /// Finds a track by id or (case-insensitive) name.
-fn find_track<'a>(project: &'a Project, query: &str) -> Result<&'a Track> {
+pub(crate) fn find_track<'a>(project: &'a Project, query: &str) -> Result<&'a Track> {
 	let q = query.trim();
 	project
 		.tracks
@@ -268,12 +273,12 @@ fn load(path: &PathBuf) -> Result<Project> {
 }
 
 /// The plugin catalog cache, when the project uses plugin devices.
-fn plugins_for(project: &Project) -> Option<Arc<PluginCatalog>> {
+pub(crate) fn plugins_for(project: &Project) -> Option<Arc<PluginCatalog>> {
 	cadenza_mcp::session::uses_plugins(project)
 		.then(|| Arc::new(PluginCatalog::load_or_default(default_cache_path())))
 }
 
-fn print_json(value: &impl serde::Serialize) -> Result<()> {
+pub(crate) fn print_json(value: &impl serde::Serialize) -> Result<()> {
 	println!("{}", serde_json::to_string_pretty(value)?);
 	Ok(())
 }
@@ -400,6 +405,7 @@ fn main() -> Result<()> {
 			track,
 		} => midi_files::export(&project, &output, track),
 		Command::ListPlugins { query, json } => list_plugins(query, json),
+		Command::Export(args) => export::run(args, hosting),
 		Command::Collect {
 			project,
 			include_factory,

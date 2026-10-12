@@ -67,7 +67,10 @@ hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in
 `warnings` (re-render to retry); during playback `transport_status` lists it under \
 `plugin_crashes` and `restart_plugins` reloads it. Replace a plugin that keeps crashing.\n\n\
 Audio and MIDI files: `import_audio` puts a recording on an Audio track (then \
-`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files.\n\n\
+`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files. \
+`export_stems` writes per-track/bus stems (and the mixdown) with range, format, \
+normalization and metadata. Project files: `list_missing_files`/`relink_files` fix moved \
+audio, `collect_files` copies outside files into the project folder, `pack_project` zips it.\n\n\
 Positions and durations are always in beats (quarter notes); pitches are note names \
 (\"C4\") or MIDI numbers (60 = C4); velocity is 0..1; volume is dB; pan is -1..1.";
 
@@ -961,17 +964,43 @@ impl CadenzaServer {
 
 	#[tool(
 		description = "Renders the project to a stereo audio file and returns the mix report \
-			(levels, loudness, band energy, per track). The path extension picks the format: \
-			.wav (32-bit float, or bit_depth 16/24), .flac (24-bit, or 16) or .mp3 (if this \
-			build supports it; mp3_bitrate_kbps). 16/24-bit output is TPDF-dithered. \
-			CPU-heavy; runs off the main session lock."
+			(levels, loudness, band energy, per track) plus the written file's levels. The path \
+			extension picks the format: .wav (32-bit float, or bit_depth 16/24), .flac (24-bit, \
+			or 16) or .mp3 (if this build supports it; mp3_bitrate_kbps). 16/24-bit output is \
+			TPDF-dithered. Range: start_beat/end_beat or start_bar/end_bar (bars from 1, end bar \
+			included); tail appends the effect decay. Optional output_sample_rate (resampled), \
+			normalize (peak, or loudness LUFS with a true-peak ceiling) and metadata (title, \
+			artist...). CPU-heavy; runs off the main session lock."
 	)]
 	async fn render(
 		&self,
 		Parameters(args): Parameters<render::RenderArgs>,
-	) -> Result<Json<cadenza_engine::MixReport>, ErrorData> {
+	) -> Result<Json<render::RenderOutput>, ErrorData> {
 		let (project, plugins, hosting) = self.project_and_plugins();
 		Ok(Json(render::render(project, plugins, hosting, args).await?))
+	}
+
+	#[tool(
+		description = "Exports stems: one file per instrument/audio track (stems: tracks), per \
+			bus and track feeding the master directly (buses: they sum to the mix), or per \
+			listed track (selected + track_ids), optionally with the mixdown. Options: \
+			through_master (run each stem through the master chain), pre_fader, range (beats or \
+			bars), tail, format wav/flac/mp3 + bit_depth, output_sample_rate, normalize (stems \
+			share the mix gain unless normalize_individually), metadata. Files are \
+			\"<name> - <track>.<ext>\" in folder (default: the project's Renders/). CPU-heavy."
+	)]
+	async fn export_stems(
+		&self,
+		Parameters(args): Parameters<render::ExportStemsArgs>,
+	) -> Result<Json<render::ExportStemsOutput>, ErrorData> {
+		let (project, plugins, hosting) = self.project_and_plugins();
+		let renders = self
+			.session()
+			.path()
+			.map(|p| cadenza_model::ProjectLayout::new(p).renders_dir());
+		Ok(Json(
+			render::export_stems(project, plugins, hosting, args, renders).await?,
+		))
 	}
 
 	#[tool(

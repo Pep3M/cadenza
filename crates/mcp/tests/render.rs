@@ -83,7 +83,8 @@ async fn render_writes_a_valid_wav_with_a_sane_report() {
 		},
 	)
 	.await
-	.expect("render should succeed");
+	.expect("render should succeed")
+	.report;
 
 	assert_eq!(report.sample_rate, 48_000);
 	assert!(report.duration_seconds > 0.0);
@@ -237,4 +238,132 @@ async fn analyze_mix_on_silence_has_no_loudness_observations() {
 	.await
 	.unwrap();
 	assert_eq!(out.report.master.clipped_samples, 0);
+}
+
+#[tokio::test]
+async fn render_takes_bars_normalization_resampling_and_metadata() {
+	let mut session = Session::new();
+	let track_id = instrument_track_with_synth(&mut session);
+	add_notes(&mut session, track_id, 0.8);
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("master.flac");
+	let out = render::render(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::RenderArgs {
+			path: path.display().to_string(),
+			start_bar: Some(1),
+			end_bar: Some(1),
+			output_sample_rate: Some(44_100),
+			normalize: Some(render::NormalizeArgs {
+				mode: render::NormalizeMode::Peak,
+				peak_db: Some(-3.0),
+				..Default::default()
+			}),
+			metadata: Some(render::MetadataArgs {
+				title: Some("Bar One".into()),
+				..Default::default()
+			}),
+			..Default::default()
+		},
+	)
+	.await
+	.unwrap();
+	assert_eq!(out.path, path.display().to_string());
+	assert!((out.file.peak_db + 3.0).abs() < 0.15, "{:?}", out.file);
+	let info = cadenza_audio_io::probe(&path).unwrap();
+	assert_eq!(info.sample_rate, 44_100);
+	assert!(
+		(info.frames as f64 / 44_100.0 - 2.0).abs() < 1e-3,
+		"one 4/4 bar at 120 bpm"
+	);
+	let comments = cadenza_audio_io::tags::read_flac_comments(&std::fs::read(&path).unwrap());
+	assert!(comments.contains(&"TITLE=Bar One".to_string()));
+
+	let err = render::render(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::RenderArgs {
+			path: path.display().to_string(),
+			start_beat: Some(0.0),
+			end_bar: Some(2),
+			..Default::default()
+		},
+	)
+	.await
+	.unwrap_err();
+	assert!(err.to_string().contains("not both"), "{err}");
+}
+
+#[tokio::test]
+async fn export_stems_writes_one_file_per_track_into_renders() {
+	let mut session = Session::new();
+	let a = instrument_track_with_synth(&mut session);
+	add_notes(&mut session, a, 0.8);
+	let b = instrument_track_with_synth(&mut session);
+	add_notes(&mut session, b, 0.5);
+	let dir = tempfile::tempdir().unwrap();
+	let renders = dir.path().join("Renders");
+	let out = render::export_stems(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::ExportStemsArgs {
+			include_mixdown: Some(true),
+			end_beat: Some(2.0),
+			format: Some("wav".into()),
+			bit_depth: Some(24),
+			..Default::default()
+		},
+		Some(renders.clone()),
+	)
+	.await
+	.unwrap();
+	assert_eq!(out.files.len(), 3);
+	assert_eq!(out.files[0].name, "Untitled");
+	assert!(
+		out.files[1].path.ends_with("Untitled - Synth.wav"),
+		"{}",
+		out.files[1].path
+	);
+	assert!(
+		out.files[2].path.ends_with("Untitled - Synth (2).wav"),
+		"{}",
+		out.files[2].path
+	);
+	assert!(
+		out.files
+			.iter()
+			.all(|f| std::path::Path::new(&f.path).starts_with(&renders))
+	);
+	assert_eq!(
+		out.total_bytes,
+		out.files.iter().map(|f| f.bytes).sum::<u64>()
+	);
+
+	let err = render::export_stems(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::ExportStemsArgs {
+			stems: render::StemKind::Selected,
+			..Default::default()
+		},
+		Some(renders),
+	)
+	.await
+	.unwrap_err();
+	assert!(err.to_string().contains("no tracks selected"), "{err}");
+	let err = render::export_stems(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		Default::default(),
+		None,
+	)
+	.await
+	.unwrap_err();
+	assert!(err.to_string().contains("folder"), "{err}");
 }

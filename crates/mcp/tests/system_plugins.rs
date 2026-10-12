@@ -119,7 +119,8 @@ async fn surge_chord_through_lsp_compressor() {
 		args(json!({ "path": path.display().to_string() })),
 	)
 	.await
-	.unwrap();
+	.unwrap()
+	.report;
 	eprintln!("{}", serde_json::to_string_pretty(&report.master).unwrap());
 	eprintln!(
 		"duration {:.2} s, latency {} samples, warnings {:?}",

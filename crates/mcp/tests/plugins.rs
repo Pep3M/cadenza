@@ -259,7 +259,8 @@ async fn renders_song_with_plugin_instrument_and_effect() {
 		args(json!({ "path": path.display().to_string(), "end_beat": 4.0 })),
 	)
 	.await
-	.unwrap();
+	.unwrap()
+	.report;
 	assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 	assert_eq!(report.latency_samples, 128, "track + master plugin latency");
 	assert!(

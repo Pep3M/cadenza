@@ -34,6 +34,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"list_factory_samples",
 	"list_missing_files",
 	"pack_project",
+	"export_stems",
 ];
 
 /// Formats the `render` tool may write.
@@ -163,6 +164,24 @@ impl PathPolicy {
 			return Err(outside());
 		}
 		Ok(real)
+	}
+
+	/// [`PathPolicy::resolve_dir`] creating the folder first (output folders).
+	pub fn resolve_dir_create(&self, raw: &str) -> Result<PathBuf, String> {
+		let raw_path = Path::new(raw.trim());
+		let joined = if raw_path.is_absolute() {
+			raw_path.to_path_buf()
+		} else {
+			self.root.join(raw_path)
+		};
+		let lexically_inside = joined.starts_with(&self.root)
+			&& !raw_path
+				.components()
+				.any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)));
+		if lexically_inside {
+			std::fs::create_dir_all(&joined).map_err(|e| format!("cannot create folder: {e}"))?;
+		}
+		self.resolve_dir(raw)
 	}
 
 	/// A sample for `load_sample`: an audio file in the session folder, or one of the
@@ -405,6 +424,15 @@ impl ToolBridge {
 				let path = self.policy.resolve_dir(raw)?;
 				obj.insert("search_folder".into(), path_value(&path));
 			}
+			"export_stems" => {
+				let raw = obj
+					.get("folder")
+					.and_then(Value::as_str)
+					.unwrap_or("Renders")
+					.to_owned();
+				let path = self.policy.resolve_dir_create(&raw)?;
+				obj.insert("folder".into(), path_value(&path));
+			}
 			"pack_project" => {
 				let raw = obj
 					.get("path")
@@ -448,7 +476,7 @@ fn offered(name: &str, allow_plugins: bool) -> bool {
 fn describe(name: &str, description: String) -> String {
 	match name {
 		"save_project" | "open_project" | "render" | "import_audio" | "import_midi"
-		| "export_midi" | "get_audio_info" | "relink_files" | "pack_project" => format!(
+		| "export_midi" | "get_audio_info" | "relink_files" | "pack_project" | "export_stems" => format!(
 			"{description} Paths are file names relative to the session folder; locations \
 			 outside it are rejected."
 		),
@@ -688,6 +716,16 @@ mod tests {
 		assert!(relink(".").is_ok());
 		assert!(relink("/etc").is_err());
 		assert!(relink("../").is_err());
+		let stems = bridge.apply_policy("export_stems", json!({})).unwrap();
+		assert_eq!(
+			stems["folder"],
+			json!(root.join("Renders").display().to_string())
+		);
+		assert!(
+			bridge
+				.apply_policy("export_stems", json!({ "folder": "/tmp" }))
+				.is_err()
+		);
 		assert!(ok("export_midi", "../out.mid").is_err());
 		assert!(ok("export_midi", "out.wav").unwrap_err().contains(".mid"));
 		assert!(ok("get_audio_info", "/tmp/x.wav").is_err());

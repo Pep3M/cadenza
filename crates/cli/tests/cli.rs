@@ -276,3 +276,49 @@ fn collect_pack_and_unpack_make_a_portable_project() {
 	assert_eq!(file, dest.join("Song/Audio/take.wav"));
 	assert!(file.is_file());
 }
+
+#[test]
+fn export_writes_mixdown_and_stems_like_the_dialog() {
+	let dir = tempfile::tempdir().unwrap();
+	let project = dir.path().join("Song").join("Song.cadenza.json");
+	std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+	song(&project);
+	let out = cadenza(&[
+		"export",
+		s(&project),
+		"--stems",
+		"tracks",
+		"--range",
+		"bars:1-1",
+		"--format",
+		"flac",
+		"--bit-depth",
+		"16",
+		"--normalize",
+		"peak:-1",
+		"--output-rate",
+		"44100",
+		"--artist",
+		"Tests",
+	]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	let files = report["files"].as_array().unwrap();
+	let names: Vec<&str> = files.iter().map(|f| f["name"].as_str().unwrap()).collect();
+	assert_eq!(names, ["Song", "Keys", "Bass"]);
+	let mix = std::path::Path::new(files[0]["path"].as_str().unwrap());
+	assert_eq!(mix, project.parent().unwrap().join("Renders/Song.flac"));
+	let info = cadenza_audio_io::probe(mix).unwrap();
+	assert_eq!((info.sample_rate, info.bits_per_sample), (44_100, Some(16)));
+	assert!((files[0]["peak_db"].as_f64().unwrap() + 1.0).abs() < 0.15);
+
+	let bad = cadenza(&["export", s(&project), "--range", "bars:3"]);
+	assert!(!bad.status.success());
+	assert!(String::from_utf8_lossy(&bad.stderr).contains("A-B"));
+	let bad = cadenza(&["export", s(&project), "--stems", "Drums"]);
+	assert!(String::from_utf8_lossy(&bad.stderr).contains("no track named"));
+}

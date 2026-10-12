@@ -354,6 +354,21 @@ pub fn build_device(
 			desc.name.clone(),
 		),
 	};
+	// Samplers start with their default factory content so they sound out of the box;
+	// explicit params apply on top of the preset's.
+	let mut zones = Vec::new();
+	if let DeviceKind::Builtin { id } = &kind {
+		match cadenza_engine::factory::default_content(id) {
+			Ok(Some(content)) => {
+				let mut merged = content.params;
+				merged.extend(params);
+				params = merged;
+				zones = content.zones;
+			}
+			Ok(None) => {}
+			Err(e) => tracing::warn!("factory samples unavailable: {e}"),
+		}
+	}
 	Ok(Device {
 		id: DeviceId::new(),
 		kind,
@@ -363,7 +378,7 @@ pub fn build_device(
 		state: None,
 		sidechain: None,
 		aux_outputs: Vec::new(),
-		zones: Vec::new(),
+		zones,
 	})
 }
 

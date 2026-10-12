@@ -201,24 +201,8 @@ pub fn write_chord_progression(
 	})
 }
 
-const GM_LANES: &[(&str, u8)] = &[
-	("kick", 36),
-	("snare", 38),
-	("clap", 39),
-	("closed_hat", 42),
-	("open_hat", 46),
-	("low_tom", 41),
-	("mid_tom", 45),
-	("high_tom", 48),
-	("crash", 49),
-	("ride", 51),
-];
-
 fn lane_pitch(name: &str) -> Result<u8, McpError> {
-	if let Some((_, pitch)) = GM_LANES.iter().find(|(n, _)| *n == name) {
-		return Ok(*pitch);
-	}
-	cadenza_theory::parse_pitch(name).map_err(McpError::from)
+	crate::tools::samples::pad_note(name)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -232,9 +216,10 @@ pub struct WriteDrumPatternArgs {
 	/// 0..=1: delays every second step for a swung feel.
 	#[serde(default)]
 	pub swing: Option<f64>,
-	/// Lane name (a GM drum name such as "kick", "snare", "closed_hat", "open_hat",
-	/// "clap", "low_tom", "mid_tom", "high_tom", "crash", "ride", or any note name/MIDI
-	/// number) to a step string. Steps: `X` accent, `x` normal, `o` ghost, `.`/`-` rest.
+	/// Lane name (a GM drum name such as "kick", "snare", "clap", "rim", "closed_hat",
+	/// "pedal_hat", "open_hat", "low_tom", "mid_tom", "high_tom", "crash", "ride",
+	/// "tambourine", "cowbell", a drum_sampler pad name, or any note name/MIDI number) to a
+	/// step string. Steps: `X` accent, `x` normal, `o` ghost, `.`/`-` rest.
 	/// Spaces and `|` are ignored (use them for readability); the pattern repeats to
 	/// fill the requested bars.
 	pub lanes: BTreeMap<String, String>,
@@ -244,6 +229,9 @@ pub struct WriteDrumPatternArgs {
 pub struct WriteDrumPatternOutput {
 	pub clip_id: ClipId,
 	pub length_beats: f64,
+	/// Lanes the track's drum_sampler has no sample for (they would be silent).
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub warnings: Vec<String>,
 }
 
 pub fn write_drum_pattern(
@@ -267,9 +255,29 @@ pub fn write_drum_pattern(
 		(args.bars as f64 * quarters_per_bar * steps_per_beat as f64).round() as usize;
 	let step_beats = 1.0 / steps_per_beat as f64;
 
+	let drum_sampler = session
+		.document()
+		.project()
+		.track(args.track_id)
+		.and_then(|t| t.instrument.as_ref())
+		.filter(|d| d.builtin_id() == Some("drum_sampler"))
+		.cloned();
+	let mut warnings = Vec::new();
 	let mut notes = Vec::new();
 	for (lane, pattern) in &args.lanes {
 		let pitch = lane_pitch(lane)?;
+		if let Some(d) = &drum_sampler
+			&& !d
+				.zones
+				.iter()
+				.any(|z| z.matches(pitch, 1.0) || z.matches(pitch, 0.5))
+		{
+			warnings.push(format!(
+				"lane '{lane}' ({pitch}) has no sample on '{}': load one with load_sample pad \
+				 \"{lane}\" or use another lane",
+				d.name
+			));
+		}
 		let cleaned: Vec<char> = pattern
 			.chars()
 			.filter(|c| !matches!(c, ' ' | '|'))
@@ -319,6 +327,7 @@ pub fn write_drum_pattern(
 	Ok(WriteDrumPatternOutput {
 		clip_id,
 		length_beats,
+		warnings,
 	})
 }
 

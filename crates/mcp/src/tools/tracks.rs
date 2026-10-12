@@ -614,11 +614,20 @@ pub fn set_output_routes(session: &mut Session, args: SetOutputRoutesArgs) -> Re
 		.track(args.track_id)
 		.and_then(|t| t.instrument.clone());
 	if let Some(instrument) = &instrument {
-		let outputs = match &instrument.kind {
-			cadenza_model::DeviceKind::Builtin { .. } => Some(Vec::new()),
+		let outputs: Option<Vec<(String, u32)>> = match &instrument.kind {
+			cadenza_model::DeviceKind::Builtin { id } => Some(
+				(1..=cadenza_dsp::create(id).map_or(0, |p| p.aux_output_count()))
+					.map(|i| (format!("Out {i}"), 2))
+					.collect(),
+			),
 			_ => {
 				let catalog = session.plugins();
-				crate::convert::plugin_ref_of(instrument, &catalog).map(|d| d.aux_outputs.clone())
+				crate::convert::plugin_ref_of(instrument, &catalog).map(|d| {
+					d.aux_outputs
+						.iter()
+						.map(|o| (o.name.clone(), o.channels))
+						.collect()
+				})
 			}
 		};
 		if let Some(outputs) = outputs
@@ -633,7 +642,7 @@ pub fn set_output_routes(session: &mut Session, args: SetOutputRoutesArgs) -> Re
 					outputs
 						.iter()
 						.enumerate()
-						.map(|(i, o)| format!("{} '{}' ({} ch)", i + 1, o.name, o.channels))
+						.map(|(i, (name, channels))| format!("{} '{name}' ({channels} ch)", i + 1))
 						.collect::<Vec<_>>()
 						.join(", ")
 				)

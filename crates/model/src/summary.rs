@@ -248,13 +248,17 @@ fn device_summary(device: &Device) -> DeviceSummary {
 		has_state: device.state.is_some(),
 		sidechain: device.sidechain,
 		aux_outputs: device.aux_outputs.clone(),
-		zones: device
-			.zones
-			.iter()
-			.enumerate()
-			.map(|(i, z)| zone_summary(i, z))
-			.collect(),
+		zones: zone_summaries(&device.zones),
 	}
+}
+
+/// Compact views of a zone map, by index (as in [`DeviceSummary::zones`]).
+pub fn zone_summaries(zones: &[SampleZone]) -> Vec<ZoneSummary> {
+	zones
+		.iter()
+		.enumerate()
+		.map(|(i, z)| zone_summary(i, z))
+		.collect()
 }
 
 fn zone_summary(index: usize, z: &SampleZone) -> ZoneSummary {

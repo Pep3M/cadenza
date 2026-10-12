@@ -62,6 +62,9 @@ pub struct UserPreset {
 	/// Plugin state (base64), if the device has one.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub state: Option<String>,
+	/// Sample zones (sampler / drum_sampler), with absolute sample paths.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub zones: Vec<cadenza_model::SampleZone>,
 }
 
 /// `list_devices`-style id of a project device.
@@ -256,6 +259,9 @@ pub struct LoadPresetOutput {
 	pub params: BTreeMap<String, f32>,
 	/// Plugin state stored with the device.
 	pub has_state: bool,
+	/// Sample zones now loaded (sampler / drum_sampler presets).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub zones: Option<usize>,
 }
 
 pub fn load_preset(
@@ -297,7 +303,7 @@ pub fn load_preset(
 			device.name
 		))
 	};
-	let (name, state, params) = match source {
+	let (name, state, params, zones) = match source {
 		PresetSource::Factory => {
 			let preset = factory.ok_or_else(not_found)?;
 			match &device.kind {
@@ -311,7 +317,10 @@ pub fn load_preset(
 						.iter()
 						.map(|(k, v)| ((*k).to_owned(), *v))
 						.collect();
-					(preset.name, None, params)
+					let zones = cadenza_dsp::uses_samples(id)
+						.then(|| cadenza_engine::factory::preset_zones(p))
+						.transpose()?;
+					(preset.name, None, params, zones)
 				}
 				_ => {
 					let catalog = session.plugins();
@@ -323,7 +332,7 @@ pub fn load_preset(
 						.key;
 					let state =
 						cadenza_engine::preset_state(&device, &key, Some(&catalog), &hosting)?;
-					(preset.name, Some(state), BTreeMap::new())
+					(preset.name, Some(state), BTreeMap::new(), None)
 				}
 			}
 		}
@@ -344,21 +353,42 @@ pub fn load_preset(
 					check_param_range(info, param, *value)?;
 				}
 			}
-			(preset.name, preset.state, preset.params)
+			let zones = device
+				.builtin_id()
+				.is_some_and(cadenza_dsp::uses_samples)
+				.then_some(preset.zones);
+			(preset.name, preset.state, preset.params, zones)
 		}
 	};
 	let has_state = state.is_some();
-	session.document_mut().execute(Command::SetDeviceState {
+	let set_state = Command::SetDeviceState {
 		track: args.track_id,
 		device: args.device_id,
 		state,
 		params: Some(params.clone()),
-	})?;
+	};
+	let zone_count = zones.as_ref().map(Vec::len);
+	let command = match zones {
+		Some(zones) => Command::Batch {
+			label: format!("Load preset '{name}'"),
+			commands: vec![
+				set_state,
+				Command::SetSampleZones {
+					track: args.track_id,
+					device: args.device_id,
+					zones,
+				},
+			],
+		},
+		None => set_state,
+	};
+	session.document_mut().execute(command)?;
 	Ok(LoadPresetOutput {
 		name,
 		source,
 		params,
 		has_state,
+		zones: zone_count,
 	})
 }
 
@@ -405,6 +435,7 @@ pub fn save_preset(
 		device: device_key(&device),
 		params: device.params.clone(),
 		state,
+		zones: device.zones.clone(),
 	};
 	let folder = session.preset_dir().join(device_folder(&device));
 	let path = folder.join(format!("{file_name}.json"));

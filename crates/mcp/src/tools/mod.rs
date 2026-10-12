@@ -11,4 +11,5 @@ pub mod playback;
 pub mod presets;
 pub mod project;
 pub mod render;
+pub mod samples;
 pub mod tracks;

@@ -27,7 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, devices, midi, playback, presets, project, render, tracks,
+	arrange, audio, clips, compose, devices, midi, playback, presets, project, render, samples,
+	tracks,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -50,6 +51,9 @@ like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_no
 `transpose_notes` to shape them.\n\
 4. Route tracks to reverb/delay buses with `create_track` (kind: bus) + `add_send`; shape \
 tone with `insert_device`/`set_device_params` on a track or the master.\n\
+Samples: the built-in `drum_sampler` (16 GM pads, starts with the factory 'Synth Kit') and \
+`sampler` (multi-zone, starts with 'Sine Pad') play audio files: `list_factory_samples`, \
+`load_sample` (pad or zone), `set_pad`, `set_zone`; their zones show in get_project.\n\
 Devices have presets: `list_presets`/`load_preset` for a quick starting sound, \
 `save_preset` to keep one for later. Duck a pad or bass under the kick with a compressor \
 keyed by it (`set_sidechain`); give the separate outputs of a multi-output drum plugin \
@@ -688,6 +692,67 @@ impl CadenzaServer {
 		Ok(Json(self.run_mut(|s| clips::duplicate_clip(s, args))?))
 	}
 
+	// -- samplers ---------------------------------------------------------------------
+
+	#[tool(
+		description = "Lists the factory samples (synthesized drum hits and a sine multisample, \
+			rendered on first use) with absolute paths for load_sample, each with its kind \
+			(drum with its GM note, or tonal with its recorded pitch), plus the factory presets \
+			built from them (load_preset on a sampler / drum_sampler)."
+	)]
+	fn list_factory_samples(&self) -> Result<Json<samples::ListFactorySamplesOutput>, ErrorData> {
+		Ok(Json(samples::list_factory_samples()?))
+	}
+
+	#[tool(
+		description = "Loads an audio file into the built-in sampler or drum_sampler of a track \
+			(track_id; device_id defaults to the track's instrument). drum_sampler: pass pad \
+			(kick, snare, clap, rim, closed_hat, pedal_hat, open_hat, low_tom, mid_tom, high_tom, \
+			crash, ride, tambourine, cowbell, or a note like \"C2\"/36) — replaces that pad's \
+			sample keeping its settings, or adds a layer with layer: true. sampler: with nothing \
+			else the file is mapped across the whole keyboard at its root (from the file name \
+			like \"Piano C3\", else detected pitch, else C4; override with root); zone: N \
+			replaces one zone's sample; keys: \"C2-B3\" adds a zone on that range. path must be \
+			absolute. One undo step; returns the zones."
+	)]
+	fn load_sample(
+		&self,
+		Parameters(args): Parameters<samples::LoadSampleArgs>,
+	) -> Result<Json<samples::LoadSampleOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| samples::load_sample(s, args))?))
+	}
+
+	#[tool(
+		description = "Edits one zone of a sampler or drum_sampler by index (see get_project \
+			instrument zones): key range, root, velocity range (layers), tune, gain_db, pan, \
+			start/end (seconds into the file; end 0 = file end), loop_mode off|forward|ping_pong \
+			with loop_start/loop_end/loop_crossfade (seconds; a 0.02-0.1 s crossfade hides the \
+			seam), reverse, attack_ms/decay_ms (decay 0 = ring out), choke group, output (0 \
+			main, 1-8 extra outputs), round_robin group; remove: true deletes it. Omitted \
+			fields keep their value. One undo step."
+	)]
+	fn set_zone(
+		&self,
+		Parameters(args): Parameters<samples::SetZoneArgs>,
+	) -> Result<Json<samples::ZonesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| samples::set_zone(s, args))?))
+	}
+
+	#[tool(
+		description = "Shapes one drum_sampler pad (every layer on its note): gain_db, pan, \
+			tune (semitones), attack_ms, decay_ms (short = tight, 0 = ring out), start (seconds, \
+			skips the attack), reverse, choke (same group cuts each other: closed + open hat), \
+			output (1-8 sends the pad to an extra output so it can get its own bus via \
+			set_output_routes; it plays on the track until routed), clear: true unloads it. pad \
+			is a drum name, note name or MIDI number. One undo step."
+	)]
+	fn set_pad(
+		&self,
+		Parameters(args): Parameters<samples::SetPadArgs>,
+	) -> Result<Json<samples::ZonesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| samples::set_pad(s, args))?))
+	}
+
 	// -- audio and MIDI files ----------------------------------------------------------
 
 	#[tool(
@@ -774,8 +839,10 @@ impl CadenzaServer {
 
 	#[tool(
 		description = "Writes a drum pattern into a new MIDI clip from ASCII step grids, one per \
-			GM lane (kick, snare, clap, closed_hat, open_hat, low_tom, mid_tom, high_tom, crash, \
-			ride, or any note name/MIDI number). Steps: X accent, x normal, o ghost, '.'/'-' rest; \
+			GM lane (kick, snare, clap, rim, closed_hat, pedal_hat, open_hat, low_tom, mid_tom, \
+			high_tom, crash, ride, tambourine, cowbell, or any note name/MIDI number); plays on \
+			drum_machine and drum_sampler alike (warnings name lanes a drum_sampler has no \
+			sample for). Steps: X accent, x normal, o ghost, '.'/'-' rest; \
 			spaces and '|' are ignored; the pattern repeats to fill the requested bars."
 	)]
 	fn write_drum_pattern(

@@ -26,7 +26,7 @@ pub use project::{
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{
 	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,
-	TempoSummary, TrackSummary, ZoneSummary, note_name,
+	TempoSummary, TrackSummary, ZoneSummary, note_name, zone_summaries,
 };
 
 #[cfg(test)]

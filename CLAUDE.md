@@ -258,10 +258,19 @@ cache v2: older caches are rescanned).
 Plugin editors (phase 11, `cadenza_plugin_host::editor`): the GUI lives in the process that owns
 the instance, on its `cadenza-plugin-main` thread, which is also the plugins' event loop (poll on
 a wake-up pipe + the X11 connection + plugin fds; CLAP timer-support/posix-fd-support, VST3
-`IRunLoop` on the plug frame). Windows: CLAP floating if offered, else embedded (`set_parent`,
-api `x11`) into our own top-level X11 window (x11rb pure-Rust connection, XWayland on Wayland;
-`_NET_WM_WINDOW_TYPE_DIALOG`, fixed-size hints when not resizable); VST3 `IPlugView` attached
-with `X11EmbedWindowID`. Resizes both ways, close button = close (reported `Closed`).
+`IRunLoop` on the plug frame). Windows: embedded (`set_parent`, api `x11`) preferred over CLAP
+floating (so every editor gets the host-drawn title strip below) into our own top-level X11
+window (x11rb pure-Rust connection, XWayland on Wayland; `_NET_WM_WINDOW_TYPE_DIALOG`,
+fixed-size hints when not resizable); VST3 `IPlugView` attached with `X11EmbedWindowID`;
+floating is the fallback when a CLAP plugin cannot embed at all. The window is the plugin's
+content size plus a `TITLE_STRIP_HEIGHT` (24 px) strip on top (`editor::geometry`, built-in
+8x8 bitmap font in `editor::font`: XWayland here ships no X11 core fonts), drawn with the
+title and a close (×) button; dragging it sends `_NET_WM_MOVERESIZE` to the root (Hyprland
+honors it) with a manual `ConfigureWindow` fallback if a window manager never grabs the
+pointer. New editors center on the RandR monitor under the pointer (whole root if RandR is
+unavailable); a position the user drags to is remembered per plugin id for the process's
+life and reused next time that plugin opens. Resizes both ways, close button (ours or the
+window manager's) = close (reported `Closed`).
 `PluginEditor` handle (from `instantiate_with_editor`, `ClapProcessor/Vst3Processor/
 SandboxedProcessor::editor()`, `Graph::plugin_editor`): `open(title)/close/is_open/poll()
 -> Vec<EditorEvent { GestureBegin, Value{param, plain}, GestureEnd, StateChanged, Closed }>/

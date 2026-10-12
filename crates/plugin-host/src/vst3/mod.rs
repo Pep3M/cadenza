@@ -262,6 +262,10 @@ fn describe(
 		Some(l) => (l.main_input_channels(), l.main_output_channels()),
 		None => (buses.main_input_channels, buses.main_output_channels),
 	};
+	let (sidechain_channels, aux_outputs) = layout
+		.as_ref()
+		.map(|l| (l.sidechain_channels(), l.aux_outputs()))
+		.unwrap_or_default();
 	let mut d = PluginDescriptor {
 		format: PluginFormat::Vst3,
 		id: id.clone(),
@@ -289,6 +293,8 @@ fn describe(
 		audio_outputs,
 		note_input: buses.event_inputs,
 		latency_samples: latency,
+		sidechain_channels,
+		aux_outputs,
 	};
 	d.description = d.compose_description("");
 	Ok(d)

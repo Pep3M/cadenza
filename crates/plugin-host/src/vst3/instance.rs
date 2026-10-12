@@ -22,6 +22,7 @@ use crate::clap::instance::{MAX_TAIL_SECONDS, NOTE_EVENT_CAPACITY, default_tail}
 use crate::descriptor::{PluginDescriptor, PluginRole};
 use crate::error::PluginError;
 use crate::main_thread::{post_to_main, run_on_main};
+use crate::ports::KeyInput;
 
 /// Room for parameter changes the plugin reports back (ignored, but the
 /// plugin must have somewhere to put them).
@@ -114,6 +115,9 @@ pub struct Vst3Processor {
 	flags: Arc<Vst3Flags>,
 	layout: PortLayout,
 	buffers: Buffers,
+	sidechain: KeyInput,
+	/// Frames of the last successful `process` (for `aux_output`).
+	last_frames: usize,
 	event_inputs: bool,
 	sample_rate: f32,
 	max_block: usize,
@@ -206,6 +210,8 @@ impl Vst3Processor {
 			audio: Some(audio),
 			flags,
 			layout: PortLayout::default(),
+			sidechain: KeyInput::default(),
+			last_frames: 0,
 			buffers: Buffers::empty(),
 			event_inputs: false,
 			sample_rate,
@@ -254,6 +260,8 @@ impl Vst3Processor {
 		})?;
 		self.buffers = Buffers::new(&activation.layout, max_block);
 		self.layout = activation.layout;
+		self.sidechain.allocate(max_block);
+		self.last_frames = 0;
 		self.event_inputs = activation.event_inputs;
 		self.latency = activation.latency;
 		self.tail_seconds = match activation.tail_samples {
@@ -455,10 +463,13 @@ impl Processor for Vst3Processor {
 		transport: &Transport,
 	) {
 		let n = left.len().min(right.len()).min(self.max_block);
+		self.last_frames = 0;
 		if n == 0 {
+			self.sidechain.clear();
 			return;
 		}
 		if self.failed || self.audio.is_none() {
+			self.sidechain.clear();
 			self.bypass(left, right);
 			return;
 		}
@@ -474,27 +485,12 @@ impl Processor for Vst3Processor {
 			self.held.push(&self.events, e, n as u32);
 		}
 
-		// Inputs: the main bus gets the track's stereo signal (down-mixed for
-		// mono buses); every other channel is silent.
-		let mut channel = 0;
-		for (bus, &count) in self.layout.inputs.iter().enumerate() {
-			for c in 0..count as usize {
-				let buf = &mut self.buffers.inputs[channel + c][..n];
-				let is_main =
-					Some(bus) == self.layout.main_input && self.role == PluginRole::Effect;
-				match (is_main, count, c) {
-					(true, 1, 0) => {
-						for ((o, l), r) in buf.iter_mut().zip(&*left).zip(&*right) {
-							*o = 0.5 * (l + r);
-						}
-					}
-					(true, _, 0) => buf.copy_from_slice(&left[..n]),
-					(true, _, 1) => buf.copy_from_slice(&right[..n]),
-					_ => buf.fill(0.0),
-				}
-			}
-			channel += count as usize;
-		}
+		// Inputs: the main bus gets the track's signal (effects), the
+		// sidechain bus the key; every other channel is silent.
+		let main = (self.role == PluginRole::Effect).then_some((&left[..n], &right[..n]));
+		let key = self.sidechain.take();
+		self.layout
+			.fill_inputs(&mut self.buffers.inputs, n, main, key);
 		for b in self
 			.buffers
 			.in_buses
@@ -513,30 +509,38 @@ impl Processor for Vst3Processor {
 			return;
 		}
 
-		let Some(main) = self.layout.main_output else {
-			left[..n].fill(0.0);
-			right[..n].fill(0.0);
-			return;
-		};
-		let first: usize = self.layout.outputs[..main]
-			.iter()
-			.map(|&c| c as usize)
-			.sum();
-		let outs = &self.buffers.outputs;
-		match self.layout.outputs[main] {
-			0 => {
+		self.last_frames = n;
+		match self
+			.layout
+			.main_output
+			.and_then(|main| self.layout.output_pair(&self.buffers.outputs, main, n))
+		{
+			Some((l, r)) => {
+				left[..n].copy_from_slice(l);
+				right[..n].copy_from_slice(r);
+			}
+			None => {
 				left[..n].fill(0.0);
 				right[..n].fill(0.0);
 			}
-			1 => {
-				left[..n].copy_from_slice(&outs[first][..n]);
-				right[..n].copy_from_slice(&outs[first][..n]);
-			}
-			_ => {
-				left[..n].copy_from_slice(&outs[first][..n]);
-				right[..n].copy_from_slice(&outs[first + 1][..n]);
-			}
 		}
+	}
+
+	fn has_sidechain(&self) -> bool {
+		self.layout.sidechain_input.is_some()
+	}
+
+	fn set_sidechain(&mut self, left: &[f32], right: &[f32]) {
+		self.sidechain.set(left, right);
+	}
+
+	fn aux_output_count(&self) -> usize {
+		self.layout.aux_output_ports().count()
+	}
+
+	fn aux_output(&self, index: usize) -> Option<(&[f32], &[f32])> {
+		self.layout
+			.aux_pair(&self.buffers.outputs, index, self.last_frames)
 	}
 
 	fn reset(&mut self) {

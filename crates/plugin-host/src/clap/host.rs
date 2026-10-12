@@ -16,6 +16,8 @@ use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::params::{
 	HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
 };
+use clack_extensions::preset_discovery::HostPresetLoadImpl;
+use clack_extensions::preset_discovery::prelude::{HostPresetLoad, Location};
 use clack_extensions::state::{HostState, HostStateImpl};
 use clack_extensions::tail::{HostTail, HostTailImpl};
 use clack_extensions::thread_check::{HostThreadCheck, HostThreadCheckImpl};
@@ -133,6 +135,27 @@ impl HostStateImpl for HostMainThread<'_> {
 	}
 }
 
+impl HostPresetLoadImpl for HostMainThread<'_> {
+	fn on_error(
+		&self,
+		_location: Location,
+		load_key: Option<&std::ffi::CStr>,
+		os_error: i32,
+		message: Option<&std::ffi::CStr>,
+	) {
+		eprintln!(
+			"[plugin {}] preset {:?} failed to load (os error {os_error}): {}",
+			self.shared.plugin,
+			load_key.map(|k| k.to_string_lossy()),
+			message.map(|m| m.to_string_lossy()).unwrap_or_default()
+		);
+	}
+
+	fn loaded(&self, _location: Location, _load_key: Option<&std::ffi::CStr>) {
+		HostShared::set(&self.shared.flags.state_dirty);
+	}
+}
+
 impl HostLatencyImpl for HostMainThread<'_> {
 	fn changed(&self) {
 		HostShared::set(&self.shared.flags.latency_changed);
@@ -184,7 +207,8 @@ impl HostHandlers for CadenzaHost {
 			.register::<HostLatency>()
 			.register::<HostAudioPorts>()
 			.register::<HostTail>()
-			.register::<HostThreadCheck>();
+			.register::<HostThreadCheck>()
+			.register::<HostPresetLoad>();
 	}
 }
 

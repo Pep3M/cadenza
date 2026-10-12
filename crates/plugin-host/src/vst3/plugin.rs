@@ -6,10 +6,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use vst3::Steinberg::Vst::{
-	BusDirections_, BusInfo, BusInfo_, BusTypes_, IAudioProcessor, IAudioProcessorTrait,
-	IComponent, IComponentHandler, IComponentTrait, IConnectionPoint, IConnectionPointTrait,
-	IEditController, IEditControllerTrait, MediaTypes_, ParameterInfo, ParameterInfo_,
-	ProcessModes_, ProcessSetup, SpeakerArr, SpeakerArrangement, SymbolicSampleSizes_,
+	BusDirections_, BusInfo, BusTypes_, IAudioProcessor, IAudioProcessorTrait, IComponent,
+	IComponentHandler, IComponentTrait, IConnectionPoint, IConnectionPointTrait, IEditController,
+	IEditControllerTrait, MediaTypes_, ParameterInfo, ParameterInfo_, ProcessModes_, ProcessSetup,
+	SpeakerArr, SpeakerArrangement, SymbolicSampleSizes_,
 };
 use vst3::Steinberg::{FUnknown, IPluginBaseTrait, TUID};
 use vst3::Steinberg::{kResultOk, kResultTrue};
@@ -314,11 +314,28 @@ impl Vst3Plugin {
 				.map(|(i, &c)| self.arrangement(dir, i, c).count_ones().min(MAX_CHANNELS))
 				.collect()
 		};
+		let inputs = channels(input, &in_channels);
+		let sidechain_input = (0..inputs.len()).find(|&i| {
+			Some(i) != main_in
+				&& inputs[i] > 0
+				&& self
+					.bus_info(MediaTypes_::kAudio as u32, input, i as i32)
+					.is_some_and(|b| b.busType == BusTypes_::kAux as i32)
+		});
+		let output_names = (0..out_channels.len())
+			.map(|o| {
+				self.bus_info(MediaTypes_::kAudio as u32, output, o as i32)
+					.map(|b| from_utf16(&b.name))
+					.unwrap_or_default()
+			})
+			.collect();
 		let layout = PortLayout {
-			inputs: channels(input, &in_channels),
+			inputs,
 			outputs: channels(output, &out_channels),
 			main_input: main_in,
 			main_output: main_out,
+			sidechain_input,
+			output_names,
 		};
 
 		let mut setup = ProcessSetup {
@@ -341,15 +358,15 @@ impl Vst3Plugin {
 		// SAFETY: bus indices come from the plugin's own counts.
 		unsafe {
 			for i in 0..layout.inputs.len() {
-				let on = role == PluginRole::Effect && Some(i) == main_in;
+				let on = (role == PluginRole::Effect && Some(i) == main_in)
+					|| Some(i) == layout.sidechain_input;
 				self.component
 					.activateBus(audio, input as i32, i as i32, u8::from(on));
 			}
+			// Every output bus with channels is active: extra outputs of
+			// multi-output instruments may be routed to buses.
 			for o in 0..layout.outputs.len() {
-				let on = Some(o) == main_out
-					|| self
-						.bus_info(audio as u32, output, o as i32)
-						.is_some_and(|b| b.flags & BusInfo_::BusFlags_::kDefaultActive as u32 != 0);
+				let on = Some(o) == main_out || layout.outputs[o] > 0;
 				self.component
 					.activateBus(audio, output as i32, o as i32, u8::from(on));
 			}

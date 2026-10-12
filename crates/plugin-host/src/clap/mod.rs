@@ -32,6 +32,7 @@
 pub(crate) mod events;
 pub(crate) mod host;
 pub(crate) mod instance;
+pub(crate) mod presets;
 
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -47,6 +48,8 @@ use clack_host::prelude::*;
 use crate::descriptor::{PluginDescriptor, PluginFormat, PluginParam};
 use crate::error::PluginError;
 use host::{CadenzaHost, HostAudioProcessor, HostFlags, HostMainThread, HostShared, host_info};
+
+pub(crate) use crate::ports::PortLayout;
 
 pub use instance::ClapProcessor;
 
@@ -70,26 +73,6 @@ fn lossy(bytes: &[u8]) -> String {
 	String::from_utf8_lossy(bytes).trim().to_string()
 }
 
-/// Audio port layout of an instance: channel count of every port, plus which
-/// port is the main one in each direction.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct PortLayout {
-	pub inputs: Vec<u32>,
-	pub outputs: Vec<u32>,
-	pub main_input: Option<usize>,
-	pub main_output: Option<usize>,
-}
-
-impl PortLayout {
-	pub fn main_input_channels(&self) -> u32 {
-		self.main_input.map_or(0, |i| self.inputs[i])
-	}
-
-	pub fn main_output_channels(&self) -> u32 {
-		self.main_output.map_or(0, |i| self.outputs[i])
-	}
-}
-
 /// What the main-thread extensions report about an instance.
 pub(crate) struct Capabilities {
 	pub params: Vec<PluginParam>,
@@ -108,16 +91,19 @@ pub(crate) fn query_ports(instance: &mut PluginInstance<CadenzaHost>) -> PortLay
 	let mut buf = AudioPortInfoBuffer::new();
 	for is_input in [true, false] {
 		let mut channels = Vec::new();
+		let mut names = Vec::new();
 		let mut main = None;
 		for i in 0..ports.count(&handle, is_input).min(64) {
 			let Some(info) = ports.get(&handle, i, is_input, &mut buf) else {
 				channels.push(0);
+				names.push(String::new());
 				continue;
 			};
 			if info.flags.contains(AudioPortFlags::IS_MAIN) && main.is_none() {
 				main = Some(i as usize);
 			}
 			channels.push(info.channel_count.min(64));
+			names.push(lossy(info.name));
 		}
 		if main.is_none() && !channels.is_empty() {
 			main = Some(0);
@@ -127,9 +113,11 @@ pub(crate) fn query_ports(instance: &mut PluginInstance<CadenzaHost>) -> PortLay
 			layout.main_input = main;
 		} else {
 			layout.outputs = channels;
+			layout.output_names = names;
 			layout.main_output = main;
 		}
 	}
+	layout.sidechain_input = layout.first_aux_input();
 	layout
 }
 
@@ -332,6 +320,8 @@ fn describe(
 		audio_outputs: caps.ports.main_output_channels(),
 		note_input: caps.note_input,
 		latency_samples: latency,
+		sidechain_channels: caps.ports.sidechain_channels(),
+		aux_outputs: caps.ports.aux_outputs(),
 	};
 	d.description = d.compose_description(&meta.description);
 	Ok(d)

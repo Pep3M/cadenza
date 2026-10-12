@@ -20,6 +20,7 @@ pub mod descriptor;
 pub mod discovery;
 mod error;
 pub(crate) mod main_thread;
+mod ports;
 pub mod sandbox;
 pub mod scanner;
 pub mod vst3;
@@ -30,7 +31,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use catalog::{BlockedPlugin, FileStamp, PluginCatalog, ScanReport, default_cache_path};
-pub use descriptor::{PluginDescriptor, PluginFormat, PluginParam, PluginRole};
+pub use descriptor::{AuxOutput, PluginDescriptor, PluginFormat, PluginParam, PluginRole};
 pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, find_vst3_files};
 pub use error::PluginError;
 pub use sandbox::{

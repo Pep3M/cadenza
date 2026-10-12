@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 clack-plugin.workspace = true
-clack-extensions = { workspace = true, features = ["clack-plugin", "audio-ports", "note-ports", "params", "state", "latency"] }
+clack-extensions = { workspace = true, features = ["clack-plugin", "audio-ports", "note-ports", "params", "state", "latency", "preset-discovery"] }
 
 [dev-dependencies]
 vst3.workspace = true
@@ -25,4 +25,10 @@ crate-type = ["cdylib"]
 # `.clap` file so the main test bundle keeps exactly two plugins).
 [[example]]
 name = "clap_crash"
+crate-type = ["cdylib"]
+
+# Effect with a sidechain input, multi-output instrument and preset-discovery
+# factory, for the sidechain/multi-output/preset tests.
+[[example]]
+name = "clap_routing"
 crate-type = ["cdylib"]

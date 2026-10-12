@@ -165,3 +165,29 @@ pub fn crash_descriptor() -> &'static PluginDescriptor {
 		descs.remove(0)
 	})
 }
+
+pub const DUCKER_ID: &str = "dev.cadenza.test.ducker";
+pub const MULTI_ID: &str = "dev.cadenza.test.multi";
+
+/// Descriptors of the sidechain/multi-output test plugins
+/// (`cadenza-routing.clap`), scanned out-of-process once.
+pub fn routing_descriptors() -> &'static [PluginDescriptor] {
+	static DESCS: OnceLock<Vec<PluginDescriptor>> = OnceLock::new();
+	DESCS.get_or_init(|| {
+		let library = build_cdylib(&["--example", "clap_routing"], "clap_routing");
+		let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+			.join(format!("cadenza-test-routing-{}", std::process::id()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let dest = dir.join("cadenza-routing.clap");
+		std::fs::copy(&library, &dest).unwrap();
+		scan_in_subprocess(&scanner(), &dest, Duration::from_secs(20))
+			.expect("scan routing test plugins")
+	})
+}
+
+pub fn routing_descriptor(id: &str) -> &'static PluginDescriptor {
+	routing_descriptors()
+		.iter()
+		.find(|d| d.id == id)
+		.unwrap_or_else(|| panic!("{id} not scanned"))
+}

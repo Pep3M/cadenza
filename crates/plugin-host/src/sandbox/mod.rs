@@ -63,7 +63,12 @@ use crate::descriptor::{PluginDescriptor, PluginRole};
 use crate::error::PluginError;
 use crate::{ProcessMode, encode_state};
 use protocol::{Reply, Request};
-use shm::{Block, CMD_PARAMS, CMD_PROCESS, CMD_RESET, Layout, Region, W_ACK_SEQ, W_REQ_SEQ};
+use shm::{
+	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_PARAMS, CMD_PROCESS, CMD_RESET, Layout,
+	Region, W_ACK_SEQ, W_REQ_SEQ,
+};
+
+use crate::ports::KeyInput;
 
 /// Environment variable overriding the sandbox executable location.
 pub const SANDBOX_ENV: &str = "CADENZA_PLUGIN_SANDBOX";
@@ -455,6 +460,7 @@ impl Connection {
 			capacity: max_block.max(MIN_CAPACITY).min(shm::MAX_CAPACITY as usize),
 			event_capacity: EVENT_CAPACITY,
 			param_capacity: desc.params.len().min(shm::MAX_PARAMS as usize),
+			aux_outputs: desc.aux_outputs.len().min(shm::MAX_AUX_OUTPUTS as usize),
 		};
 		let region = Region::create(layout.bytes()).map_err(fail)?;
 		layout.write_header(region.words());
@@ -595,6 +601,11 @@ pub struct SandboxedProcessor {
 	dirty: Vec<u32>,
 	/// Last value set per parameter (NaN = never), replayed after a restart.
 	current: Vec<f32>,
+	sidechain: KeyInput,
+	/// Extra outputs of the last block: left/right per output, `max_block` long.
+	aux: Vec<Vec<f32>>,
+	/// Frames of the last successful `process` (for `aux_output`).
+	last_frames: usize,
 }
 
 impl SandboxedProcessor {
@@ -638,10 +649,25 @@ impl SandboxedProcessor {
 			pending: vec![f32::NAN; n],
 			dirty: Vec::with_capacity(n),
 			current: vec![f32::NAN; n],
+			sidechain: KeyInput::default(),
+			aux: Vec::new(),
+			last_frames: 0,
 		};
 		p.apply_reply(&reply);
 		p.update_timeout();
+		p.allocate_buffers();
 		Ok(p)
+	}
+
+	/// Sidechain and extra-output buffers for the current `max_block`.
+	fn allocate_buffers(&mut self) {
+		self.sidechain.allocate(self.max_block);
+		let aux = self
+			.conn
+			.as_ref()
+			.map_or(0, |c| c.layout.aux_outputs.min(self.desc.aux_outputs.len()));
+		self.aux = vec![vec![0.0; self.max_block]; 2 * aux];
+		self.last_frames = 0;
 	}
 
 	/// A cloneable handle to this instance's crash status.
@@ -880,6 +906,7 @@ impl Processor for SandboxedProcessor {
 	fn prepare(&mut self, sample_rate: f32, max_block: usize) {
 		self.sample_rate = sample_rate;
 		self.max_block = max_block.max(1);
+		self.allocate_buffers();
 		self.update_timeout();
 		self.warmup = true;
 		self.control(&Request::Prepare {
@@ -907,6 +934,8 @@ impl Processor for SandboxedProcessor {
 		transport: &Transport,
 	) {
 		let n = left.len().min(right.len());
+		self.last_frames = 0;
+		let keyed = self.sidechain.take_active();
 		if n == 0 {
 			return;
 		}
@@ -935,8 +964,15 @@ impl Processor for SandboxedProcessor {
 				return;
 			};
 			block.write_events_shifted(chunk_events, start as u32);
-			block.write_audio(false, &left[start..end]);
-			block.write_audio(true, &right[start..end]);
+			block.write_audio(CH_LEFT, &left[start..end]);
+			block.write_audio(CH_RIGHT, &right[start..end]);
+			block.set_sidechain(keyed);
+			if keyed {
+				let (kl, kr) = self.sidechain.buffers();
+				let range = start.min(kl.len())..end.min(kl.len());
+				block.write_audio(CH_SIDECHAIN, &kl[range.clone()]);
+				block.write_audio(CH_SIDECHAIN + 1, &kr[range]);
+			}
 			let mut chunk_transport = *transport;
 			if start > 0 {
 				chunk_transport.beat_position +=
@@ -948,8 +984,12 @@ impl Processor for SandboxedProcessor {
 					let Some(block) = self.conn.as_ref().map(Connection::block) else {
 						return;
 					};
-					block.read_audio(false, &mut left[start..end]);
-					block.read_audio(true, &mut right[start..end]);
+					block.read_audio(CH_LEFT, &mut left[start..end]);
+					block.read_audio(CH_RIGHT, &mut right[start..end]);
+					for (c, buf) in self.aux.iter_mut().enumerate() {
+						let range = start.min(buf.len())..end.min(buf.len());
+						block.read_audio(CH_AUX + c, &mut buf[range]);
+					}
 				}
 				how => {
 					let timeout = self.timeout();
@@ -960,6 +1000,55 @@ impl Processor for SandboxedProcessor {
 			}
 			start = end;
 		}
+		self.last_frames = n.min(self.max_block);
+	}
+
+	fn has_sidechain(&self) -> bool {
+		self.desc.sidechain_channels > 0
+	}
+
+	fn set_sidechain(&mut self, left: &[f32], right: &[f32]) {
+		self.sidechain.set(left, right);
+	}
+
+	fn aux_output_count(&self) -> usize {
+		self.aux.len() / 2
+	}
+
+	fn aux_output(&self, index: usize) -> Option<(&[f32], &[f32])> {
+		let n = self.last_frames;
+		let l = self.aux.get(2 * index)?;
+		let r = self.aux.get(2 * index + 1)?;
+		Some((&l[..n], &r[..n]))
+	}
+
+	fn presets(&mut self) -> Vec<cadenza_dsp::PresetInfo> {
+		self.control(&Request::ListPresets)
+			.map(|reply| {
+				reply
+					.presets
+					.into_iter()
+					.map(|p| cadenza_dsp::PresetInfo {
+						key: p.key,
+						name: p.name,
+						category: p.category,
+					})
+					.collect()
+			})
+			.unwrap_or_default()
+	}
+
+	fn load_preset(&mut self, key: &str) -> bool {
+		let accepted = self
+			.control(&Request::LoadPreset {
+				key: key.to_string(),
+			})
+			.is_some_and(|r| r.accepted);
+		if accepted {
+			// Keep the restart state in sync with what the plugin now holds.
+			self.save_state();
+		}
+		accepted
 	}
 
 	fn reset(&mut self) {

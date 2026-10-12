@@ -21,6 +21,7 @@ use super::{
 };
 use crate::descriptor::{PluginDescriptor, PluginRole};
 use crate::error::PluginError;
+use crate::ports::KeyInput;
 
 /// Room for MIDI events per block on top of one slot per parameter.
 pub(crate) const NOTE_EVENT_CAPACITY: usize = 1024;
@@ -48,6 +49,7 @@ pub(crate) fn default_tail(desc: &PluginDescriptor) -> f32 {
 pub struct ClapProcessor {
 	key: u64,
 	id: String,
+	path: std::path::PathBuf,
 	info: &'static DeviceInfo,
 	role: PluginRole,
 	/// CLAP param id for each `set_param` index (descriptor order).
@@ -63,6 +65,9 @@ pub struct ClapProcessor {
 	out_bufs: Vec<Vec<f32>>,
 	in_ports: AudioPorts,
 	out_ports: AudioPorts,
+	sidechain: KeyInput,
+	/// Frames of the last successful `process` (for `aux_output`).
+	last_frames: usize,
 	sample_rate: f32,
 	max_block: usize,
 	latency: u32,
@@ -107,6 +112,7 @@ impl ClapProcessor {
 		let mut processor = Self {
 			key,
 			id: desc.id.clone(),
+			path: desc.path.clone(),
 			info: desc.device_info(),
 			role: desc.role,
 			param_ids,
@@ -125,6 +131,8 @@ impl ClapProcessor {
 			out_bufs: Vec::new(),
 			in_ports: AudioPorts::with_capacity(0, 0),
 			out_ports: AudioPorts::with_capacity(0, 0),
+			sidechain: KeyInput::default(),
+			last_frames: 0,
 			sample_rate,
 			max_block,
 			latency: 0,
@@ -187,6 +195,8 @@ impl ClapProcessor {
 		self.in_ports = AudioPorts::with_capacity(total_in, ports.inputs.len());
 		self.out_ports = AudioPorts::with_capacity(total_out, ports.outputs.len());
 		self.ports = ports;
+		self.sidechain.allocate(max_block);
+		self.last_frames = 0;
 		self.latency = latency;
 		self.sample_rate = sample_rate;
 		self.max_block = max_block;
@@ -305,10 +315,13 @@ impl Processor for ClapProcessor {
 		transport: &Transport,
 	) {
 		let n = left.len().min(right.len()).min(self.max_block);
+		self.last_frames = 0;
 		if n == 0 {
+			self.sidechain.clear();
 			return;
 		}
 		if self.failed || self.audio.is_none() {
+			self.sidechain.clear();
 			self.bypass(left, right);
 			return;
 		}
@@ -317,6 +330,7 @@ impl Processor for ClapProcessor {
 		};
 		let Ok(started) = audio.ensure_processing_started() else {
 			self.failed = true;
+			self.sidechain.clear();
 			self.bypass(left, right);
 			return;
 		};
@@ -332,27 +346,11 @@ impl Processor for ClapProcessor {
 			self.events.push_midi(e, n as u32, self.midi_dialect);
 		}
 
-		// Inputs: the main port gets the track's stereo signal (down-mixed for
-		// mono ports); every other channel is silent.
-		let mut channel = 0;
-		for (port, &count) in self.ports.inputs.iter().enumerate() {
-			for c in 0..count as usize {
-				let buf = &mut self.in_bufs[channel + c][..n];
-				let is_main =
-					Some(port) == self.ports.main_input && self.role == PluginRole::Effect;
-				match (is_main, count, c) {
-					(true, 1, 0) => {
-						for ((o, l), r) in buf.iter_mut().zip(&*left).zip(&*right) {
-							*o = 0.5 * (l + r);
-						}
-					}
-					(true, _, 0) => buf.copy_from_slice(&left[..n]),
-					(true, _, 1) => buf.copy_from_slice(&right[..n]),
-					_ => buf.fill(0.0),
-				}
-			}
-			channel += count as usize;
-		}
+		// Inputs: the main port gets the track's signal (effects), the
+		// sidechain port the key; every other channel is silent.
+		let main = (self.role == PluginRole::Effect).then_some((&left[..n], &right[..n]));
+		let key = self.sidechain.take();
+		self.ports.fill_inputs(&mut self.in_bufs, n, main, key);
 
 		let transport_event = transport_event(transport);
 		let status = {
@@ -398,26 +396,37 @@ impl Processor for ClapProcessor {
 			return;
 		}
 
-		let Some(main) = self.ports.main_output else {
-			left[..n].fill(0.0);
-			right[..n].fill(0.0);
-			return;
-		};
-		let first: usize = self.ports.outputs[..main].iter().map(|&c| c as usize).sum();
-		match self.ports.outputs[main] {
-			0 => {
+		self.last_frames = n;
+		match self
+			.ports
+			.main_output
+			.and_then(|main| self.ports.output_pair(&self.out_bufs, main, n))
+		{
+			Some((l, r)) => {
+				left[..n].copy_from_slice(l);
+				right[..n].copy_from_slice(r);
+			}
+			None => {
 				left[..n].fill(0.0);
 				right[..n].fill(0.0);
 			}
-			1 => {
-				left[..n].copy_from_slice(&self.out_bufs[first][..n]);
-				right[..n].copy_from_slice(&self.out_bufs[first][..n]);
-			}
-			_ => {
-				left[..n].copy_from_slice(&self.out_bufs[first][..n]);
-				right[..n].copy_from_slice(&self.out_bufs[first + 1][..n]);
-			}
 		}
+	}
+
+	fn has_sidechain(&self) -> bool {
+		self.ports.sidechain_input.is_some()
+	}
+
+	fn set_sidechain(&mut self, left: &[f32], right: &[f32]) {
+		self.sidechain.set(left, right);
+	}
+
+	fn aux_output_count(&self) -> usize {
+		self.ports.aux_output_ports().count()
+	}
+
+	fn aux_output(&self, index: usize) -> Option<(&[f32], &[f32])> {
+		self.ports.aux_pair(&self.out_bufs, index, self.last_frames)
 	}
 
 	fn reset(&mut self) {
@@ -461,6 +470,27 @@ impl Processor for ClapProcessor {
 				return false;
 			};
 			state.load(&handle, &mut data.as_slice()).is_ok()
+		})
+		.unwrap_or(false)
+	}
+
+	fn presets(&mut self) -> Vec<cadenza_dsp::PresetInfo> {
+		let (path, id) = (self.path.clone(), self.id.clone());
+		run_on_main(move |main| {
+			main.entry(&path)
+				.map(|entry| super::presets::discover(&entry, &id))
+				.unwrap_or_default()
+		})
+		.unwrap_or_default()
+	}
+
+	fn load_preset(&mut self, preset: &str) -> bool {
+		let key = self.key;
+		let preset = preset.to_string();
+		run_on_main(move |main| {
+			main.instances
+				.get_mut(&key)
+				.is_some_and(|h| super::presets::load(&mut h.instance, &preset))
 		})
 		.unwrap_or(false)
 	}

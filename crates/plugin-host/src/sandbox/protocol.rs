@@ -32,6 +32,10 @@ pub(crate) enum Request {
 	LoadState {
 		data: String,
 	},
+	ListPresets,
+	LoadPreset {
+		key: String,
+	},
 	Shutdown,
 }
 
@@ -48,6 +52,17 @@ pub(crate) struct Reply {
 	/// `Init` failed because the plugin refused the saved state (the host
 	/// reports it as `PluginError::State` so callers can retry without it).
 	pub state_rejected: bool,
+	/// `ListPresets`: the plugin's factory presets.
+	#[serde(default)]
+	pub presets: Vec<WirePreset>,
+}
+
+/// A factory preset as sent over the control channel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct WirePreset {
+	pub key: String,
+	pub name: String,
+	pub category: String,
 }
 
 pub(crate) fn write_frame(out: &mut impl Write, msg: &impl Serialize) -> std::io::Result<()> {

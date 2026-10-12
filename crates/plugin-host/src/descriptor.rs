@@ -103,6 +103,22 @@ pub struct PluginDescriptor {
 	pub note_input: bool,
 	/// Processing latency reported at activation (48 kHz), compensated by the engine.
 	pub latency_samples: u32,
+	/// Channels of the sidechain (auxiliary) audio input; 0 = none. A device's
+	/// sidechain is fed from another track (see `Device.sidechain`).
+	#[serde(default)]
+	pub sidechain_channels: u32,
+	/// Extra audio outputs besides the main one, in port order (output port 1 is
+	/// the first entry); multi-output instruments such as drum samplers.
+	#[serde(default)]
+	pub aux_outputs: Vec<AuxOutput>,
+}
+
+/// One extra audio output port of a plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AuxOutput {
+	/// Port name chosen by the vendor (e.g. "Kick", "Out 3/4"); may be empty.
+	pub name: String,
+	pub channels: u32,
 }
 
 impl PluginDescriptor {
@@ -172,6 +188,32 @@ impl PluginDescriptor {
 			s.push_str(&format!(", {} samples latency", self.latency_samples));
 		}
 		s.push('.');
+		if self.sidechain_channels > 0 {
+			s.push_str(&format!(
+				" Has a {} sidechain input (key it from another track with set_sidechain).",
+				io(self.sidechain_channels)
+			));
+		}
+		if !self.aux_outputs.is_empty() {
+			let names: Vec<String> = self
+				.aux_outputs
+				.iter()
+				.enumerate()
+				.map(|(i, o)| {
+					if o.name.is_empty() {
+						format!("{}", i + 1)
+					} else {
+						format!("{} '{}'", i + 1, o.name)
+					}
+				})
+				.collect();
+			s.push_str(&format!(
+				" Multi-output: {} extra output{} ({}); route them with set_output_routes.",
+				names.len(),
+				if names.len() == 1 { "" } else { "s" },
+				names.join(", ")
+			));
+		}
 		s
 	}
 
@@ -287,6 +329,8 @@ mod tests {
 			audio_outputs: 2,
 			note_input: false,
 			latency_samples: 0,
+			sidechain_channels: 0,
+			aux_outputs: Vec::new(),
 		}
 	}
 

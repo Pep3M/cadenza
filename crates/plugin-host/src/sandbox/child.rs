@@ -19,8 +19,12 @@ use std::time::Duration;
 use base64::Engine as _;
 use cadenza_dsp::{MidiEvent, Processor};
 
+use super::protocol::WirePreset;
 use super::protocol::{Reply, Request, read_frame, write_frame};
-use super::shm::{Block, CMD_PROCESS, CMD_RESET, Layout, Region, W_ACK_SEQ, W_REQ_SEQ};
+use super::shm::{
+	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_PROCESS, CMD_RESET, Layout, Region,
+	W_ACK_SEQ, W_REQ_SEQ,
+};
 use super::sync;
 use crate::ProcessMode;
 
@@ -252,6 +256,28 @@ fn handle(processor: &Mutex<Box<dyn Processor>>, request: Request) -> Reply {
 				..reply_ok(&mut p)
 			}
 		}
+		Request::ListPresets => {
+			let presets = p
+				.presets()
+				.into_iter()
+				.map(|p| WirePreset {
+					key: p.key,
+					name: p.name,
+					category: p.category,
+				})
+				.collect();
+			Reply {
+				presets,
+				..reply_ok(&mut p)
+			}
+		}
+		Request::LoadPreset { key } => {
+			let accepted = p.load_preset(&key);
+			Reply {
+				accepted,
+				..reply_ok(&mut p)
+			}
+		}
 		Request::Shutdown => {
 			let _ = std::io::stderr().flush();
 			exit_now(0)
@@ -265,6 +291,9 @@ fn audio_loop(region: &Region, layout: Layout, processor: &Mutex<Box<dyn Process
 	};
 	let mut left = vec![0.0f32; layout.capacity];
 	let mut right = vec![0.0f32; layout.capacity];
+	let mut key_left = vec![0.0f32; layout.capacity];
+	let mut key_right = vec![0.0f32; layout.capacity];
+	let zeros = vec![0.0f32; layout.capacity];
 	let mut events: Vec<MidiEvent> = Vec::with_capacity(layout.event_capacity);
 	let req = block.word(W_REQ_SEQ);
 	let ack = block.word(W_ACK_SEQ);
@@ -285,12 +314,29 @@ fn audio_loop(region: &Region, layout: Layout, processor: &Mutex<Box<dyn Process
 				CMD_PROCESS => {
 					let n = block.frames();
 					block.read_events(&mut events);
-					block.read_audio(false, &mut left[..n]);
-					block.read_audio(true, &mut right[..n]);
+					block.read_audio(CH_LEFT, &mut left[..n]);
+					block.read_audio(CH_RIGHT, &mut right[..n]);
+					if block.sidechain() {
+						block.read_audio(CH_SIDECHAIN, &mut key_left[..n]);
+						block.read_audio(CH_SIDECHAIN + 1, &mut key_right[..n]);
+						p.set_sidechain(&key_left[..n], &key_right[..n]);
+					}
 					let transport = block.transport();
 					p.process(&mut left[..n], &mut right[..n], &events, &transport);
-					block.write_audio(false, &left[..n]);
-					block.write_audio(true, &right[..n]);
+					block.write_audio(CH_LEFT, &left[..n]);
+					block.write_audio(CH_RIGHT, &right[..n]);
+					for k in 0..layout.aux_outputs {
+						let (l, r) = p.aux_output(k).unwrap_or((&zeros[..n], &zeros[..n]));
+						let (l, r) = (&l[..l.len().min(n)], &r[..r.len().min(n)]);
+						block.write_audio(CH_AUX + 2 * k, l);
+						block.write_audio(CH_AUX + 2 * k + 1, r);
+						if l.len() < n {
+							block.write_audio_at(CH_AUX + 2 * k, l.len(), &zeros[l.len()..n]);
+						}
+						if r.len() < n {
+							block.write_audio_at(CH_AUX + 2 * k + 1, r.len(), &zeros[r.len()..n]);
+						}
+					}
 				}
 				CMD_RESET => p.reset(),
 				_ => {}

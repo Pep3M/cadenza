@@ -15,20 +15,21 @@
 //! | `0..64` | header: magic, version, capacities, request fields, transport; `REQ_SEQ` and `ACK_SEQ` sit on their own cache lines |
 //! | `events` | `event_capacity` x 4 words: kind, offset, pitch, velocity bits |
 //! | `params` | `param_capacity` x 2 words: index, value bits |
-//! | `left`, `right` | `capacity` samples each (`f32` bits), processed in place |
+//! | audio | `capacity` samples (`f32` bits) per channel: main left/right (processed in place), sidechain left/right, then left/right of each extra output |
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cadenza_dsp::{MidiEvent, Transport};
 
 pub(crate) const MAGIC: u32 = u32::from_le_bytes(*b"CDZS");
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 
 pub(crate) const W_MAGIC: usize = 0;
 pub(crate) const W_VERSION: usize = 1;
 pub(crate) const W_CAPACITY: usize = 2;
 pub(crate) const W_EVENT_CAPACITY: usize = 3;
 pub(crate) const W_PARAM_CAPACITY: usize = 4;
+pub(crate) const W_AUX_OUTPUTS: usize = 5;
 /// Written by the host to post a request; the child futex-waits on it.
 pub(crate) const W_REQ_SEQ: usize = 16;
 pub(crate) const W_CMD: usize = 17;
@@ -38,6 +39,8 @@ pub(crate) const W_PARAMS: usize = 20;
 pub(crate) const W_PLAYING: usize = 21;
 pub(crate) const W_BPM: usize = 22; // + 23
 pub(crate) const W_BEAT: usize = 24; // + 25
+/// Non-zero when the sidechain channels carry a signal for this request.
+pub(crate) const W_SIDECHAIN: usize = 26;
 /// Written by the child when a request is done; the host futex-waits on it.
 pub(crate) const W_ACK_SEQ: usize = 32;
 const HEADER_WORDS: usize = 64;
@@ -56,6 +59,14 @@ const EV_ALL_OFF: u32 = 3;
 pub(crate) const MAX_CAPACITY: u32 = 1 << 16;
 pub(crate) const MAX_EVENTS: u32 = 1 << 14;
 pub(crate) const MAX_PARAMS: u32 = 1 << 16;
+pub(crate) const MAX_AUX_OUTPUTS: u32 = 32;
+
+/// Audio channel indices (see [`Layout::channel`]).
+pub(crate) const CH_LEFT: usize = 0;
+pub(crate) const CH_RIGHT: usize = 1;
+pub(crate) const CH_SIDECHAIN: usize = 2;
+/// Left channel of extra output `k` is `CH_AUX + 2 * k`, right is `+ 1`.
+pub(crate) const CH_AUX: usize = 4;
 
 /// Sizes of the variable sections; offsets derive from them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +74,8 @@ pub(crate) struct Layout {
 	pub capacity: usize,
 	pub event_capacity: usize,
 	pub param_capacity: usize,
+	/// Extra stereo outputs transferred after each block.
+	pub aux_outputs: usize,
 }
 
 impl Layout {
@@ -72,14 +85,18 @@ impl Layout {
 	pub fn params(&self) -> usize {
 		self.events() + self.event_capacity * 4
 	}
-	pub fn left(&self) -> usize {
+	fn audio(&self) -> usize {
 		self.params() + self.param_capacity * 2
 	}
-	pub fn right(&self) -> usize {
-		self.left() + self.capacity
+	pub fn channels(&self) -> usize {
+		CH_AUX + 2 * self.aux_outputs
+	}
+	/// First word of audio channel `c` (`c < channels()`).
+	pub fn channel(&self, c: usize) -> usize {
+		self.audio() + c * self.capacity
 	}
 	pub fn words(&self) -> usize {
-		self.right() + self.capacity
+		self.channel(self.channels())
 	}
 	pub fn bytes(&self) -> usize {
 		self.words() * 4
@@ -98,18 +115,20 @@ impl Layout {
 				get(W_VERSION)
 			));
 		}
-		let (c, e, p) = (
+		let (c, e, p, a) = (
 			get(W_CAPACITY),
 			get(W_EVENT_CAPACITY),
 			get(W_PARAM_CAPACITY),
+			get(W_AUX_OUTPUTS),
 		);
-		if c == 0 || c > MAX_CAPACITY || e > MAX_EVENTS || p > MAX_PARAMS {
-			return Err(format!("invalid sandbox capacities {c}/{e}/{p}"));
+		if c == 0 || c > MAX_CAPACITY || e > MAX_EVENTS || p > MAX_PARAMS || a > MAX_AUX_OUTPUTS {
+			return Err(format!("invalid sandbox capacities {c}/{e}/{p}/{a}"));
 		}
 		let layout = Layout {
 			capacity: c as usize,
 			event_capacity: e as usize,
 			param_capacity: p as usize,
+			aux_outputs: a as usize,
 		};
 		if layout.words() > words.len() {
 			return Err("shared memory is smaller than its header declares".into());
@@ -122,6 +141,7 @@ impl Layout {
 		words[W_CAPACITY].store(self.capacity as u32, Ordering::Relaxed);
 		words[W_EVENT_CAPACITY].store(self.event_capacity as u32, Ordering::Relaxed);
 		words[W_PARAM_CAPACITY].store(self.param_capacity as u32, Ordering::Relaxed);
+		words[W_AUX_OUTPUTS].store(self.aux_outputs as u32, Ordering::Relaxed);
 		words[W_MAGIC].store(MAGIC, Ordering::Release);
 	}
 }
@@ -150,6 +170,14 @@ impl<'a> Block<'a> {
 
 	fn load(&self, i: usize) -> u32 {
 		self.words[i].load(Ordering::Relaxed)
+	}
+
+	pub fn set_sidechain(&self, active: bool) {
+		self.store(W_SIDECHAIN, u32::from(active));
+	}
+
+	pub fn sidechain(&self) -> bool {
+		self.load(W_SIDECHAIN) != 0
 	}
 
 	pub fn set_request(&self, cmd: u32, frames: usize, transport: &Transport) {
@@ -265,25 +293,31 @@ impl<'a> Block<'a> {
 		}
 	}
 
-	/// Copies `src` into channel `right` (or left) starting at frame 0.
-	pub fn write_audio(&self, right: bool, src: &[f32]) {
-		let base = if right {
-			self.layout.right()
-		} else {
-			self.layout.left()
-		};
-		let n = src.len().min(self.layout.capacity);
+	/// Copies `src` into audio channel `c` starting at frame 0 (ignored for
+	/// channels the layout does not have).
+	pub fn write_audio(&self, c: usize, src: &[f32]) {
+		self.write_audio_at(c, 0, src);
+	}
+
+	/// Like [`Self::write_audio`], starting at frame `offset`.
+	pub fn write_audio_at(&self, c: usize, offset: usize, src: &[f32]) {
+		if c >= self.layout.channels() || offset >= self.layout.capacity {
+			return;
+		}
+		let base = self.layout.channel(c) + offset;
+		let n = src.len().min(self.layout.capacity - offset);
 		for (w, &x) in self.words[base..base + n].iter().zip(src) {
 			w.store(x.to_bits(), Ordering::Relaxed);
 		}
 	}
 
-	pub fn read_audio(&self, right: bool, dst: &mut [f32]) {
-		let base = if right {
-			self.layout.right()
-		} else {
-			self.layout.left()
-		};
+	/// Reads audio channel `c` into `dst` (silence for missing channels).
+	pub fn read_audio(&self, c: usize, dst: &mut [f32]) {
+		if c >= self.layout.channels() {
+			dst.fill(0.0);
+			return;
+		}
+		let base = self.layout.channel(c);
 		let n = dst.len().min(self.layout.capacity);
 		for (x, w) in dst[..n].iter_mut().zip(&self.words[base..base + n]) {
 			*x = f32::from_bits(w.load(Ordering::Relaxed));
@@ -528,6 +562,7 @@ mod tests {
 			capacity: 64,
 			event_capacity: 3,
 			param_capacity: 2,
+			aux_outputs: 1,
 		}
 	}
 
@@ -571,10 +606,18 @@ mod tests {
 		let mut out = Vec::with_capacity(8);
 		bb.read_events(&mut out);
 		assert_eq!(out, events[..3]);
-		ba.write_audio(true, &[0.5, -0.25]);
+		ba.write_audio(CH_RIGHT, &[0.5, -0.25]);
 		let mut r = [0.0; 2];
-		bb.read_audio(true, &mut r);
+		bb.read_audio(CH_RIGHT, &mut r);
 		assert_eq!(r, [0.5, -0.25]);
+		ba.write_audio(CH_AUX + 1, &[0.125]);
+		bb.read_audio(CH_AUX + 1, &mut r[..1]);
+		assert_eq!(r[0], 0.125);
+		ba.write_audio(CH_AUX + 2, &[1.0]);
+		bb.read_audio(CH_AUX + 2, &mut r);
+		assert_eq!(r, [0.0, 0.0], "missing channels read as silence");
+		ba.set_sidechain(true);
+		assert!(bb.sidechain());
 		assert!(ba.write_param(1, 7, 0.75) && !ba.write_param(2, 0, 0.0));
 		ba.set_param_count(9);
 		let mut seen = Vec::new();

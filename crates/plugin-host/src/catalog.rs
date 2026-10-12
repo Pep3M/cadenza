@@ -12,7 +12,9 @@ use crate::discovery::find_plugin_files;
 use crate::error::PluginError;
 use crate::scanner::{DEFAULT_SCAN_TIMEOUT, ScanFailure, scan_in_subprocess};
 
-const CACHE_VERSION: u32 = 1;
+/// Version 2 added sidechain inputs and extra outputs to descriptors; older
+/// caches are discarded so the next scan records them.
+const CACHE_VERSION: u32 = 2;
 
 /// Identity of a plugin file on disk; a change means it must be rescanned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

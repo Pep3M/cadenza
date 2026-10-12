@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 cadenza-dsp.workspace = true
 clack-host.workspace = true
-clack-extensions = { workspace = true, features = ["clack-host", "audio-ports", "note-ports", "params", "state", "latency", "tail", "log", "thread-check"] }
+clack-extensions = { workspace = true, features = ["clack-host", "audio-ports", "note-ports", "params", "state", "latency", "tail", "log", "thread-check", "preset-discovery"] }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

@@ -108,31 +108,46 @@ pub fn sandboxed() -> PluginHosting {
 	hosting
 }
 
+/// A catalog holding only the plugin of `cadenza-test-plugins` example `example`,
+/// installed as `file`.
+fn example_catalog(example: &str, file: &str) -> Arc<PluginCatalog> {
+	let library = cargo_build(&["-p", "cadenza-test-plugins", "--example", example])
+		.into_iter()
+		.find(|f| {
+			let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+			let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned());
+			matches!(ext, "so" | "dll" | "dylib") && stem.is_some_and(|s| s.contains(example))
+		})
+		.unwrap_or_else(|| panic!("cargo reported no cdylib for {example}"));
+	let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+		.join(format!("{example}-plugin-{}", std::process::id()))
+		.join("plugins");
+	std::fs::create_dir_all(&dir).unwrap();
+	std::fs::copy(&library, dir.join(file)).unwrap();
+	let cache = dir.join("../catalog.json");
+	let mut catalog = PluginCatalog::load_or_default(&cache);
+	let report = catalog
+		.scan(&[dir], &scanner())
+		.unwrap_or_else(|e| panic!("scan {example}: {e}"));
+	assert_eq!(report.added.len(), 1, "{report:?}");
+	Arc::new(catalog)
+}
+
 /// A catalog holding only the crash/hang test effect (`dev.cadenza.test.crash`).
 pub fn crash_catalog() -> Arc<PluginCatalog> {
 	static CATALOG: OnceLock<Arc<PluginCatalog>> = OnceLock::new();
 	CATALOG
-		.get_or_init(|| {
-			let library = cargo_build(&["-p", "cadenza-test-plugins", "--example", "clap_crash"])
-				.into_iter()
-				.find(|f| {
-					let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
-					let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned());
-					matches!(ext, "so" | "dll" | "dylib")
-						&& stem.is_some_and(|s| s.contains("clap_crash"))
-				})
-				.expect("cargo reported no cdylib for clap_crash");
-			let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-				.join(format!("crash-plugin-{}", std::process::id()))
-				.join("plugins");
-			std::fs::create_dir_all(&dir).unwrap();
-			std::fs::copy(&library, dir.join("cadenza-crash.clap")).unwrap();
-			let cache = dir.join("../catalog.json");
-			let mut catalog = PluginCatalog::load_or_default(&cache);
-			let report = catalog.scan(&[dir], &scanner()).expect("scan crash plugin");
-			assert_eq!(report.added.len(), 1, "{report:?}");
-			Arc::new(catalog)
-		})
+		.get_or_init(|| example_catalog("clap_crash", "cadenza-crash.clap"))
+		.clone()
+}
+
+pub const GUI_ID: &str = "dev.cadenza.test.gui";
+
+/// A catalog holding only the scripted-editor test effect (`dev.cadenza.test.gui`).
+pub fn gui_catalog() -> Arc<PluginCatalog> {
+	static CATALOG: OnceLock<Arc<PluginCatalog>> = OnceLock::new();
+	CATALOG
+		.get_or_init(|| example_catalog("clap_gui", "cadenza-gui.clap"))
 		.clone()
 }
 

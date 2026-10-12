@@ -26,13 +26,17 @@ pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, Wa
 pub use cadenza_midi_io::PortInfo as MidiPort;
 pub use cadenza_plugin_host::PluginCatalog;
 pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions};
+pub use cadenza_plugin_host::{EDITORS_SUPPORTED, EditorEvent};
 pub use compile::{compile, compile_hosted, compile_with};
 pub use devices::{capture_state, plugin_presets, preset_state};
 pub use error::EngineError;
 pub use graph::{Graph, ScheduleSwap};
 pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting};
 pub use meter::{MeterBank, MeterReading};
-pub use player::{AuditionScope, Player, PlayerClock, find_midi_input, midi_input_ports};
+pub use player::{
+	AuditionScope, EditorState, EditorUpdate, Player, PlayerClock, find_midi_input,
+	midi_input_ports,
+};
 pub use render::{
 	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,
 	export_options_for_path, render_offline, render_to_file, render_to_wav,

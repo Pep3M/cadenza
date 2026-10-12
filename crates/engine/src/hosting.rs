@@ -8,7 +8,9 @@
 use std::path::PathBuf;
 
 use cadenza_core::{DeviceId, TrackId};
-use cadenza_plugin_host::{CrashReason, HostingMode, PluginError, SandboxMonitor, SandboxOptions};
+use cadenza_plugin_host::{
+	CrashReason, HostingMode, PluginEditor, PluginError, SandboxMonitor, SandboxOptions,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +104,15 @@ pub struct PluginCrash {
 	pub reason: CrashReason,
 	/// Human/LLM-readable summary with what happened and what to do next.
 	pub message: String,
+}
+
+/// The editor handle of a plugin device in a compiled graph.
+#[derive(Clone)]
+pub(crate) struct PluginEditorSlot {
+	pub device_id: DeviceId,
+	/// Track holding the device; `None` for the master channel.
+	pub track_id: Option<TrackId>,
+	pub editor: PluginEditor,
 }
 
 /// A sandboxed device in a compiled graph, watched for crashes off the audio thread.

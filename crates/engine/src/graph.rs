@@ -12,7 +12,7 @@ use cadenza_model::AutomationLane;
 use crate::QUANTUM;
 use crate::audio_clip::ClipPlayback;
 use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Resolver};
-use crate::hosting::{PluginCrash, PluginWatch};
+use crate::hosting::{PluginCrash, PluginEditorSlot, PluginWatch};
 use crate::meter::{MeterBank, Meters};
 use crate::schedule::MidiSchedule;
 
@@ -470,6 +470,8 @@ pub struct Graph {
 	pub(crate) warnings: Vec<String>,
 	/// Sandboxed plugin devices; never touched by `process`.
 	pub(crate) plugin_watches: Vec<PluginWatch>,
+	/// Editor handles of the plugin devices; never touched by `process`.
+	pub(crate) plugin_editors: Vec<PluginEditorSlot>,
 	/// Timeline sample fed to the sources in the next quantum to render.
 	pub(crate) engine_pos: i64,
 	/// Output samples still to drop to compensate the master latency.
@@ -814,6 +816,9 @@ impl Graph {
 	/// stopped, writes silence and does not advance.
 	pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
 		let n = left.len().min(right.len());
+		if !self.playing {
+			self.idle_devices();
+		}
 		if !self.playing && self.preview_frames > 0 {
 			self.process_preview(&mut left[..n], &mut right[..n]);
 			return;
@@ -856,6 +861,34 @@ impl Graph {
 			self.out_wrap = None;
 		}
 		self.meters.publish();
+	}
+
+	/// The editor handle of plugin device `device` (`None` for built-ins and plugins that
+	/// are bypassed or failed to load). Usable while the graph runs on the audio thread.
+	pub fn plugin_editor(&self, device: DeviceId) -> Option<cadenza_plugin_host::PluginEditor> {
+		self.plugin_editors
+			.iter()
+			.find(|s| s.device_id == device)
+			.map(|s| s.editor.clone())
+	}
+
+	/// Lets plugin devices exchange parameter changes with their editors while the
+	/// transport is stopped (`Processor::idle`). Realtime-safe.
+	fn idle_devices(&mut self) {
+		for n in &mut self.nodes {
+			if let Source::Instrument {
+				device: Some(d), ..
+			} = &mut n.source
+			{
+				d.processor.idle();
+			}
+			for d in &mut n.inserts {
+				d.processor.idle();
+			}
+		}
+		for d in &mut self.master.inserts {
+			d.processor.idle();
+		}
 	}
 
 	/// Stopped transport with live notes: renders quanta without song content and

@@ -27,6 +27,14 @@
 //! notices it through the sandbox monitors ([`Player::plugin_crashes`],
 //! [`Player::take_plugin_crashes`]). Crashed plugins are restarted by the next
 //! [`Player::load`], which re-creates every device from the project.
+//!
+//! Plugin editors ([`Player::open_editor`]) show the GUI of a plugin device of the loaded
+//! project, in the process that runs it. [`Player::poll_editors`] returns what the user
+//! did there (parameter gestures and values, state changes, closed windows); the caller
+//! turns them into project commands. Editors stay open across [`Player::load`]: the new
+//! instance's editor replaces the old one, and plugin state changed in an editor (e.g. a
+//! patch loaded from the plugin's own browser) is carried over to the new instance and
+//! reported by [`Player::take_editor_states`] so it can be stored in the project.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -34,11 +42,13 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
+use std::collections::HashMap;
+
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_dsp::MidiEvent;
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
-use cadenza_model::{AutomationLane, Clip, Project};
-use cadenza_plugin_host::PluginCatalog;
+use cadenza_model::{AutomationLane, Clip, Command, Document, Project};
+use cadenza_plugin_host::{EditorEvent, PluginCatalog};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -47,7 +57,7 @@ use crate::automation::{AutoTarget, AutomationSet, Resolver};
 use crate::compile_hosted;
 use crate::error::EngineError;
 use crate::graph::{Audition, Graph, ScheduleSwap};
-use crate::hosting::{PluginCrash, PluginHosting, PluginWatch};
+use crate::hosting::{PluginCrash, PluginEditorSlot, PluginHosting, PluginWatch};
 use crate::meter::MeterBank;
 use crate::schedule::MidiSchedule;
 
@@ -89,6 +99,22 @@ enum Cmd {
 	Preview(TrackId, MidiEvent),
 	/// Loop range (song ticks), kept across loads.
 	Loop(Option<(Tick, Tick)>),
+}
+
+/// Something that happened in the editor of a plugin device (see [`Player::poll_editors`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditorUpdate {
+	pub device: DeviceId,
+	pub event: EditorEvent,
+}
+
+/// The live state of a plugin device whose editor changed it (base64, for
+/// `Command::SetDeviceState`; see [`Player::take_editor_states`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditorState {
+	pub track: Option<TrackId>,
+	pub device: DeviceId,
+	pub state: String,
 }
 
 /// The tracks an audition plays (see [`Player::set_audition`]).
@@ -535,7 +561,25 @@ pub struct Player {
 	audition_state: Option<Arc<Audition>>,
 	audition: Option<AuditionScope>,
 	loop_range: Option<(Tick, Tick)>,
+	editors: Editors,
 	_stream: cpal::Stream,
+}
+
+/// Plugin editors of the loaded graph and the ones the user opened.
+#[derive(Default)]
+struct Editors {
+	/// Editor handle per plugin device of the loaded graph.
+	slots: HashMap<DeviceId, PluginEditorSlot>,
+	/// Open editors and their window titles (kept across loads).
+	open: HashMap<DeviceId, String>,
+	/// Devices whose plugin changed state in its editor since the last capture.
+	dirty: std::collections::HashSet<DeviceId>,
+	/// Last plain value each editor reported per parameter, to skip echoing it back.
+	reported: HashMap<(DeviceId, String), f32>,
+	/// Updates produced outside a poll (by a load), returned by the next poll.
+	pending: Vec<EditorUpdate>,
+	/// States captured from live instances, for the caller to store.
+	captured: Vec<EditorState>,
 }
 
 /// Lists the MIDI input ports (hardware and virtual).
@@ -619,6 +663,7 @@ impl Player {
 			audition_state: None,
 			audition: None,
 			loop_range: None,
+			editors: Editors::default(),
 			_stream: stream,
 		})
 	}
@@ -667,6 +712,16 @@ impl Player {
 		else {
 			return Ok(false);
 		};
+		// The plugin's editor reported this very value: it already has it (sending it
+		// back could make the editor's control jump through a rounding error).
+		if self
+			.editors
+			.reported
+			.remove(&(device, param.to_string()))
+			.is_some_and(|v| v == value)
+		{
+			return Ok(true);
+		}
 		self.control
 			.send(Cmd::Param(device, index as u32, value))
 			.map(|()| true)
@@ -725,6 +780,26 @@ impl Player {
 	///
 	/// Every plugin device is created afresh, so this also restarts crashed plugins.
 	pub fn load(&mut self, project: &Project) -> Result<Vec<String>, EngineError> {
+		// Plugin state changed in an editor lives only in the running instance so far:
+		// carry it over to the new one.
+		let captured = self.capture_dirty_states(project, &[]);
+		let patched;
+		let project = if captured.is_empty() {
+			project
+		} else {
+			let mut doc = Document::new(project.clone());
+			for c in &captured {
+				let _ = doc.execute(Command::SetDeviceState {
+					track: c.track,
+					device: c.device,
+					state: Some(c.state.clone()),
+					params: None,
+				});
+			}
+			patched = doc.into_project();
+			&patched
+		};
+		self.editors.captured.extend(captured);
 		let mut graph = compile_hosted(
 			project,
 			self.sample_rate,
@@ -739,6 +814,7 @@ impl Player {
 		let automated = crate::automation::targets(&graph.automation);
 		graph.load_id = self.load_id + 1;
 		let audition = graph.audition.clone();
+		let editor_slots = graph.plugin_editors.clone();
 		audition.set(
 			self.audition
 				.as_ref()
@@ -752,7 +828,151 @@ impl Player {
 		self.meters = Some(meters);
 		self.resolver = Some(resolver);
 		self.automated = automated;
+		self.swap_editors(editor_slots);
 		Ok(warnings)
+	}
+
+	/// Replaces the editor handles with the new graph's, moving open editors over to
+	/// the new instances (devices that are gone report their editor closed).
+	fn swap_editors(&mut self, slots: Vec<PluginEditorSlot>) {
+		let old = std::mem::replace(
+			&mut self.editors.slots,
+			slots.into_iter().map(|s| (s.device_id, s)).collect(),
+		);
+		self.editors.reported.clear();
+		let open: Vec<(DeviceId, String)> = self.editors.open.drain().collect();
+		for (device, title) in open {
+			if let Some(slot) = old.get(&device) {
+				let _ = slot.editor.close();
+			}
+			let reopened = self
+				.editors
+				.slots
+				.get(&device)
+				.is_some_and(|s| s.editor.open(&title).is_ok());
+			if reopened {
+				self.editors.open.insert(device, title);
+			} else {
+				self.editors.pending.push(EditorUpdate {
+					device,
+					event: EditorEvent::Closed,
+				});
+			}
+		}
+	}
+
+	/// Live states of the devices whose editors changed their state, plus `extra`
+	/// (those still in `project`).
+	fn capture_dirty_states(&mut self, project: &Project, extra: &[DeviceId]) -> Vec<EditorState> {
+		let mut devices: Vec<DeviceId> = self.editors.dirty.drain().collect();
+		for d in extra {
+			if !devices.contains(d) {
+				devices.push(*d);
+			}
+		}
+		let mut out = Vec::new();
+		for device in devices {
+			let Some(slot) = self.editors.slots.get(&device) else {
+				continue;
+			};
+			if project.device(slot.track_id, device).is_none() {
+				continue;
+			}
+			if let Ok(Some(state)) = slot.editor.save_state() {
+				out.push(EditorState {
+					track: slot.track_id,
+					device,
+					state: cadenza_plugin_host::encode_state(&state),
+				});
+			}
+		}
+		out
+	}
+
+	/// Whether `device` is a plugin of the loaded project (so it may have an editor).
+	pub fn has_editor(&self, device: DeviceId) -> bool {
+		self.editors.slots.contains_key(&device)
+	}
+
+	/// Opens (or raises) the editor window of plugin device `device`, titled `title`.
+	/// Fails when the device is not a plugin of the loaded project (built-in, bypassed,
+	/// failed to load, or not loaded yet) or the plugin cannot show an editor.
+	pub fn open_editor(&mut self, device: DeviceId, title: &str) -> Result<(), EngineError> {
+		let slot = self.editors.slots.get(&device).ok_or_else(|| {
+			EngineError::Device(format!(
+				"device {device} is not a loaded plugin (built-in devices have no editor; 				 bypassed or failed plugins are not loaded)"
+			))
+		})?;
+		slot.editor
+			.open(title)
+			.map_err(|e| EngineError::Device(e.to_string()))?;
+		self.editors.open.insert(device, title.to_string());
+		Ok(())
+	}
+
+	/// Closes the editor of `device` (no-op when it is not open).
+	pub fn close_editor(&mut self, device: DeviceId) -> Result<(), EngineError> {
+		self.editors.open.remove(&device);
+		match self.editors.slots.get(&device) {
+			Some(slot) => slot
+				.editor
+				.close()
+				.map_err(|e| EngineError::Device(e.to_string())),
+			None => Ok(()),
+		}
+	}
+
+	/// Devices whose editor is open.
+	pub fn open_editors(&self) -> Vec<DeviceId> {
+		self.editors.open.keys().copied().collect()
+	}
+
+	/// What happened in the open editors since the last call: parameter gestures and
+	/// values (plain, by param id), state changes and closed windows (also when a
+	/// device disappeared or its sandbox crashed). Call it regularly (e.g. every 30 ms)
+	/// from the control thread while editors are open.
+	pub fn poll_editors(&mut self) -> Vec<EditorUpdate> {
+		let mut out = std::mem::take(&mut self.editors.pending);
+		let open: Vec<DeviceId> = self.editors.open.keys().copied().collect();
+		for device in open {
+			let Some(slot) = self.editors.slots.get(&device) else {
+				continue;
+			};
+			for event in slot.editor.poll() {
+				match &event {
+					EditorEvent::Value { param, value } => {
+						self.editors
+							.reported
+							.insert((device, param.clone()), *value as f32);
+					}
+					EditorEvent::StateChanged => {
+						self.editors.dirty.insert(device);
+					}
+					EditorEvent::Closed => {
+						self.editors.open.remove(&device);
+					}
+					_ => {}
+				}
+				out.push(EditorUpdate { device, event });
+			}
+		}
+		out
+	}
+
+	/// Captures the live state of `devices` and of every device whose editor reported a
+	/// state change (e.g. when an editor closes, or before saving the project); the
+	/// results, and states carried over by [`Player::load`], come back from
+	/// [`Player::take_editor_states`]. Devices that are not loaded plugins are skipped.
+	pub fn capture_editor_states(&mut self, project: &Project, devices: &[DeviceId]) {
+		let captured = self.capture_dirty_states(project, devices);
+		self.editors.captured.extend(captured);
+	}
+
+	/// Live plugin states captured since the last call, to store in the project with
+	/// `Command::SetDeviceState { params: None }` (they are what the running instances
+	/// already have, so storing them needs no reload).
+	pub fn take_editor_states(&mut self) -> Vec<EditorState> {
+		std::mem::take(&mut self.editors.captured)
 	}
 
 	/// Live per-track and master levels of the loaded project, updated by the audio
@@ -964,6 +1184,16 @@ impl Player {
 
 	pub fn is_playing(&self) -> bool {
 		self.control.shared.playing.load(Ordering::Relaxed)
+	}
+}
+
+impl Drop for Player {
+	fn drop(&mut self) {
+		for device in self.editors.open.keys() {
+			if let Some(slot) = self.editors.slots.get(device) {
+				let _ = slot.editor.close();
+			}
+		}
 	}
 }
 

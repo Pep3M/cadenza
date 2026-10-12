@@ -9,7 +9,8 @@
 use cadenza_dsp::{PresetInfo, Processor};
 use cadenza_model::{Device, DeviceKind};
 use cadenza_plugin_host::{
-	PluginCatalog, PluginDescriptor, PluginError, PluginFormat, ProcessMode, SandboxMonitor,
+	PluginCatalog, PluginDescriptor, PluginEditor, PluginError, PluginFormat, ProcessMode,
+	SandboxMonitor,
 };
 
 use crate::QUANTUM;
@@ -36,7 +37,14 @@ pub(crate) fn find_plugin<'c>(
 		})
 }
 
-/// Creates a plugin instance, sandboxed when `sandboxed` (with the monitor to watch it).
+/// A plugin instance with its editor handle and, when sandboxed, the monitor to watch it.
+pub(crate) struct CreatedPlugin {
+	pub processor: Box<dyn Processor>,
+	pub monitor: Option<SandboxMonitor>,
+	pub editor: PluginEditor,
+}
+
+/// Creates a plugin instance, sandboxed when `sandboxed`.
 pub(crate) fn create_plugin(
 	desc: &PluginDescriptor,
 	sample_rate: f32,
@@ -44,7 +52,7 @@ pub(crate) fn create_plugin(
 	mode: ProcessMode,
 	hosting: &PluginHosting,
 	sandboxed: bool,
-) -> Result<(Box<dyn Processor>, Option<SandboxMonitor>), PluginError> {
+) -> Result<CreatedPlugin, PluginError> {
 	if sandboxed {
 		let p = cadenza_plugin_host::instantiate_sandboxed(
 			desc,
@@ -54,11 +62,19 @@ pub(crate) fn create_plugin(
 			mode,
 			hosting.sandbox.clone(),
 		)?;
-		let monitor = p.monitor();
-		Ok((Box::new(p), Some(monitor)))
+		Ok(CreatedPlugin {
+			monitor: Some(p.monitor()),
+			editor: p.editor(),
+			processor: Box::new(p),
+		})
 	} else {
-		cadenza_plugin_host::instantiate_with_mode(desc, sample_rate, QUANTUM, state, mode)
-			.map(|p| (p, None))
+		let (processor, editor) =
+			cadenza_plugin_host::instantiate_with_editor(desc, sample_rate, QUANTUM, state, mode)?;
+		Ok(CreatedPlugin {
+			processor,
+			monitor: None,
+			editor,
+		})
 	}
 }
 
@@ -108,7 +124,7 @@ fn open_plugin(
 	};
 	let sandboxed = hosting.mode == cadenza_plugin_host::HostingMode::Sandboxed
 		&& sandbox_unavailable(&hosting.sandbox).is_none();
-	let (mut processor, _) = create_plugin(
+	let mut processor = create_plugin(
 		desc,
 		STANDALONE_SAMPLE_RATE,
 		state.as_deref(),
@@ -116,7 +132,8 @@ fn open_plugin(
 		hosting,
 		sandboxed,
 	)
-	.map_err(|e| device_error(device, format!("failed to load: {e}")))?;
+	.map_err(|e| device_error(device, format!("failed to load: {e}")))?
+	.processor;
 	if with_settings {
 		let info = processor.info();
 		for (param, &value) in &device.params {

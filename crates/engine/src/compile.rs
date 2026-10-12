@@ -26,7 +26,7 @@ use crate::error::EngineError;
 use crate::graph::{
 	AuxEdge, Device, Edge, Fader, Graph, Master, Node, Sidechain, Source, StereoBuf, StereoDelay,
 };
-use crate::hosting::{PluginHosting, PluginWatch, sandbox_unavailable};
+use crate::hosting::{PluginEditorSlot, PluginHosting, PluginWatch, sandbox_unavailable};
 use crate::pdc::{PdcEdge, PdcNode, PdcStage, Tap, plan};
 use crate::schedule::MidiSchedule;
 use crate::{MAX_TAIL_SECONDS, QUANTUM};
@@ -122,6 +122,8 @@ struct Compiler<'a> {
 	sandbox_ok: Option<bool>,
 	/// Sandboxed devices compiled so far, for crash reports.
 	watches: Vec<PluginWatch>,
+	/// Editor handles of the plugin devices compiled so far.
+	editors: Vec<PluginEditorSlot>,
 	/// Track whose devices are being compiled (`None` = master).
 	current_track: Option<TrackId>,
 	mode: ProcessMode,
@@ -145,6 +147,7 @@ impl<'a> Compiler<'a> {
 			hosting,
 			sandbox_ok: None,
 			watches: Vec::new(),
+			editors: Vec::new(),
 			current_track: None,
 			mode,
 			sample_rate,
@@ -318,11 +321,16 @@ impl<'a> Compiler<'a> {
 			other => other,
 		};
 		match result {
-			Ok((processor, monitor)) => {
-				if let Some(monitor) = monitor {
+			Ok(created) => {
+				if let Some(monitor) = created.monitor {
 					self.watch(monitor, device, owner, &label, desc.role);
 				}
-				Some(processor)
+				self.editors.push(PluginEditorSlot {
+					device_id: device.id,
+					track_id: self.current_track,
+					editor: created.editor,
+				});
+				Some(created.processor)
 			}
 			Err(e) => {
 				self.warnings
@@ -730,6 +738,7 @@ impl<'a> Compiler<'a> {
 			tail_seconds: self.tail.min(MAX_TAIL_SECONDS),
 			warnings: self.warnings,
 			plugin_watches: self.watches,
+			plugin_editors: self.editors,
 			engine_pos: 0,
 			discard: latency,
 			out_pos: 0,

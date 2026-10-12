@@ -102,7 +102,13 @@ pub struct Device { id: DeviceId, kind: DeviceKind, name: String, bypass: bool,
 	params: BTreeMap<String, f32> /* plain (unnormalized) values by param id */,
 	state: Option<String> /* opaque plugin state, base64; params apply on top */,
 	sidechain: Option<SidechainSource { track: TrackId, pre_fader: bool }> /* key input */,
-	aux_outputs: Vec<OutputRoute { port: u32 /* 1-based extra output */, bus: Option<TrackId> /* None = own track */ }> }
+	aux_outputs: Vec<OutputRoute { port: u32 /* 1-based extra output */, bus: Option<TrackId> /* None = own track */ }>,
+	zones: Vec<SampleZone> /* built-in sampler / drum_sampler only */ }
+pub struct SampleZone { sample: SampleRef { path: PathBuf /* absolute */, name: String /* original file name */ },
+	key_low, key_high, root_key: u8, vel_low, vel_high: f32 /* 0..1 */, tune: f32 /* semitones */, gain_db, pan,
+	start: f64, end: Option<f64> /* seconds of the file */, loop_mode: LoopMode /* off|forward|ping_pong */,
+	loop_start: f64, loop_end: Option<f64>, loop_crossfade: f64, reverse: bool, attack_ms: f32, decay_ms: Option<f32>,
+	choke: u8 /* 1..=16 */, output: u8 /* 0 main, n = extra output n */, round_robin: u8 /* 1..=16 */ }
 // New fields are optional in JSON (missing = None/empty), so format_version stays 1.
 pub enum DeviceKind { Builtin { id: String }, Clap { plugin_id: String, path: PathBuf },
 	Vst3 { class_id: String, path: PathBuf } }
@@ -124,6 +130,7 @@ MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, A
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
+SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
 (instrument only), SetClipFades { clip, fade_in, fade_out } (replaces both; audio clips only),
 UpdateAudioClip { clip, file?, offset_seconds?, gain_db? } (audio clips; swaps in processed copies),
@@ -131,6 +138,14 @@ Batch { label, commands }.
 `ParamAddress` also names send levels: `track/{id}/send/{send_id}` (dB; SetParam, automation);
 removing a send (or the bus it feeds) drops its lanes. `model::automation_value(points, tick,
 tempo)` evaluates a lane in seconds, exactly like the engine (which interpolates in samples).
+
+Sample zones (phase 13, `model::sample`): typed structured state of the sample-based built-ins
+(not the opaque `state`, which stays for plugins), all fields but sample/keys optional in JSON
+(format_version 1). Samples are absolute paths like audio clips; `SampleRef.name` keeps the
+original file name so a later "collect project files" can relocate/rename them. Validation:
+keys 0..=127, low <= high, velocity 0..=1, tune ±48, gain -60..=24, end > start, loop_end >
+loop_start, crossfade 0..=10 s, groups <= 16, at most 1024 zones. `root_from_file_name`
+("Piano C3", "pad_F#2", "Strings_60"; 60 = C4), `zone_summaries` (get_project lists zones).
 
 Clip fades are in **seconds**, not beats: like `offset_seconds` they shape the recording
 (de-click, natural decay) and must not stretch with tempo changes; AI tools accept beats too
@@ -183,8 +198,20 @@ pub trait Processor: Send {
 }
 pub fn registry() -> &'static [&'static DeviceInfo];
 pub fn create(id: &str) -> Option<Box<dyn Processor>>;
-pub fn factory_presets(id: &str) -> &'static [FactoryPreset { name, description, params }];
+pub fn factory_presets(id: &str) -> &'static [FactoryPreset { name, description, params, zones: &[FactoryZone] }];
+	fn set_zones(&mut self, zones: Vec<Zone>) -> bool  // sample built-ins; non-realtime, after prepare
+pub trait SampleData: Send + Sync { sample_rate, num_channels, channel(i) -> &[f32] } // Arc<dyn SampleData> per zone
 ```
+Sample instruments (phase 13): `sampler` (multi-zone; amp ADSR, SVF LP/HP/BP with its own ADSR,
+velocity/key tracking, velocity sensitivity + curve, gate/one-shot, glide + mono legato,
+transpose, polyphony 1..64) and `drum_sampler` (16 GM pads `instruments::drum_sampler::PADS`,
+one-shot, choke groups, per-zone AD envelope, 8 extra stereo outputs = `Zone::output` 1..=8).
+Shared playback in `instruments::sample_voice` (per-zone frame positions precomputed in
+`set_zones`; forward/ping-pong loops with an equal-gain seam crossfade; reverse; round-robin and
+velocity layers; stolen/choked voices fade 4-5 ms in spare slots), `util::interp` (cubic
+Hermite up to 1.25x, table windowed-sinc with cutoff 1/ratio above), `util::pitch` (YIN
+`detect_pitch`). `uses_samples(id)`; factory presets carry `FactoryZone`s naming files of the
+factory sample folder (`factory_samples::*`).
 The built-in `compressor` has a sidechain input (detector keyed by it when set).
 Instruments receive silence in `left/right` and must write (not add) their output.
 Events are sorted by `offset` within the block.
@@ -286,6 +313,16 @@ Vec<EditorUpdate>/capture_editor_states(project, devices)/take_editor_states()`;
 dirty live states over to the new instances and re-opens open editors; `set_live_param` skips
 echoing a value the editor just reported. Display tests: `cargo test -p cadenza-plugin-host
 --release --test editor_display -- --ignored --test-threads 1` (scripted plugins + Surge XT/LSP).
+Sample zones: `compile` converts `Device.zones` (or any `uses_samples` device) to DSP zones whose
+audio is decoded + resampled to the engine rate through `AudioCache::global()` and shared as
+`Arc` (`samples::CachedSample`, no copy, nothing on the audio thread); a missing/unreadable
+file leaves the zone silent with one warning naming track, device, file and key.
+`engine::factory`: synthesized factory content (drum_machine renders + a looped additive sine
+pad C2-C5, mono 48 kHz WAV) in `$CADENZA_FACTORY_SAMPLES` or
+`$XDG_DATA_HOME/cadenza/samples/factory`, rendered on first use (`ensure_factory_samples`,
+versioned), `list_factory_samples`, `preset_zones`, `default_content(id)` (a new sampler starts
+with "Sine Pad", a drum_sampler with "Synth Kit"). `auto_zone(path)`/`detect_root`: name, else
+pitch, else C4.
 Audio clips: files are decoded + resampled to the engine rate at compile time through
 `AudioCache::global()` (any format symphonia reads) and played with `render_clip` (realtime
 safe); overlapping clips on a track sum. An unreadable file is a `MixReport`/`Player::load`
@@ -300,6 +337,13 @@ Shared session: `cadenza_mcp::SharedSession = Arc<Mutex<Session>>`;
 locks it per call; render/analyze work on a copy). `Session::change_key()` = (epoch bumped by
 `reset`, document revision); `is_clean/mark_clean` track the state last saved/opened
 (`save_project` marks clean).
+MCP sample tools (`tools::samples`): `list_factory_samples`, `load_sample` (drum pad by name/
+note keeping its settings, `layer`; sampler `zone` / `keys` / auto-map with root detection),
+`set_zone`, `set_pad` (patch fields; a pad on an unrouted extra output gets a route to its own
+track in the same batch); `build_device` fills default content; presets (factory and user) carry
+zones; `set_output_routes` accepts built-in extra outputs; `write_drum_pattern` knows rim/pedal_hat/
+tambourine/cowbell lanes and warns about lanes a drum_sampler has no sample for. The agent's
+`PathPolicy::resolve_sample` allows the session folder or the factory folder.
 MCP file tools: `import_audio`, `get_audio_info`, `set_clip_fades`, `import_midi` (Batch via
 Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension. The
 embedded agent's `PathPolicy` confines all of them to the session folder with checked extensions.
@@ -431,9 +475,20 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/E/I, Ctrl+D, S
   split, Del (automation points first, then clips), A lanes; arrange: drag empty lane =
   rubber band, drag a clip's left edge = trim start. Dirty state is confirmed on new/open/close.
+- Sampler editors (`state::samples` pure builders + `ui::instrument_editor`): the bottom editor
+  dock shows them when `view.instrument_editor` (opened by the inspector "Edit pads/zones",
+  double-click on the instrument in a track header or mixer strip; "Piano roll" goes back).
+  Drum sampler: 4x4 pad grid (pad 1 bottom-left; click auditions through the preview path,
+  higher = harder), selected pad's waveform (`WaveformPeaks`) with draggable start/end, pad
+  knobs (`widgets::knob`, one command per drag) and the device's param knobs (live). Sampler:
+  keyboard zone map (click selects, keys audition), start/end/loop markers, zone knobs, loop
+  mode toggles, global knobs. Audio file drops (browser Files or OS) on a pad / zone / the
+  keyboard go through the shared `load_sample` tool; Alt+drop below the tracks or the Files
+  context menu "Load into new sampler" adds a sampler track auto-mapped to the file.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
-  including automation lanes, the audio editor and an empty project.
+  including automation lanes, the audio editor, an empty project and (`render_sampler_screens`)
+  the sampler editors.
 - Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
   30 ms): Edit button in the inspector (device and track instrument), double-click a plugin
   insert / instrument in the mixer or the instrument name in a track header. Window title

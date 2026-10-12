@@ -184,4 +184,13 @@ fn render_screens() {
 		.unwrap()
 		.save(dir.join("device_selected.png"))
 		.unwrap();
+	h.state_mut().state.dirty = true;
+	h.state_mut()
+		.state
+		.request(cadenza_app::state::Pending::Quit);
+	h.run_steps(3);
+	h.render()
+		.unwrap()
+		.save(dir.join("unsaved_prompt.png"))
+		.unwrap();
 }

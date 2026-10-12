@@ -423,7 +423,11 @@ fn shortcut_button(ui: &mut Ui, label: &str, shortcut: &str) -> bool {
 
 fn status_bar(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal_centered(|ui| {
-		let dirty = if state.dirty { "● unsaved" } else { "saved" };
+		let dirty = if state.dirty {
+			"unsaved changes"
+		} else {
+			"saved"
+		};
 		ui.label(
 			RichText::new(dirty)
 				.font(theme::small())
@@ -522,28 +526,36 @@ fn unsaved_prompt(ctx: &egui::Context, state: &mut AppState) {
 		Pending::Open(_) => "opening another project",
 		Pending::Quit => "quitting",
 	};
-	egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
-		ui.set_width(380.0);
-		ui.heading("Unsaved changes");
-		ui.add_space(4.0);
-		ui.label(format!(
-			"'{}' has changes that are not saved. Save them before {action}?",
-			state.project().name
-		));
-		ui.add_space(10.0);
-		ui.horizontal(|ui| {
-			if ui.button(RichText::new("Save").strong()).clicked() {
-				state.save_then(pending.clone());
-			}
-			if ui.button("Don't save").clicked() {
-				state.dirty = false;
-				state.proceed(pending.clone());
-			}
-			if ui.button("Cancel").clicked() {
-				state.confirm = None;
-			}
+	egui::Modal::new(egui::Id::new("unsaved"))
+		.frame(
+			Frame::new()
+				.fill(theme::BG_RAISED)
+				.stroke(egui::Stroke::new(1.0, theme::BORDER_STRONG))
+				.corner_radius(6)
+				.inner_margin(Margin::same(16)),
+		)
+		.show(ctx, |ui| {
+			ui.set_width(380.0);
+			ui.heading("Unsaved changes");
+			ui.add_space(4.0);
+			ui.label(format!(
+				"'{}' has changes that are not saved. Save them before {action}?",
+				state.project().name
+			));
+			ui.add_space(10.0);
+			ui.horizontal(|ui| {
+				if ui.button(RichText::new("Save").strong()).clicked() {
+					state.save_then(pending.clone());
+				}
+				if ui.button("Don't save").clicked() {
+					state.dirty = false;
+					state.proceed(pending.clone());
+				}
+				if ui.button("Cancel").clicked() {
+					state.confirm = None;
+				}
+			});
 		});
-	});
 }
 
 /// Spinner while an export or plugin scan runs in the background.

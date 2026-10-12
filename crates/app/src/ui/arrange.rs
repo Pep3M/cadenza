@@ -615,6 +615,10 @@ impl ArrangeUi {
 			}
 			// Pressing an unselected clip selects it; dragging a selected one keeps the group.
 			let add = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+			if r.clicked() && !add {
+				// A plain click (no drag) narrows a group selection to this clip.
+				state.selection.clear_clips();
+			}
 			if r.clicked() || (r.drag_started() && !state.selection.clips.contains(&clip.id)) {
 				state.selection.click_clip(track.id, clip.id, add);
 			}

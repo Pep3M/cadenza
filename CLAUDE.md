@@ -23,10 +23,12 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose` | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `gui` (starts `cadenza-app`) | all |
+| `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, mixer with live meters, browser, inspector; `AppState` over the MCP `Session` | core, model, dsp, engine, mcp, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output) | — |
 
-Future: `cadenza-ui`, audio editing (destructive + clip-based), sandbox on Windows/macOS.
+Future: piano roll / automation / audio editor (phase 10), plugin editor windows (11), AI chat
+panel in the app (12), audio editing (destructive + clip-based), sandbox on Windows/macOS.
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
 `cadenza-audio-io` and are forwarded by `cadenza-engine` and `cadenza-cli`; both are OFF by
@@ -98,8 +100,9 @@ pub struct Marker { tick: Tick, name: String }
 ```
 
 `Command` is a serde-tagged enum (`#[serde(tag = "op", rename_all = "snake_case")]`):
-AddTrack, RemoveTrack, UpdateTrack (name/color patch), SetChannel (volume/pan/mute/solo/output
-patch, `track: Option<TrackId>` = None means master), SetInstrument, InsertDevice, RemoveDevice,
+AddTrack, RemoveTrack, MoveTrack { track, index } (display order only), UpdateTrack (name/color
+patch), SetChannel (volume/pan/mute/solo/output patch, `track: Option<TrackId>` = None means
+master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
@@ -178,6 +181,8 @@ pub struct MixReport { sample_rate, duration_seconds, latency_samples, warnings:
 pub struct LevelStats { peak_db, true_peak_db, rms_db, lufs_integrated /* BS.1770-4 */, lufs_short_term_max,
 	crest_factor_db, clipped_samples, band_energy_db: BandEnergy, stereo_correlation } // silence = -144
 pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing(),
+	// clock() -> PlayerClock (Send+Sync: position/is_playing/sample_rate from any thread),
+	// meters() -> Option<Arc<MeterBank>> (per load), set_live_volume/set_live_pan(Option<TrackId>, ..) (no recompile),
 	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>,
 	// set_midi_input(Option<&MidiPort>), set_monitor_track(Option<TrackId>), dropped_midi_events()
 pub fn midi_input_ports() -> Result<Vec<MidiPort>, EngineError>; pub fn find_midi_input(index_or_name) -> Result<MidiPort, _>;
@@ -221,6 +226,43 @@ track releases held notes.
 MCP file tools: `import_audio`, `get_audio_info`, `set_clip_fades`, `import_midi` (Batch via
 Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension. The
 embedded agent's `PathPolicy` confines all of them to the session folder with checked extensions.
+Metering: every graph measures each track's post-fader signal and the master per quantum and
+publishes at the end of each `Graph::process` into a `MeterBank` of atomics (peak via `fetch_max`
+on the float bits, readers take-and-reset it; RMS with 300 ms ballistics is a plain store):
+wait-free, no allocation (covered by the `no_alloc` test). Peak hold/fall-off is the UI's job.
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.
+
+### cadenza-app
+
+Desktop app (`cadenza-app [project]`, or `cadenza gui [project]`, which execs the binary next to
+the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with the wgpu renderer
+(the crate sets `rust-version = 1.95`); native file dialogs through `rfd` (xdg-desktop-portal).
+
+- `state::AppState` (no egui; unit-tested) owns the `cadenza_mcp::Session` — the same document +
+  undo history + path + plugin catalog + hosting the MCP tools and the AI agent use — plus
+  selection (ids only, pruned after edits), view (zoom/scroll/panels), notices, meters, jobs.
+- **Every edit is a `Command` through `AppState::apply`** (or `edit_session` to reuse MCP tool
+  functions such as `import_audio`, `import_midi`, `save_project`): validated + undoable by
+  `Document`, marks dirty, prunes the selection and schedules a debounced (120 ms) player reload.
+  Gesture edits (fader/pan/value drags, clip moves) are previewed locally and committed as ONE
+  command on release; fader previews also go to the player live (`set_live_volume/pan`), so
+  their commit skips the reload that would cut sounding notes. `state::edits` holds the pure
+  gesture -> Command builders (move/resize/duplicate/split clips, new tracks/clips, reorder).
+- `audio::AudioEngine`: the `Player` on its own thread (like MCP `PlayerHandle`) but never
+  blocking the UI: requests are fire-and-forget, a burst of loads is coalesced into the newest,
+  results come back as polled `AudioEvent`s; position via `PlayerClock`, levels via `MeterBank`,
+  plugin crashes polled every 500 ms and shown as toasts. No device = app works without sound.
+- `jobs`: waveform peaks (decoded + `WaveformPeaks` on a worker, cached by path), plugin
+  rescans, renders (`render_to_file`, format by extension) and file dialogs run off the UI thread.
+- `ui`: views only read state and call its methods. Panels: menu, transport, browser (left, F5),
+  inspector + history (right, F4), mixer (bottom, F3), arrange (center); `theme` is the single
+  palette/metrics module. Shortcuts: Space play/stop, Home return, Ctrl+Z / Ctrl+Shift+Z,
+  Ctrl+S/Shift+S/O/N/E/I, Ctrl+D duplicate, S split at playhead, Del delete, Ctrl+wheel zoom,
+  Shift+wheel scroll, Alt+wheel track height. Dirty state is confirmed on new/open/close.
+- Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
+  `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu).
+- Phase 12 (AI panel): the agent's tools must act on the app's `Session` (today `CadenzaServer`
+  owns its own behind a `Mutex`; share it, e.g. `Arc<Mutex<Session>>`) and AI edits must go
+  through the same bookkeeping as `edit_session` (dirty, selection prune, debounced reload).

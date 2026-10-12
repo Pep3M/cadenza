@@ -25,10 +25,14 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"analyze_mix",
 	"render",
 	"save_project",
+	"get_audio_info",
+	"export_midi",
 ];
 
 /// Formats the `render` tool may write.
 const RENDER_EXTENSIONS: &[&str] = &["wav", "flac", "mp3"];
+/// MIDI file extensions for `import_midi`/`export_midi`.
+const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
 /// Where the session may read and write files.
 #[derive(Debug, Clone)]
@@ -301,6 +305,21 @@ impl ToolBridge {
 				};
 				obj.insert("path".into(), path_value(&path));
 			}
+			// Audio/MIDI files are read from and written to the session folder only.
+			"import_audio" | "import_midi" | "export_midi" | "get_audio_info" => {
+				let extensions = match name {
+					"import_midi" | "export_midi" => MIDI_EXTENSIONS,
+					_ => cadenza_mcp::tools::audio::AUDIO_EXTENSIONS,
+				};
+				match obj.get("path").and_then(Value::as_str) {
+					Some(raw) => {
+						let path = self.policy.resolve_any(raw, extensions)?;
+						obj.insert("path".into(), path_value(&path));
+					}
+					None if name == "get_audio_info" => {}
+					None => return Err("missing 'path'".into()),
+				}
+			}
 			"scan_plugins" => {
 				let custom = obj
 					.get("paths")
@@ -326,7 +345,8 @@ fn offered(name: &str, allow_plugins: bool) -> bool {
 /// File-path tools get a note that paths are relative to the session folder.
 fn describe(name: &str, description: String) -> String {
 	match name {
-		"save_project" | "open_project" | "render" => format!(
+		"save_project" | "open_project" | "render" | "import_audio" | "import_midi"
+		| "export_midi" | "get_audio_info" => format!(
 			"{description} Paths are file names relative to the session folder; locations \
 			 outside it are rejected."
 		),
@@ -501,6 +521,38 @@ mod tests {
 		let outside = tempfile::tempdir().unwrap();
 		std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
 		assert!(policy.resolve("link/x.wav", "wav").is_err());
+	}
+
+	#[test]
+	fn file_tools_are_confined_and_typed() {
+		let (policy, dir) = policy();
+		let root = dir.path().canonicalize().unwrap();
+		let bridge = ToolBridge::new(CadenzaServer::new(), policy, false, 10_000);
+		let ok = |name: &str, path: &str| {
+			bridge
+				.apply_policy(name, json!({ "path": path }))
+				.map(|v| v["path"].as_str().unwrap().to_owned())
+		};
+		assert_eq!(
+			ok("render", "mix.flac").unwrap(),
+			root.join("mix.flac").display().to_string()
+		);
+		assert!(ok("render", "mix.aiff").is_err());
+		assert!(ok("import_audio", "takes/vox.wav").is_ok());
+		assert!(ok("import_audio", "/etc/passwd.wav").is_err());
+		assert!(ok("import_audio", "song.mid").is_err());
+		assert!(ok("import_midi", "song.mid").is_ok());
+		assert!(ok("export_midi", "../out.mid").is_err());
+		assert!(ok("export_midi", "out.wav").unwrap_err().contains(".mid"));
+		assert!(ok("get_audio_info", "/tmp/x.wav").is_err());
+		assert!(bridge.apply_policy("get_audio_info", json!({})).is_ok());
+		assert!(bridge.apply_policy("import_midi", json!({})).is_err());
+		assert!(
+			bridge
+				.specs()
+				.iter()
+				.any(|s| s.name == "import_audio" && s.description.contains("session folder"))
+		);
 	}
 
 	#[test]

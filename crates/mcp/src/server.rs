@@ -26,7 +26,9 @@ use rmcp::{
 use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::Session;
-use crate::tools::{arrange, clips, compose, devices, playback, presets, project, render, tracks};
+use crate::tools::{
+	arrange, audio, clips, compose, devices, midi, playback, presets, project, render, tracks,
+};
 
 const INSTRUCTIONS: &str = "\
 Cadenza: you are the arranger and mix engineer for this project. Everything you do goes \
@@ -60,6 +62,8 @@ Third-party plugins run in crash-isolated sandbox processes: a plugin that crash
 hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in \
 `warnings` (re-render to retry); during playback `transport_status` lists it under \
 `plugin_crashes` and `restart_plugins` reloads it. Replace a plugin that keeps crashing.\n\n\
+Audio and MIDI files: `import_audio` puts a recording on an Audio track (then \
+`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files.\n\n\
 Positions and durations are always in beats (quarter notes); pitches are note names \
 (\"C4\") or MIDI numbers (60 = C4); velocity is 0..1; volume is dB; pan is -1..1.";
 
@@ -669,6 +673,72 @@ impl CadenzaServer {
 		Parameters(args): Parameters<clips::DuplicateClipArgs>,
 	) -> Result<Json<clips::DuplicateClipOutput>, ErrorData> {
 		Ok(Json(self.run_mut(|s| clips::duplicate_clip(s, args))?))
+	}
+
+	// -- audio and MIDI files ----------------------------------------------------------
+
+	#[tool(
+		description = "Imports an audio file (WAV, AIFF, FLAC, MP3, OGG, M4A, CAF; any sample \
+			rate) as a clip covering the whole file at at_beats, on an existing Audio track \
+			(track_id) or on a new Audio track named after the file. One undo step. Returns the \
+			clip, its length in beats and the file's duration, sample rate and channels."
+	)]
+	fn import_audio(
+		&self,
+		Parameters(args): Parameters<audio::ImportAudioArgs>,
+	) -> Result<Json<audio::ImportAudioOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| audio::import_audio(s, args))?))
+	}
+
+	#[tool(
+		description = "Describes an audio file (path) or the file of an audio clip (clip_id): \
+			duration in seconds and beats, sample rate, channels, format; for a clip also its \
+			position, offset, gain and fades."
+	)]
+	fn get_audio_info(
+		&self,
+		Parameters(args): Parameters<audio::GetAudioInfoArgs>,
+	) -> Result<Json<audio::GetAudioInfoOutput>, ErrorData> {
+		Ok(Json(audio::get_audio_info(&self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Sets the fade-in and/or fade-out of an audio clip, each as a length in \
+			seconds or beats (0 removes it; omit a side to keep it) with a curve: linear, \
+			equal_power (crossfades), exponential (long fade-outs) or s_curve. Use a few \
+			milliseconds (0.005 s) to remove clicks at clip edges. The fades must fit in the clip."
+	)]
+	fn set_clip_fades(
+		&self,
+		Parameters(args): Parameters<audio::SetClipFadesArgs>,
+	) -> Result<Json<audio::SetClipFadesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| audio::set_clip_fades(s, args))?))
+	}
+
+	#[tool(
+		description = "Imports a standard MIDI file (.mid) in one undo step: new instrument \
+			tracks per source track (or per channel with split_by_channel; drums get \
+			drum_machine, the rest poly_synth), or one clip on an existing instrument track \
+			(track_id, at_beats). Also applies the file's tempo map, time signature and \
+			markers. Returns the created tracks/clip and warnings about data that was dropped."
+	)]
+	fn import_midi(
+		&self,
+		Parameters(args): Parameters<midi::ImportMidiArgs>,
+	) -> Result<Json<midi::ImportMidiOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| midi::import_midi(s, args))?))
+	}
+
+	#[tool(
+		description = "Writes the project's MIDI to a standard MIDI file (.mid): every \
+			instrument track with notes, or only track_id, or only one clip (clip_id). \
+			Includes the tempo map, time signature and markers."
+	)]
+	fn export_midi(
+		&self,
+		Parameters(args): Parameters<midi::ExportMidiArgs>,
+	) -> Result<Json<midi::ExportMidiOutput>, ErrorData> {
+		Ok(Json(midi::export_midi(&self.session(), args)?))
 	}
 
 	// -- composition helpers ---------------------------------------------------------

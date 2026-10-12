@@ -2,9 +2,11 @@
 //! independently testable; `server.rs` only adapts these to the MCP tool-call protocol.
 
 pub mod arrange;
+pub mod audio;
 pub mod clips;
 pub mod compose;
 pub mod devices;
+pub mod midi;
 pub mod playback;
 pub mod presets;
 pub mod project;

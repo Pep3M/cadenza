@@ -12,7 +12,7 @@ path = "src/main.rs"
 [features]
 default = []
 # Offline time-stretch / pitch-shift (needs a C++ compiler + libclang).
-stretch = ["cadenza-engine/stretch", "cadenza-mcp/stretch"]
+stretch = ["cadenza-engine/stretch"]
 # MP3 export (vendored LAME, LGPL; needs a C toolchain).
 mp3 = ["cadenza-engine/mp3"]
 

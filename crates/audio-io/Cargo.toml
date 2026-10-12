@@ -1,0 +1,28 @@
+[package]
+name = "cadenza-audio-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Audio file decoding, resampling, caching, waveform peaks, clip DSP and export for Cadenza"
+
+[features]
+default = []
+# High-quality time-stretch / pitch-shift via Signalsmith Stretch (MIT, C++).
+# Needs a C++ compiler and libclang at build time.
+stretch = ["dep:signalsmith-stretch"]
+# MP3 export via vendored LAME (LGPL-3.0). Needs a C toolchain + make at build time.
+mp3 = ["dep:mp3lame-encoder"]
+
+[dependencies]
+symphonia.workspace = true
+rubato.workspace = true
+hound.workspace = true
+flacenc.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+signalsmith-stretch = { workspace = true, optional = true }
+mp3lame-encoder = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

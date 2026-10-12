@@ -80,6 +80,58 @@ pub(crate) fn open(main: &mut MainState, key: u64, title: &str) -> Result<(), St
 		}
 		return Ok(());
 	}
+	// Embedding is preferred over a plugin's own floating window so every
+	// editor gets the host-drawn title strip consistently; floating is only
+	// a fallback for plugins that cannot embed at all.
+	#[cfg(all(unix, not(target_os = "macos")))]
+	if gui.is_api_supported(&handle, X11_EMBEDDED) {
+		let plugin_id = hosted
+			.shared
+			.as_ref()
+			.map(|s| s.plugin_id.clone())
+			.unwrap_or_else(|| format!("clap:{key}"));
+		let display = main.gui.display()?;
+		gui.create(&handle, X11_EMBEDDED)
+			.map_err(|_| "the plugin failed to create its editor".to_string())?;
+		let size = gui.get_size(&handle).unwrap_or(FALLBACK_SIZE);
+		let resizable = gui.can_resize(&handle);
+		let window =
+			match display.create_window(title, &plugin_id, size.width, size.height, resizable) {
+				Ok(w) => w,
+				Err(e) => {
+					gui.destroy(&handle);
+					return Err(e);
+				}
+			};
+		let Some(content) = display.content_window(window.top) else {
+			gui.destroy(&handle);
+			display.destroy(window.top);
+			return Err(
+				"the editor window lost its content area before the plugin could embed".into(),
+			);
+		};
+		let parent = clack_extensions::gui::Window::from_x11_handle(content as std::ffi::c_ulong);
+		// SAFETY: `content` is a live X11 window that outlives the GUI (it is
+		// destroyed, with its parent, only after `gui.destroy`).
+		if unsafe { gui.set_parent(&handle, parent) }.is_err() {
+			gui.destroy(&handle);
+			display.destroy(window.top);
+			return Err("the plugin refused to embed its editor into the Cadenza window".into());
+		}
+		let _ = gui.show(&handle);
+		display.show(window.top);
+		main.gui
+			.windows
+			.insert(window.top, crate::main_thread::Owner::Clap(key));
+		hosted.editor = Some(ClapEditor {
+			window: ClapWindow::Embedded {
+				window: window.top,
+				size,
+				resizable,
+			},
+		});
+		return Ok(());
+	}
 	if gui.is_api_supported(&handle, X11_FLOATING) {
 		gui.create(&handle, X11_FLOATING)
 			.map_err(|_| "the plugin failed to create its editor window".to_string())?;
@@ -93,51 +145,11 @@ pub(crate) fn open(main: &mut MainState, key: u64, title: &str) -> Result<(), St
 		});
 		return Ok(());
 	}
-	#[cfg(all(unix, not(target_os = "macos")))]
-	{
-		if !gui.is_api_supported(&handle, X11_EMBEDDED) {
-			return Err(
-				"the plugin's editor supports neither X11 embedding nor floating X11 windows, \
-				 which is all Cadenza offers on Linux"
-					.into(),
-			);
-		}
-		let display = main.gui.display()?;
-		gui.create(&handle, X11_EMBEDDED)
-			.map_err(|_| "the plugin failed to create its editor".to_string())?;
-		let size = gui.get_size(&handle).unwrap_or(FALLBACK_SIZE);
-		let resizable = gui.can_resize(&handle);
-		let window = match display.create_window(title, size.width, size.height, resizable) {
-			Ok(w) => w,
-			Err(e) => {
-				gui.destroy(&handle);
-				return Err(e);
-			}
-		};
-		let parent = clack_extensions::gui::Window::from_x11_handle(window as std::ffi::c_ulong);
-		// SAFETY: `window` is a live X11 window that outlives the GUI (it is
-		// destroyed only after `gui.destroy`).
-		if unsafe { gui.set_parent(&handle, parent) }.is_err() {
-			gui.destroy(&handle);
-			display.destroy(window);
-			return Err("the plugin refused to embed its editor into the Cadenza window".into());
-		}
-		let _ = gui.show(&handle);
-		display.show(window);
-		main.gui
-			.windows
-			.insert(window, crate::main_thread::Owner::Clap(key));
-		hosted.editor = Some(ClapEditor {
-			window: ClapWindow::Embedded {
-				window,
-				size,
-				resizable,
-			},
-		});
-		Ok(())
-	}
-	#[cfg(not(all(unix, not(target_os = "macos"))))]
-	Err(crate::editor::UNSUPPORTED.into())
+	Err(
+		"the plugin's editor supports neither X11 embedding nor floating X11 windows, which is \
+		 all Cadenza offers on Linux"
+			.into(),
+	)
 }
 
 /// Destroys the editor of `key` (no-op without one). `destroyed`: the plugin

@@ -40,6 +40,12 @@
 #[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) mod x11;
 
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) mod font;
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) mod geometry;
+
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -412,6 +418,38 @@ pub(crate) fn dispatch_fds(main: &mut MainState, ready: &[(i32, i16, FdOwner)]) 
 		}
 	}
 }
+
+/// Window positions remembered per plugin id for the life of this process
+/// (phase 11's title strip: "put it back where I left it" within a session).
+#[cfg(all(unix, not(target_os = "macos")))]
+static LAST_POSITION: std::sync::LazyLock<Mutex<HashMap<String, (i32, i32)>>> =
+	std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn remembered_position(plugin_id: &str) -> Option<(i32, i32)> {
+	LAST_POSITION
+		.lock()
+		.unwrap_or_else(|e| e.into_inner())
+		.get(plugin_id)
+		.copied()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn remember_position(plugin_id: &str, pos: (i32, i32)) {
+	LAST_POSITION
+		.lock()
+		.unwrap_or_else(|e| e.into_inner())
+		.insert(plugin_id.to_string(), pos);
+}
+
+/// Height in pixels of the host-drawn title strip on top of every embedded
+/// editor window: the X11 window reported by [`find_window`] (and seen by a
+/// window manager) is the plugin's content size plus this. `0` on OSes
+/// without the strip.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub const TITLE_STRIP_HEIGHT: u32 = geometry::STRIP_HEIGHT;
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+pub const TITLE_STRIP_HEIGHT: u32 = 0;
 
 /// Whether plugin editors can be shown on this OS at all.
 pub const EDITORS_SUPPORTED: bool = cfg!(all(unix, not(target_os = "macos")));

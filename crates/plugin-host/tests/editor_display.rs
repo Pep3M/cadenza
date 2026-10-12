@@ -18,8 +18,8 @@ use cadenza_dsp::{Processor, Transport};
 use cadenza_plugin_host::editor::find_window;
 use cadenza_plugin_host::scanner::scan_in_subprocess;
 use cadenza_plugin_host::{
-	EditorEvent, PluginDescriptor, PluginEditor, ProcessMode, instantiate_sandboxed,
-	instantiate_with_editor,
+	EditorEvent, PluginDescriptor, PluginEditor, ProcessMode, TITLE_STRIP_HEIGHT,
+	instantiate_sandboxed, instantiate_with_editor,
 };
 use common::{gui_descriptor, sandbox_options, scanner, vst3_gain_descriptor};
 
@@ -102,16 +102,29 @@ fn check_scripted(events: &[EditorEvent]) {
 	);
 }
 
-/// Opens the scripted editor, checks the window, the edit and the resize to
-/// 320x240 the plugin asks for, then closes it.
+/// The outer (titled) window size for a plugin content area of this size:
+/// our host-drawn title strip sits on top of it.
+fn with_strip(content_w: u32, content_h: u32) -> (u32, u32) {
+	(content_w, content_h + TITLE_STRIP_HEIGHT)
+}
+
+/// Opens the scripted editor, checks the window (content size plus the title
+/// strip), the edit and the resize to 320x240 the plugin asks for, then
+/// closes it.
 fn scripted_round(p: &mut dyn Processor, editor: &PluginEditor, title: &str) {
 	editor.open(title).unwrap();
 	let size = wait_window(title, true).unwrap();
 	println!("{title}: opened at {size:?}");
+	assert_eq!(
+		size,
+		with_strip(300, 200),
+		"the window does not include the strip"
+	);
 	let events = run(p, editor, Duration::from_secs(5), scripted);
 	check_scripted(&events);
+	let wanted = with_strip(320, 240);
 	let started = Instant::now();
-	while wait_window(title, true) != Some((320, 240)) {
+	while wait_window(title, true) != Some(wanted) {
 		assert!(
 			started.elapsed() < Duration::from_secs(3),
 			"the editor window did not follow the plugin's resize request"
@@ -194,6 +207,176 @@ fn scripted_vst3_editor_uses_the_run_loop_in_process_and_sandboxed() {
 	.unwrap();
 	let editor = p.editor();
 	scripted_round(&mut p, &editor, "Cadenza Test Gain — sandboxed");
+}
+
+/// Position of `window` relative to the root (works whether or not it was
+/// reparented into a window manager frame) and its current size.
+#[cfg(target_os = "linux")]
+fn geometry_of(
+	conn: &x11rb::rust_connection::RustConnection,
+	root: u32,
+	window: u32,
+) -> (i32, i32, u32, u32) {
+	use x11rb::protocol::xproto::ConnectionExt;
+	let g = conn.get_geometry(window).unwrap().reply().unwrap();
+	let t = conn
+		.translate_coordinates(window, root, 0, 0)
+		.unwrap()
+		.reply()
+		.unwrap();
+	(
+		i32::from(t.dst_x),
+		i32::from(t.dst_y),
+		u32::from(g.width),
+		u32::from(g.height),
+	)
+}
+
+/// Synthesizes a drag of the title strip of the window titled `title`:
+/// press inside the strip (left of the close button), then a motion `(dx,
+/// dy)` away. These are `SendEvent`s, not real hardware input, so the window
+/// manager's own interactive move (triggered by the `_NET_WM_MOVERESIZE`
+/// message the press also sends) never actually engages a pointer grab for
+/// them; what moves the window here is Cadenza's own manual-move fallback,
+/// which only needs the motion event, not a real grab. Returns
+/// `(before, after)` positions.
+#[cfg(target_os = "linux")]
+fn drag_strip(title: &str, dx: i16, dy: i16) -> ((i32, i32), (i32, i32)) {
+	use x11rb::connection::Connection;
+	use x11rb::protocol::xproto::{
+		BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ButtonPressEvent, ConnectionExt, EventMask,
+		KeyButMask, MOTION_NOTIFY_EVENT, Motion, MotionNotifyEvent,
+	};
+	let (conn, screen) = x11rb::connect(None).unwrap();
+	let root = conn.setup().roots[screen].root;
+	let window = find_top(&conn, root, title).expect("editor window");
+	let (before_x, before_y, _, _) = geometry_of(&conn, root, window);
+	// Inside the strip (y < 24), well clear of the close button on the right.
+	let (start_x, start_y): (i16, i16) = (40, 10);
+	let (root_x, root_y) = (before_x as i16 + start_x, before_y as i16 + start_y);
+	let press = ButtonPressEvent {
+		response_type: BUTTON_PRESS_EVENT,
+		detail: 1,
+		sequence: 0,
+		time: x11rb::CURRENT_TIME,
+		root,
+		event: window,
+		child: x11rb::NONE,
+		root_x,
+		root_y,
+		event_x: start_x,
+		event_y: start_y,
+		state: KeyButMask::default(),
+		same_screen: true,
+	};
+	conn.send_event(true, window, EventMask::BUTTON_PRESS, press)
+		.unwrap()
+		.check()
+		.unwrap();
+	let motion = MotionNotifyEvent {
+		response_type: MOTION_NOTIFY_EVENT,
+		detail: Motion::NORMAL,
+		sequence: 0,
+		time: x11rb::CURRENT_TIME,
+		root,
+		event: window,
+		child: x11rb::NONE,
+		root_x: root_x + dx,
+		root_y: root_y + dy,
+		event_x: start_x + dx,
+		event_y: start_y + dy,
+		state: KeyButMask::BUTTON1,
+		same_screen: true,
+	};
+	conn.send_event(true, window, EventMask::POINTER_MOTION, motion)
+		.unwrap()
+		.check()
+		.unwrap();
+	std::thread::sleep(Duration::from_millis(300));
+	let release = ButtonPressEvent {
+		response_type: BUTTON_RELEASE_EVENT,
+		..press
+	};
+	let _ = conn.send_event(true, window, EventMask::BUTTON_RELEASE, release);
+	let _ = conn.get_input_focus().map(|c| c.reply());
+	let after = geometry_of(&conn, root, window);
+	((before_x, before_y), (after.0, after.1))
+}
+
+/// Synthesizes a click on the strip's own close (×) button (as opposed to
+/// `press_close_button`, which sends the `WM_DELETE_WINDOW` a real window
+/// manager's decoration would send): checks the host's own hit-testing.
+#[cfg(target_os = "linux")]
+fn click_strip_close_button(title: &str) {
+	use x11rb::connection::Connection;
+	use x11rb::protocol::xproto::{
+		BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ButtonPressEvent, ConnectionExt, EventMask,
+		KeyButMask,
+	};
+	let (conn, screen) = x11rb::connect(None).unwrap();
+	let root = conn.setup().roots[screen].root;
+	let window = find_top(&conn, root, title).expect("editor window");
+	let (_, _, width, _) = geometry_of(&conn, root, window);
+	// Inside the close button's square at the strip's right edge.
+	let (x, y) = ((width - 12) as i16, 10i16);
+	let press = ButtonPressEvent {
+		response_type: BUTTON_PRESS_EVENT,
+		detail: 1,
+		sequence: 0,
+		time: x11rb::CURRENT_TIME,
+		root,
+		event: window,
+		child: x11rb::NONE,
+		root_x: x,
+		root_y: y,
+		event_x: x,
+		event_y: y,
+		state: KeyButMask::default(),
+		same_screen: true,
+	};
+	conn.send_event(true, window, EventMask::BUTTON_PRESS, press)
+		.unwrap()
+		.check()
+		.unwrap();
+	let release = ButtonPressEvent {
+		response_type: BUTTON_RELEASE_EVENT,
+		..press
+	};
+	conn.send_event(true, window, EventMask::BUTTON_RELEASE, release)
+		.unwrap()
+		.check()
+		.unwrap();
+}
+
+#[test]
+#[ignore = "opens windows on the X server"]
+fn strip_drag_moves_the_window_and_its_close_button_closes_the_editor() {
+	if !display() {
+		return;
+	}
+	unsafe { std::env::set_var("CADENZA_TEST_GUI_EMBED", "1") };
+	let (mut p, editor) =
+		instantiate_with_editor(gui_descriptor(), SR, BLOCK, None, ProcessMode::Realtime).unwrap();
+	editor.open("Cadenza Test GUI — strip drag").unwrap();
+	wait_window("Cadenza Test GUI — strip drag", true);
+	#[cfg(target_os = "linux")]
+	{
+		let (before, after) = drag_strip("Cadenza Test GUI — strip drag", 60, 40);
+		assert_ne!(
+			before, after,
+			"dragging the title strip did not move the window (before={before:?})"
+		);
+		assert_eq!(after, (before.0 + 60, before.1 + 40));
+
+		click_strip_close_button("Cadenza Test GUI — strip drag");
+		let events = run(p.as_mut(), &editor, Duration::from_secs(5), |e| {
+			e.contains(&EditorEvent::Closed)
+		});
+		assert!(events.contains(&EditorEvent::Closed), "{events:?}");
+		wait_window("Cadenza Test GUI — strip drag", false);
+	}
+	#[cfg(not(target_os = "linux"))]
+	editor.close().unwrap();
 }
 
 fn find(file: &str, name: &str) -> Option<PluginDescriptor> {

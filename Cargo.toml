@@ -45,7 +45,7 @@ tempfile = "3"
 vst3 = "0.3"
 libloading = "0.8"
 libc = "0.2"
-x11rb = { version = "0.13", default-features = false }
+x11rb = { version = "0.13", default-features = false, features = ["randr"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
 async-trait = "0.1"

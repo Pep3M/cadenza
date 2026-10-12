@@ -244,8 +244,12 @@ impl MainThread<'_> {
 
 impl PluginGuiImpl for MainThread<'_> {
 	fn is_api_supported(&self, configuration: GuiConfiguration) -> bool {
-		configuration.api_type == GuiApiType::X11
-			&& (!configuration.is_floating || floating_allowed())
+		// Exactly one of floating/embedded is "supported" at a time, so tests
+		// control which one the host picks (now that it prefers embedding)
+		// through the same env var: by default only the imaginary floating
+		// window is offered (headless-testable); `CADENZA_TEST_GUI_EMBED=1`
+		// withdraws it and offers the real embedded window instead.
+		configuration.api_type == GuiApiType::X11 && configuration.is_floating == floating_allowed()
 	}
 
 	fn get_preferred_api(&self) -> Option<GuiConfiguration<'_>> {

@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 pub use catalog::{BlockedPlugin, FileStamp, PluginCatalog, ScanReport, default_cache_path};
 pub use descriptor::{AuxOutput, PluginDescriptor, PluginFormat, PluginParam, PluginRole};
 pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, find_vst3_files};
-pub use editor::{EDITORS_SUPPORTED, EditorEvent, PluginEditor};
+pub use editor::{EDITORS_SUPPORTED, EditorEvent, PluginEditor, TITLE_STRIP_HEIGHT};
 pub use error::PluginError;
 pub use sandbox::{
 	CrashInfo, CrashReason, SANDBOX_ENV, SandboxMonitor, SandboxOptions, SandboxStats,

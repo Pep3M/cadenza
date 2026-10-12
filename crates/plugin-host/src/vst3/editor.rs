@@ -358,10 +358,21 @@ pub(crate) fn open(main: &mut MainState, key: u64, title: &str) -> Result<(), St
 		let (w, h) = if w == 0 || h == 0 { (800, 600) } else { (w, h) };
 		// SAFETY: plain view query.
 		let resizable = unsafe { view.canResize() } == kResultTrue;
-		let window = display.create_window(title, w, h, resizable)?;
+		let plugin_id = plugin
+			.attachment
+			.as_ref()
+			.map(|a| a.shared.plugin_id.clone())
+			.unwrap_or_else(|| format!("vst3:{key}"));
+		let window = display.create_window(title, &plugin_id, w, h, resizable)?;
+		let Some(content) = display.content_window(window.top) else {
+			display.destroy(window.top);
+			return Err(
+				"the editor window lost its content area before the plugin could embed".into(),
+			);
+		};
 		let frame = ComWrapper::new(PlugFrame {
 			state: Mutex::new(FrameState {
-				window,
+				window: window.top,
 				size: (w, h),
 				display: Some(display.clone()),
 				..FrameState::default()
@@ -371,11 +382,11 @@ pub(crate) fn open(main: &mut MainState, key: u64, title: &str) -> Result<(), St
 			.as_com_ref::<IPlugFrame>()
 			.map_or(std::ptr::null_mut(), |r| r.as_ptr());
 		// SAFETY: the frame outlives the view's use of it (cleared in teardown);
-		// `window` is a live X11 window id, passed as the platform handle.
+		// `content` is a live X11 window id, passed as the platform handle.
 		let attached = unsafe {
 			view.setFrame(frame_ptr);
 			view.attached(
-				window as usize as *mut std::ffi::c_void,
+				content as usize as *mut std::ffi::c_void,
 				vst3::Steinberg::kPlatformTypeX11EmbedWindowID,
 			)
 		};
@@ -383,17 +394,17 @@ pub(crate) fn open(main: &mut MainState, key: u64, title: &str) -> Result<(), St
 			// SAFETY: undo `setFrame` before releasing the view.
 			unsafe { view.setFrame(std::ptr::null_mut()) };
 			frame.clear();
-			display.destroy(window);
+			display.destroy(window.top);
 			return Err("the plugin failed to attach its editor to the Cadenza window".into());
 		}
-		display.show(window);
+		display.show(window.top);
 		main.gui
 			.windows
-			.insert(window, crate::main_thread::Owner::Vst3(key));
+			.insert(window.top, crate::main_thread::Owner::Vst3(key));
 		plugin.editor = Some(Vst3Editor {
 			view,
 			frame,
-			window,
+			window: window.top,
 			resizable,
 		});
 		// Show what the processor is playing right away.

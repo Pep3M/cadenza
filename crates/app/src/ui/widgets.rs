@@ -372,6 +372,86 @@ pub fn volume_bar(p: &egui::Painter, rect: Rect, db: f32, color: Color32) {
 	);
 }
 
+/// Thin themed scrollbar over `rect` for a view showing `visible` of `total` starting
+/// at `offset` (any unit). Drag the thumb, click the track to page. Returns the new
+/// offset when the user moved it.
+pub fn scrollbar(
+	ui: &mut Ui,
+	id: Id,
+	rect: Rect,
+	vertical: bool,
+	total: f64,
+	visible: f64,
+	offset: f64,
+) -> Option<f64> {
+	let response = ui.interact(rect, id, Sense::click_and_drag());
+	let along = |p: Pos2| {
+		if vertical {
+			p.y - rect.top()
+		} else {
+			p.x - rect.left()
+		}
+	};
+	let length = if vertical {
+		rect.height()
+	} else {
+		rect.width()
+	};
+	let map = crate::state::timeline::Overview {
+		total: total.max(visible).max(1e-9),
+		width: length,
+	};
+	let (t0, t1) = map.thumb(offset, visible, 24.0);
+	let thumb = if vertical {
+		Rect::from_x_y_ranges(
+			rect.left() + 2.0..=rect.right() - 2.0,
+			rect.top() + t0..=rect.top() + t1,
+		)
+	} else {
+		Rect::from_x_y_ranges(
+			rect.left() + t0..=rect.left() + t1,
+			rect.top() + 2.0..=rect.bottom() - 2.0,
+		)
+	};
+	let grab_id = id.with("grab");
+	let mut new = None;
+	if let Some(pos) = response.interact_pointer_pos() {
+		if response.drag_started() || response.is_pointer_button_down_on() && !response.dragged() {
+			let grab = if thumb.contains(pos) {
+				along(pos) - t0
+			} else {
+				// Clicked the track: center the thumb there.
+				(t1 - t0) * 0.5
+			};
+			ui.data_mut(|d| d.insert_temp(grab_id, grab));
+		}
+		if let Some(grab) = ui.data(|d| d.get_temp::<f32>(grab_id)) {
+			let v = map.offset_for_thumb(along(pos) - grab, visible);
+			if (v - offset).abs() > 1e-9 {
+				new = Some(v);
+			}
+		}
+	}
+	if !response.is_pointer_button_down_on() && !response.dragged() {
+		ui.data_mut(|d| d.remove_temp::<f32>(grab_id));
+	}
+	if ui.is_rect_visible(rect) {
+		let p = ui.painter();
+		let active = response.dragged() || response.is_pointer_button_down_on();
+		let fill = if active {
+			theme::ACCENT_DIM
+		} else if response.hovered() {
+			theme::BG_HOVER
+		} else {
+			theme::BG_WIDGET
+		};
+		if visible < total - 1e-9 {
+			p.rect_filled(thumb, CornerRadius::same(3), fill);
+		}
+	}
+	new
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

@@ -50,6 +50,21 @@ pub const RULER_HEIGHT: f32 = 26.0;
 pub const MARKER_LANE_HEIGHT: f32 = 18.0;
 pub const STRIP_WIDTH: f32 = 100.0;
 pub const TRANSPORT_HEIGHT: f32 = 46.0;
+/// Song overview strip above the arrange ruler.
+pub const OVERVIEW_HEIGHT: f32 = 22.0;
+/// Thickness of the custom scrollbars (arrange view, piano roll).
+pub const SCROLLBAR: f32 = 10.0;
+/// Width of the piano roll keyboard.
+pub const KEYBOARD_WIDTH: f32 = 64.0;
+
+// Piano roll.
+pub const KEY_WHITE: Color32 = Color32::from_rgb(0xd9, 0xdd, 0xe3);
+pub const KEY_BLACK: Color32 = Color32::from_rgb(0x1d, 0x20, 0x25);
+pub const ROW_WHITE: Color32 = Color32::from_rgb(0x1c, 0x20, 0x25);
+pub const ROW_BLACK: Color32 = Color32::from_rgb(0x16, 0x19, 0x1d);
+/// Rows of pitches outside the selected scale.
+pub const ROW_OUT_OF_SCALE: Color32 = Color32::from_rgb(0x12, 0x14, 0x17);
+pub const ROW_ROOT: Color32 = Color32::from_rgb(0x21, 0x29, 0x33);
 
 /// Fallback color for tracks without one.
 pub const DEFAULT_TRACK: Color32 = Color32::from_rgb(0x6c, 0x7a, 0x8a);

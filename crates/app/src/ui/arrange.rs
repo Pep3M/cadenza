@@ -1,29 +1,34 @@
-//! Arrange view: ruler, markers, track headers and clip lanes.
+//! Arrange view ("playlist"): song overview, ruler, markers, track headers and clip
+//! lanes, with scrollbars, wheel/middle-drag navigation and drop targets.
 //!
-//! Gestures are previewed locally (ghost clips, insertion line) and become one command
-//! through [`AppState::apply`] when the mouse is released.
+//! Gestures are previewed locally (ghost clips, insertion line, drop highlight) and
+//! become one command through [`AppState::apply`] when the mouse is released.
 
 use cadenza_core::{ClipId, PPQ, Tick, TrackId};
 use cadenza_model::{
 	ChannelPatch, Clip, ClipContent, Command, Marker, Project, Track, TrackKind, TrackPatch,
 };
 use egui::{
-	Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Painter, Rect, Sense, Shape, Stroke,
-	StrokeKind, Ui, pos2, vec2,
+	Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Painter, PointerButton, Pos2, Rect,
+	Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 
 use crate::jobs::Peaks;
+use crate::state::dnd::{DropTarget, Payload};
 use crate::state::edits::{self, TRACK_PALETTE};
+use crate::state::files::{FileKind, classify};
+use crate::state::layout::FollowMode;
 use crate::state::selection::DeviceRef;
-use crate::state::timeline::Timeline;
+use crate::state::timeline::{self, Overview, Timeline};
 use crate::state::{AppState, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT};
 use crate::theme;
-use crate::ui::browser::DraggedDevice;
-use crate::ui::widgets;
+use crate::ui::{dnd, widgets};
 
 /// Width of the clip edge that resizes instead of moving.
 const RESIZE_HANDLE: f32 = 7.0;
 const CLIP_HEADER: f32 = 14.0;
+/// Room below the last track (add buttons and the "new track" drop zone).
+const BELOW_TRACKS: f32 = 72.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DragKind {
@@ -38,11 +43,14 @@ struct ClipDrag {
 	clips: Vec<ClipId>,
 	/// Anchor start (move) or end (resize) when the drag began.
 	origin: Tick,
-	press_x: f32,
+	/// Song position under the pointer at the press (scroll-independent).
+	press: Tick,
 	/// Snapped offset of the gesture.
 	delta: Tick,
 	/// Track under the pointer when it differs from the anchor's.
 	target: Option<TrackId>,
+	/// Ctrl held: the clips are copied, not moved.
+	copy: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -58,16 +66,26 @@ pub struct ArrangeUi {
 	drag: Option<ClipDrag>,
 	track_drag: Option<TrackDrag>,
 	rename: Option<(TrackId, String)>,
-	/// Width of the lanes area in the last frame (for "zoom to fit" and following).
+	/// Middle-button pan in progress.
+	pan: bool,
+	/// Overview viewport drag: beats between the grab point and the view start.
+	overview_grab: Option<f64>,
+	/// Size of the lanes area in the last frame (keyboard navigation, zoom to fit).
 	pub lanes_width: f32,
+	pub lanes_height: f32,
+	last: Option<Layout>,
 }
 
 /// Geometry shared by the painting helpers.
+#[derive(Debug, Clone, Copy)]
 struct Layout {
 	header: Rect,
 	lanes: Rect,
+	overview: Rect,
 	ruler: Rect,
 	markers: Rect,
+	hbar: Rect,
+	vbar: Rect,
 	body_top: f32,
 }
 
@@ -77,41 +95,51 @@ impl Layout {
 	}
 }
 
+/// Total height of the track list (with the room below the last track).
+pub fn content_height(state: &AppState) -> f32 {
+	state.project().tracks.len() as f32 * state.view.track_height + BELOW_TRACKS
+}
+
 impl ArrangeUi {
 	pub fn show(&mut self, ui: &mut Ui, state: &mut AppState) {
 		let full = ui.available_rect_before_wrap();
 		ui.allocate_rect(full, Sense::hover());
-		let top = full.top() + theme::RULER_HEIGHT + theme::MARKER_LANE_HEIGHT;
+		let x0 = full.left() + theme::HEADER_WIDTH;
+		let right = full.right() - theme::SCROLLBAR;
+		let bottom = full.bottom() - theme::SCROLLBAR;
+		let ov_bottom = full.top() + theme::OVERVIEW_HEIGHT;
+		let ruler_bottom = ov_bottom + theme::RULER_HEIGHT;
+		let top = ruler_bottom + theme::MARKER_LANE_HEIGHT;
 		let layout = Layout {
-			header: Rect::from_min_max(
-				pos2(full.left(), top),
-				pos2(full.left() + theme::HEADER_WIDTH, full.bottom()),
-			),
-			lanes: Rect::from_min_max(pos2(full.left() + theme::HEADER_WIDTH, top), full.max),
-			ruler: Rect::from_min_max(
-				pos2(full.left() + theme::HEADER_WIDTH, full.top()),
-				pos2(full.right(), full.top() + theme::RULER_HEIGHT),
-			),
-			markers: Rect::from_min_max(
-				pos2(
-					full.left() + theme::HEADER_WIDTH,
-					full.top() + theme::RULER_HEIGHT,
-				),
-				pos2(full.right(), top),
-			),
+			header: Rect::from_min_max(pos2(full.left(), top), pos2(x0, bottom)),
+			lanes: Rect::from_min_max(pos2(x0, top), pos2(right, bottom)),
+			overview: Rect::from_min_max(pos2(x0, full.top()), pos2(right, ov_bottom)),
+			ruler: Rect::from_min_max(pos2(x0, ov_bottom), pos2(right, ruler_bottom)),
+			markers: Rect::from_min_max(pos2(x0, ruler_bottom), pos2(right, top)),
+			hbar: Rect::from_min_max(pos2(x0, bottom), pos2(right, full.bottom())),
+			vbar: Rect::from_min_max(pos2(right, top), pos2(full.right(), bottom)),
 			body_top: top,
 		};
 		self.lanes_width = layout.lanes.width();
+		self.lanes_height = layout.lanes.height();
 		self.handle_wheel(ui, state, &layout, full);
+		self.handle_pan(ui, state, &layout);
 
 		let playing = state.is_playing();
 		let position = state.position();
-		if playing && state.view.follow_playhead {
-			state
-				.view
-				.timeline
-				.follow(position.beats(), layout.lanes.width());
+		if playing && self.drag.is_none() && !self.pan {
+			state.view.timeline.follow_mode(
+				state.view.follow,
+				position.beats(),
+				layout.lanes.width(),
+			);
 		}
+		self.auto_scroll(ui, state, &layout);
+		state.view.scroll_y = timeline::clamp_scroll(
+			state.view.scroll_y,
+			content_height(state),
+			layout.lanes.height(),
+		);
 
 		let painter = ui.painter_at(full);
 		painter.rect_filled(full, 0.0, theme::LANE);
@@ -119,19 +147,22 @@ impl ArrangeUi {
 		self.lanes(ui, state, &layout);
 		self.headers(ui, state, &layout);
 		self.corner(ui, state, full);
+		self.overview(ui, state, &layout);
 		ruler(ui, state, &layout);
 		markers(ui, state, &layout);
+		scrollbars(ui, state, &layout, full);
+		self.drop_zone(ui, state, &layout);
 
 		// Playhead over everything in the timeline.
 		let x = layout.lanes.left() + state.view.timeline.tick_to_x(position);
 		if (layout.lanes.left()..=layout.lanes.right()).contains(&x) {
 			let p = ui.painter_at(Rect::from_min_max(
-				pos2(layout.lanes.left(), full.top()),
-				full.max,
+				pos2(layout.lanes.left(), layout.ruler.top()),
+				pos2(layout.lanes.right(), layout.lanes.bottom()),
 			));
 			p.vline(
 				x,
-				layout.ruler.top()..=full.bottom(),
+				layout.ruler.top()..=layout.lanes.bottom(),
 				Stroke::new(1.5, theme::PLAYHEAD),
 			);
 			let tip = layout.ruler.bottom();
@@ -145,6 +176,7 @@ impl ArrangeUi {
 				Stroke::NONE,
 			));
 		}
+		self.last = Some(layout);
 	}
 
 	/// Ctrl+wheel: zoom at the pointer; Shift+wheel: horizontal scroll; Alt+wheel: track
@@ -164,28 +196,87 @@ impl ArrangeUi {
 				.zoom_around(zoom, (pointer.x - layout.lanes.left()).max(0.0));
 		}
 		if alt && scroll.y != 0.0 {
+			// Keep the track under the pointer in place.
+			let anchor = pointer.y - layout.body_top;
+			let rows = (anchor + view.scroll_y) / view.track_height;
 			view.track_height =
 				(view.track_height + scroll.y * 0.25).clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+			view.scroll_y = (rows * view.track_height - anchor).max(0.0);
 			return;
 		}
 		if scroll.x != 0.0 {
 			view.timeline.scroll_px(-scroll.x);
 		}
-		if scroll.y != 0.0 {
-			let content =
-				state.session.document().project().tracks.len() as f32 * view.track_height;
-			let max = (content - layout.lanes.height() + 40.0).max(0.0);
-			view.scroll_y = (view.scroll_y - scroll.y).clamp(0.0, max);
+		if scroll.y != 0.0 && !layout.overview.contains(pointer) && !layout.ruler.contains(pointer)
+		{
+			view.scroll_y -= scroll.y;
+		} else if scroll.y != 0.0 {
+			// Over the ruler/overview the wheel scrolls the song.
+			view.timeline.scroll_px(-scroll.y);
 		}
 	}
 
-	/// Top-left corner above the headers: snap and zoom controls.
+	/// Middle-button drag pans in both directions (cursor shows a grabbing hand).
+	fn handle_pan(&mut self, ui: &Ui, state: &mut AppState, layout: &Layout) {
+		let (pressed, down, delta, pos) = ui.input(|i| {
+			(
+				i.pointer.button_pressed(PointerButton::Middle),
+				i.pointer.middle_down(),
+				i.pointer.delta(),
+				i.pointer.interact_pos(),
+			)
+		});
+		if pressed
+			&& pos.is_some_and(|p| {
+				layout.lanes.contains(p) || layout.header.contains(p) || layout.ruler.contains(p)
+			}) {
+			self.pan = true;
+		}
+		if !down {
+			self.pan = false;
+		}
+		if self.pan {
+			state.view.timeline.scroll_px(-delta.x);
+			state.view.scroll_y -= delta.y;
+			ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+		}
+	}
+
+	/// Scrolls while a clip (or something from the browser) is dragged near the edges.
+	fn auto_scroll(&self, ui: &Ui, state: &mut AppState, layout: &Layout) {
+		let dragging_payload = egui::DragAndDrop::has_payload_of_type::<Payload>(ui.ctx());
+		if self.drag.is_none() && !dragging_payload {
+			return;
+		}
+		let Some(pos) = ui.ctx().pointer_latest_pos() else {
+			return;
+		};
+		let inside_x =
+			(layout.lanes.top()..=layout.lanes.bottom()).contains(&pos.y) || self.drag.is_some();
+		let dx = timeline::edge_scroll(pos.x, layout.lanes.left(), layout.lanes.right());
+		let dy = timeline::edge_scroll(pos.y, layout.lanes.top(), layout.lanes.bottom());
+		let vertical = self.drag.as_ref().is_none_or(|d| d.kind == DragKind::Move);
+		let mut moved = false;
+		if inside_x && dx != 0.0 && pos.x > layout.header.right() {
+			state.view.timeline.scroll_px(dx);
+			moved = true;
+		}
+		if vertical && dy != 0.0 && (pos.x > layout.header.left()) {
+			state.view.scroll_y += dy;
+			moved = true;
+		}
+		if moved {
+			ui.ctx().request_repaint();
+		}
+	}
+
+	/// Top-left corner above the headers: zoom buttons, snap and grid.
 	fn corner(&self, ui: &mut Ui, state: &mut AppState, full: Rect) {
 		let rect = Rect::from_min_size(
 			full.min,
 			vec2(
 				theme::HEADER_WIDTH,
-				theme::RULER_HEIGHT + theme::MARKER_LANE_HEIGHT,
+				theme::OVERVIEW_HEIGHT + theme::RULER_HEIGHT + theme::MARKER_LANE_HEIGHT,
 			),
 		);
 		ui.painter().rect_filled(rect, 0.0, theme::BG_PANEL);
@@ -194,16 +285,69 @@ impl ArrangeUi {
 			rect.bottom() - 0.5,
 			Stroke::new(1.0, theme::BORDER),
 		);
+		ui.painter().vline(
+			rect.right() - 0.5,
+			rect.y_range(),
+			Stroke::new(1.0, theme::BORDER_STRONG),
+		);
 		let grid = state.view.timeline.grid(state.project().time_signature);
+		let row1 = Rect::from_min_size(
+			rect.min + vec2(8.0, 2.0),
+			vec2(rect.width() - 16.0, theme::OVERVIEW_HEIGHT),
+		);
+		let row2 = Rect::from_min_size(
+			pos2(rect.left() + 8.0, row1.bottom() + 2.0),
+			vec2(rect.width() - 16.0, theme::RULER_HEIGHT),
+		);
+		let mut top = ui.new_child(
+			egui::UiBuilder::new()
+				.max_rect(row1)
+				.layout(egui::Layout::left_to_right(egui::Align::Center)),
+		);
+		top.label(
+			egui::RichText::new("ARRANGE")
+				.font(theme::small())
+				.color(theme::TEXT_FAINT),
+		);
+		top.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+			if ui
+				.small_button("−")
+				.on_hover_text("Zoom out (Ctrl+wheel)")
+				.clicked()
+			{
+				state.view.timeline.zoom_around(1.0 / 1.5, 0.0);
+			}
+			if ui
+				.small_button("+")
+				.on_hover_text("Zoom in (Ctrl+wheel)")
+				.clicked()
+			{
+				state.view.timeline.zoom_around(1.5, 0.0);
+			}
+			if ui
+				.small_button("Sel")
+				.on_hover_text("Zoom to the selected clips (Z)")
+				.clicked()
+			{
+				zoom_to_selection(state, self.lanes_width, self.lanes_height);
+			}
+			if ui
+				.small_button("Fit")
+				.on_hover_text("Zoom to the whole song (Shift+Z)")
+				.clicked()
+			{
+				zoom_to_fit(state, self.lanes_width);
+			}
+		});
 		let mut child = ui.new_child(
 			egui::UiBuilder::new()
-				.max_rect(rect.shrink2(vec2(6.0, 4.0)))
+				.max_rect(row2)
 				.layout(egui::Layout::left_to_right(egui::Align::Center)),
 		);
 		let snap = state.view.snap;
 		if child
 			.selectable_label(snap, "Snap")
-			.on_hover_text("Snap clips to the grid")
+			.on_hover_text("Snap clips and notes to the grid (Alt while dragging: free)")
 			.clicked()
 		{
 			state.view.snap = !snap;
@@ -214,25 +358,258 @@ impl ArrangeUi {
 				.color(theme::TEXT_DIM),
 		);
 		child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-			if ui
-				.small_button("Fit")
-				.on_hover_text("Zoom to the whole song")
-				.clicked()
-			{
-				let end = state.project().end_tick().beats().max(16.0) + 4.0;
-				state.view.timeline.fit(end, self.lanes_width);
-			}
-			if ui
-				.small_button("+")
-				.on_hover_text("Zoom in (Ctrl+wheel)")
-				.clicked()
-			{
-				state.view.timeline.zoom_around(1.5, 0.0);
-			}
-			if ui.small_button("−").on_hover_text("Zoom out").clicked() {
-				state.view.timeline.zoom_around(1.0 / 1.5, 0.0);
-			}
+			follow_menu(ui, state);
 		});
+	}
+
+	/// The whole song in a strip above the ruler; the visible part is a draggable box.
+	fn overview(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
+		let r = layout.overview;
+		let p = ui.painter_at(r);
+		p.rect_filled(r, 0.0, theme::BG_DEEP);
+		let tl = state.view.timeline;
+		let visible = tl.visible_beats(r.width());
+		let song_end = state.song_end().beats();
+		let total = timeline::content_beats(song_end, tl.scroll_beats, visible);
+		let ov = Overview {
+			total,
+			width: r.width(),
+		};
+		let tracks = &state.project().tracks;
+		let n = tracks.len().max(1) as f32;
+		let inner = r.shrink2(vec2(0.0, 3.0));
+		let row = (inner.height() / n).max(1.0);
+		for (i, t) in tracks.iter().enumerate() {
+			let color = theme::track_color(t.color.as_deref());
+			let y = inner.top() + (i as f32 * row).min(inner.height() - 1.0);
+			for c in &t.clips {
+				let x0 = r.left() + ov.to_x(c.start.beats());
+				let x1 = r.left() + ov.to_x(c.end().beats());
+				p.rect_filled(
+					Rect::from_min_max(
+						pos2(x0, y),
+						pos2(x1.max(x0 + 1.0), y + (row - 0.5).max(1.0)),
+					),
+					0.0,
+					color.gamma_multiply(0.7),
+				);
+			}
+		}
+		for m in &state.project().markers {
+			let x = r.left() + ov.to_x(m.tick.beats());
+			p.vline(
+				x,
+				r.y_range(),
+				Stroke::new(1.0, theme::MARKER.gamma_multiply(0.7)),
+			);
+		}
+		let px = r.left() + ov.to_x(state.position().beats());
+		p.vline(px, r.y_range(), Stroke::new(1.0, theme::PLAYHEAD));
+		let (vx0, vx1) = ov.thumb(tl.scroll_beats, visible, 6.0);
+		let view = Rect::from_x_y_ranges(
+			r.left() + vx0..=r.left() + vx1,
+			r.top() + 1.0..=r.bottom() - 1.0,
+		);
+		let resp = ui
+			.interact(r, Id::new("arrange-overview"), Sense::click_and_drag())
+			.on_hover_text("Song overview: drag the box to scroll, double-click to fit");
+		let active = resp.dragged() || resp.hovered();
+		p.rect_filled(
+			view,
+			CornerRadius::same(2),
+			Color32::from_white_alpha(if active { 22 } else { 12 }),
+		);
+		p.rect_stroke(
+			view,
+			CornerRadius::same(2),
+			Stroke::new(
+				1.0,
+				if active {
+					theme::ACCENT
+				} else {
+					theme::ACCENT_DIM
+				},
+			),
+			StrokeKind::Inside,
+		);
+		p.hline(
+			r.x_range(),
+			r.bottom() - 0.5,
+			Stroke::new(1.0, theme::BORDER),
+		);
+		if resp.double_clicked() {
+			zoom_to_fit(state, layout.lanes.width());
+			return;
+		}
+		if let Some(pos) = resp.interact_pointer_pos() {
+			let beat = ov.to_value(pos.x - r.left());
+			if resp.drag_started() || (resp.clicked() && self.overview_grab.is_none()) {
+				let inside = (view.left()..=view.right()).contains(&pos.x);
+				self.overview_grab = Some(if inside {
+					beat - tl.scroll_beats
+				} else {
+					visible * 0.5
+				});
+			}
+			if let Some(grab) = self.overview_grab
+				&& (resp.dragged() || resp.clicked())
+			{
+				let start = (beat - grab).clamp(0.0, (total - visible).max(0.0));
+				state.view.timeline.scroll_beats = start;
+			}
+		}
+		if resp.drag_stopped() || resp.clicked() {
+			self.overview_grab = None;
+		}
+	}
+
+	/// Song position (snapped when snap is on) at screen x inside the lanes.
+	fn tick_at(&self, state: &AppState, layout: &Layout, x: f32) -> Tick {
+		let tl = state.view.timeline;
+		let t = tl.x_to_tick(x - layout.lanes.left());
+		if state.view.snap {
+			tl.snap_floor(t, state.project().time_signature)
+		} else {
+			Tick(t.0.max(0))
+		}
+	}
+
+	/// The drop target under `pos` in the last drawn frame (`None` outside the view).
+	pub fn target_at(&self, state: &AppState, pos: Pos2) -> Option<DropTarget> {
+		let layout = self.last?;
+		self.target_in(state, &layout, pos)
+	}
+
+	fn target_in(&self, state: &AppState, layout: &Layout, pos: Pos2) -> Option<DropTarget> {
+		let in_lanes = layout.lanes.contains(pos);
+		if !in_lanes && !layout.header.contains(pos) {
+			return None;
+		}
+		let row =
+			((pos.y - layout.body_top + state.view.scroll_y) / state.view.track_height).floor();
+		let tracks = &state.project().tracks;
+		let at = if in_lanes {
+			self.tick_at(state, layout, pos.x)
+		} else {
+			state.position()
+		};
+		if row >= 0.0 && (row as usize) < tracks.len() {
+			let track = tracks[row as usize].id;
+			return Some(if in_lanes {
+				DropTarget::Lane { track, at }
+			} else {
+				DropTarget::Track(track)
+			});
+		}
+		Some(DropTarget::Below { at })
+	}
+
+	/// Highlights the drop target of an in-app drag or an OS file hover, shows the hint
+	/// and performs in-app drops on release (OS drops are handled by the window).
+	fn drop_zone(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
+		let ctx = ui.ctx().clone();
+		let in_app = egui::DragAndDrop::payload::<Payload>(&ctx).map(|p| (*p).clone());
+		let payload = in_app
+			.clone()
+			.or_else(|| dnd::hovered_file(&ctx).map(Payload::File));
+		let Some(payload) = payload else {
+			return;
+		};
+		let Some(pos) = ctx.pointer_latest_pos() else {
+			return;
+		};
+		let Some(target) = self.target_in(state, layout, pos) else {
+			return;
+		};
+		let copy = ctx.input(|i| i.modifiers.command);
+		let action = state.drop_action(&payload, target, copy);
+		let accepted = action.accepted();
+		let color = if accepted {
+			theme::ACCENT
+		} else {
+			theme::ERROR
+		};
+		let h = state.view.track_height;
+		let scroll = state.view.scroll_y;
+		let n = state.project().tracks.len();
+		let clip = Rect::from_min_max(layout.header.min, layout.lanes.max);
+		let p = ui.painter_at(clip);
+		let row_rect = |i: usize| {
+			let y = layout.track_top(i, h, scroll);
+			Rect::from_min_max(
+				pos2(layout.header.left(), y),
+				pos2(layout.lanes.right(), y + h),
+			)
+		};
+		let (zone, ghost_row) = match target {
+			DropTarget::Track(t) | DropTarget::Lane { track: t, .. } => {
+				let i = state.project().track_index(t).unwrap_or(0);
+				(row_rect(i), Some(row_rect(i)))
+			}
+			_ => {
+				let y = layout.track_top(n, h, scroll);
+				let zone = Rect::from_min_max(
+					pos2(layout.header.left(), y),
+					pos2(layout.lanes.right(), layout.lanes.bottom().max(y + h)),
+				);
+				(
+					zone,
+					Some(Rect::from_min_size(zone.min, vec2(zone.width(), h))),
+				)
+			}
+		};
+		p.rect_filled(zone, 0.0, color.gamma_multiply(0.08));
+		p.rect_stroke(
+			zone.shrink(1.0),
+			CornerRadius::same(2),
+			Stroke::new(1.5, color),
+			StrokeKind::Inside,
+		);
+		if matches!(target, DropTarget::Below { .. }) && accepted {
+			p.text(
+				pos2(layout.header.center().x, zone.top() + h * 0.5),
+				Align2::CENTER_CENTER,
+				"＋ new track",
+				theme::small(),
+				theme::ACCENT,
+			);
+		}
+		// Ghost clip where a dropped file will land.
+		if let (Payload::File(path), Some(at), Some(row)) = (&payload, target.at(), ghost_row)
+			&& accepted
+			&& matches!(classify(path), Some(FileKind::Audio | FileKind::Midi))
+		{
+			let tl = state.view.timeline;
+			let x0 = layout.lanes.left() + tl.tick_to_x(at);
+			let w = tl
+				.ticks_to_px(Tick(state.project().time_signature.ticks_per_bar().0 * 2))
+				.max(60.0);
+			let ghost = Rect::from_min_size(pos2(x0, row.top() + 2.0), vec2(w, row.height() - 4.0));
+			let gp = ui.painter_at(layout.lanes);
+			gp.rect_filled(
+				ghost,
+				CornerRadius::same(theme::RADIUS),
+				theme::ACCENT.gamma_multiply(0.25),
+			);
+			gp.rect_stroke(
+				ghost,
+				CornerRadius::same(theme::RADIUS),
+				Stroke::new(1.0, theme::ACCENT),
+				StrokeKind::Inside,
+			);
+			gp.text(
+				ghost.left_top() + vec2(4.0, 3.0),
+				Align2::LEFT_TOP,
+				payload.label(),
+				theme::small(),
+				theme::TEXT,
+			);
+		}
+		dnd::set_hint(&ctx, action.describe(state.project()), accepted);
+		if in_app.is_some() && ctx.input(|i| i.pointer.any_released()) {
+			egui::DragAndDrop::clear_payload(&ctx);
+			state.drop_payload(&payload, target, copy);
+		}
 	}
 
 	fn headers(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
@@ -261,8 +638,8 @@ impl ArrangeUi {
 				.hline(clip.x_range(), y, Stroke::new(2.0, theme::ACCENT));
 		}
 		// Add-track buttons under the last track.
-		let below = layout.track_top(tracks.len(), h, scroll) + 6.0;
-		if below + 24.0 < clip.bottom() {
+		let below = layout.track_top(tracks.len(), h, scroll) + 8.0;
+		if below + 24.0 < clip.bottom() && below > clip.top() - 24.0 {
 			let rect = Rect::from_min_size(
 				pos2(clip.left() + 8.0, below),
 				vec2(clip.width() - 16.0, 22.0),
@@ -274,6 +651,15 @@ impl ArrangeUi {
 			);
 			child.set_clip_rect(clip);
 			add_track_buttons(&mut child, state);
+			if tracks.is_empty() || below + 52.0 < clip.bottom() {
+				ui.painter_at(clip).text(
+					pos2(clip.left() + 12.0, below + 36.0),
+					Align2::LEFT_CENTER,
+					"or drop a device or file here",
+					theme::small(),
+					theme::TEXT_FAINT,
+				);
+			}
 		}
 		ui.painter().vline(
 			clip.right() - 0.5,
@@ -314,18 +700,6 @@ impl ArrangeUi {
 			rect.bottom() - 0.5,
 			Stroke::new(1.0, theme::BORDER),
 		);
-
-		// Drop a device from the browser onto the track.
-		if let Some(dev) = response.dnd_release_payload::<DraggedDevice>() {
-			state.use_device(&dev.0, Some(track.id));
-		} else if response.dnd_hover_payload::<DraggedDevice>().is_some() {
-			p.rect_stroke(
-				rect.shrink(1.0),
-				0.0,
-				Stroke::new(1.5, theme::ACCENT),
-				StrokeKind::Inside,
-			);
-		}
 
 		let left = rect.left() + 12.0;
 		let meter_w = 8.0;
@@ -463,7 +837,7 @@ impl ArrangeUi {
 		if response.double_clicked() {
 			self.rename = Some((track.id, track.name.clone()));
 		}
-		if response.drag_started() {
+		if response.drag_started_by(PointerButton::Primary) {
 			self.track_drag = Some(TrackDrag {
 				track: track.id,
 				from: index,
@@ -473,12 +847,12 @@ impl ArrangeUi {
 		if let Some(d) = &mut self.track_drag
 			&& d.track == track.id
 		{
-			if let Some(pos) = response.interact_pointer_pos() {
+			if let Some(pos) = ui.ctx().pointer_interact_pos() {
 				let n = state.project().tracks.len();
 				let row = ((pos.y - rect.top()) / rect.height()).floor() as i64 + index as i64;
 				d.to = row.clamp(0, n as i64 - 1) as usize;
 			}
-			if response.drag_stopped() {
+			if response.drag_stopped() || ui.input(|i| i.pointer.any_released()) {
 				let d = self.track_drag.take().expect("track drag");
 				if d.to != d.from {
 					state.apply(Command::MoveTrack {
@@ -520,13 +894,23 @@ impl ArrangeUi {
 				},
 			);
 		}
-		grid(&painter, area, &tl, ts);
+		// The area below the tracks is a little darker: it is a drop zone, not a lane.
+		let below = layout.track_top(tracks.len(), h, scroll);
+		if below < area.bottom() {
+			painter.rect_filled(
+				Rect::from_min_max(pos2(area.left(), below), area.max),
+				0.0,
+				theme::BG_PANEL,
+			);
+		}
+		let grid_area = Rect::from_min_max(area.min, pos2(area.right(), below.min(area.bottom())));
+		grid(&painter, grid_area, &tl, ts);
 		for i in 0..=tracks.len() {
 			let y = layout.track_top(i, h, scroll);
 			painter.hline(area.x_range(), y - 0.5, Stroke::new(1.0, theme::BORDER));
 		}
 
-		// Lane clicks: select / create clips / drop devices.
+		// Lane clicks: select / create clips.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = layout.track_top(i, h, scroll);
 			let r =
@@ -552,19 +936,14 @@ impl ArrangeUi {
 					state.selection.click_clip(t.id, id, false);
 				}
 			}
-			if let Some(dev) = resp.dnd_release_payload::<DraggedDevice>() {
-				state.use_device(&dev.0, Some(t.id));
-			}
 		}
 
 		// Clips.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = layout.track_top(i, h, scroll);
-			if y > area.bottom() || y + h < area.top() {
-				// Still process an in-flight drag of clips scrolled out of view.
-				if self.drag.is_none() {
-					continue;
-				}
+			if (y > area.bottom() || y + h < area.top()) && self.drag.is_none() {
+				// Clips scrolled out of view still process an in-flight drag.
+				continue;
 			}
 			for c in &t.clips {
 				self.clip(ui, state, &painter, layout, t, i, c);
@@ -610,21 +989,27 @@ impl ArrangeUi {
 					.is_some_and(|d| d.anchor == clip.id && d.kind == DragKind::Resize)
 			{
 				ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
-			} else if r.hovered() {
+			} else if self.drag.as_ref().is_some_and(|d| d.copy) {
+				ui.ctx().set_cursor_icon(CursorIcon::Copy);
+			} else if r.hovered() && !self.pan {
 				ui.ctx().set_cursor_icon(CursorIcon::Grab);
 			}
 			// Pressing an unselected clip selects it; dragging a selected one keeps the group.
 			let add = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+			let drag_started = r.drag_started_by(PointerButton::Primary);
 			if r.clicked() && !add {
 				// A plain click (no drag) narrows a group selection to this clip.
 				state.selection.clear_clips();
 			}
-			if r.clicked() || (r.drag_started() && !state.selection.clips.contains(&clip.id)) {
-				state.selection.click_clip(track.id, clip.id, add);
+			if r.clicked() || (drag_started && !state.selection.clips.contains(&clip.id)) {
+				state
+					.selection
+					.click_clip(track.id, clip.id, add && !drag_started);
 			}
-			if r.drag_started()
-				&& let Some(press) = r.interact_pointer_pos()
-			{
+			if r.double_clicked() && clip.is_midi() {
+				state.open_piano_roll(clip.id);
+			}
+			if drag_started && let Some(press) = r.interact_pointer_pos() {
 				let kind = if press.x > rect.right() - RESIZE_HANDLE {
 					DragKind::Resize
 				} else {
@@ -643,12 +1028,13 @@ impl ArrangeUi {
 					} else {
 						clip.end()
 					},
-					press_x: press.x,
+					press: tl.x_to_tick(press.x - area.left()),
 					delta: Tick::ZERO,
 					target: None,
+					copy: false,
 				});
 			}
-			r.context_menu(|ui| clip_menu(ui, state, track.id, clip.id));
+			r.context_menu(|ui| clip_menu(ui, state, track.id, clip));
 		}
 
 		// Update an active drag anchored on this clip.
@@ -656,13 +1042,16 @@ impl ArrangeUi {
 			&& d.anchor == clip.id
 		{
 			if let Some(pos) = ui.ctx().pointer_interact_pos() {
-				let raw = d.origin + tl.px_to_ticks(pos.x - d.press_x);
-				let snapped = if state.view.snap && !ui.input(|i| i.modifiers.alt) {
+				let now = tl.x_to_tick(pos.x - area.left());
+				let raw = d.origin + (now - d.press);
+				let (alt, ctrl) = ui.input(|i| (i.modifiers.alt, i.modifiers.command));
+				let snapped = if state.view.snap && !alt {
 					tl.snap(raw, ts)
 				} else {
 					Tick(raw.0.max(0))
 				};
 				d.delta = snapped - d.origin;
+				d.copy = d.kind == DragKind::Move && ctrl;
 				if d.kind == DragKind::Move {
 					let row = ((pos.y - layout.body_top + state.view.scroll_y) / h).floor();
 					let tracks = &state.project().tracks;
@@ -677,16 +1066,29 @@ impl ArrangeUi {
 				|| response.as_ref().is_some_and(|r| r.drag_stopped());
 			if released {
 				let d = self.drag.take().expect("clip drag");
-				let cmd = match d.kind {
+				match d.kind {
+					DragKind::Move if d.copy => {
+						if let Some((cmd, ids)) =
+							edits::copy_clips(state.project(), &d.clips, d.delta, d.target)
+							&& state.apply(cmd)
+						{
+							state.selection.clips = ids.into_iter().collect();
+						}
+					}
 					DragKind::Move => {
-						edits::move_clips(state.project(), &d.clips, d.delta, d.target)
+						if let Some(cmd) =
+							edits::move_clips(state.project(), &d.clips, d.delta, d.target)
+						{
+							state.apply(cmd);
+						}
 					}
 					DragKind::Resize => {
-						edits::resize_clip(state.project(), d.anchor, d.origin + d.delta)
+						if let Some(cmd) =
+							edits::resize_clip(state.project(), d.anchor, d.origin + d.delta)
+						{
+							state.apply(cmd);
+						}
 					}
-				};
-				if let Some(cmd) = cmd {
-					state.apply(cmd);
 				}
 				return;
 			}
@@ -695,10 +1097,12 @@ impl ArrangeUi {
 		// Ghost position while dragging.
 		let mut draw_rect = rect;
 		let mut ghost = false;
+		let mut copying = false;
 		if let Some(d) = &self.drag
 			&& d.clips.contains(&clip.id)
 		{
 			ghost = true;
+			copying = d.copy;
 			match d.kind {
 				DragKind::Move => {
 					let dx = tl.ticks_to_px(d.delta);
@@ -723,10 +1127,18 @@ impl ArrangeUi {
 				}
 			}
 		}
-		if !draw_rect.intersects(area) {
-			return;
-		}
-		if ghost {
+		let selected = state.selection.clips.contains(&clip.id);
+		let editing = state
+			.view
+			.panels
+			.visible(crate::state::layout::PanelKind::PianoRoll)
+			&& state.view.piano.clip == Some(clip.id);
+		if copying {
+			// The original stays; the copy is drawn at the destination.
+			if rect.intersects(area) {
+				paint_clip(painter, state, track, clip, rect, selected, editing, area);
+			}
+		} else if ghost && rect.intersects(area) {
 			painter.rect_stroke(
 				rect,
 				CornerRadius::same(theme::RADIUS),
@@ -734,12 +1146,123 @@ impl ArrangeUi {
 				StrokeKind::Inside,
 			);
 		}
-		let selected = state.selection.clips.contains(&clip.id);
-		paint_clip(painter, state, track, clip, draw_rect, selected, area);
+		if !draw_rect.intersects(area) {
+			return;
+		}
+		paint_clip(
+			painter, state, track, clip, draw_rect, selected, editing, area,
+		);
+		if copying {
+			painter.text(
+				draw_rect.right_top() + vec2(-5.0, 2.0),
+				Align2::RIGHT_TOP,
+				"+",
+				FontId::proportional(13.0),
+				Color32::WHITE,
+			);
+		}
 	}
 }
 
-fn grid_name(step: Tick, bar: Tick) -> String {
+/// Zooms (and scrolls) the arrange view to the whole song.
+pub fn zoom_to_fit(state: &mut AppState, width: f32) {
+	let end = state.song_end().beats();
+	state.view.timeline.zoom_to_range(0.0, end, width);
+	state.view.timeline.scroll_beats = 0.0;
+}
+
+/// Zooms to the selected clips (time) and scrolls their first track into view; without
+/// a selection, zooms to fit.
+pub fn zoom_to_selection(state: &mut AppState, width: f32, height: f32) {
+	let p = state.project();
+	let found: Vec<(usize, Tick, Tick)> = state
+		.selection
+		.clips
+		.iter()
+		.filter_map(|c| {
+			let (t, clip) = p.find_clip(*c)?;
+			Some((p.track_index(t.id)?, clip.start, clip.end()))
+		})
+		.collect();
+	let (Some(start), Some(end), Some(row)) = (
+		found.iter().map(|f| f.1).min(),
+		found.iter().map(|f| f.2).max(),
+		found.iter().map(|f| f.0).min(),
+	) else {
+		zoom_to_fit(state, width);
+		return;
+	};
+	state
+		.view
+		.timeline
+		.zoom_to_range(start.beats(), end.beats(), width);
+	let h = state.view.track_height;
+	let top = row as f32 * h;
+	if top < state.view.scroll_y || top + h > state.view.scroll_y + height {
+		state.view.scroll_y = (top - h * 0.5).max(0.0);
+	}
+}
+
+/// Song scrollbar under the lanes and track scrollbar to their right.
+fn scrollbars(ui: &mut Ui, state: &mut AppState, layout: &Layout, full: Rect) {
+	let tl = state.view.timeline;
+	let visible = tl.visible_beats(layout.lanes.width());
+	let total = timeline::content_beats(state.song_end().beats(), tl.scroll_beats, visible);
+	ui.painter().rect_filled(
+		Rect::from_min_max(pos2(full.left(), layout.hbar.top()), full.max),
+		0.0,
+		theme::BG_PANEL,
+	);
+	if let Some(v) = widgets::scrollbar(
+		ui,
+		Id::new("arrange-hbar"),
+		layout.hbar,
+		false,
+		total,
+		visible,
+		tl.scroll_beats,
+	) {
+		state.view.timeline.scroll_beats = v;
+	}
+	ui.painter().rect_filled(layout.vbar, 0.0, theme::BG_PANEL);
+	let content = f64::from(content_height(state));
+	if let Some(v) = widgets::scrollbar(
+		ui,
+		Id::new("arrange-vbar"),
+		layout.vbar,
+		true,
+		content.max(f64::from(layout.lanes.height())),
+		f64::from(layout.lanes.height()),
+		f64::from(state.view.scroll_y),
+	) {
+		state.view.scroll_y = v as f32;
+	}
+}
+
+/// Follow-playhead mode selector (Off / Page / Continuous).
+pub fn follow_menu(ui: &mut Ui, state: &mut AppState) {
+	let mode = state.view.follow;
+	egui::ComboBox::from_id_salt("follow-mode")
+		.width(78.0)
+		.selected_text(
+			egui::RichText::new(format!("Follow: {}", mode.name()))
+				.font(theme::small())
+				.color(if mode == FollowMode::Off {
+					theme::TEXT_FAINT
+				} else {
+					theme::TEXT_DIM
+				}),
+		)
+		.show_ui(ui, |ui| {
+			for m in [FollowMode::Off, FollowMode::Page, FollowMode::Continuous] {
+				ui.selectable_value(&mut state.view.follow, m, m.name());
+			}
+		})
+		.response
+		.on_hover_text("Follow the playhead while playing: off, page by page, or continuously");
+}
+
+pub(crate) fn grid_name(step: Tick, bar: Tick) -> String {
 	if step.0 >= bar.0 {
 		let bars = step.0 / bar.0.max(1);
 		return if bars == 1 {
@@ -846,9 +1369,19 @@ fn track_menu(
 	}
 }
 
-fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: ClipId) {
-	if !state.selection.clips.contains(&clip) {
-		state.selection.click_clip(track, clip, false);
+fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
+	if !state.selection.clips.contains(&clip.id) {
+		state.selection.click_clip(track, clip.id, false);
+	}
+	if clip.is_midi() {
+		if ui
+			.add(egui::Button::new("Open in piano roll").shortcut_text("Double-click"))
+			.clicked()
+		{
+			state.open_piano_roll(clip.id);
+			ui.close();
+		}
+		ui.separator();
 	}
 	if ui.button("Duplicate      Ctrl+D").clicked() {
 		super::duplicate_selection(state);
@@ -865,7 +1398,7 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: ClipId) {
 }
 
 /// Vertical grid lines (bars strong, beats and subdivisions fainter).
-fn grid(p: &Painter, area: Rect, tl: &Timeline, ts: cadenza_core::TimeSignature) {
+pub(crate) fn grid(p: &Painter, area: Rect, tl: &Timeline, ts: cadenza_core::TimeSignature) {
 	let g = tl.grid(ts);
 	let beat = Tick(PPQ * 4 / i64::from(ts.denominator.max(1)));
 	let first = tl.x_to_tick(0.0).0.max(0) / g.step.0 * g.step.0;
@@ -935,7 +1468,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 		&& let Some(pos) = resp.interact_pointer_pos()
 	{
 		let tick = tl.x_to_tick(pos.x - r.left());
-		let tick = if state.view.snap {
+		let tick = if state.view.snap && !ui.input(|i| i.modifiers.alt) {
 			tl.snap(tick, ts)
 		} else {
 			tick
@@ -1017,6 +1550,7 @@ fn paint_clip(
 	clip: &Clip,
 	rect: Rect,
 	selected: bool,
+	editing: bool,
 	area: Rect,
 ) {
 	let color = theme::track_color(track.color.as_deref());
@@ -1092,6 +1626,16 @@ fn paint_clip(
 		},
 		StrokeKind::Inside,
 	);
+	if editing {
+		// Open in the piano roll: a small pencil badge in the header.
+		p.text(
+			pos2(rect.right() - 5.0, header.center().y),
+			Align2::RIGHT_CENTER,
+			"✏",
+			FontId::proportional(10.0),
+			theme::text_on(color),
+		);
+	}
 }
 
 fn paint_notes(

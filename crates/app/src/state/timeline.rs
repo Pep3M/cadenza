@@ -6,6 +6,8 @@
 
 use cadenza_core::{PPQ, TempoMap, Tick, TimeSignature};
 
+use super::layout::FollowMode;
+
 /// Narrowest grid cell drawn or snapped to, in pixels.
 pub const MIN_GRID_PX: f32 = 12.0;
 pub const MIN_PX_PER_BEAT: f32 = 2.0;
@@ -96,6 +98,58 @@ impl Timeline {
 		false
 	}
 
+	/// Keeps `beat` at [`CONTINUOUS_ANCHOR`] of the width once it gets there (the song
+	/// scrolls under a fixed playhead). Returns true when it scrolled.
+	pub fn follow_continuous(&mut self, beat: f64, width: f32) -> bool {
+		let x = self.beat_to_x(beat);
+		let anchor = width * CONTINUOUS_ANCHOR;
+		if x > anchor || x < 0.0 {
+			let before = self.scroll_beats;
+			self.scroll_beats = (beat - f64::from(anchor / self.px_per_beat)).max(0.0);
+			return self.scroll_beats != before;
+		}
+		false
+	}
+
+	/// Follows the playhead in `mode`.
+	pub fn follow_mode(&mut self, mode: FollowMode, beat: f64, width: f32) -> bool {
+		match mode {
+			FollowMode::Off => false,
+			FollowMode::Page => self.follow(beat, width),
+			FollowMode::Continuous => self.follow_continuous(beat, width),
+		}
+	}
+
+	/// Beats visible in a view `width` pixels wide.
+	pub fn visible_beats(&self, width: f32) -> f64 {
+		f64::from(width.max(0.0)) / f64::from(self.px_per_beat)
+	}
+
+	/// Zooms and scrolls so `start..end` (beats) fills `width` with a small margin.
+	pub fn zoom_to_range(&mut self, start: f64, end: f64, width: f32) {
+		let (start, end) = (start.min(end).max(0.0), end.max(start));
+		let span = (end - start).max(1.0 / 16.0);
+		let margin = span * 0.04;
+		self.px_per_beat = ((f64::from(width.max(1.0)) / (span + 2.0 * margin)) as f32)
+			.clamp(MIN_PX_PER_BEAT, MAX_PX_PER_BEAT);
+		let visible = self.visible_beats(width);
+		let center = (start + end) * 0.5;
+		self.scroll_beats = (center - visible * 0.5).max(0.0);
+	}
+
+	/// Scrolls one page (`pages` < 0: back), keeping a little overlap.
+	pub fn page(&mut self, pages: f32, width: f32) {
+		self.scroll_px(pages * width * 0.9);
+	}
+
+	/// Scrolls so `beat` sits at the left edge (a little before it).
+	pub fn reveal(&mut self, beat: f64, width: f32) {
+		let x = self.beat_to_x(beat);
+		if x < 0.0 || x > width {
+			self.scroll_beats = (beat - self.visible_beats(width) * 0.05).max(0.0);
+		}
+	}
+
 	/// The finest musical grid whose cells are at least [`MIN_GRID_PX`] wide: a power-of-two
 	/// division of the beat, a beat, or a power-of-two number of bars.
 	pub fn grid(&self, ts: TimeSignature) -> Grid {
@@ -129,6 +183,74 @@ impl Timeline {
 		let step = self.grid(ts).step.0.max(1);
 		Tick(tick.0.max(0).div_euclid(step) * step)
 	}
+}
+
+/// Where the playhead stays when following continuously (fraction of the view width).
+pub const CONTINUOUS_ANCHOR: f32 = 0.4;
+
+/// Scrollable length of a song: its end plus room to keep working after it, never less
+/// than what is on screen.
+pub fn content_beats(song_end_beats: f64, scroll_beats: f64, visible_beats: f64) -> f64 {
+	(song_end_beats + 32.0)
+		.max(scroll_beats + visible_beats)
+		.max(visible_beats)
+}
+
+/// Linear map between a whole range (song beats, pixels of content) and a strip of
+/// pixels (an overview or a scrollbar track).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Overview {
+	pub total: f64,
+	pub width: f32,
+}
+
+impl Overview {
+	pub fn to_x(&self, v: f64) -> f32 {
+		if self.total <= 0.0 {
+			return 0.0;
+		}
+		(v / self.total * f64::from(self.width)) as f32
+	}
+
+	pub fn to_value(&self, x: f32) -> f64 {
+		if self.width <= 0.0 {
+			return 0.0;
+		}
+		f64::from(x) / f64::from(self.width) * self.total
+	}
+
+	/// Viewport `offset..offset + visible` as an x range, at least `min_px` wide.
+	pub fn thumb(&self, offset: f64, visible: f64, min_px: f32) -> (f32, f32) {
+		let x0 = self.to_x(offset).clamp(0.0, self.width);
+		let w = self.to_x(visible).max(min_px).min(self.width);
+		let x0 = x0.min(self.width - w).max(0.0);
+		(x0, x0 + w)
+	}
+
+	/// Offset for a thumb dragged so its left edge is at `x` (clamped to the range).
+	pub fn offset_for_thumb(&self, x: f32, visible: f64) -> f64 {
+		self.to_value(x).clamp(0.0, (self.total - visible).max(0.0))
+	}
+}
+
+/// Auto-scroll speed (pixels per frame, signed) for a pointer at `pos` near the edges of
+/// `lo..hi`: zero away from the edges, faster the further it goes past them.
+pub fn edge_scroll(pos: f32, lo: f32, hi: f32) -> f32 {
+	const ZONE: f32 = 24.0;
+	const MAX: f32 = 28.0;
+	let speed = |depth: f32| (depth / ZONE).clamp(0.0, 3.0) * MAX / 3.0;
+	if pos < lo + ZONE {
+		-speed(lo + ZONE - pos)
+	} else if pos > hi - ZONE {
+		speed(pos - (hi - ZONE))
+	} else {
+		0.0
+	}
+}
+
+/// Clamps a vertical pixel scroll to the content (`content` tall, `view` visible).
+pub fn clamp_scroll(scroll: f32, content: f32, view: f32) -> f32 {
+	scroll.clamp(0.0, (content - view).max(0.0))
 }
 
 pub fn snap_to(tick: Tick, step: Tick) -> Tick {
@@ -245,6 +367,66 @@ mod tests {
 		assert!(!t.follow(50.0, 1000.0));
 		assert!(t.follow(95.0, 1000.0));
 		assert!(t.beat_to_x(95.0) >= 0.0 && t.beat_to_x(95.0) < 100.0);
+	}
+
+	#[test]
+	fn continuous_follow_keeps_the_playhead_fixed() {
+		let mut t = Timeline {
+			px_per_beat: 10.0,
+			scroll_beats: 0.0,
+		};
+		assert!(!t.follow_mode(FollowMode::Off, 500.0, 1000.0));
+		assert!(!t.follow_mode(FollowMode::Continuous, 30.0, 1000.0));
+		assert!(t.follow_mode(FollowMode::Continuous, 50.0, 1000.0));
+		assert!((t.beat_to_x(50.0) - 400.0).abs() < 1e-3);
+		t.follow_mode(FollowMode::Continuous, 51.0, 1000.0);
+		assert!((t.beat_to_x(51.0) - 400.0).abs() < 1e-3);
+		// Seeking back before the view jumps there.
+		assert!(t.follow_mode(FollowMode::Continuous, 2.0, 1000.0));
+		assert_eq!(t.scroll_beats, 0.0);
+	}
+
+	#[test]
+	fn zoom_to_range_and_pages() {
+		let mut t = Timeline::default();
+		t.zoom_to_range(16.0, 32.0, 800.0);
+		assert!(t.beat_to_x(16.0) > 0.0 && t.beat_to_x(16.0) < 40.0);
+		assert!(t.beat_to_x(32.0) < 800.0 && t.beat_to_x(32.0) > 760.0);
+		let before = t.scroll_beats;
+		t.page(1.0, 800.0);
+		assert!((t.scroll_beats - before - t.visible_beats(800.0) * 0.9).abs() < 1e-6);
+		t.page(-100.0, 800.0);
+		assert_eq!(t.scroll_beats, 0.0);
+		t.reveal(200.0, 800.0);
+		assert!(t.beat_to_x(200.0) >= 0.0 && t.beat_to_x(200.0) < 800.0);
+	}
+
+	#[test]
+	fn overview_and_scrollbar_math() {
+		let o = Overview {
+			total: 200.0,
+			width: 400.0,
+		};
+		assert_eq!(o.to_x(100.0), 200.0);
+		assert_eq!(o.to_value(100.0), 50.0);
+		assert_eq!(o.thumb(50.0, 20.0, 4.0), (100.0, 140.0));
+		// Tiny viewport: minimum thumb width, kept inside the track.
+		assert_eq!(o.thumb(199.0, 0.1, 10.0), (390.0, 400.0));
+		assert_eq!(o.offset_for_thumb(390.0, 20.0), 180.0);
+		assert_eq!(o.offset_for_thumb(-10.0, 20.0), 0.0);
+		assert_eq!(content_beats(64.0, 0.0, 40.0), 96.0);
+		assert_eq!(content_beats(0.0, 100.0, 40.0), 140.0);
+		assert_eq!(clamp_scroll(500.0, 300.0, 200.0), 100.0);
+		assert_eq!(clamp_scroll(50.0, 100.0, 200.0), 0.0);
+	}
+
+	#[test]
+	fn edge_scroll_speeds() {
+		assert_eq!(edge_scroll(500.0, 0.0, 1000.0), 0.0);
+		assert!(edge_scroll(10.0, 0.0, 1000.0) < 0.0);
+		assert!(edge_scroll(995.0, 0.0, 1000.0) > 0.0);
+		assert!(edge_scroll(1100.0, 0.0, 1000.0) > edge_scroll(990.0, 0.0, 1000.0));
+		assert!(edge_scroll(5000.0, 0.0, 1000.0) <= 28.0);
 	}
 
 	#[test]

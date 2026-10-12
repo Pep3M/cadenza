@@ -148,6 +148,15 @@ enum Command {
 	},
 	/// Run the MCP server over stdio, for an AI client to connect to
 	Mcp,
+	/// Open the desktop app, optionally with a project.
+	///
+	/// Starts the `cadenza-app` executable found next to this one (`cargo build --release`
+	/// builds both into target/release), on the PATH, or named by CADENZA_APP. It is a
+	/// separate binary so this CLI stays free of GPU and windowing dependencies.
+	Gui {
+		/// Project to open (.cadenza.json)
+		project: Option<PathBuf>,
+	},
 	/// Let the embedded AI producer compose, arrange, mix and render a song from a brief
 	#[command(after_long_help = compose::presets_help())]
 	Compose(compose::ComposeArgs),
@@ -313,6 +322,7 @@ fn main() -> Result<()> {
 			set_in_process_env(cli.in_process_plugins);
 			run_mcp()
 		}
+		Command::Gui { project } => run_gui(project, cli.in_process_plugins),
 		Command::Compose(args) => {
 			set_in_process_env(cli.in_process_plugins);
 			compose::run(args)
@@ -355,6 +365,37 @@ fn set_in_process_env(in_process: bool) {
 		// SAFETY: called on the main thread before any other thread is spawned.
 		unsafe { std::env::set_var(cadenza_engine::HOSTING_ENV, "in-process") };
 	}
+}
+
+/// Runs the `cadenza-app` desktop executable and waits for it to close.
+fn run_gui(project: Option<PathBuf>, in_process: bool) -> Result<()> {
+	let name = format!("cadenza-app{}", std::env::consts::EXE_SUFFIX);
+	let exe = std::env::var_os("CADENZA_APP")
+		.map(PathBuf::from)
+		.or_else(|| {
+			std::env::current_exe()
+				.ok()
+				.and_then(|e| e.parent().map(|d| d.join(&name)))
+				.filter(|p| p.is_file())
+		})
+		.unwrap_or_else(|| PathBuf::from(&name));
+	let mut cmd = std::process::Command::new(&exe);
+	if let Some(p) = project {
+		cmd.arg(p);
+	}
+	if in_process {
+		cmd.env(cadenza_engine::HOSTING_ENV, "in-process");
+	}
+	let status = cmd.status().with_context(|| {
+		format!(
+			"cannot start {}; build it with `cargo build --release -p cadenza-app` or set CADENZA_APP",
+			exe.display()
+		)
+	})?;
+	if !status.success() {
+		bail!("cadenza-app exited with {status}");
+	}
+	Ok(())
 }
 
 fn scan_plugins(paths: Vec<PathBuf>, json: bool) -> Result<()> {

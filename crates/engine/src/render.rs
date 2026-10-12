@@ -15,6 +15,7 @@ use crate::analysis::{Analyzer, MixReport, TrackLevel};
 use crate::compile::compile_for;
 use crate::error::EngineError;
 use crate::graph::{Graph, Source};
+use crate::hosting::PluginHosting;
 
 /// What and how to render.
 #[derive(Debug, Clone)]
@@ -28,6 +29,10 @@ pub struct RenderOptions {
 	/// Catalog used to load third-party plugin devices. `None` renders built-in devices
 	/// only; plugin devices are then bypassed with a warning.
 	pub plugins: Option<Arc<PluginCatalog>>,
+	/// Where plugin devices run. Defaults to [`PluginHosting::default`]: each plugin in
+	/// its own sandbox process (a crash or hang only bypasses that device and adds a
+	/// warning to the [`MixReport`]), unless `CADENZA_PLUGIN_HOSTING=in-process`.
+	pub hosting: PluginHosting,
 }
 
 impl PartialEq for RenderOptions {
@@ -40,7 +45,7 @@ impl PartialEq for RenderOptions {
 				(None, None) => true,
 				(Some(a), Some(b)) => Arc::ptr_eq(a, b),
 				_ => false,
-			}
+			} && self.hosting == other.hosting
 	}
 }
 
@@ -52,6 +57,7 @@ impl Default for RenderOptions {
 			start: Tick::ZERO,
 			end: None,
 			plugins: None,
+			hosting: PluginHosting::default(),
 		}
 	}
 }
@@ -91,6 +97,7 @@ fn prepare(project: &Project, opts: &RenderOptions) -> Result<(Graph, usize), En
 		opts.sample_rate,
 		opts.block_size,
 		opts.plugins.as_deref(),
+		&opts.hosting,
 		ProcessMode::Offline,
 	)?;
 	let sr = opts.sample_rate as f64;
@@ -152,6 +159,7 @@ fn render_analyzed(
 	while rendered < total {
 		let pos = graph.engine_pos;
 		graph.render_quantum();
+		graph.note_plugin_crashes();
 		let from = latency.saturating_sub(rendered).min(QUANTUM);
 		let to = (total - rendered).min(QUANTUM);
 		if from < to {
@@ -198,7 +206,12 @@ fn render_analyzed(
 		sample_rate: sr,
 		duration_seconds: len as f64 / sr as f64,
 		latency_samples: graph.latency_samples(),
-		warnings: graph.warnings().to_vec(),
+		warnings: graph
+			.warnings()
+			.iter()
+			.cloned()
+			.chain(graph.crash_warnings())
+			.collect(),
 		master: master.finish(),
 		tracks: track_levels.into_iter().map(|(_, t)| t).collect(),
 	})

@@ -9,6 +9,12 @@
 //!
 //! The callback runs the exact same [`Graph::process`] used by offline renders and does not
 //! allocate.
+//!
+//! Plugin devices are sandboxed by default (see [`crate::hosting`]): a crashing or hanging
+//! plugin is bypassed on the audio thread by its sandbox proxy, and the control side
+//! notices it through the sandbox monitors ([`Player::plugin_crashes`],
+//! [`Player::take_plugin_crashes`]). Crashed plugins are restarted by the next
+//! [`Player::load`], which re-creates every device from the project.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -21,9 +27,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::compile_with;
+use crate::compile_hosted;
 use crate::error::EngineError;
 use crate::graph::Graph;
+use crate::hosting::{PluginCrash, PluginHosting, PluginWatch};
 
 const GRAPH_SLOTS: usize = 4;
 const GARBAGE_SLOTS: usize = 8;
@@ -214,8 +221,16 @@ pub struct Player {
 	control: Control,
 	sample_rate: u32,
 	plugins: Option<Arc<PluginCatalog>>,
+	hosting: PluginHosting,
+	/// Sandboxed devices of the last loaded graph, and whether each crash was taken.
+	watches: Vec<(PluginWatch, bool)>,
 	_stream: cpal::Stream,
 }
+
+/// Ends every playback crash message.
+const PLAYBACK_CRASH_HINT: &str = "Playback continues without it. Reload the project into \
+	the player (e.g. play again) to restart it from the project's saved state; if it keeps \
+	failing, replace this device with another plugin or a built-in device, or bypass it.";
 
 impl Player {
 	/// Opens the default output device and starts a (silent) output stream.
@@ -249,6 +264,8 @@ impl Player {
 			control,
 			sample_rate: config.sample_rate,
 			plugins: None,
+			hosting: PluginHosting::default(),
+			watches: Vec::new(),
 			_stream: stream,
 		})
 	}
@@ -267,16 +284,54 @@ impl Player {
 	/// Compiles `project` (on this thread) and swaps it in without interrupting the stream.
 	/// Playback keeps its tick position and play state; notes sounding at the swap are cut.
 	/// Returns the compile warnings.
+	///
+	/// Every plugin device is created afresh, so this also restarts crashed plugins.
 	pub fn load(&mut self, project: &Project) -> Result<Vec<String>, EngineError> {
-		let graph = compile_with(
+		let graph = compile_hosted(
 			project,
 			self.sample_rate,
 			crate::QUANTUM,
 			self.plugins.as_deref(),
+			&self.hosting,
 		)?;
 		let warnings = graph.warnings().to_vec();
+		let watches = graph.plugin_watches.clone();
 		self.control.load_graph(graph)?;
+		self.watches = watches.into_iter().map(|w| (w, false)).collect();
 		Ok(warnings)
+	}
+
+	/// Sets where plugin devices run on subsequent [`Player::load`] calls (default:
+	/// [`PluginHosting::default`], sandboxed unless `CADENZA_PLUGIN_HOSTING=in-process`).
+	pub fn set_hosting(&mut self, hosting: PluginHosting) {
+		self.hosting = hosting;
+	}
+
+	pub fn hosting(&self) -> &PluginHosting {
+		&self.hosting
+	}
+
+	/// Plugins of the loaded project that crashed or hung and are bypassed. Polls the
+	/// sandbox monitors; call it from the control thread (it may wait briefly for a dead
+	/// plugin process' exit status).
+	pub fn plugin_crashes(&self) -> Vec<PluginCrash> {
+		self.watches
+			.iter()
+			.filter_map(|(w, _)| w.crash(PLAYBACK_CRASH_HINT))
+			.collect()
+	}
+
+	/// Like [`Player::plugin_crashes`], but returns each crash only once (for
+	/// notifications).
+	pub fn take_plugin_crashes(&mut self) -> Vec<PluginCrash> {
+		let mut new = Vec::new();
+		for (w, taken) in &mut self.watches {
+			if !*taken && let Some(crash) = w.crash(PLAYBACK_CRASH_HINT) {
+				*taken = true;
+				new.push(crash);
+			}
+		}
+		new
 	}
 
 	pub fn play(&mut self) -> Result<(), EngineError> {

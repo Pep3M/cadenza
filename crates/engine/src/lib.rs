@@ -12,6 +12,7 @@ mod automation;
 mod compile;
 mod error;
 mod graph;
+pub mod hosting;
 mod pdc;
 mod player;
 mod render;
@@ -19,9 +20,11 @@ mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
 pub use cadenza_plugin_host::PluginCatalog;
-pub use compile::{compile, compile_with};
+pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions};
+pub use compile::{compile, compile_hosted, compile_with};
 pub use error::EngineError;
 pub use graph::Graph;
+pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting};
 pub use player::Player;
 pub use render::{RenderOptions, StereoBuffer, analyze_mix, render_offline, render_to_wav};
 

@@ -5,7 +5,9 @@
 //!
 //! Third-party plugins (`DeviceKind::Clap`/`Vst3`) are resolved through an optional
 //! [`PluginCatalog`]. A plugin that cannot be found or loaded is bypassed with a warning:
-//! an instrument slot stays silent and an effect slot passes audio through.
+//! an instrument slot stays silent and an effect slot passes audio through. Plugins run in
+//! sandbox processes unless [`PluginHosting`] says otherwise (see [`crate::hosting`]); a
+//! missing sandbox executable falls back to in-process hosting with a warning.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -14,12 +16,15 @@ use std::sync::Arc;
 use cadenza_core::{DeviceId, ParamTarget, TrackId};
 use cadenza_dsp::{DeviceRole, Processor};
 use cadenza_model::{ClipContent, DeviceKind, Output, Project, Track, TrackKind};
-use cadenza_plugin_host::{PluginCatalog, PluginError, PluginFormat, ProcessMode};
+use cadenza_plugin_host::{
+	HostingMode, PluginCatalog, PluginError, PluginFormat, ProcessMode, SandboxMonitor,
+};
 
 use crate::audio_clip::{AudioData, ClipPlayback, load_wav};
 use crate::automation::{AutoTarget, Binding, Curve, DeviceSlot};
 use crate::error::EngineError;
 use crate::graph::{Device, Edge, Fader, Graph, Master, Node, Source, StereoBuf, StereoDelay};
+use crate::hosting::{PluginHosting, PluginWatch, sandbox_unavailable};
 use crate::pdc::{PdcEdge, PdcNode, plan};
 use crate::schedule::MidiSchedule;
 use crate::{MAX_TAIL_SECONDS, QUANTUM};
@@ -34,7 +39,8 @@ pub fn compile(
 	compile_with(project, sample_rate, max_block, None)
 }
 
-/// Compiles `project` for `sample_rate`, instantiating plugin devices from `plugins`.
+/// Compiles `project` for `sample_rate`, instantiating plugin devices from `plugins` with
+/// the default [`PluginHosting`] (sandboxed unless `CADENZA_PLUGIN_HOSTING=in-process`).
 ///
 /// `max_block` is the largest block the host will pass to [`Graph::process`]; it is only
 /// validated, since the graph accepts any block length and processes devices in fixed
@@ -45,22 +51,41 @@ pub fn compile_with(
 	max_block: usize,
 	plugins: Option<&PluginCatalog>,
 ) -> Result<Graph, EngineError> {
+	compile_hosted(
+		project,
+		sample_rate,
+		max_block,
+		plugins,
+		&PluginHosting::default(),
+	)
+}
+
+/// [`compile_with`] with an explicit [`PluginHosting`], for realtime playback.
+pub fn compile_hosted(
+	project: &Project,
+	sample_rate: u32,
+	max_block: usize,
+	plugins: Option<&PluginCatalog>,
+	hosting: &PluginHosting,
+) -> Result<Graph, EngineError> {
 	compile_for(
 		project,
 		sample_rate,
 		max_block,
 		plugins,
+		hosting,
 		ProcessMode::Realtime,
 	)
 }
 
-/// [`compile_with`] for a given plugin processing mode (offline renders let plugins use
+/// [`compile_hosted`] for a given plugin processing mode (offline renders let plugins use
 /// their slower, higher-quality paths).
 pub(crate) fn compile_for(
 	project: &Project,
 	sample_rate: u32,
 	max_block: usize,
 	plugins: Option<&PluginCatalog>,
+	hosting: &PluginHosting,
 	mode: ProcessMode,
 ) -> Result<Graph, EngineError> {
 	if !(8_000..=384_000).contains(&sample_rate) {
@@ -73,7 +98,7 @@ pub(crate) fn compile_for(
 			"block size must be at least 1 sample (e.g. 512)".into(),
 		));
 	}
-	Compiler::new(project, sample_rate, plugins, mode).run()
+	Compiler::new(project, sample_rate, plugins, hosting, mode).run()
 }
 
 /// Where a track's output or send goes.
@@ -86,6 +111,13 @@ enum Dest {
 struct Compiler<'a> {
 	project: &'a Project,
 	plugins: Option<&'a PluginCatalog>,
+	hosting: &'a PluginHosting,
+	/// Whether the sandbox can be used; resolved (and warned about) on first plugin load.
+	sandbox_ok: Option<bool>,
+	/// Sandboxed devices compiled so far, for crash reports.
+	watches: Vec<PluginWatch>,
+	/// Track whose devices are being compiled (`None` = master).
+	current_track: Option<TrackId>,
 	mode: ProcessMode,
 	sample_rate: u32,
 	warnings: Vec<String>,
@@ -98,11 +130,16 @@ impl<'a> Compiler<'a> {
 		project: &'a Project,
 		sample_rate: u32,
 		plugins: Option<&'a PluginCatalog>,
+		hosting: &'a PluginHosting,
 		mode: ProcessMode,
 	) -> Self {
 		Self {
 			project,
 			plugins,
+			hosting,
+			sandbox_ok: None,
+			watches: Vec::new(),
+			current_track: None,
 			mode,
 			sample_rate,
 			warnings: Vec::new(),
@@ -270,8 +307,25 @@ impl<'a> Compiler<'a> {
 		};
 		let sr = self.sample_rate as f32;
 		let mode = self.mode;
-		let create = |state: Option<&[u8]>| {
-			cadenza_plugin_host::instantiate_with_mode(desc, sr, QUANTUM, state, mode)
+		let sandboxed = self.sandbox_ok();
+		let hosting = self.hosting;
+		let options = &hosting.sandbox;
+		let create = |state: Option<&[u8]>| -> Result<_, PluginError> {
+			if sandboxed {
+				let p = cadenza_plugin_host::instantiate_sandboxed(
+					desc,
+					sr,
+					QUANTUM,
+					state,
+					mode,
+					options.clone(),
+				)?;
+				let monitor = p.monitor();
+				Ok((Box::new(p) as Box<dyn Processor>, Some(monitor)))
+			} else {
+				cadenza_plugin_host::instantiate_with_mode(desc, sr, QUANTUM, state, mode)
+					.map(|p| (p, None))
+			}
 		};
 		let result = match create(state.as_deref()) {
 			Err(e @ PluginError::State { .. }) if state.is_some() => {
@@ -281,13 +335,60 @@ impl<'a> Compiler<'a> {
 			other => other,
 		};
 		match result {
-			Ok(processor) => Some(processor),
+			Ok((processor, monitor)) => {
+				if let Some(monitor) = monitor {
+					self.watch(monitor, device, owner, &label, desc.role);
+				}
+				Some(processor)
+			}
 			Err(e) => {
 				self.warnings
 					.push(format!("{label} failed to load: {e}; bypassed"));
 				None
 			}
 		}
+	}
+
+	/// Whether plugins are sandboxed in this compile; warns once when the sandbox was
+	/// requested but cannot be used (plugins then run in-process).
+	fn sandbox_ok(&mut self) -> bool {
+		if self.hosting.mode == HostingMode::InProcess {
+			return false;
+		}
+		*self
+			.sandbox_ok
+			.get_or_insert_with(|| match sandbox_unavailable(&self.hosting.sandbox) {
+				Some(why) => {
+					self.warnings.push(why);
+					false
+				}
+				None => true,
+			})
+	}
+
+	fn watch(
+		&mut self,
+		monitor: SandboxMonitor,
+		device: &cadenza_model::Device,
+		owner: &str,
+		label: &str,
+		role: cadenza_plugin_host::PluginRole,
+	) {
+		// `label` starts with the owner; the watch keeps them apart.
+		let label = label
+			.strip_prefix(owner)
+			.and_then(|l| l.strip_prefix(": "))
+			.unwrap_or(label);
+		self.watches.push(PluginWatch {
+			monitor,
+			track_id: self.current_track,
+			location: owner.to_string(),
+			device_id: device.id,
+			device_name: device.name.clone(),
+			label: label.to_string(),
+			instrument: role == cadenza_plugin_host::PluginRole::Instrument,
+			crashed_at: None,
+		});
 	}
 
 	fn inserts(&mut self, devices: &[cadenza_model::Device], owner: &str) -> Vec<Device> {
@@ -457,6 +558,7 @@ impl<'a> Compiler<'a> {
 		for (pos, &ti) in order.iter().enumerate() {
 			let track = &project.tracks[ti];
 			let owner = format!("track '{}'", track.name);
+			self.current_track = Some(track.id);
 			let (mut source, mono) = self.source(track, &owner);
 			if let Source::Bus { accumulator } = &mut source {
 				*accumulator = bus_acc[&track.id];
@@ -528,6 +630,7 @@ impl<'a> Compiler<'a> {
 			});
 		}
 
+		self.current_track = None;
 		let master_inserts = self.inserts(&project.master.inserts, "master");
 		let master_chain: u32 = master_inserts.iter().map(|d| d.processor.latency()).sum();
 		let pdc = plan(&pdc_nodes, &pdc_edges, master_acc + 1);
@@ -563,6 +666,7 @@ impl<'a> Compiler<'a> {
 			latency,
 			tail_seconds: self.tail.min(MAX_TAIL_SECONDS),
 			warnings: self.warnings,
+			plugin_watches: self.watches,
 			engine_pos: 0,
 			discard: latency,
 			out_pos: 0,

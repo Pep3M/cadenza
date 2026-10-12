@@ -1,13 +1,14 @@
 //! Third-party CLAP plugins inside the engine: parameters, latency compensation, plugin
-//! instruments, state restore and graceful bypass of missing plugins.
+//! instruments, state restore and graceful bypass of missing plugins. Plugins run
+//! sandboxed (the engine default); `sandbox.rs` covers parity with in-process hosting.
 
 mod common;
 mod plugin_support;
 
-use cadenza_engine::{RenderOptions, analyze_mix, compile_with, render_offline};
+use cadenza_engine::{RenderOptions, analyze_mix, compile_hosted, render_offline};
 use cadenza_model::{Device, DeviceKind, Track, TrackKind};
 use common::*;
-use plugin_support::{GAIN_ID, SINE_ID, catalog, plugin_path};
+use plugin_support::{GAIN_ID, SINE_ID, catalog, plugin_path, sandboxed};
 
 const NOTES: &[(u8, f64, f64)] = &[
 	(60, 0.0, 1.0),
@@ -36,6 +37,7 @@ fn plugin_gain(db: Option<f32>) -> Device {
 fn with_plugins(end_beats: f64) -> RenderOptions {
 	RenderOptions {
 		plugins: Some(catalog()),
+		hosting: sandboxed(),
 		..opts(end_beats)
 	}
 }
@@ -72,7 +74,7 @@ fn plugin_latency_is_compensated() {
 	let mut dry = synth_track("dry", NOTES, 4.0);
 	dry.channel.inserts.push(inverter());
 	let p = project(vec![wet.clone(), dry]);
-	let graph = compile_with(&p, 48_000, 512, Some(&catalog())).unwrap();
+	let graph = compile_hosted(&p, 48_000, 512, Some(&catalog()), &sandboxed()).unwrap();
 	assert_eq!(graph.latency_samples(), 64);
 	assert!(graph.warnings().is_empty(), "{:?}", graph.warnings());
 
@@ -208,7 +210,7 @@ fn seeking_silences_plugin_instrument_voices() {
 		8.0,
 	);
 	let p = project(vec![t]);
-	let mut graph = compile_with(&p, 48_000, 512, Some(&catalog())).unwrap();
+	let mut graph = compile_hosted(&p, 48_000, 512, Some(&catalog()), &sandboxed()).unwrap();
 	let mut l = vec![0.0f32; 4_800];
 	let mut r = vec![0.0f32; 4_800];
 	graph.play();

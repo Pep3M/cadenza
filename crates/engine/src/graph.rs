@@ -8,6 +8,7 @@ use cadenza_dsp::{MidiEvent, Processor, Transport};
 use crate::QUANTUM;
 use crate::audio_clip::ClipPlayback;
 use crate::automation::{AutoTarget, Binding, DeviceSlot};
+use crate::hosting::{PluginCrash, PluginWatch};
 use crate::schedule::MidiSchedule;
 
 /// Stereo scratch buffer of exactly [`QUANTUM`] samples.
@@ -268,6 +269,8 @@ pub struct Graph {
 	pub(crate) latency: u32,
 	pub(crate) tail_seconds: f32,
 	pub(crate) warnings: Vec<String>,
+	/// Sandboxed plugin devices; never touched by `process`.
+	pub(crate) plugin_watches: Vec<PluginWatch>,
 	/// Timeline sample fed to the sources in the next quantum to render.
 	pub(crate) engine_pos: i64,
 	/// Output samples still to drop to compensate the master latency.
@@ -298,6 +301,53 @@ impl Graph {
 	/// Problems found while compiling (unknown devices/params, missing files, ...).
 	pub fn warnings(&self) -> &[String] {
 		&self.warnings
+	}
+
+	/// Sandboxed plugin devices that have crashed or hung so far (they are bypassed).
+	/// Not real-time: call it off the audio thread.
+	pub fn plugin_crashes(&self) -> Vec<PluginCrash> {
+		self.plugin_watches
+			.iter()
+			.filter_map(|w| w.crash(""))
+			.collect()
+	}
+
+	/// Records the engine position of newly crashed plugins (offline loops only; cheap
+	/// atomic checks).
+	pub(crate) fn note_plugin_crashes(&mut self) {
+		let pos = self.engine_pos;
+		for w in &mut self.plugin_watches {
+			if w.crashed_at.is_none() && w.monitor.is_crashed() {
+				w.crashed_at = Some(pos);
+			}
+		}
+	}
+
+	/// Crash warnings for an offline render, with the approximate timeline position.
+	pub(crate) fn crash_warnings(&self) -> Vec<String> {
+		let sr = f64::from(self.sample_rate);
+		self.plugin_watches
+			.iter()
+			.filter_map(|w| {
+				let when = match w.crashed_at {
+					Some(pos) => {
+						let sample = (pos - i64::from(self.latency)).max(0);
+						format!(
+							"It happened at about {:.1} s (beat {:.1}); ",
+							sample as f64 / sr,
+							self.beat_at(sample)
+						)
+					}
+					None => String::new(),
+				};
+				w.crash(&format!(
+					"{when}the rest of the render completed without it. Render again to retry; \
+					 if it keeps failing, replace this device with another plugin or a built-in \
+					 device, or bypass it."
+				))
+				.map(|c| c.message)
+			})
+			.collect()
 	}
 
 	pub fn is_playing(&self) -> bool {

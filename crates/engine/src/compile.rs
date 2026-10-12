@@ -709,6 +709,7 @@ impl<'a> Compiler<'a> {
 			buf: StereoBuf::new(),
 		};
 		let automation = self.bind_automation(&nodes, &master);
+		let meters = crate::meter::Meters::new(nodes.iter().map(|n| n.track_id), sr);
 
 		Ok(Graph {
 			sample_rate: sr,
@@ -730,6 +731,7 @@ impl<'a> Compiler<'a> {
 			monitor: None,
 			monitor_release: None,
 			live: Vec::with_capacity(crate::LIVE_EVENT_CAPACITY),
+			meters,
 		})
 	}
 

@@ -14,6 +14,7 @@ mod devices;
 mod error;
 mod graph;
 pub mod hosting;
+mod meter;
 mod pdc;
 mod player;
 mod render;
@@ -29,6 +30,7 @@ pub use devices::{capture_state, plugin_presets, preset_state};
 pub use error::EngineError;
 pub use graph::Graph;
 pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting};
+pub use meter::{MeterBank, MeterReading};
 pub use player::{Player, find_midi_input, midi_input_ports};
 pub use render::{
 	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,

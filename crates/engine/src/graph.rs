@@ -9,6 +9,7 @@ use crate::QUANTUM;
 use crate::audio_clip::ClipPlayback;
 use crate::automation::{AutoTarget, Binding, DeviceSlot};
 use crate::hosting::{PluginCrash, PluginWatch};
+use crate::meter::{MeterBank, Meters};
 use crate::schedule::MidiSchedule;
 
 /// Stereo scratch buffer of exactly [`QUANTUM`] samples.
@@ -382,6 +383,8 @@ pub struct Graph {
 	pub(crate) monitor_release: Option<usize>,
 	/// Live events for the next quantum (capacity [`crate::LIVE_EVENT_CAPACITY`]).
 	pub(crate) live: Vec<MidiEvent>,
+	/// Per-track and master levels for the UI.
+	pub(crate) meters: Meters,
 }
 
 impl Graph {
@@ -453,6 +456,12 @@ impl Graph {
 
 	pub fn is_playing(&self) -> bool {
 		self.playing
+	}
+
+	/// Live levels of this graph's tracks and master, published at the end of every
+	/// [`Graph::process`] call (see [`MeterBank`]).
+	pub fn meters(&self) -> std::sync::Arc<MeterBank> {
+		self.meters.bank.clone()
 	}
 
 	/// Routes live MIDI ([`Graph::push_live_event`]) to the instrument of `track` (`None`
@@ -554,6 +563,8 @@ impl Graph {
 		if !self.playing {
 			left.fill(0.0);
 			right.fill(0.0);
+			self.meters.silence();
+			self.meters.publish();
 			return;
 		}
 		while self.discard > 0 {
@@ -580,6 +591,7 @@ impl Graph {
 			done += take;
 		}
 		self.out_pos += n as i64;
+		self.meters.publish();
 	}
 
 	/// Clears all device and delay state at `engine_pos`, with automation applied first so
@@ -682,6 +694,7 @@ impl Graph {
 			monitor,
 			monitor_release,
 			live,
+			meters,
 			..
 		} = self;
 		for i in 0..nodes.len() {
@@ -753,12 +766,14 @@ impl Graph {
 			}
 			if !node.audible {
 				buf.clear();
+				meters.measure_silence(i);
 				continue;
 			}
 			for e in node.edges.iter_mut().filter(|e| e.pre_fader) {
 				e.mix(buf, &mut accumulators[e.accumulator]);
 			}
 			node.fader.apply(buf);
+			meters.measure(Some(i), &buf.l, &buf.r);
 			for e in node.edges.iter_mut().filter(|e| !e.pre_fader) {
 				e.mix(buf, &mut accumulators[e.accumulator]);
 			}
@@ -770,6 +785,7 @@ impl Graph {
 			d.run(&mut master.buf, &[], &transport, nodes);
 		}
 		master.fader.apply(&mut master.buf);
+		meters.measure(None, &master.buf.l, &master.buf.r);
 		self.engine_pos += QUANTUM as i64;
 	}
 }

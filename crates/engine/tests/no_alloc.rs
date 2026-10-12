@@ -101,3 +101,32 @@ fn graph_process_does_not_allocate() {
 
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn metering_does_not_allocate() {
+	let p = mini_song();
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	let meters = graph.meters();
+	let ids: Vec<_> = p.tracks.iter().map(|t| t.id).collect();
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	graph.play();
+
+	TRACKING.with(|t| t.set(true));
+	let mut loudest = 0.0f32;
+	for block in [1usize, 64, 333, 1024].into_iter().cycle().take(200) {
+		graph.process(&mut left[..block], &mut right[..block]);
+		// The UI side reads (and resets) the levels between callbacks.
+		loudest = loudest.max(meters.master().max_peak());
+		for &id in &ids {
+			let _ = meters.track(id);
+		}
+	}
+	graph.stop();
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+
+	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(loudest > 0.0, "meters saw the song");
+	assert_eq!(meters.master().rms, [0.0, 0.0]);
+}

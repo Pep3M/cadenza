@@ -39,6 +39,7 @@ use crate::compile_hosted;
 use crate::error::EngineError;
 use crate::graph::Graph;
 use crate::hosting::{PluginCrash, PluginHosting, PluginWatch};
+use crate::meter::MeterBank;
 
 const GRAPH_SLOTS: usize = 4;
 const GARBAGE_SLOTS: usize = 8;
@@ -309,6 +310,8 @@ pub struct Player {
 	/// Sandboxed devices of the last loaded graph, and whether each crash was taken.
 	watches: Vec<(PluginWatch, bool)>,
 	midi_input: Option<MidiInputConnection>,
+	/// Meters of the last loaded graph.
+	meters: Option<Arc<MeterBank>>,
 	_stream: cpal::Stream,
 }
 
@@ -386,6 +389,7 @@ impl Player {
 			hosting: PluginHosting::default(),
 			watches: Vec::new(),
 			midi_input: None,
+			meters: None,
 			_stream: stream,
 		})
 	}
@@ -416,9 +420,18 @@ impl Player {
 		)?;
 		let warnings = graph.warnings().to_vec();
 		let watches = graph.plugin_watches.clone();
+		let meters = graph.meters();
 		self.control.load_graph(graph)?;
 		self.watches = watches.into_iter().map(|w| (w, false)).collect();
+		self.meters = Some(meters);
 		Ok(warnings)
+	}
+
+	/// Live per-track and master levels of the loaded project, updated by the audio
+	/// thread once per callback without locks or allocation (`None` before the first
+	/// [`Player::load`]). The bank changes on every load; keep the `Arc` only until then.
+	pub fn meters(&self) -> Option<Arc<MeterBank>> {
+		self.meters.clone()
 	}
 
 	/// Sets where plugin devices run on subsequent [`Player::load`] calls (default:
@@ -611,6 +624,35 @@ mod tests {
 		core.fill_interleaved(&mut out, 2);
 		assert!(out.iter().all(|&x| x == 0.0));
 		assert_eq!(control.shared.position.load(Ordering::Relaxed), pos);
+	}
+
+	#[test]
+	fn meters_follow_the_audio_thread() {
+		let p = project();
+		let track = p.tracks[0].id;
+		let (mut control, mut core) = channel_pair(48_000);
+		let graph = compile(&p, 48_000, 256).unwrap();
+		let meters = graph.meters();
+		control.load_graph(graph).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		core.fill_interleaved(&mut out, 2);
+		assert_eq!(meters.master().max_peak(), 0.0, "stopped: silent meters");
+
+		control.send(Cmd::Play).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		let master = meters.master();
+		let out_peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+		assert!(master.max_peak() > 0.0 && master.rms[0] > 0.0);
+		assert!(
+			(master.max_peak() - out_peak).abs() < 0.05,
+			"{master:?} vs {out_peak}"
+		);
+		assert!(meters.track(track).unwrap().max_peak() > 0.0);
+
+		control.send(Cmd::Stop).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		let after = meters.master();
+		assert_eq!(after.rms, [0.0, 0.0], "stopping clears the levels");
 	}
 
 	#[test]

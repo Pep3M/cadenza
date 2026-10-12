@@ -17,13 +17,13 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-model` | project document, `Command` enum, undo/redo `Document`, persistence, AI summary | core |
 | `cadenza-theory` | notes, scales, chord symbols, roman numerals, voicings | core |
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
-| `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature), stretch (`stretch` feature) | — |
+| `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
-| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export, mix analysis, realtime playback (cpal) + live MIDI monitoring | core, model, dsp, audio-io, midi-io |
+| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis, realtime playback (cpal) + live MIDI monitoring | core, model, dsp, audio-io, midi-io |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `gui` (starts `cadenza-app`) | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView`) | — |
 
@@ -104,7 +104,7 @@ pub struct Device { id: DeviceId, kind: DeviceKind, name: String, bypass: bool,
 	sidechain: Option<SidechainSource { track: TrackId, pre_fader: bool }> /* key input */,
 	aux_outputs: Vec<OutputRoute { port: u32 /* 1-based extra output */, bus: Option<TrackId> /* None = own track */ }>,
 	zones: Vec<SampleZone> /* built-in sampler / drum_sampler only */ }
-pub struct SampleZone { sample: SampleRef { path: PathBuf /* absolute */, name: String /* original file name */ },
+pub struct SampleZone { sample: SampleRef { path: PathBuf /* absolute in memory */, name: String /* original file name */ },
 	key_low, key_high, root_key: u8, vel_low, vel_high: f32 /* 0..1 */, tune: f32 /* semitones */, gain_db, pan,
 	start: f64, end: Option<f64> /* seconds of the file */, loop_mode: LoopMode /* off|forward|ping_pong */,
 	loop_start: f64, loop_end: Option<f64>, loop_crossfade: f64, reverse: bool, attack_ms: f32, decay_ms: Option<f32>,
@@ -159,6 +159,20 @@ removed with `SetInstrument { device: null }`. Removing a track drops its lanes 
 target it and re-routes its dependants to Master (undo restores all). MIDI clips only on
 Instrument tracks, audio clips only on Audio tracks. Device param ranges are NOT validated
 here (model doesn't know devices) — callers with registry access (mcp) must validate.
+
+Project files (phase 14, `model::files`): a portable project is a folder
+`<Name>/<Name>.cadenza.json` + `Audio/` (recordings, imports, processed copies) + `Samples/`
+(collected zone files) + `Renders/` (exports) + `.cadenza/` (autosaves, session marker; safe to
+delete). In memory every file path is absolute; `save_json(path)` stores paths inside the folder
+holding the file relative to it (`/` separators) and `load_json` resolves them against that
+folder, so moving the folder keeps working; other paths stay absolute and old absolute
+projects load unchanged (format_version stays 1). `save_json` is atomic (temp + fsync +
+rename, dir fsync) and keeps the previous file as `<file>.bak` (`backup_path`,
+`write_atomic`); `save_json_absolute` (autosaves) writes absolute paths without a backup.
+`file_refs()` lists audio clip files and sample zones (`FileRef { path, name, used_by }`),
+`missing_files()` the absent ones, `relink_commands(fn)` builds the `UpdateAudioClip` /
+`SetSampleZones` commands that repoint references (zones keep their original names);
+`ProjectLayout` names the folders, `sanitize_file_name`, `project_stem`.
 
 `Document { project, undo stack, redo stack }`: `execute(Command) -> Result<(), ModelError>`
 (applies atomically, records the inverse), `undo()`, `redo()`, `can_undo/can_redo`,
@@ -226,6 +240,13 @@ pub fn render_offline(project: &Project, opts: &RenderOptions) -> Result<StereoB
 pub fn render_to_wav(project: &Project, opts: &RenderOptions, path: &Path) -> Result<MixReport, EngineError>; // 32f, streamed
 pub fn render_to_file(project, opts, path, &ExportOptions) -> Result<MixReport, EngineError>; // WAV 16/24/32f, FLAC 16/24, MP3; TPDF dither
 pub fn export_options_for_path(path, bit_depth: Option<u32>, mp3_bitrate_kbps: Option<u16>) -> Result<ExportOptions, EngineError>; // by extension
+pub fn export_project(project, &RenderOptions, &ExportSpec, progress: &mut dyn FnMut(&ExportProgress) -> bool /* false = cancel */)
+	-> Result<ExportReport { files: Vec<ExportedFile { path, track_id, name, gain_db, stats, sample_rate, duration_seconds, bytes }>, mix: MixReport, notes }, EngineError>;
+pub struct ExportSpec { start: Tick, end: Option<Tick> /* None = song end */, tail: bool, mixdown: bool,
+	stems: StemSet /* none | tracks | buses (buses + tracks routed to master: they sum to the mix) | selected(ids) */,
+	stems_through_master, stems_pre_fader, format: ExportOptions, sample_rate: Option<u32> /* resample */,
+	normalize: Normalize /* off | peak{peak_db} | loudness{lufs, true_peak_db} */, normalize_stems_individually,
+	metadata: Metadata, folder, name /* mix "<name>.<ext>", stems "<name> - <track>.<ext>" */ }
 pub fn analyze_mix(project: &Project, opts: &RenderOptions) -> Result<MixReport, EngineError>;
 pub fn compile(project: &Project, sample_rate: u32, max_block: usize) -> Result<Graph, EngineError>;
 pub struct MixReport { sample_rate, duration_seconds, latency_samples, warnings: Vec<String>,
@@ -345,8 +366,25 @@ zones; `set_output_routes` accepts built-in extra outputs; `write_drum_pattern` 
 tambourine/cowbell lanes and warns about lanes a drum_sampler has no sample for. The agent's
 `PathPolicy::resolve_sample` allows the session folder or the factory folder.
 MCP file tools: `import_audio`, `get_audio_info`, `set_clip_fades`, `import_midi` (Batch via
-Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension. The
-embedded agent's `PathPolicy` confines all of them to the session folder with checked extensions.
+Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension and takes
+`start_bar/end_bar` (1-based, end included) or beats, `tail`, `output_sample_rate`, `normalize`
+(`{mode: off|peak|loudness, peak_db, lufs, true_peak_db}`), `metadata`; it returns the mix report
+flattened plus `path`, `gain_db`, `file` (levels as written). `export_stems` (tracks | buses |
+selected + `track_ids`, `include_mixdown`, `through_master`, `pre_fader`, format/bit depth,
+range, normalization, metadata; default folder = the project's `Renders/`). Portable projects
+(`tools::portable`): `collect_files` (copies external clip/zone files into `Audio/`/`Samples/`
+under their original names, once per SHA-256 content, reusing identical files already there,
+`name (2).ext` on conflicts, factory samples only with `include_factory`; one undo step
+"Collect project files"; needs a saved project), `list_missing_files`, `relink_files`
+(`search_folder` indexed recursively by lower-case file name, hidden folders skipped, ties go to
+the candidate sharing most trailing folders with the old path; one undo step), `pack_project`
+(zip of the folder as `<folder>/...` with the current document written fresh, without
+`.cadenza/`, backups and (by default) `Renders/`; `outside` lists files not in the folder).
+`open_project` and the app go through `portable::open_document`: missing factory samples are
+repointed to this machine's factory folder before the history starts; `unpack_project` rejects
+unsafe entries and never overwrites. The embedded agent's `PathPolicy` confines all file tools
+to the session folder with checked extensions (`relink_files`/`export_stems` folders via
+`resolve_dir`/`resolve_dir_create`, default `Renders/`).
 Metering: every graph measures each track's post-fader signal and the master per quantum and
 publishes at the end of each `Graph::process` into a `MeterBank` of atomics (peak via `fetch_max`
 on the float bits, readers take-and-reset it; RMS with 300 ms ballistics is a plain store):
@@ -376,6 +414,17 @@ and sends it boxed through its own rtrb (garbage ring back); `Graph::swap_schedu
 schedule + event buffer and releases only the notes sounding before but not after.
 Event buffers are sized for both sides of a wrap (`compile::event_capacity`). All covered by
 the `no_alloc` test.
+Export jobs (`engine::export`): one offline pass (`render::prepare_range` + `render_analyzed_with`
+and a per-quantum hook) renders the mix and taps each stem node (post-fader `buf`, or `pre` for
+pre-fader; silent when the mix silences it), latency aligned like the per-track analyzers, into
+temporary 32f WAVs in a hidden folder next to the outputs (removed however the job ends).
+Stems through the master are then played one by one through a copy of the master channel (a
+synthetic project: one audio track on the temp file + master inserts/fader/master lanes, same
+tempo). Each file is gained (normalization: by default stems take the mix gain so they still
+sum to it; loudness gain is capped by the true-peak ceiling with a note), resampled, measured
+and encoded with metadata (dither per `ExportOptions`). Progress fractions weight the main
+pass, master passes and encodes; returning false from the callback cancels
+(`EngineError::Cancelled`) and deletes what was written. `render_to_file` stays for simple renders.
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.
@@ -429,7 +478,29 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   results come back as polled `AudioEvent`s; position via `PlayerClock`, levels via `MeterBank`,
   plugin crashes polled every 500 ms and shown as toasts. No device = app works without sound.
 - `jobs`: waveform peaks (decoded + `WaveformPeaks` on a worker, cached by path), plugin
-  rescans, renders (`render_to_file`, format by extension) and file dialogs run off the UI thread.
+  rescans, exports, file copies and file dialogs (files and folders) run off the UI thread.
+- Project files (phase 14; `state::safety`, `state::export`, `state::project_io`,
+  `ui::project_dialogs`): File menu New / Open (projects and `.cadenza.zip`/`.cadenzapack`
+  archives, extracted into a chosen folder) / Open Recent (persisted, 10) / Start Screen / Save /
+  Save As / Import / Export… (Ctrl+E) / Collect Project Files / Locate Missing Files / Export
+  Project Archive / Autosave interval. Start screen (no project on the command line): New,
+  Open, Demo song (bundled `examples/first_light`, written to the state folder), recent list.
+  Export dialog: range (whole song, loop region, selected clips, bars) + tail, mixdown, stems
+  (every track, buses + direct tracks, chosen tracks; through the master, pre-fader), format
+  (WAV 16/24/32f, FLAC 16/24, MP3 when built), dither, sample rate, normalization (peak or LUFS
+  + true-peak ceiling, stems linked or individual), metadata, folder (default `Renders/`), file
+  name preview; runs `export_project` on a worker with a progress bar and Cancel, then shows a
+  per-file loudness table and "Open folder"; settings persist in `Prefs.export`. Missing files on
+  open show the Locate dialog (folder search, one undo). "Save As" to a folder that lacks the
+  project's external files offers to collect them. Processed audio copies go to `Audio/`.
+  Safety (off in `AppState::headless`, on via `enable_safety(state_dir)`): autosave every
+  `Prefs.autosave_minutes` (default 2, 0 = off) after the first unsaved change, written on a
+  worker from a project clone to `.cadenza/autosave/` (unsaved projects:
+  `$XDG_STATE_HOME/cadenza/autosave/untitled-<pid>/`), rotating 5; saves clear them, "Don't save"
+  deletes them. A `.cadenza/session.lock` (pid) marks an open project, removed on new/open/quit;
+  opening a project whose newest autosave is newer than the file offers Recover (unsaved
+  document, same path) or keeping the saved version (reason: crashed when a dead pid's marker
+  is left); untitled sessions of dead processes are offered at startup.
 - `ui`: views only read state and call its methods; `theme` is the single palette/metrics
   module. Panels (`state::layout::PanelLayout`, FL Studio-like keys): F5 arrange, F6 / Alt+F8
   browser, F7 piano roll, F8 inspector, F9 mixer, F11 / Ctrl+Enter maximize the focused panel
@@ -495,7 +566,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   instrument track / bus); presets -> device or track; mixer inserts reorder / move to another
   strip (Ctrl copies); browser Files tab (bookmarks, audio/MIDI filter) and OS file drops:
   audio/MIDI import at the drop beat/track (new tracks below), `.cadenza.json` opens (dirty
-  prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/E/I, Ctrl+D, S
+  prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/I, Ctrl+E (export dialog), Ctrl+D, S
   split, Del (automation points first, then clips), A lanes; arrange: drag empty lane =
   rubber band, drag a clip's left edge = trim start. Dirty state is confirmed on new/open/close.
 - Sampler editors (`state::samples` pure builders + `ui::instrument_editor`): the bottom editor
@@ -510,8 +581,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   context menu "Load into new sampler" adds a sampler track auto-mapped to the file.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
-  including automation lanes, the audio editor, an empty project and (`render_sampler_screens`)
-  the sampler editors.
+  including automation lanes, the audio editor, an empty project, (`render_sampler_screens`)
+  the sampler editors and (`render_project_screens`) the start screen, export dialog/progress/
+  result, Locate missing files and the recovery prompt.
 - Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
   30 ms): Edit button in the inspector (device and track instrument), double-click a plugin
   insert / instrument in the mixer or the instrument name in a track header. Window title

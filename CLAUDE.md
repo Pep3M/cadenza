@@ -19,10 +19,15 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render, mix analysis, realtime playback (cpal) | core, model, dsp |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp |
-| `cadenza-cli` | `cadenza` binary: `render`, `mcp`, `play` | all |
+| `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex) | dsp |
+| `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
+| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play`, `mcp`, `scan-plugins`, `list-plugins`, `compose` | all |
+| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash) | — |
 
-Future: `cadenza-plugin-host` (CLAP via clack first, VST3 next, out-of-process scanner,
-sandboxed processing), `cadenza-ui`, audio editing (destructive + clip-based).
+Future: `cadenza-ui`, audio editing (destructive + clip-based), sandbox on Windows/macOS.
+
+AI agent rule: never depend on a single LLM vendor's API — new AI features go behind
+`LlmProvider`. Secrets come from the environment or an ignored `.env`; never log or commit them.
 
 ## Non-negotiable rules
 

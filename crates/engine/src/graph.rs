@@ -285,6 +285,21 @@ pub(crate) enum Source {
 	},
 }
 
+/// `event` moved to the start of a quantum.
+fn at_offset_zero(event: MidiEvent) -> MidiEvent {
+	match event {
+		MidiEvent::NoteOn {
+			pitch, velocity, ..
+		} => MidiEvent::NoteOn {
+			offset: 0,
+			pitch,
+			velocity,
+		},
+		MidiEvent::NoteOff { pitch, .. } => MidiEvent::NoteOff { offset: 0, pitch },
+		MidiEvent::AllNotesOff { .. } => MidiEvent::AllNotesOff { offset: 0 },
+	}
+}
+
 pub(crate) struct Node {
 	pub track_id: TrackId,
 	pub name: String,
@@ -361,6 +376,12 @@ pub struct Graph {
 	pub(crate) fifo_pos: usize,
 	pub(crate) playing: bool,
 	pub(crate) needs_reset: bool,
+	/// Node whose instrument receives live MIDI input (monitoring).
+	pub(crate) monitor: Option<usize>,
+	/// Previously monitored node that still needs an `AllNotesOff`.
+	pub(crate) monitor_release: Option<usize>,
+	/// Live events for the next quantum (capacity [`crate::LIVE_EVENT_CAPACITY`]).
+	pub(crate) live: Vec<MidiEvent>,
 }
 
 impl Graph {
@@ -434,6 +455,41 @@ impl Graph {
 		self.playing
 	}
 
+	/// Routes live MIDI ([`Graph::push_live_event`]) to the instrument of `track` (`None`
+	/// stops monitoring; notes still held on the previous track are released). Returns
+	/// false when `track` is not an instrument track of this graph. Realtime safe.
+	pub fn set_monitor_track(&mut self, track: Option<TrackId>) -> bool {
+		let next = track.and_then(|id| {
+			self.nodes
+				.iter()
+				.position(|n| n.track_id == id && matches!(n.source, Source::Instrument { .. }))
+		});
+		if self.monitor != next {
+			if self.monitor.is_some() {
+				self.monitor_release = self.monitor;
+			}
+			self.monitor = next;
+			self.live.clear();
+		}
+		track.is_none() || next.is_some()
+	}
+
+	/// The monitored track, if any.
+	pub fn monitor_track(&self) -> Option<TrackId> {
+		self.monitor.map(|i| self.nodes[i].track_id)
+	}
+
+	/// Queues a live event for the monitored instrument; it plays at the start of the next
+	/// rendered quantum (its offset is ignored). Returns false when nothing is monitored,
+	/// the transport is stopped or the buffer is full. Realtime safe (never allocates).
+	pub fn push_live_event(&mut self, event: MidiEvent) -> bool {
+		if self.monitor.is_none() || !self.playing || self.live.len() == self.live.capacity() {
+			return false;
+		}
+		self.live.push(event);
+		true
+	}
+
 	pub fn play(&mut self) {
 		self.playing = true;
 	}
@@ -441,6 +497,7 @@ impl Graph {
 	/// Stops output; sounding notes are released (AllNotesOff) and tails cleared on resume.
 	pub fn stop(&mut self) {
 		self.playing = false;
+		self.live.clear();
 		self.needs_reset = true;
 		self.fifo_pos = QUANTUM;
 		self.engine_pos = self.out_pos;
@@ -622,6 +679,9 @@ impl Graph {
 			nodes,
 			accumulators,
 			master,
+			monitor,
+			monitor_release,
+			live,
 			..
 		} = self;
 		for i in 0..nodes.len() {
@@ -646,6 +706,18 @@ impl Graph {
 						// Chase notes that should already be sounding at `pos` so a
 						// start/seek landing mid-note doesn't leave it silent.
 						schedule.chase(pos, events);
+					}
+					if *monitor_release == Some(i) {
+						*monitor_release = None;
+						events.push(MidiEvent::AllNotesOff { offset: 0 });
+					}
+					if *monitor == Some(i) {
+						for e in live.drain(..) {
+							if events.len() == events.capacity() {
+								break;
+							}
+							events.push(at_offset_zero(e));
+						}
 					}
 					schedule.collect(pos, QUANTUM, events);
 					if let Some(d) = device {

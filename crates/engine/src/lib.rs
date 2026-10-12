@@ -21,6 +21,7 @@ mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
+pub use cadenza_midi_io::PortInfo as MidiPort;
 pub use cadenza_plugin_host::PluginCatalog;
 pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions};
 pub use compile::{compile, compile_hosted, compile_with};
@@ -28,7 +29,7 @@ pub use devices::{capture_state, plugin_presets, preset_state};
 pub use error::EngineError;
 pub use graph::Graph;
 pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting};
-pub use player::Player;
+pub use player::{Player, find_midi_input, midi_input_ports};
 pub use render::{
 	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,
 	export_options_for_path, render_offline, render_to_file, render_to_wav,
@@ -37,6 +38,10 @@ pub use render::{
 /// Internal processing quantum in samples: devices always process this many samples at a
 /// time, and automation and transport changes are applied at quantum boundaries.
 pub const QUANTUM: usize = 32;
+
+/// Live MIDI events (monitoring) a graph buffers between two quanta; extra events in a
+/// burst are dropped.
+pub const LIVE_EVENT_CAPACITY: usize = 512;
 
 /// Finite stand-in for -inf dB (silence) so reports stay valid JSON.
 pub const FLOOR_DB: f32 = -144.0;

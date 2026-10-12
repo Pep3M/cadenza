@@ -17,4 +17,6 @@ pub enum EngineError {
 	Busy,
 	#[error("{0}")]
 	Device(String),
+	#[error("MIDI input: {0}")]
+	Midi(String),
 }

@@ -425,9 +425,13 @@ impl<'a> Compiler<'a> {
 					.is_none_or(|d| matches!(d.kind, DeviceKind::Builtin { .. }));
 				let schedule = MidiSchedule::from_clips(&track.clips, &self.project.tempo, sr);
 				// +1 for a possible `AllNotesOff` on reset, plus room for every note that
-				// could be chased back in at that same instant.
+				// could be chased back in at that same instant, plus live input (monitoring)
+				// and its release.
 				let events = Vec::with_capacity(
-					schedule.max_events_per_quantum() + schedule.max_chase_notes() + 1,
+					schedule.max_events_per_quantum()
+						+ schedule.max_chase_notes()
+						+ crate::LIVE_EVENT_CAPACITY
+						+ 2,
 				);
 				(
 					Source::Instrument {
@@ -723,6 +727,9 @@ impl<'a> Compiler<'a> {
 			fifo_pos: QUANTUM,
 			playing: false,
 			needs_reset: true,
+			monitor: None,
+			monitor_release: None,
+			live: Vec::with_capacity(crate::LIVE_EVENT_CAPACITY),
 		})
 	}
 

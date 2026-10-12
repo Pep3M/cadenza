@@ -295,14 +295,18 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cadenza-agent",
+ "cadenza-audio-io",
  "cadenza-core",
+ "cadenza-dsp",
  "cadenza-engine",
  "cadenza-mcp",
+ "cadenza-midi-io",
  "cadenza-model",
  "cadenza-plugin-host",
  "clap",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
 ]

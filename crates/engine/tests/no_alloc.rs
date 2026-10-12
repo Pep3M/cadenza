@@ -64,9 +64,31 @@ fn graph_process_does_not_allocate() {
 	let mut left = vec![0.0f32; 1024];
 	let mut right = vec![0.0f32; 1024];
 	graph.play();
+	assert!(graph.set_monitor_track(Some(source)));
 
 	TRACKING.with(|t| t.set(true));
-	for block in [1usize, 37, 512, 1024].into_iter().cycle().take(400) {
+	for (i, block) in [1usize, 37, 512, 1024]
+		.into_iter()
+		.cycle()
+		.take(400)
+		.enumerate()
+	{
+		// Live MIDI input (monitoring), including bursts beyond the buffer.
+		let pitch = 48 + (i % 24) as u8;
+		for _ in 0..if i % 50 == 0 { 600 } else { 1 } {
+			graph.push_live_event(cadenza_dsp::MidiEvent::NoteOn {
+				offset: 0,
+				pitch,
+				velocity: 0.7,
+			});
+		}
+		graph.push_live_event(cadenza_dsp::MidiEvent::NoteOff { offset: 0, pitch });
+		if i == 200 {
+			graph.set_monitor_track(None);
+		}
+		if i == 250 {
+			graph.set_monitor_track(Some(source));
+		}
 		graph.process(&mut left[..block], &mut right[..block]);
 	}
 	graph.seek(beats(3.0));

@@ -454,6 +454,34 @@ pub fn trim_start(project: &Project, clip: ClipId, start: Tick) -> Option<Comman
 	batch("Trim clip start", commands)
 }
 
+/// Clips of `tracks` overlapping the time range `t0..t1` (rubber band selection).
+pub fn clips_in(project: &Project, tracks: &[TrackId], t0: Tick, t1: Tick) -> Vec<ClipId> {
+	let (t0, t1) = (t0.min(t1), t0.max(t1));
+	project
+		.tracks
+		.iter()
+		.filter(|t| tracks.contains(&t.id))
+		.flat_map(|t| t.clips.iter())
+		.filter(|c| c.start < t1 && c.end() > t0)
+		.map(|c| c.id)
+		.collect()
+}
+
+/// Time ranges where audio clips of one track overlap (they sum; drawn as crossfades).
+pub fn overlaps(track: &Track) -> Vec<(Tick, Tick)> {
+	let audio: Vec<&Clip> = track.clips.iter().filter(|c| !c.is_midi()).collect();
+	let mut out = Vec::new();
+	for (i, a) in audio.iter().enumerate() {
+		for b in &audio[i + 1..] {
+			let (s, e) = (a.start.max(b.start), a.end().min(b.end()));
+			if s < e {
+				out.push((s, e));
+			}
+		}
+	}
+	out
+}
+
 /// An empty one-bar (at least) MIDI clip on an instrument track.
 pub fn new_midi_clip(
 	project: &Project,
@@ -807,6 +835,26 @@ mod trim_tests {
 		assert_eq!((c.start, c.length), (beats(2.0), beats(10.0)));
 		assert_eq!(c.notes()[1].start, beats(6.0));
 		assert!(trim_start(&grown, id, beats(2.0)).is_none());
+	}
+
+	#[test]
+	fn rubber_band_and_overlaps() {
+		let mut p = Project::new("t");
+		let mut a = Track::new("A", TrackKind::Audio);
+		let c1 = Clip::audio("1", beats(0.0), beats(4.0), "a.wav");
+		let c2 = Clip::audio("2", beats(3.0), beats(4.0), "b.wav");
+		let c3 = Clip::audio("3", beats(10.0), beats(2.0), "c.wav");
+		let ids = [c1.id, c2.id, c3.id];
+		a.clips = vec![c1, c2, c3];
+		let b = Track::new("B", TrackKind::Audio);
+		let (ta, tb) = (a.id, b.id);
+		p.tracks = vec![a, b];
+		assert_eq!(
+			clips_in(&p, &[ta, tb], beats(5.0), beats(2.0)),
+			vec![ids[0], ids[1]]
+		);
+		assert!(clips_in(&p, &[tb], beats(0.0), beats(20.0)).is_empty());
+		assert_eq!(overlaps(&p.tracks[0]), vec![(beats(3.0), beats(4.0))]);
 	}
 
 	#[test]

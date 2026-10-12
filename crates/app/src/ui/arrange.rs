@@ -36,6 +36,8 @@ const BELOW_TRACKS: f32 = 72.0;
 enum DragKind {
 	Move,
 	Resize,
+	/// Left edge: trims/extends the start, content stays in place.
+	TrimStart,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,10 @@ pub struct ArrangeUi {
 	rename: Option<(TrackId, String)>,
 	/// Middle-button pan in progress.
 	pan: bool,
+	/// Rubber band on empty lane area: press and current pointer (screen), Shift adds.
+	band: Option<(Pos2, Pos2, bool)>,
+	/// Audio clip overlaps to mark this frame.
+	overlaps: Vec<Rect>,
 	/// Overview viewport drag: beats between the grab point and the view start.
 	overview_grab: Option<f64>,
 	/// Size of the lanes area in the last frame (keyboard navigation, zoom to fit).
@@ -497,6 +503,17 @@ impl ArrangeUi {
 		} else {
 			Tick(t.0.max(0))
 		}
+	}
+
+	/// Screen rect of the clip row of track `index` in the last drawn frame.
+	pub fn track_rect(&self, scroll_y: f32, index: usize) -> Option<Rect> {
+		let layout = self.last?;
+		let row = self.rows.track(index)?;
+		let y = layout.body_top + row.top - scroll_y;
+		Some(Rect::from_min_size(
+			pos2(layout.lanes.left(), y),
+			vec2(layout.lanes.width(), row.height),
+		))
 	}
 
 	/// Screen rect of the automation lane `address` in the last drawn frame.
@@ -992,7 +1009,13 @@ impl ArrangeUi {
 			if r.height() <= 0.0 {
 				continue;
 			}
-			let resp = ui.interact(r, Id::new(("lane", t.id)), Sense::click());
+			let resp = ui.interact(r, Id::new(("lane", t.id)), Sense::click_and_drag());
+			if resp.drag_started_by(PointerButton::Primary)
+				&& let Some(press) = ui.input(|i| i.pointer.press_origin())
+			{
+				let add = ui.input(|i| i.modifiers.shift);
+				self.band = Some((press, press, add));
+			}
 			if resp.clicked() {
 				state.selection.select_track(t.id);
 				state.selection.clear_clips();
@@ -1012,6 +1035,20 @@ impl ArrangeUi {
 			}
 		}
 
+		// Overlapping audio clips sum: mark the overlap like a crossfade.
+		for (i, t) in tracks.iter().enumerate() {
+			let y = self.top(layout, i, scroll);
+			if y > area.bottom() || y + h < area.top() {
+				continue;
+			}
+			for (s0, s1) in edits::overlaps(t) {
+				let x0 = area.left() + tl.tick_to_x(s0);
+				let x1 = area.left() + tl.tick_to_x(s1);
+				self.overlaps
+					.push(Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + h - 1.0)));
+			}
+		}
+
 		// Clips.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
@@ -1023,6 +1060,57 @@ impl ArrangeUi {
 				self.clip(ui, state, &painter, layout, t, i, c);
 			}
 		}
+		for r in std::mem::take(&mut self.overlaps) {
+			if !r.intersects(area) {
+				continue;
+			}
+			painter.rect_filled(r, 0.0, Color32::from_black_alpha(70));
+			let stroke = Stroke::new(1.0, Color32::from_white_alpha(150));
+			painter.line_segment([r.left_bottom(), r.right_top()], stroke);
+			painter.line_segment([r.left_top(), r.right_bottom()], stroke);
+		}
+		self.rubber_band(ui, state, layout);
+	}
+
+	/// Rubber band over empty lane area: selects the clips it touches (Shift adds).
+	fn rubber_band(&mut self, ui: &Ui, state: &mut AppState, layout: &Layout) {
+		let Some((start, _, add)) = self.band else {
+			return;
+		};
+		let Some(pos) = ui.ctx().pointer_interact_pos() else {
+			return;
+		};
+		self.band = Some((start, pos, add));
+		let r = Rect::from_two_pos(start, pos);
+		let p = ui.painter_at(layout.lanes);
+		p.rect_filled(r, 0.0, theme::ACCENT.gamma_multiply(0.12));
+		p.rect_stroke(r, 0.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+		if !ui.input(|i| i.pointer.any_released()) {
+			return;
+		}
+		self.band = None;
+		let tl = state.view.timeline;
+		let t0 = tl.x_to_tick(r.left() - layout.lanes.left());
+		let t1 = tl.x_to_tick(r.right() - layout.lanes.left());
+		let (y0, y1) = (
+			Self::content_y(layout, state, r.top()),
+			Self::content_y(layout, state, r.bottom()),
+		);
+		let tracks: Vec<TrackId> = self
+			.rows
+			.rows
+			.iter()
+			.filter(|row| row.bottom() > y0 && row.top < y1)
+			.filter_map(|row| match row.kind {
+				RowKind::Track { id, .. } => Some(id),
+				_ => None,
+			})
+			.collect();
+		let found = edits::clips_in(state.project(), &tracks, t0, t1);
+		if !add {
+			state.selection.clear_clips();
+		}
+		state.selection.clips.extend(found);
 	}
 
 	#[allow(clippy::too_many_arguments)]
@@ -1053,14 +1141,14 @@ impl ArrangeUi {
 		};
 
 		if let Some(r) = &response {
-			let near_end = r
-				.hover_pos()
-				.is_some_and(|p| p.x > rect.right() - RESIZE_HANDLE);
-			if near_end
+			let near_edge = r.hover_pos().is_some_and(|p| {
+				p.x > rect.right() - RESIZE_HANDLE || p.x < rect.left() + RESIZE_HANDLE
+			});
+			if near_edge
 				|| self
 					.drag
 					.as_ref()
-					.is_some_and(|d| d.anchor == clip.id && d.kind == DragKind::Resize)
+					.is_some_and(|d| d.anchor == clip.id && d.kind != DragKind::Move)
 			{
 				ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
 			} else if self.drag.as_ref().is_some_and(|d| d.copy) {
@@ -1083,9 +1171,17 @@ impl ArrangeUi {
 			if r.double_clicked() {
 				state.open_editor(clip.id);
 			}
-			if drag_started && let Some(press) = r.interact_pointer_pos() {
+			if drag_started
+				&& let Some(press) = ui
+					.input(|i| i.pointer.press_origin())
+					.or(r.interact_pointer_pos())
+			{
 				let kind = if press.x > rect.right() - RESIZE_HANDLE {
 					DragKind::Resize
+				} else if press.x < rect.left() + RESIZE_HANDLE
+					&& rect.width() > 3.0 * RESIZE_HANDLE
+				{
+					DragKind::TrimStart
 				} else {
 					DragKind::Move
 				};
@@ -1097,10 +1193,10 @@ impl ArrangeUi {
 					} else {
 						vec![clip.id]
 					},
-					origin: if kind == DragKind::Move {
-						clip.start
-					} else {
+					origin: if kind == DragKind::Resize {
 						clip.end()
+					} else {
+						clip.start
 					},
 					press: tl.x_to_tick(press.x - area.left()),
 					delta: Tick::ZERO,
@@ -1164,6 +1260,13 @@ impl ArrangeUi {
 							state.apply(cmd);
 						}
 					}
+					DragKind::TrimStart => {
+						if let Some(cmd) =
+							edits::trim_start(state.project(), d.anchor, d.origin + d.delta)
+						{
+							state.apply(cmd);
+						}
+					}
 				}
 				return;
 			}
@@ -1200,6 +1303,10 @@ impl ArrangeUi {
 				DragKind::Resize => {
 					let end = area.left() + tl.tick_to_x(d.origin + d.delta);
 					draw_rect.max.x = end.max(draw_rect.min.x + 4.0);
+				}
+				DragKind::TrimStart => {
+					let start = area.left() + tl.tick_to_x(d.origin + d.delta);
+					draw_rect.min.x = start.min(draw_rect.max.x - 4.0);
 				}
 			}
 		}

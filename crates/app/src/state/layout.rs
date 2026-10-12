@@ -279,6 +279,38 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Clips", "Alt+drag", "Move or resize without snapping"),
 	sc("Clips", "Double-click lane", "New MIDI clip"),
 	sc("Clips", "Double-click MIDI clip", "Open in the piano roll"),
+	sc(
+		"Clips",
+		"Drag empty lane",
+		"Rubber band select (Shift adds)",
+	),
+	sc(
+		"Clips",
+		"Drag left / right edge",
+		"Trim the start (content stays) / the end",
+	),
+	sc(
+		"Clips",
+		"Double-click audio clip",
+		"Open in the audio editor",
+	),
+	sc(
+		"Audio editor",
+		"Drag waveform",
+		"Select a range (double-click: all)",
+	),
+	sc(
+		"Audio editor",
+		"Edges / squares / pill",
+		"Region start-end / fades / clip gain",
+	),
+	sc(
+		"Audio editor",
+		"S / Del",
+		"Split / delete the selected range",
+	),
+	sc("Audio editor", "Ctrl+A / Esc", "Select all / clear"),
+	sc("Audio editor", "Ctrl+Wheel", "Zoom down to samples"),
 	sc("Automation", "A", "Show / hide the selected track's lanes"),
 	sc("Automation", "Click lane", "Add a point"),
 	sc(

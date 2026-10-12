@@ -482,6 +482,66 @@ fn automation_lanes_add_move_and_delete_points() {
 }
 
 #[test]
+fn rubber_band_selects_clips_and_left_trim_keeps_notes_in_place() {
+	let mut a = app();
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	let p = a.state.project();
+	let index = |name: &str| p.tracks.iter().position(|t| t.name == name).unwrap();
+	let (drums, bass, keys) = (index("Drums"), index("Bass"), index("Keys"));
+	let expected: Vec<_> = [drums, bass]
+		.iter()
+		.flat_map(|&i| p.tracks[i].clips.iter())
+		.filter(|c| c.start < Tick(PPQ * 30) && c.end() > Tick(PPQ))
+		.map(|c| c.id)
+		.collect();
+	let mut h = harness(a);
+	h.run_steps(3);
+	let tl = h.state().state.view.timeline;
+	let top = h.state().track_rect(drums).unwrap();
+	let bottom = h.state().track_rect(bass).unwrap();
+	// From empty space in the Drums lane (before its clips) to the Bass row.
+	let from = pos2(top.left() + tl.beat_to_x(1.0), top.center().y);
+	let to = pos2(top.left() + tl.beat_to_x(30.0), bottom.center().y);
+	h.drag_at(from);
+	h.run_steps(1);
+	h.hover_at(to);
+	h.run_steps(1);
+	h.drop_at(to);
+	h.run_steps(2);
+	let selected: std::collections::HashSet<_> =
+		h.state().state.selection.clips.iter().copied().collect();
+	assert!(!expected.is_empty());
+	assert!(
+		expected.iter().all(|c| selected.contains(c)),
+		"{selected:?}"
+	);
+	assert_eq!(selected.len(), expected.len());
+
+	// Drag the left edge of the second Keys clip one bar later.
+	let (clip, start, abs_notes) = {
+		let t = &h.state().state.project().tracks[keys];
+		let c = &t.clips[1];
+		let abs: Vec<_> = c.notes().iter().map(|n| c.start + n.start).collect();
+		(c.id, c.start, abs)
+	};
+	let row = h.state().track_rect(keys).unwrap();
+	let edge = pos2(row.left() + tl.tick_to_x(start) + 2.0, row.center().y);
+	let target = pos2(edge.x + tl.ticks_to_px(Tick(PPQ * 4)), edge.y);
+	h.drag_at(edge);
+	h.run_steps(1);
+	h.hover_at(target);
+	h.run_steps(1);
+	h.drop_at(target);
+	h.run_steps(2);
+	let (_, c) = h.state().state.project().find_clip(clip).unwrap();
+	assert_eq!(c.start, start + Tick(PPQ * 4));
+	assert_eq!(h.state().state.undo_label(), Some("Trim clip start"));
+	for n in c.notes() {
+		assert!(abs_notes.contains(&(c.start + n.start)) || n.start == Tick::ZERO);
+	}
+}
+
+#[test]
 fn empty_project_starts_and_shows_master_automation() {
 	let mut h = harness(CadenzaApp::with_state(AppState::headless()));
 	h.run_steps(3);
@@ -698,6 +758,32 @@ fn render_screens() {
 		std::thread::sleep(std::time::Duration::from_millis(10));
 	}
 	shot(&mut h, "audio_editor_samples");
+
+	// Overlapping audio clips on one track are marked like a crossfade; rubber band.
+	{
+		let s = &mut h.state_mut().state;
+		if let Some((cmd, _)) =
+			cadenza_app::state::edits::copy_clips(s.project(), &[clip], Tick(PPQ * 2), None)
+		{
+			s.apply(cmd);
+		}
+		s.close_piano_roll();
+		s.view.panels.set(PanelKind::Mixer, false);
+		s.view.scroll_y = 0.0;
+	}
+	h.run_steps(2);
+	let rows = (
+		h.state().track_rect(0).unwrap(),
+		h.state().track_rect(2).unwrap(),
+	);
+	let tl = h.state().state.view.timeline;
+	h.drag_at(pos2(rows.0.left() + tl.beat_to_x(2.0), rows.0.center().y));
+	h.run_steps(1);
+	h.hover_at(pos2(rows.1.left() + tl.beat_to_x(22.0), rows.1.center().y));
+	shot(&mut h, "arrange_overlap_rubber_band");
+	h.drop_at(pos2(rows.1.left() + tl.beat_to_x(22.0), rows.1.center().y));
+	h.run_steps(2);
+	h.remove_cursor();
 
 	h.state_mut().state.dirty = true;
 	h.state_mut()

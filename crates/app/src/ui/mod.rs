@@ -91,6 +91,11 @@ impl CadenzaApp {
 		self.arrange.lane_rect(self.state.view.scroll_y, address)
 	}
 
+	/// Clip row of track `index` in the arrange view in the last frame (headless tests).
+	pub fn track_rect(&self, index: usize) -> Option<Rect> {
+		self.arrange.track_rect(self.state.view.scroll_y, index)
+	}
+
 	/// Waveform area of the audio editor in the last frame (headless tests).
 	pub fn audio_wave(&self) -> Option<Rect> {
 		self.audio_editor.wave_rect

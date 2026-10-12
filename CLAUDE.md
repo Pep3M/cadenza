@@ -27,8 +27,8 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector; `AppState` over the MCP `Session` | core, model, theory, dsp, engine, mcp, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output) | — |
 
-Future: automation / audio editor (phase 10b), plugin editor windows (11), AI chat
-panel in the app (12), audio editing (destructive + clip-based), sandbox on Windows/macOS.
+Future: plugin editor windows (11), AI chat panel in the app (12), time signature changes,
+automatic crossfades, sandbox on Windows/macOS.
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
 `cadenza-audio-io` and are forwarded by `cadenza-engine` and `cadenza-cli`; both are OFF by
@@ -95,7 +95,8 @@ pub enum ClipContent { Midi { notes: Vec<Note> }, Audio { file: PathBuf, offset_
 	fade_in: Option<ClipFade>, fade_out: Option<ClipFade> } }
 pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
 pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick }
-pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32 }> }
+pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32,
+	shape: PointShape /* linear (default, omitted in JSON) | hold | smooth: segment to the next point */ }> }
 pub struct Marker { tick: Tick, name: String }
 ```
 
@@ -109,7 +110,11 @@ SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMark
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
 (instrument only), SetClipFades { clip, fade_in, fade_out } (replaces both; audio clips only),
+UpdateAudioClip { clip, file?, offset_seconds?, gain_db? } (audio clips; swaps in processed copies),
 Batch { label, commands }.
+`ParamAddress` also names send levels: `track/{id}/send/{send_id}` (dB; SetParam, automation);
+removing a send (or the bus it feeds) drops its lanes. `model::automation_value(points, tick,
+tempo)` evaluates a lane in seconds, exactly like the engine (which interpolates in samples).
 
 Clip fades are in **seconds**, not beats: like `offset_seconds` they shape the recording
 (de-click, natural decay) and must not stretch with tempo changes; AI tools accept beats too
@@ -183,6 +188,8 @@ pub struct LevelStats { peak_db, true_peak_db, rms_db, lufs_integrated /* BS.177
 pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing(),
 	// clock() -> PlayerClock (Send+Sync: position/is_playing/sample_rate from any thread),
 	// meters() -> Option<Arc<MeterBank>> (per load), set_live_volume/set_live_pan(Option<TrackId>, ..) (no recompile),
+	// set_live_param(device, param_id, value) / set_live_send(send, db) -> Result<bool> (false: not in the graph, reload),
+	// set_automation(&lanes, &tempo) -> Result<bool> (false: tempo changed or a lane was removed, reload),
 	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>,
 	// set_midi_input(Option<&MidiPort>), set_monitor_track(Option<TrackId>), dropped_midi_events()
 pub fn midi_input_ports() -> Result<Vec<MidiPort>, EngineError>; pub fn find_midi_input(index_or_name) -> Result<MidiPort, _>;
@@ -230,6 +237,17 @@ Metering: every graph measures each track's post-fader signal and the master per
 publishes at the end of each `Graph::process` into a `MeterBank` of atomics (peak via `fetch_max`
 on the float bits, readers take-and-reset it; RMS with 300 ms ballistics is a plain store):
 wait-free, no allocation (covered by the `no_alloc` test). Peak hold/fall-off is the UI's job.
+Live parameter path: every compiled graph carries a `Resolver` (address -> node/device slot/
+param index/send edge, built at compile time, used only off the audio thread). The `Player`
+keeps the resolver of the loaded graph; `set_live_param`/`set_live_send` resolve on the control
+side and push `Cmd::Param(device, index, value)` / `Cmd::SendLevel` (Copy) through the command
+rtrb; the callback calls `Processor::set_param` (built-ins, in-process and sandboxed plugins:
+all realtime safe) or retargets the send edge gain (ramped over a quantum). `set_automation`
+builds new `Binding`s off the audio thread and sends them boxed through a second rtrb; the
+callback swaps them in (`Graph::swap_automation`, matched by load id; sets for a graph still
+queued wait, stale ones go back) and returns the old box through a garbage ring. Covered by
+the `no_alloc` test. Structural changes (tracks, devices, routing, clips, tempo, bypass,
+resetting a param to its default) still recompile.
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.
@@ -245,11 +263,33 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   selection (ids only, pruned after edits), view (zoom/scroll/panels), notices, meters, jobs.
 - **Every edit is a `Command` through `AppState::apply`** (or `edit_session` to reuse MCP tool
   functions such as `import_audio`, `import_midi`, `save_project`): validated + undoable by
-  `Document`, marks dirty, prunes the selection and schedules a debounced (120 ms) player reload.
-  Gesture edits (fader/pan/value drags, clip moves) are previewed locally and committed as ONE
-  command on release; fader previews also go to the player live (`set_live_volume/pan`), so
-  their commit skips the reload that would cut sounding notes. `state::edits` holds the pure
-  gesture -> Command builders (move/resize/duplicate/split clips, new tracks/clips, reorder).
+  `Document`, marks dirty and prunes the selection. `state::live::diff(before, after)` decides
+  how the player follows: volume/pan/send levels, device param values and automation lanes go
+  live (`set_live_*`, `set_automation`; sounding notes keep playing, also for undo/redo and
+  shared MCP tools), anything structural schedules a debounced (120 ms) reload. Gesture edits
+  (faders, knobs, send levels, clip moves, automation points) are previewed locally (and heard
+  live) and committed as ONE command on release; value widgets only commit real user edits.
+  Mixer/inspector controls show the automated value at the playhead. `state::edits` holds the
+  pure gesture -> Command builders (move/resize/duplicate/split clips, left trim
+  `trim_start` keeping content in place, rubber band `clips_in`, new tracks/clips, reorder).
+- Automation (`state::automation` builders + `ui::automation`; rows laid out by
+  `state::rows`): per-track and master lanes expand under their channel (A key, header "A"
+  toggle, track menu "Automate"), lane picker (volume, pan, sends, every device param by
+  name), click adds, drag moves (snap; Alt free; Shift vertical), rubber band (Shift adds),
+  Ctrl+drag ramp, right-click/Del deletes, double-click cycles linear/hold/smooth, tooltip in
+  real units. Right-click "Automate" on mixer faders/pans/sends and inspector controls creates
+  and shows the lane. Tempo lane (transport ♩ toggle, pinned under the markers): step curve
+  of the `TempoMap`, click adds a change, drag moves, right-click removes; the BPM field edits
+  the segment under the playhead. Time signature is still global (one per project).
+- Audio editor (`state::audio_edit` + `ui::audio_editor`; double-click an audio clip): shares
+  the bottom editor dock with the piano roll (`view.audio_editor`; F7 toggles the dock).
+  Source-file time axis, peaks when zoomed out and decoded samples (`PeakCache::samples`) when
+  zoomed in; region start/end handles, fade handles + curve pickers, clip gain pill, selection
+  with split / trim / delete range (clip commands). Normalize/reverse/gain (and time-stretch/
+  pitch with the app's `stretch` feature) render a processed copy on a worker into
+  `<project dir>/<project> audio/` (user cache when unsaved) and swap it in with one undoable
+  `UpdateAudioClip` batch; the original file is never modified. Overlapping audio clips on a
+  track are marked like crossfades (they sum; no automatic crossfade yet).
 - `audio::AudioEngine`: the `Player` on its own thread (like MCP `PlayerHandle`) but never
   blocking the UI: requests are fire-and-forget, a burst of loads is coalesced into the newest,
   results come back as polled `AudioEvent`s; position via `PlayerClock`, levels via `MeterBank`,
@@ -286,9 +326,11 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   strip (Ctrl copies); browser Files tab (bookmarks, audio/MIDI filter) and OS file drops:
   audio/MIDI import at the drop beat/track (new tracks below), `.cadenza.json` opens (dirty
   prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/E/I, Ctrl+D, S
-  split, Del. Dirty state is confirmed on new/open/close.
+  split, Del (automation points first, then clips), A lanes; arrange: drag empty lane =
+  rubber band, drag a clip's left edge = trim start. Dirty state is confirmed on new/open/close.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
-  `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu).
+  `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
+  including automation lanes, the audio editor and an empty project.
 - Phase 12 (AI panel): the agent's tools must act on the app's `Session` (today `CadenzaServer`
   owns its own behind a `Mutex`; share it, e.g. `Arc<Mutex<Session>>`) and AI edits must go
   through the same bookkeeping as `edit_session` (dirty, selection prune, debounced reload).

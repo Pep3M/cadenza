@@ -1,6 +1,10 @@
-//! OpenRouter backend: OpenAI-compatible Chat Completions with tools, streaming (SSE),
-//! reported costs, reasoning passthrough and — for `anthropic/*` models — explicit prompt
-//! cache breakpoints.
+//! Chat Completions backends: OpenRouter, and any other OpenAI-compatible endpoint
+//! (OpenAI, a local Ollama or LM Studio...) through the same code: tools, streaming (SSE),
+//! reasoning passthrough and retries are identical. OpenRouter adds its own fields —
+//! reported costs (`usage.include`), provider routing (`provider.require_parameters`),
+//! `reasoning.effort` and, for `anthropic/*` models, explicit prompt cache breakpoints
+//! (`cache_control`); the generic flavor sends only standard fields (`reasoning_effort`,
+//! `stream_options.include_usage`).
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,11 +23,23 @@ use crate::provider::{
 use crate::types::{AssistantTurn, Message, Reasoning, ToolCall, ToolResult};
 
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
+/// Default endpoint of the OpenAI-compatible flavor.
+pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+
+/// Which dialect of Chat Completions the endpoint speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiFlavor {
+	OpenRouter,
+	/// Plain OpenAI Chat Completions (OpenAI, Ollama, LM Studio, vLLM...): standard
+	/// fields only, the API key is optional (local servers need none).
+	OpenAiCompatible,
+}
 /// Overrides the endpoint (used by tests against a local mock server).
 pub const BASE_URL_ENV: &str = "OPENROUTER_BASE_URL";
 
 #[derive(Clone)]
 pub struct OpenRouterConfig {
+	pub flavor: ApiFlavor,
 	pub base_url: String,
 	pub api_key: Option<String>,
 	pub model: String,
@@ -44,6 +60,7 @@ impl OpenRouterConfig {
 	/// `OPENROUTER_BASE_URL` or the public endpoint.
 	pub fn new(model: impl Into<String>, api_key: Option<String>) -> Self {
 		Self {
+			flavor: ApiFlavor::OpenRouter,
 			base_url: std::env::var(BASE_URL_ENV)
 				.ok()
 				.filter(|u| !u.trim().is_empty())
@@ -59,11 +76,30 @@ impl OpenRouterConfig {
 			request_timeout: Duration::from_secs(600),
 		}
 	}
+
+	/// A generic OpenAI-compatible endpoint (`base_url` ends before `/chat/completions`,
+	/// e.g. `http://localhost:11434/v1` for Ollama). No reasoning effort by default: not
+	/// every model accepts one.
+	pub fn openai_compatible(
+		base_url: impl Into<String>,
+		model: impl Into<String>,
+		api_key: Option<String>,
+	) -> Self {
+		Self {
+			flavor: ApiFlavor::OpenAiCompatible,
+			base_url: base_url.into(),
+			reasoning_effort: None,
+			referer: None,
+			title: None,
+			..Self::new(model, api_key)
+		}
+	}
 }
 
 impl fmt::Debug for OpenRouterConfig {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("OpenRouterConfig")
+			.field("flavor", &self.flavor)
 			.field("base_url", &self.base_url)
 			.field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
 			.field("model", &self.model)
@@ -108,19 +144,23 @@ impl OpenRouterProvider {
 	}
 
 	fn caches(&self) -> bool {
-		self.config.model.starts_with("anthropic/")
+		self.config.flavor == ApiFlavor::OpenRouter && self.config.model.starts_with("anthropic/")
 	}
 
 	fn headers(&self, redact: bool) -> Vec<(String, String)> {
 		let auth = match (&self.config.api_key, redact) {
-			(Some(_), true) => "Bearer <redacted>".to_owned(),
-			(Some(key), false) => format!("Bearer {key}"),
-			(None, _) => "Bearer <missing>".to_owned(),
+			(Some(_), true) => Some("Bearer <redacted>".to_owned()),
+			(Some(key), false) => Some(format!("Bearer {key}")),
+			(None, _) if self.config.flavor == ApiFlavor::OpenRouter => {
+				Some("Bearer <missing>".to_owned())
+			}
+			(None, _) => None,
 		};
-		let mut headers = vec![
-			("Authorization".to_owned(), auth),
-			("Content-Type".to_owned(), "application/json".to_owned()),
-		];
+		let mut headers = Vec::new();
+		if let Some(auth) = auth {
+			headers.push(("Authorization".to_owned(), auth));
+		}
+		headers.push(("Content-Type".to_owned(), "application/json".to_owned()));
 		if let Some(referer) = &self.config.referer {
 			headers.push(("HTTP-Referer".to_owned(), referer.clone()));
 		}
@@ -152,20 +192,36 @@ impl OpenRouterProvider {
 			"messages": render_messages(request.system, request.messages, cache),
 			"max_tokens": self.config.max_output_tokens,
 			"stream": self.config.stream,
-			"usage": { "include": true },
-			"provider": { "require_parameters": true },
 		});
+		match self.config.flavor {
+			ApiFlavor::OpenRouter => {
+				body["usage"] = json!({ "include": true });
+				body["provider"] = json!({ "require_parameters": true });
+				if let Some(effort) = &self.config.reasoning_effort {
+					body["reasoning"] = json!({ "effort": effort });
+				}
+			}
+			ApiFlavor::OpenAiCompatible => {
+				if self.config.stream {
+					body["stream_options"] = json!({ "include_usage": true });
+				}
+				if let Some(effort) = &self.config.reasoning_effort {
+					body["reasoning_effort"] = json!(effort);
+				}
+			}
+		}
 		if !tools.is_empty() {
 			body["tools"] = Value::Array(tools);
 			body["tool_choice"] = json!("auto");
 		}
-		if let Some(effort) = &self.config.reasoning_effort {
-			body["reasoning"] = json!({ "effort": effort });
-		}
 		body
 	}
 
-	async fn send_once(&self, body: &[u8]) -> Result<ChatResponse, ProviderError> {
+	async fn send_once(
+		&self,
+		body: &[u8],
+		observer: &dyn AgentObserver,
+	) -> Result<ChatResponse, ProviderError> {
 		let mut builder = self.client.post(self.url()).body(body.to_vec());
 		for (name, value) in self.headers(false) {
 			builder = builder.header(name, value);
@@ -201,13 +257,13 @@ impl OpenRouterProvider {
 				let chunk =
 					chunk.map_err(|e| ProviderError::Network(e.without_url().to_string()))?;
 				for data in parser.push(&chunk) {
-					if state.apply_data(&data)? {
+					if state.apply_data(&data, observer)? {
 						return state.finish(self);
 					}
 				}
 			}
 			for data in parser.finish() {
-				state.apply_data(&data)?;
+				state.apply_data(&data, observer)?;
 			}
 			state.finish(self)
 		} else {
@@ -232,7 +288,10 @@ impl OpenRouterProvider {
 #[async_trait]
 impl LlmProvider for OpenRouterProvider {
 	fn name(&self) -> &str {
-		"openrouter"
+		match self.config.flavor {
+			ApiFlavor::OpenRouter => "openrouter",
+			ApiFlavor::OpenAiCompatible => "openai-compatible",
+		}
 	}
 
 	fn model(&self) -> &str {
@@ -253,7 +312,7 @@ impl LlmProvider for OpenRouterProvider {
 		request: &ChatRequest<'_>,
 		observer: &dyn AgentObserver,
 	) -> Result<ChatResponse, ProviderError> {
-		if self.config.api_key.is_none() {
+		if self.config.api_key.is_none() && self.config.flavor == ApiFlavor::OpenRouter {
 			return Err(ProviderError::Credentials(format!(
 				"no OpenRouter API key: set {} in the environment or in a .env file",
 				crate::config::OPENROUTER_KEY_ENV
@@ -264,7 +323,7 @@ impl LlmProvider for OpenRouterProvider {
 		let mut attempt = 0;
 		loop {
 			attempt += 1;
-			match self.send_once(&body).await {
+			match self.send_once(&body, observer).await {
 				Ok(mut response) => {
 					response.attempts = attempt;
 					return Ok(response);
@@ -501,8 +560,13 @@ struct StreamState {
 }
 
 impl StreamState {
-	/// Applies one SSE `data` payload; returns true at `[DONE]`.
-	fn apply_data(&mut self, data: &str) -> Result<bool, ProviderError> {
+	/// Applies one SSE `data` payload; returns true at `[DONE]`. Text and reasoning
+	/// fragments are forwarded to `observer` as they arrive.
+	fn apply_data(
+		&mut self,
+		data: &str,
+		observer: &dyn AgentObserver,
+	) -> Result<bool, ProviderError> {
 		let data = data.trim();
 		if data.is_empty() {
 			return Ok(false);
@@ -514,11 +578,11 @@ impl StreamState {
 		let chunk: Value = serde_json::from_str(data).map_err(|e| {
 			ProviderError::Decode(format!("bad stream chunk ({e}): {}", clip(data, 200)))
 		})?;
-		self.apply(&chunk)?;
+		self.apply(&chunk, observer)?;
 		Ok(false)
 	}
 
-	fn apply(&mut self, chunk: &Value) -> Result<(), ProviderError> {
+	fn apply(&mut self, chunk: &Value, observer: &dyn AgentObserver) -> Result<(), ProviderError> {
 		if !chunk["error"].is_null() {
 			return Err(api_error(&chunk["error"]));
 		}
@@ -535,9 +599,15 @@ impl StreamState {
 			let delta = &choice["delta"];
 			if let Some(text) = delta["content"].as_str() {
 				self.text.push_str(text);
+				if !text.is_empty() {
+					observer.on_event(&AgentEvent::TextDelta(text));
+				}
 			}
 			if let Some(text) = delta["reasoning"].as_str() {
 				self.reasoning.push_str(text);
+				if !text.is_empty() {
+					observer.on_event(&AgentEvent::ThinkingDelta(text));
+				}
 			}
 			for item in delta["reasoning_details"].as_array().into_iter().flatten() {
 				merge_reasoning_detail(&mut self.details, item);
@@ -660,6 +730,7 @@ fn merge_reasoning_detail(details: &mut Vec<Value>, item: &Value) {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::observer::NullObserver;
 	use crate::types::ToolSpec;
 
 	fn provider(model: &str) -> OpenRouterProvider {
@@ -780,6 +851,81 @@ mod tests {
 	}
 
 	#[test]
+	fn openai_compatible_bodies_use_standard_fields_only() {
+		let mut config = OpenRouterConfig::openai_compatible(
+			"http://localhost:11434/v1/",
+			"anthropic/claude-like",
+			None,
+		);
+		let p = OpenRouterProvider::new(config.clone()).unwrap();
+		assert_eq!(p.name(), "openai-compatible");
+		let messages = history();
+		let request = ChatRequest {
+			system: "sys",
+			messages: &messages,
+			tools: &[],
+		};
+		let body = p.build_body(&request);
+		for field in [
+			"usage",
+			"provider",
+			"reasoning",
+			"reasoning_effort",
+			"tools",
+		] {
+			assert!(body.get(field).is_none(), "{field} in {body}");
+		}
+		assert_eq!(body["stream_options"]["include_usage"], true);
+		assert!(
+			!body.to_string().contains("cache_control"),
+			"no cache markers"
+		);
+		assert!(!p.capabilities().supports_prompt_cache);
+		let preview = p.preview(&request);
+		assert_eq!(preview.url, "http://localhost:11434/v1/chat/completions");
+		assert!(preview.headers.iter().all(|(k, _)| k != "Authorization"));
+
+		config.reasoning_effort = Some("low".into());
+		config.api_key = Some("sk-secret".into());
+		let p = OpenRouterProvider::new(config).unwrap();
+		let body = p.build_body(&request);
+		assert_eq!(body["reasoning_effort"], "low");
+		let preview = p.preview(&request);
+		assert!(
+			preview
+				.headers
+				.iter()
+				.any(|(k, v)| k == "Authorization" && v.contains("redacted"))
+		);
+	}
+
+	#[test]
+	fn streamed_text_is_forwarded_as_deltas() {
+		#[derive(Default)]
+		struct Deltas(std::sync::Mutex<Vec<String>>);
+		impl AgentObserver for Deltas {
+			fn on_event(&self, event: &AgentEvent<'_>) {
+				match event {
+					AgentEvent::TextDelta(t) => self.0.lock().unwrap().push(format!("t:{t}")),
+					AgentEvent::ThinkingDelta(t) => self.0.lock().unwrap().push(format!("r:{t}")),
+					_ => {}
+				}
+			}
+		}
+		let deltas = Deltas::default();
+		let mut state = StreamState::default();
+		for chunk in [
+			json!({"choices": [{"delta": {"reasoning": "hm"}}]}),
+			json!({"choices": [{"delta": {"content": "Hel"}}]}),
+			json!({"choices": [{"delta": {"content": ""}}]}),
+			json!({"choices": [{"delta": {"content": "lo"}, "finish_reason": "stop"}]}),
+		] {
+			state.apply_data(&chunk.to_string(), &deltas).unwrap();
+		}
+		assert_eq!(*deltas.0.lock().unwrap(), vec!["r:hm", "t:Hel", "t:lo"]);
+	}
+
+	#[test]
 	fn streamed_tool_calls_and_reasoning_accumulate() {
 		let p = provider("x/y");
 		let mut state = StreamState::default();
@@ -793,9 +939,9 @@ mod tests {
 			json!({"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.0012, "prompt_tokens_details": {"cached_tokens": 80}}}),
 		];
 		for chunk in &chunks {
-			state.apply_data(&chunk.to_string()).unwrap();
+			state.apply_data(&chunk.to_string(), &NullObserver).unwrap();
 		}
-		assert!(state.apply_data("[DONE]").unwrap());
+		assert!(state.apply_data("[DONE]", &NullObserver).unwrap());
 		let response = state.finish(&p).unwrap();
 		assert_eq!(response.finish, FinishReason::ToolCalls);
 		assert_eq!(response.turn.text.as_deref(), Some("Plan."));
@@ -822,14 +968,21 @@ mod tests {
 		let p = provider("x/y");
 		let mut state = StreamState::default();
 		let err = state
-			.apply_data(&json!({"error": {"code": 502, "message": "upstream down"}}).to_string())
+			.apply_data(
+				&json!({"error": {"code": 502, "message": "upstream down"}}).to_string(),
+				&NullObserver,
+			)
 			.unwrap_err();
 		assert!(err.is_retryable(), "{err}");
 		let truncated = StreamState::default().finish(&p).unwrap_err();
 		assert!(truncated.is_retryable());
 		let mut filtered = StreamState::default();
 		filtered
-			.apply_data(&json!({"choices": [{"delta": {"content": "no"}, "finish_reason": "content_filter"}]}).to_string())
+			.apply_data(
+				&json!({"choices": [{"delta": {"content": "no"}, "finish_reason": "content_filter"}]})
+					.to_string(),
+				&NullObserver,
+			)
 			.unwrap();
 		assert_eq!(
 			filtered.finish(&p).unwrap().finish,

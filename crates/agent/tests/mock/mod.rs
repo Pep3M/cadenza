@@ -298,7 +298,7 @@ pub fn setup(
 		"rain",
 	);
 	tweak(&mut config);
-	let ProviderConfig::OpenRouter(provider) = config.provider.clone();
+	let provider = config.provider.chat_config().clone();
 	let session = Session::with_plugin_cache(plugins.path().join("plugins.json"));
 	let agent = Agent::with_parts(
 		config,
@@ -339,6 +339,8 @@ impl AgentObserver for Recorder {
 			} => format!("retry {attempt} {wait_ms}"),
 			AgentEvent::Notice(t) => format!("notice {t}"),
 			AgentEvent::Final(t) => format!("final {t}"),
+			// Streaming fragments are covered by the provider tests.
+			AgentEvent::TextDelta(_) | AgentEvent::ThinkingDelta(_) => return,
 		};
 		self.events.lock().unwrap().push(line);
 	}

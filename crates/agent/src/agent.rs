@@ -16,10 +16,9 @@ use cadenza_mcp::CadenzaServer;
 use serde_json::json;
 
 use crate::budget::Budget;
-use crate::config::{AgentConfig, ProviderConfig};
+use crate::config::AgentConfig;
 use crate::error::AgentError;
 use crate::observer::{AgentEvent, AgentObserver};
-use crate::openrouter::OpenRouterProvider;
 use crate::prompt::{self, SYSTEM_PROMPT};
 use crate::provider::{
 	ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderError, RequestPreview,
@@ -96,9 +95,7 @@ pub struct Agent {
 impl Agent {
 	/// An agent with the provider described by `config` and a fresh Cadenza session.
 	pub fn new(config: AgentConfig) -> Result<Self, AgentError> {
-		let provider: Box<dyn LlmProvider> = match &config.provider {
-			ProviderConfig::OpenRouter(c) => Box::new(OpenRouterProvider::new(c.clone())?),
-		};
+		let provider = config.provider.build()?;
 		Self::with_parts(config, provider, CadenzaServer::new())
 	}
 
@@ -376,62 +373,17 @@ impl Agent {
 		observer: &dyn AgentObserver,
 		transcript: &Transcript,
 	) -> Result<ChatResponse, ProviderError> {
-		let request = ChatRequest {
-			system: SYSTEM_PROMPT,
-			messages: &self.history,
-			tools: self.tools.specs(),
-		};
-		let preview = self.provider.preview(&request);
-		transcript.record(
-			"request",
-			json!({
-				"turn": turn,
-				"url": preview.url,
-				"headers": preview.headers,
-				"model": self.provider.model(),
-				"messages": self.history.len(),
-				"body_bytes": preview.body.to_string().len(),
-			}),
-		);
-		let response = match self.provider.complete(&request, observer).await {
-			Ok(response) => response,
-			Err(err) => {
-				transcript.record(
-					"request_failed",
-					json!({ "turn": turn, "error": err.to_string() }),
-				);
-				return Err(err);
-			}
-		};
-		let model = response
-			.model
-			.clone()
-			.unwrap_or_else(|| self.provider.model().to_owned());
-		let (cost, estimated) = self.budget.record(&model, &response.usage);
-		observer.on_event(&AgentEvent::Usage {
+		send_request(
+			self.provider.as_ref(),
+			SYSTEM_PROMPT,
+			&self.history,
+			self.tools.specs(),
+			&mut self.budget,
 			turn,
-			usage: &response.usage,
-			turn_cost_usd: cost,
-			total_cost_usd: self.budget.spent_usd,
-			estimated,
-		});
-		transcript.record(
-			"response",
-			json!({
-				"turn": turn,
-				"id": response.id,
-				"model": model,
-				"finish": format!("{:?}", response.finish),
-				"attempts": response.attempts,
-				"usage": response.usage,
-				"cost_usd": cost,
-				"cost_estimated": estimated,
-				"total_cost_usd": self.budget.spent_usd,
-				"text_chars": response.turn.text.as_ref().map_or(0, String::len),
-				"tool_calls": response.turn.tool_calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-			}),
-		);
-		Ok(response)
+			observer,
+			transcript,
+		)
+		.await
 	}
 
 	/// Condenses the conversation into a hand-off note (see the module docs).
@@ -488,6 +440,76 @@ impl Agent {
 			deliverables.apply(&outcome.effect, policy);
 		}
 	}
+}
+
+/// Sends one request and accounts for the response (budget, usage event, transcript).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn send_request(
+	provider: &dyn LlmProvider,
+	system: &str,
+	history: &[Message],
+	tools: &[ToolSpec],
+	budget: &mut Budget,
+	turn: u32,
+	observer: &dyn AgentObserver,
+	transcript: &Transcript,
+) -> Result<ChatResponse, ProviderError> {
+	let request = ChatRequest {
+		system,
+		messages: history,
+		tools,
+	};
+	let preview = provider.preview(&request);
+	transcript.record(
+		"request",
+		json!({
+			"turn": turn,
+			"url": preview.url,
+			"headers": preview.headers,
+			"model": provider.model(),
+			"messages": history.len(),
+			"body_bytes": preview.body.to_string().len(),
+		}),
+	);
+	let response = match provider.complete(&request, observer).await {
+		Ok(response) => response,
+		Err(err) => {
+			transcript.record(
+				"request_failed",
+				json!({ "turn": turn, "error": err.to_string() }),
+			);
+			return Err(err);
+		}
+	};
+	let model = response
+		.model
+		.clone()
+		.unwrap_or_else(|| provider.model().to_owned());
+	let (cost, estimated) = budget.record(&model, &response.usage);
+	observer.on_event(&AgentEvent::Usage {
+		turn,
+		usage: &response.usage,
+		turn_cost_usd: cost,
+		total_cost_usd: budget.spent_usd,
+		estimated,
+	});
+	transcript.record(
+		"response",
+		json!({
+			"turn": turn,
+			"id": response.id,
+			"model": model,
+			"finish": format!("{:?}", response.finish),
+			"attempts": response.attempts,
+			"usage": response.usage,
+			"cost_usd": cost,
+			"cost_estimated": estimated,
+			"total_cost_usd": budget.spent_usd,
+			"text_chars": response.turn.text.as_ref().map_or(0, String::len),
+			"tool_calls": response.turn.tool_calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+		}),
+	);
+	Ok(response)
 }
 
 fn report(observer: &dyn AgentObserver, name: &str, outcome: &crate::tools::ToolOutcome) {

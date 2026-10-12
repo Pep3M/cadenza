@@ -33,11 +33,16 @@ pub const DEFAULT_MAX_TURNS: u32 = 150;
 pub const DEFAULT_TARGET_LUFS: f32 = -14.0;
 /// Environment variable holding the OpenRouter API key.
 pub const OPENROUTER_KEY_ENV: &str = "OPENROUTER_API_KEY";
+/// Environment variable holding the key of the generic OpenAI-compatible provider.
+pub const OPENAI_KEY_ENV: &str = "OPENAI_API_KEY";
 
 /// Which LLM backend drives the session, with its settings.
 #[derive(Debug, Clone)]
 pub enum ProviderConfig {
 	OpenRouter(OpenRouterConfig),
+	/// Any OpenAI-compatible Chat Completions endpoint (OpenAI, Ollama, LM Studio...);
+	/// same wire code as OpenRouter, without its extensions (see [`crate::openrouter`]).
+	OpenAiCompatible(OpenRouterConfig),
 }
 
 impl ProviderConfig {
@@ -49,9 +54,34 @@ impl ProviderConfig {
 	}
 
 	pub fn model(&self) -> &str {
+		&self.chat_config().model
+	}
+
+	/// The Chat Completions settings behind either provider.
+	pub fn chat_config(&self) -> &OpenRouterConfig {
 		match self {
-			Self::OpenRouter(c) => &c.model,
+			Self::OpenRouter(c) | Self::OpenAiCompatible(c) => c,
 		}
+	}
+
+	pub fn chat_config_mut(&mut self) -> &mut OpenRouterConfig {
+		match self {
+			Self::OpenRouter(c) | Self::OpenAiCompatible(c) => c,
+		}
+	}
+
+	/// Creates the provider.
+	pub fn build(
+		&self,
+	) -> Result<Box<dyn crate::provider::LlmProvider>, crate::provider::ProviderError> {
+		let mut config = self.chat_config().clone();
+		config.flavor = match self {
+			Self::OpenRouter(_) => crate::openrouter::ApiFlavor::OpenRouter,
+			Self::OpenAiCompatible(_) => crate::openrouter::ApiFlavor::OpenAiCompatible,
+		};
+		Ok(Box::new(crate::openrouter::OpenRouterProvider::new(
+			config,
+		)?))
 	}
 }
 

@@ -8,8 +8,10 @@
 //! ([`tools`]), spending is capped by [`budget`], and every session leaves a JSONL audit
 //! trail ([`transcript`]).
 
+
 pub mod agent;
 pub mod budget;
+pub mod cancel;
 pub mod config;
 pub mod error;
 pub mod http;
@@ -22,8 +24,10 @@ pub mod transcript;
 pub mod types;
 
 pub use agent::{Agent, AgentOutcome, StopStatus};
+pub use cancel::CancelToken;
 pub use config::{AgentConfig, ProviderConfig};
 pub use error::AgentError;
 pub use observer::{AgentEvent, AgentObserver};
 pub use openrouter::{OpenRouterConfig, OpenRouterProvider};
+pub use prompt::AppContext;
 pub use provider::LlmProvider;

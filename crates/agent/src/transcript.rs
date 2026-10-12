@@ -84,7 +84,10 @@ impl AgentObserver for TeeObserver<'_> {
 				.record("reasoning", json!({ "text": clip(text, 4000) })),
 			AgentEvent::Text(text) => self.transcript.record("text", json!({ "text": text })),
 			AgentEvent::Final(text) => self.transcript.record("final", json!({ "text": text })),
-			AgentEvent::TurnStarted { .. } | AgentEvent::Usage { .. } => {}
+			AgentEvent::TurnStarted { .. }
+			| AgentEvent::Usage { .. }
+			| AgentEvent::TextDelta(_)
+			| AgentEvent::ThinkingDelta(_) => {}
 		}
 		self.user.on_event(event);
 	}

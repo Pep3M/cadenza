@@ -9,8 +9,12 @@ pub enum AgentEvent<'a> {
 	},
 	/// Reasoning text (or its summary) the model shared this turn.
 	Thinking(&'a str),
-	/// The model's visible text: plans and progress notes.
+	/// The model's visible text: plans and progress notes (the whole text of a turn).
 	Text(&'a str),
+	/// A fragment of the turn's text as it streams in (before [`AgentEvent::Text`]).
+	TextDelta(&'a str),
+	/// A fragment of the turn's reasoning as it streams in (before [`AgentEvent::Thinking`]).
+	ThinkingDelta(&'a str),
 	ToolCall {
 		name: &'a str,
 		args: &'a str,

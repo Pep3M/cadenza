@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::provider::Usage;
 
 /// USD per million tokens.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Price {
 	pub input: f64,
 	pub output: f64,
@@ -91,7 +91,11 @@ pub fn price_for(model: &str) -> Price {
 /// cache writes at 125% (Anthropic's 5-minute cache pricing; other providers are within
 /// that envelope or report the cost themselves).
 pub fn estimate_cost(model: &str, usage: &Usage) -> f64 {
-	let price = price_for(model);
+	estimate_cost_at(price_for(model), usage)
+}
+
+/// [`estimate_cost`] at an explicit price.
+pub fn estimate_cost_at(price: Price, usage: &Usage) -> f64 {
 	let cached = usage.cache_read_tokens + usage.cache_write_tokens;
 	let uncached = usage.input_tokens.saturating_sub(cached) as f64;
 	let input = uncached * price.input
@@ -112,6 +116,9 @@ pub struct Budget {
 	pub output_tokens: u64,
 	pub cache_read_tokens: u64,
 	pub cache_write_tokens: u64,
+	/// Price used for estimates instead of the table (e.g. a local or custom model).
+	#[serde(skip)]
+	pub price: Option<Price>,
 }
 
 impl Budget {
@@ -126,7 +133,10 @@ impl Budget {
 	pub fn record(&mut self, model: &str, usage: &Usage) -> (f64, bool) {
 		let (cost, estimated) = match usage.cost_usd {
 			Some(cost) if cost.is_finite() && cost >= 0.0 => (cost, false),
-			_ => (estimate_cost(model, usage), true),
+			_ => (
+				estimate_cost_at(self.price.unwrap_or_else(|| price_for(model)), usage),
+				true,
+			),
 		};
 		self.spent_usd += cost;
 		if estimated {
@@ -149,6 +159,17 @@ impl Budget {
 
 	pub fn exhausted(&self) -> bool {
 		self.spent_usd >= self.max_cost_usd
+	}
+
+	/// Adds another budget's spending and token counts (session totals).
+	pub fn absorb(&mut self, other: &Budget) {
+		self.spent_usd += other.spent_usd;
+		self.estimated_usd += other.estimated_usd;
+		self.requests += other.requests;
+		self.input_tokens += other.input_tokens;
+		self.output_tokens += other.output_tokens;
+		self.cache_read_tokens += other.cache_read_tokens;
+		self.cache_write_tokens += other.cache_write_tokens;
 	}
 }
 
@@ -199,5 +220,28 @@ mod tests {
 		);
 		assert!(budget.exhausted());
 		assert!((budget.fraction_used() - 1.1).abs() < 1e-9);
+	}
+
+	#[test]
+	fn a_price_override_replaces_the_table_and_totals_add_up() {
+		let usage = Usage {
+			input_tokens: 1_000_000,
+			output_tokens: 1_000_000,
+			..Usage::default()
+		};
+		let mut free = Budget::new(1.0);
+		free.price = Some(Price {
+			input: 0.0,
+			output: 0.0,
+		});
+		assert_eq!(free.record("local/llama", &usage), (0.0, true));
+		let mut table = Budget::new(1.0);
+		table.record("someone/unknown-model", &usage);
+		assert!((table.spent_usd - 30.0).abs() < 1e-9);
+		let mut total = Budget::default();
+		total.absorb(&free);
+		total.absorb(&table);
+		assert_eq!(total.requests, 2);
+		assert!((total.spent_usd - 30.0).abs() < 1e-9);
 	}
 }

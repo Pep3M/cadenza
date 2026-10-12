@@ -9,8 +9,12 @@ use serde_json::{Map, Value};
 
 use crate::types::{ToolCall, ToolSpec};
 
-/// Tools not offered to the embedded agent: it runs headless and cannot hear playback.
+/// Tools not offered to the embedded agent: it runs headless and cannot hear playback
+/// (in the app, playback belongs to the user's transport).
 const HIDDEN_TOOLS: &[&str] = &["play", "stop", "transport_status", "restart_plugins"];
+/// Also hidden when working on the user's open project: replacing the document would
+/// throw away the user's work and its undo history.
+pub const SESSION_HIDDEN_TOOLS: &[&str] = &["new_project", "open_project"];
 /// Tools that only exist to work with third-party plugins.
 const PLUGIN_TOOLS: &[&str] = &["scan_plugins"];
 /// Tools that never change the project (they don't invalidate an earlier save/render).
@@ -155,6 +159,8 @@ pub struct ToolBridge {
 	server: CadenzaServer,
 	policy: PathPolicy,
 	allow_plugins: bool,
+	/// Hidden on top of [`HIDDEN_TOOLS`].
+	hidden: &'static [&'static str],
 	max_result_chars: usize,
 	specs: Vec<ToolSpec>,
 }
@@ -166,10 +172,21 @@ impl ToolBridge {
 		allow_plugins: bool,
 		max_result_chars: usize,
 	) -> Self {
+		Self::with_hidden(server, policy, allow_plugins, max_result_chars, &[])
+	}
+
+	/// A bridge that also hides `hidden` tools (e.g. [`SESSION_HIDDEN_TOOLS`]).
+	pub fn with_hidden(
+		server: CadenzaServer,
+		policy: PathPolicy,
+		allow_plugins: bool,
+		max_result_chars: usize,
+		hidden: &'static [&'static str],
+	) -> Self {
 		let specs = server
 			.tool_definitions()
 			.into_iter()
-			.filter(|d| offered(&d.name, allow_plugins))
+			.filter(|d| offered(&d.name, allow_plugins) && !hidden.contains(&d.name.as_str()))
 			.map(|d| ToolSpec {
 				description: describe(&d.name, d.description),
 				parameters: sanitize_schema(d.input_schema),
@@ -180,9 +197,16 @@ impl ToolBridge {
 			server,
 			policy,
 			allow_plugins,
+			hidden,
 			max_result_chars,
 			specs,
 		}
+	}
+
+	/// Changes where files may be read and written (the open project's folder moves
+	/// with "Save As").
+	pub fn set_policy(&mut self, policy: PathPolicy) {
+		self.policy = policy;
 	}
 
 	/// Tools offered to the model, sorted by name (stable across sessions).
@@ -263,7 +287,7 @@ impl ToolBridge {
 	}
 
 	fn apply_policy(&self, name: &str, mut args: Value) -> Result<Value, String> {
-		if !offered(name, self.allow_plugins) {
+		if !offered(name, self.allow_plugins) || self.hidden.contains(&name) {
 			return Err(format!(
 				"tool '{name}' is not available in this session; use the tools you were given"
 			));
@@ -552,6 +576,28 @@ mod tests {
 				.specs()
 				.iter()
 				.any(|s| s.name == "import_audio" && s.description.contains("session folder"))
+		);
+	}
+
+	#[test]
+	fn session_bridges_hide_document_replacing_tools() {
+		let (policy, _dir) = policy();
+		let bridge = ToolBridge::with_hidden(
+			CadenzaServer::new(),
+			policy,
+			false,
+			10_000,
+			SESSION_HIDDEN_TOOLS,
+		);
+		let names: Vec<&str> = bridge.specs().iter().map(|s| s.name.as_str()).collect();
+		assert!(!names.contains(&"new_project") && !names.contains(&"open_project"));
+		assert!(!names.contains(&"play"));
+		assert!(names.contains(&"get_project") && names.contains(&"undo"));
+		assert!(
+			bridge
+				.apply_policy("new_project", json!({"name": "x"}))
+				.unwrap_err()
+				.contains("not available")
 		);
 	}
 

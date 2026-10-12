@@ -158,9 +158,178 @@ pub fn resumed_user_message(initial: &str, handoff: &str, project_state: &str) -
 	)
 }
 
+/// System prompt of the in-app producer: it works on the project the user has open, one
+/// request at a time, in a conversation. Constant bytes, like [`SYSTEM_PROMPT`].
+pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, arranger and mix engineer, working inside the Cadenza DAW next to the user on the project they have open. They write requests in a chat ("add a bridge after the second chorus", "make the drums punchier", "write a bassline for the selected clip", "mix this") and watch every change appear live in their arrange view, piano roll and mixer. You work only through the tools provided.
+
+# How Cadenza works
+- Positions and lengths are in beats (quarter notes); pitches are note names ("C4") or MIDI numbers (60 = C4); velocity is 0..1; volume is in dB; pan is -1..1.
+- Every edit is an undoable command. Everything you change for one request becomes a single undo step named after the request, so the user can take the whole request back with one Ctrl+Z. Inside a request you can use undo for your own steps only.
+- Ids for tracks, clips, devices and sends are in get_project and in tool results; keep track of them. Each request message carries the app context: the selection, the playhead, the loop range and the clip open in the piano roll, plus the project summary whenever the project changed since you last saw it (the user edits too). Call get_project when you need fresh details.
+- Calls that don't depend on each other can go in the same response; a call that needs an id from another result must wait for that result.
+- Tool errors are written for you: read them and fix the call.
+
+# Working on the user's project
+- Do what was asked and only that: keep existing parts, sounds, mix moves and structure unless the request is to change them. Prefer small, targeted edits (add or edit notes, insert or tweak a device, adjust a channel) over rebuilding.
+- "Selected", "this", "here" and "the current clip" refer to the app context. Resolve section names ("the second chorus") with the markers; if there are none, infer sections from the clips and say what you assumed.
+- To add or move a section, shift what follows with move_clip and move the markers, keep parts continuous across the seam, and add transitions where they help.
+- Match what is there: key, scale, tempo, groove, register and sound palette. Check the clip's notes (get_clip_notes) before writing a part that must fit it.
+- Mixing: gain-stage, EQ by role, compress for control and punch, share reverb and delay through buses, and keep the master's true peak at or below -1 dBTP. analyze_mix reports loudness, peaks, band balance and per-track levels with plain-language observations; use it to check mix work.
+- Do not save the project, render or export unless the user asks; the user saves when they are happy. Playback belongs to the user's transport.
+- If a request is genuinely ambiguous or impossible with the tools, ask one short question or say what you can do instead, without editing.
+
+# Musical craft
+- Voice-lead chords; give each part its own register; leave space. Melodies need a motif, repetition with variation and phrases that breathe; bass lines lock with the kick and outline the harmony.
+- Vary velocities and timing so parts feel played (humanize_notes, accents, ghost notes); quantize only what should be tight.
+
+# Working style
+- Start with a sentence on what you will do, then do it. Be economical: every turn and tool result costs time and money, so prefer fewer, well-formed calls and don't re-read state you already know.
+- Finish with a short reply (a few sentences or a short list) saying what changed, with track and section names the user will recognize.
+
+<tone_preference>
+Keep outputs reasonably concise.
+</tone_preference>"#;
+
+/// What the app knows about the user's view when a request is sent.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AppContext {
+	/// Where the project is saved (`None`: never saved).
+	pub project_path: Option<String>,
+	/// Folder file tools may read and write (the project's folder).
+	pub files_root: String,
+	/// "Bass (track 1f3a..., instrument, Mono Synth)", one per selected track.
+	pub selected_tracks: Vec<String>,
+	/// "Verse riff (clip 9b2c..., track Bass, beats 16-32, 24 notes)".
+	pub selected_clips: Vec<String>,
+	pub playhead_beats: f64,
+	/// The loop region when looping is on.
+	pub loop_beats: Option<(f64, f64)>,
+	/// The clip open in the piano roll, described like the selected clips.
+	pub open_clip: Option<String>,
+	/// "song" or "pattern".
+	pub transport_mode: Option<String>,
+}
+
+impl AppContext {
+	/// The context block of a request message.
+	pub fn render(&self) -> String {
+		let mut out = String::from("App context:\n");
+		let list = |items: &[String]| {
+			if items.is_empty() {
+				"none".to_owned()
+			} else {
+				items.join("; ")
+			}
+		};
+		out.push_str(&format!(
+			"- Project file: {}\n",
+			self.project_path.as_deref().unwrap_or("not saved yet")
+		));
+		out.push_str(&format!(
+			"- File tools work in: {} (paths are relative to it)\n",
+			self.files_root
+		));
+		out.push_str(&format!(
+			"- Selected tracks: {}\n",
+			list(&self.selected_tracks)
+		));
+		out.push_str(&format!(
+			"- Selected clips: {}\n",
+			list(&self.selected_clips)
+		));
+		out.push_str(&format!(
+			"- Open in the piano roll: {}\n",
+			self.open_clip.as_deref().unwrap_or("nothing")
+		));
+		out.push_str(&format!("- Playhead: beat {:.2}\n", self.playhead_beats));
+		match self.loop_beats {
+			Some((a, b)) => out.push_str(&format!("- Loop: beats {a:.2} to {b:.2}\n")),
+			None => out.push_str("- Loop: off\n"),
+		}
+		if let Some(mode) = &self.transport_mode {
+			out.push_str(&format!("- Transport mode: {mode}\n"));
+		}
+		out
+	}
+}
+
+/// One request of the in-app conversation: the user's words, the app context, the
+/// budget, and the project summary when the project changed since the model last saw it.
+pub fn session_request_message(
+	request: &str,
+	context: &AppContext,
+	max_cost_usd: f64,
+	project_summary: Option<&str>,
+) -> String {
+	let mut out = format!("Request: {request}\n\n{}", context.render());
+	out.push_str(&format!(
+		"- Budget for this request: about ${max_cost_usd:.2} of model usage.\n"
+	));
+	match project_summary {
+		Some(summary) => {
+			out.push_str("\nCurrent project (get_project):\n");
+			out.push_str(summary);
+		}
+		None => out.push_str("\nThe project is unchanged since your last reply."),
+	}
+	out
+}
+
+pub fn session_wrap_up_note(fraction_used: f64) -> String {
+	format!(
+		"Session note: about {:.0}% of this request's budget is used. Finish the essential \
+		 part now and reply with a short summary of what changed.",
+		(fraction_used * 100.0).min(100.0)
+	)
+}
+
+pub const SESSION_HANDOFF_REQUEST: &str = "Context checkpoint: this conversation is long and \
+	is about to be condensed. Do not call any tools in this reply. Write a hand-off note for \
+	yourself covering: what the user asked for so far and what was done, preferences they \
+	expressed, the song's form (sections with beat ranges), tempo and key, important ids \
+	(tracks, buses, clips, devices) with their roles, and anything still open.";
+
+/// The first message after condensing an in-app conversation.
+pub fn session_resumed_message(handoff: &str, project_state: &str) -> String {
+	format!(
+		"# Conversation so far\nThis conversation was condensed. Your hand-off note:\n\n\
+		 {handoff}\n\n# Current project state (get_project)\n{project_state}"
+	)
+}
+
+/// Shown to the model when it is asked to continue after the user stopped a request.
+pub const STOPPED_BY_USER: &str = "(stopped by the user)";
+
+/// Result of tool calls skipped because the user stopped the request.
+pub const NOT_EXECUTED_STOPPED: &str = "Not executed: the user stopped the request.";
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn session_requests_carry_context_and_the_summary_only_when_needed() {
+		let context = AppContext {
+			project_path: Some("/music/song.cadenza.json".into()),
+			files_root: "/music".into(),
+			selected_tracks: vec!["Bass (track t1, instrument)".into()],
+			playhead_beats: 16.0,
+			loop_beats: Some((16.0, 32.0)),
+			transport_mode: Some("song".into()),
+			..AppContext::default()
+		};
+		let with =
+			session_request_message("add a bridge", &context, 0.25, Some("{\"name\":\"x\"}"));
+		assert!(with.starts_with("Request: add a bridge"));
+		assert!(with.contains("Selected tracks: Bass (track t1, instrument)"));
+		assert!(with.contains("Selected clips: none"));
+		assert!(with.contains("Loop: beats 16.00 to 32.00"));
+		assert!(with.contains("$0.25"));
+		assert!(with.contains("{\"name\":\"x\"}"));
+		let without = session_request_message("again", &context, 0.25, None);
+		assert!(without.contains("unchanged since your last reply"));
+		assert!(!SESSION_SYSTEM_PROMPT.contains("song.cadenza.json"));
+	}
 
 	#[test]
 	fn genre_profiles_follow_the_brief() {

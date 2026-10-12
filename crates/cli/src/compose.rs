@@ -90,7 +90,7 @@ pub fn run(args: ComposeArgs) -> Result<()> {
 	let provider = match args.provider {
 		Provider::Openrouter => {
 			let mut config = ProviderConfig::openrouter_from_env(&args.model, &args.api_key_env);
-			let ProviderConfig::OpenRouter(c) = &mut config;
+			let c = config.chat_config_mut();
 			c.reasoning_effort = match args.reasoning_effort.to_ascii_lowercase().as_str() {
 				"none" | "off" | "" => None,
 				effort @ ("minimal" | "low" | "medium" | "high" | "xhigh") => {
@@ -250,6 +250,13 @@ struct Printer {
 
 impl AgentObserver for Printer {
 	fn on_event(&self, event: &AgentEvent<'_>) {
+		// Whole turns are printed once complete.
+		if matches!(
+			event,
+			AgentEvent::TextDelta(_) | AgentEvent::ThinkingDelta(_)
+		) {
+			return;
+		}
 		let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
 		let mut err = std::io::stderr().lock();
 		if self.mid_line.swap(false, Ordering::Relaxed) {
@@ -291,7 +298,9 @@ impl AgentObserver for Printer {
 				clip(reason, 160)
 			),
 			AgentEvent::Notice(text) => writeln!(err, "!! {text}"),
-			AgentEvent::Final(_) => Ok(()),
+			AgentEvent::Final(_) | AgentEvent::TextDelta(_) | AgentEvent::ThinkingDelta(_) => {
+				Ok(())
+			}
 		};
 	}
 }

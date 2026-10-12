@@ -463,7 +463,7 @@ async fn missing_credentials_fail_before_any_request() {
 	let s = setup(&server, MODEL, true, |_| {});
 	// rebuild with no key
 	let mut config = s.agent.config().clone();
-	let cadenza_agent::ProviderConfig::OpenRouter(mut provider) = config.provider.clone();
+	let mut provider = config.provider.chat_config().clone();
 	provider.api_key = None;
 	config.provider = cadenza_agent::ProviderConfig::OpenRouter(provider.clone());
 	let mut agent = cadenza_agent::Agent::with_parts(

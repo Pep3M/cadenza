@@ -29,27 +29,29 @@ pub const SCANNER_FILE_NAME: &str = if cfg!(windows) {
 /// else next to the running executable (also checking the parent directory,
 /// which is where Cargo puts binaries relative to test executables in `deps/`).
 pub fn scanner_path() -> Result<PathBuf, PluginError> {
-	if let Some(p) = std::env::var_os(SCANNER_ENV).filter(|p| !p.is_empty()) {
+	locate_executable(SCANNER_ENV, SCANNER_FILE_NAME).map_err(PluginError::ScannerMissing)
+}
+
+/// Finds a helper executable shipped next to the host: `$env` if set, else
+/// `file_name` next to the running executable or in its parent directory.
+/// The error is the path that was expected.
+pub(crate) fn locate_executable(env: &str, file_name: &str) -> Result<PathBuf, PathBuf> {
+	if let Some(p) = std::env::var_os(env).filter(|p| !p.is_empty()) {
 		let p = PathBuf::from(p);
-		return if p.is_file() {
-			Ok(p)
-		} else {
-			Err(PluginError::ScannerMissing(p))
-		};
+		return if p.is_file() { Ok(p) } else { Err(p) };
 	}
-	let exe = std::env::current_exe()
-		.map_err(|_| PluginError::ScannerMissing(SCANNER_FILE_NAME.into()))?;
+	let exe = std::env::current_exe().map_err(|_| PathBuf::from(file_name))?;
 	let dir = exe.parent().unwrap_or(Path::new("."));
 	let candidates = [
-		Some(dir.join(SCANNER_FILE_NAME)),
-		dir.parent().map(|d| d.join(SCANNER_FILE_NAME)),
+		Some(dir.join(file_name)),
+		dir.parent().map(|d| d.join(file_name)),
 	];
 	candidates
 		.iter()
 		.flatten()
 		.find(|p| p.is_file())
 		.cloned()
-		.ok_or_else(|| PluginError::ScannerMissing(dir.join(SCANNER_FILE_NAME)))
+		.ok_or_else(|| dir.join(file_name))
 }
 
 /// Why a scan subprocess did not yield descriptors.

@@ -20,3 +20,9 @@ vst3.workspace = true
 [[example]]
 name = "vst3_gain"
 crate-type = ["cdylib"]
+
+# CLAP effect that aborts or hangs on demand, for the sandbox tests (its own
+# `.clap` file so the main test bundle keeps exactly two plugins).
+[[example]]
+name = "clap_crash"
+crate-type = ["cdylib"]

@@ -26,8 +26,8 @@
 //!   call them from any thread without blocking.
 //!
 //! A plugin that crashes or panics across the FFI boundary takes the whole
-//! process down; in-process hosting cannot prevent that. Scanning is already
-//! out-of-process; sandboxed processing is future work.
+//! process down; in-process hosting cannot prevent that. Scanning is always
+//! out-of-process, and processing can be too (see [`crate::sandbox`]).
 
 pub(crate) mod events;
 pub(crate) mod host;

@@ -127,3 +127,41 @@ pub fn descriptor(id: &str) -> &'static PluginDescriptor {
 		.find(|d| d.id == id)
 		.unwrap_or_else(|| panic!("{id} not scanned"))
 }
+
+pub const CRASH_ID: &str = "dev.cadenza.test.crash";
+
+pub fn sandbox_exe() -> PathBuf {
+	PathBuf::from(env!("CARGO_BIN_EXE_cadenza-plugin-sandbox"))
+}
+
+/// Sandbox options pointing at this build's sandbox executable, without core
+/// dumps (the crash tests abort on purpose).
+pub fn sandbox_options() -> cadenza_plugin_host::SandboxOptions {
+	cadenza_plugin_host::SandboxOptions {
+		executable: Some(sandbox_exe()),
+		core_dumps: false,
+		..Default::default()
+	}
+}
+
+fn build_crash_plugin() -> PathBuf {
+	let library = build_cdylib(&["--example", "clap_crash"], "clap_crash");
+	let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+		.join(format!("cadenza-test-crash-{}", std::process::id()));
+	std::fs::create_dir_all(&dir).unwrap();
+	let dest = dir.join("cadenza-crash.clap");
+	std::fs::copy(&library, &dest).unwrap();
+	dest
+}
+
+/// Descriptor of the crash/hang test effect (`cadenza-crash.clap`).
+pub fn crash_descriptor() -> &'static PluginDescriptor {
+	static DESC: OnceLock<PluginDescriptor> = OnceLock::new();
+	DESC.get_or_init(|| {
+		let file = build_crash_plugin();
+		let mut descs = scan_in_subprocess(&scanner(), &file, Duration::from_secs(20))
+			.expect("scan crash plugin");
+		assert_eq!(descs.len(), 1);
+		descs.remove(0)
+	})
+}

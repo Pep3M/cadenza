@@ -6,6 +6,10 @@
 //! - [`instantiate`]: turns a [`PluginDescriptor`] into a real-time
 //!   [`cadenza_dsp::Processor`] the engine can run like any built-in device.
 //!
+//! - [`instantiate_hosted`] / [`instantiate_sandboxed`]: the same, optionally
+//!   running the plugin in a `cadenza-plugin-sandbox` child process so a
+//!   crashing or hanging plugin cannot take the host down (see [`sandbox`]).
+//!
 //! CLAP ([`clap`]) and VST3 ([`vst3`]) are peer formats behind the same
 //! descriptor, catalog, scanner and `instantiate` API. Both share one plugin
 //! main thread (`cadenza-plugin-main`, see `main_thread.rs`).
@@ -16,16 +20,23 @@ pub mod descriptor;
 pub mod discovery;
 mod error;
 pub(crate) mod main_thread;
+pub mod sandbox;
 pub mod scanner;
 pub mod vst3;
 
 use base64::Engine as _;
 use cadenza_dsp::Processor;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 pub use catalog::{BlockedPlugin, FileStamp, PluginCatalog, ScanReport, default_cache_path};
 pub use descriptor::{PluginDescriptor, PluginFormat, PluginParam, PluginRole};
 pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, find_vst3_files};
 pub use error::PluginError;
+pub use sandbox::{
+	CrashInfo, CrashReason, SANDBOX_ENV, SandboxMonitor, SandboxOptions, SandboxedProcessor,
+	sandbox_path,
+};
 pub use scanner::{DEFAULT_SCAN_TIMEOUT, SCANNER_ENV, scanner_path};
 
 /// How the plugin will be driven, passed to plugins that distinguish it
@@ -83,6 +94,61 @@ pub fn instantiate_with_mode(
 			mode,
 		)?)),
 	}
+}
+
+/// Where a plugin instance runs.
+///
+/// The default is [`HostingMode::InProcess`] (what [`instantiate`] has always
+/// done); which mode the engine uses for third-party plugins is the
+/// integrator's choice. `Sandboxed` costs one process per instance and a
+/// futex round trip per processed block (a few µs), and buys crash and hang
+/// isolation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostingMode {
+	/// Load the plugin into this process (fastest; a plugin crash kills the host).
+	#[default]
+	InProcess,
+	/// Run the plugin in its own `cadenza-plugin-sandbox` process.
+	Sandboxed,
+}
+
+/// Like [`instantiate_with_mode`], choosing where the plugin runs.
+/// `Sandboxed` uses [`SandboxOptions::default`]; use
+/// [`instantiate_sandboxed`] to keep a [`SandboxMonitor`] or tune deadlines.
+pub fn instantiate_hosted(
+	desc: &PluginDescriptor,
+	sample_rate: f32,
+	max_block: usize,
+	state: Option<&[u8]>,
+	mode: ProcessMode,
+	hosting: HostingMode,
+) -> Result<Box<dyn Processor>, PluginError> {
+	match hosting {
+		HostingMode::InProcess => instantiate_with_mode(desc, sample_rate, max_block, state, mode),
+		HostingMode::Sandboxed => Ok(Box::new(instantiate_sandboxed(
+			desc,
+			sample_rate,
+			max_block,
+			state,
+			mode,
+			SandboxOptions::default(),
+		)?)),
+	}
+}
+
+/// Creates a plugin instance inside a `cadenza-plugin-sandbox` child process
+/// (located with [`sandbox_path`] unless `options.executable` is set).
+/// Not real-time: spawns a process and waits for the plugin to load.
+pub fn instantiate_sandboxed(
+	desc: &PluginDescriptor,
+	sample_rate: f32,
+	max_block: usize,
+	state: Option<&[u8]>,
+	mode: ProcessMode,
+	options: SandboxOptions,
+) -> Result<SandboxedProcessor, PluginError> {
+	SandboxedProcessor::create(desc, sample_rate, max_block, state, mode, options)
 }
 
 /// Encodes plugin state for `Device.state` (standard base64).

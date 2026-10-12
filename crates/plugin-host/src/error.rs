@@ -51,6 +51,17 @@ pub enum PluginError {
 	)]
 	ScannerMissing(PathBuf),
 
+	#[error(
+		"plugin sandbox executable not found at '{}'; build it with `cargo build -p cadenza-plugin-host` or set CADENZA_PLUGIN_SANDBOX",
+		.0.display()
+	)]
+	SandboxMissing(PathBuf),
+
+	#[error(
+		"plugin '{id}' could not run in its sandbox process: {reason}; it may be broken, try another plugin or load it in-process"
+	)]
+	Sandbox { id: String, reason: String },
+
 	#[error("plugin scan of '{}' failed: {reason}", path.display())]
 	Scan { path: PathBuf, reason: String },
 

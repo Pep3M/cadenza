@@ -1,5 +1,10 @@
 //! MIDI recording helper: off the audio thread, turns a stream of timestamped incoming
 //! messages into the notes of a new clip.
+//!
+//! Messages are placed either by seconds since the recording started ([`Recorder::push`])
+//! or directly on the song timeline ([`Recorder::push_at`], absolute ticks, as the engine
+//! tags them). Loop recording closes held notes at the loop end
+//! ([`Recorder::release_all`]) and collects each pass with [`Recorder::take_notes`].
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -9,12 +14,16 @@ use cadenza_model::Note;
 use crate::ids::IdAllocator;
 use crate::raw::RawMessage;
 
-struct ClosedNote {
-	pitch: u8,
-	velocity: f32,
-	start: Tick,
-	length: Tick,
+/// A recorded note without an id yet (start in the recorder's time base).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecordedNote {
+	pub pitch: u8,
+	pub velocity: f32,
+	pub start: Tick,
+	pub length: Tick,
 }
+
+type ClosedNote = RecordedNote;
 
 /// Accumulates recorded MIDI note events (pairing note-on/note-off, including
 /// note-on velocity 0) and turns them into [`Note`]s for a new clip once recording
@@ -40,11 +49,16 @@ impl Recorder {
 
 	/// Feeds one incoming message, `seconds_since_start` after recording started.
 	pub fn push(&mut self, seconds_since_start: f64, message: &RawMessage) {
+		let tick = self.tempo.seconds_to_tick(seconds_since_start);
+		self.push_at(tick, message);
+	}
+
+	/// Feeds one incoming message at `tick` (e.g. its song position).
+	pub fn push_at(&mut self, tick: Tick, message: &RawMessage) {
 		let channel = match message.channel() {
 			Some(c) => c,
 			None => return,
 		};
-		let tick = self.tempo.seconds_to_tick(seconds_since_start);
 
 		if message.is_note_on() && message.bytes[2] > 0 {
 			let pitch = message.bytes[1];
@@ -75,25 +89,40 @@ impl Recorder {
 	/// returns the finished notes (sorted by start, then pitch) with fresh ids.
 	pub fn finish(mut self, ids: &mut dyn IdAllocator, end_seconds: f64) -> Vec<Note> {
 		let end_tick = self.tempo.seconds_to_tick(end_seconds);
-		for ((_, pitch), queue) in self.open {
+		self.release_all(end_tick);
+		self.take_notes(ids)
+	}
+
+	/// Closes every note still held at `tick` (a loop end, the punch-out, stop).
+	pub fn release_all(&mut self, tick: Tick) {
+		for ((_, pitch), queue) in std::mem::take(&mut self.open) {
 			for (start, velocity) in queue {
 				self.closed.push(ClosedNote {
 					pitch,
 					velocity,
 					start,
-					length: Tick((end_tick.0 - start.0).max(1)),
+					length: Tick((tick.0 - start.0).max(1)),
 				});
 			}
 		}
+	}
 
+	/// Whether any note is held down.
+	pub fn has_held_notes(&self) -> bool {
+		self.open.values().any(|q| !q.is_empty())
+	}
+
+	/// The notes finished so far (quantized, sorted by start then pitch, fresh ids);
+	/// held notes stay open for later.
+	pub fn take_notes(&mut self, ids: &mut dyn IdAllocator) -> Vec<Note> {
+		let mut closed = std::mem::take(&mut self.closed);
 		if let Some(grid) = self.quantize {
-			for note in &mut self.closed {
+			for note in &mut closed {
 				note.start = quantize_tick(note.start, grid);
 			}
 		}
-
-		self.closed.sort_by_key(|n| (n.start, n.pitch));
-		self.closed
+		closed.sort_by_key(|n| (n.start, n.pitch));
+		closed
 			.into_iter()
 			.map(|n| Note {
 				id: ids.note_id(),
@@ -103,6 +132,24 @@ impl Recorder {
 				length: n.length,
 			})
 			.collect()
+	}
+
+	/// What has been played so far, for drawing while recording: finished notes plus
+	/// held ones reaching `now` (not quantized).
+	pub fn preview(&self, now: Tick) -> Vec<RecordedNote> {
+		let mut out = self.closed.clone();
+		for ((_, pitch), queue) in &self.open {
+			for &(start, velocity) in queue {
+				out.push(RecordedNote {
+					pitch: *pitch,
+					velocity,
+					start,
+					length: Tick((now.0 - start.0).max(1)),
+				});
+			}
+		}
+		out.sort_by_key(|n| (n.start, n.pitch));
+		out
 	}
 }
 
@@ -154,6 +201,27 @@ mod tests {
 		let notes = recorder.finish(&mut RandomIds, 1.0);
 		assert_eq!(notes.len(), 1);
 		assert_eq!(notes[0].length, Tick(cadenza_core::PPQ * 2));
+	}
+
+	#[test]
+	fn loop_passes_close_held_notes_and_split_into_takes() {
+		let mut recorder = Recorder::new(TempoMap::constant(120.0), None);
+		let beat = cadenza_core::PPQ;
+		recorder.push_at(Tick(beat), &note_on(60, 100));
+		recorder.push_at(Tick(beat * 2), &note_off(60));
+		recorder.push_at(Tick(beat * 3), &note_on(64, 64));
+		assert!(recorder.has_held_notes());
+		assert_eq!(recorder.preview(Tick(beat * 4)).len(), 2);
+		// The loop wraps at beat 4: the held note ends there.
+		recorder.release_all(Tick(beat * 4));
+		let first = recorder.take_notes(&mut RandomIds);
+		assert_eq!(first.len(), 2);
+		assert_eq!(first[1].length, Tick(beat));
+		recorder.push_at(Tick(beat / 2), &note_on(67, 127));
+		let second = recorder.finish(&mut RandomIds, 1.0);
+		assert_eq!(second.len(), 1);
+		assert_eq!(second[0].pitch, 67);
+		assert_eq!(second[0].length, Tick(beat * 2 - beat / 2));
 	}
 
 	#[test]

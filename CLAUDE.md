@@ -21,14 +21,14 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export, mix analysis, realtime playback (cpal) + live MIDI monitoring | core, model, dsp, audio-io, midi-io |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
-| `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex) | dsp |
+| `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
 | `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector; `AppState` over the MCP `Session` | core, model, theory, dsp, engine, mcp, plugin-host, audio-io, midi-io |
-| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output) | — |
+| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView`) | — |
 
-Future: plugin editor windows (11), AI chat panel in the app (12), time signature changes,
-automatic crossfades, sandbox on Windows/macOS.
+Future: AI chat panel in the app (12), time signature changes, automatic crossfades,
+sandbox and plugin editors on Windows/macOS, native Wayland plugin GUIs.
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
 `cadenza-audio-io` and are forwarded by `cadenza-engine` and `cadenza-cli`; both are OFF by
@@ -223,6 +223,28 @@ MCP preset tools: `list_presets`/`load_preset`/`save_preset` (user presets in
 `set_sidechain`, `set_output_routes`. Plugin factory presets: CLAP preset-discovery + preset-load
 (VST3 program lists not yet). Descriptors carry `sidechain_channels` and `aux_outputs` (catalog
 cache v2: older caches are rescanned).
+Plugin editors (phase 11, `cadenza_plugin_host::editor`): the GUI lives in the process that owns
+the instance, on its `cadenza-plugin-main` thread, which is also the plugins' event loop (poll on
+a wake-up pipe + the X11 connection + plugin fds; CLAP timer-support/posix-fd-support, VST3
+`IRunLoop` on the plug frame). Windows: CLAP floating if offered, else embedded (`set_parent`,
+api `x11`) into our own top-level X11 window (x11rb pure-Rust connection, XWayland on Wayland;
+`_NET_WM_WINDOW_TYPE_DIALOG`, fixed-size hints when not resizable); VST3 `IPlugView` attached
+with `X11EmbedWindowID`. Resizes both ways, close button = close (reported `Closed`).
+`PluginEditor` handle (from `instantiate_with_editor`, `ClapProcessor/Vst3Processor/
+SandboxedProcessor::editor()`, `Graph::plugin_editor`): `open(title)/close/is_open/poll()
+-> Vec<EditorEvent { GestureBegin, Value{param, plain}, GestureEnd, StateChanged, Closed }>/
+save_state()` (live instance). CLAP edits = output events of `process`/`params.flush`, pushed by
+the audio thread into a wait-free rtrb; VST3 `begin/perform/endEdit` (main thread) -> value to
+the processor through an rtrb + event queue; host values mirrored into the VST3 controller
+(`ParamMirror`). `Processor::idle()` (dsp): called by stopped graphs each callback so plugins
+flush editor edits (sandbox: `CMD_IDLE` round trip only while an editor is open). Sandbox:
+editor requests share the control channel (frames are `Envelope { id, body }`, late replies are
+skipped), handled by the child without the processor lock; the child queues events until polled.
+`Player`: `open_editor(device, title)/close_editor/open_editors/poll_editors() ->
+Vec<EditorUpdate>/capture_editor_states(project, devices)/take_editor_states()`; `load` carries
+dirty live states over to the new instances and re-opens open editors; `set_live_param` skips
+echoing a value the editor just reported. Display tests: `cargo test -p cadenza-plugin-host
+--release --test editor_display -- --ignored --test-threads 1` (scripted plugins + Surge XT/LSP).
 Audio clips: files are decoded + resampled to the engine rate at compile time through
 `AudioCache::global()` (any format symphonia reads) and played with `render_clip` (realtime
 safe); overlapping clips on a track sum. An unreadable file is a `MixReport`/`Player::load`
@@ -361,6 +383,15 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
   including automation lanes, the audio editor and an empty project.
+- Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
+  30 ms): Edit button in the inspector (device and track instrument), double-click a plugin
+  insert / instrument in the mixer or the instrument name in a track header. Window title
+  "<device> — <track>". A gesture = one `SetParam` on release (live meanwhile, shown by the
+  inspector); one-off values are batched after 350 ms quiet (>16 params: captured state
+  instead); `StateChanged`, close and save capture the live state -> one `SetDeviceState`
+  when it differs. States the running instance holds are live in `live::diff` (no reload);
+  every reload clears that. Editors opened before the device is loaded wait for the reload.
+  The generic editor (inspector sliders) has a filter and "show all" for large plugins.
 - Phase 12 (AI panel): the agent's tools must act on the app's `Session` (today `CadenzaServer`
   owns its own behind a `Mutex`; share it, e.g. `Arc<Mutex<Session>>`) and AI edits must go
   through the same bookkeeping as `edit_session` (dirty, selection prune, debounced reload).

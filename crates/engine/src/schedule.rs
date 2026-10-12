@@ -58,7 +58,7 @@ impl MidiSchedule {
 	pub fn from_clips(clips: &[Clip], tempo: &TempoMap, sample_rate: f64) -> Self {
 		let mut events = Vec::new();
 		let mut spans = Vec::new();
-		for clip in clips {
+		for clip in clips.iter().filter(|c| c.plays()) {
 			let ClipContent::Midi { notes } = &clip.content else {
 				continue;
 			};

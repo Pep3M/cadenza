@@ -497,7 +497,7 @@ impl<'a> Compiler<'a> {
 			}
 			TrackKind::Audio => {
 				let mut clips = Vec::new();
-				for clip in &track.clips {
+				for clip in track.clips.iter().filter(|c| c.plays()) {
 					let ClipContent::Audio {
 						file,
 						offset_seconds,

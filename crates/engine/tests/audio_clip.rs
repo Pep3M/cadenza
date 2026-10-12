@@ -199,3 +199,50 @@ fn undecodable_file_warns_with_a_fix() {
 	assert!(report.warnings[0].contains("garbage.wav"));
 	assert!(report.warnings[0].contains("silent"));
 }
+
+#[test]
+fn only_the_active_take_of_a_group_plays() {
+	let quiet = write_sine_wav(
+		"take-quiet.wav",
+		48_000,
+		1,
+		(SampleFormat::Float, 32),
+		220.0,
+		0.1,
+		1.0,
+	);
+	let loud = write_sine_wav(
+		"take-loud.wav",
+		48_000,
+		1,
+		(SampleFormat::Float, 32),
+		220.0,
+		0.8,
+		1.0,
+	);
+	let group = cadenza_core::TakeGroupId::new();
+	let mut t = Track::new("audio", TrackKind::Audio);
+	for (lane, (path, active)) in [(&quiet, false), (&loud, true)].into_iter().enumerate() {
+		let mut c = Clip::audio("take", beats(0.0), beats(1.0), path);
+		c.take = Some(cadenza_model::Take {
+			group,
+			lane: lane as u32,
+			active,
+		});
+		t.clips.push(c);
+	}
+	// A MIDI take that does not play stays silent too.
+	let mut synth = synth_track("keys", &[(60, 0.0, 1.0)], 1.0);
+	synth.clips[0].take = Some(cadenza_model::Take {
+		group: cadenza_core::TakeGroupId::new(),
+		lane: 0,
+		active: false,
+	});
+	let out = render_offline(&project(vec![t, synth]), &opts(1.0)).unwrap();
+	let expected = 0.8 * std::f32::consts::FRAC_1_SQRT_2;
+	assert!(
+		(peak(&out.left[..24_000]) - expected).abs() < 0.01,
+		"only the loud take sums: {}",
+		peak(&out.left[..24_000])
+	);
+}

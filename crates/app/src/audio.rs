@@ -38,6 +38,8 @@ enum Request {
 	Seek(Tick),
 	Volume(Option<TrackId>, f32),
 	Pan(Option<TrackId>, f32),
+	/// Note preview: `Some(velocity)` = note on, `None` = note off.
+	Preview(TrackId, u8, Option<f32>),
 	Shutdown,
 }
 
@@ -114,6 +116,15 @@ impl AudioEngine {
 
 	pub fn live_pan(&self, track: Option<TrackId>, pan: f32) {
 		self.send(Request::Pan(track, pan));
+	}
+
+	/// Plays `pitch` through `track`'s instrument, also while stopped.
+	pub fn preview_on(&self, track: TrackId, pitch: u8, velocity: f32) {
+		self.send(Request::Preview(track, pitch, Some(velocity)));
+	}
+
+	pub fn preview_off(&self, track: TrackId, pitch: u8) {
+		self.send(Request::Preview(track, pitch, None));
 	}
 
 	/// Next pending event, if any (never blocks).
@@ -206,6 +217,10 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 				Request::Seek(tick) => player.seek(tick),
 				Request::Volume(track, db) => player.set_live_volume(track, db),
 				Request::Pan(track, pan) => player.set_live_pan(track, pan),
+				Request::Preview(track, pitch, Some(velocity)) => {
+					player.preview_note_on(track, pitch, velocity)
+				}
+				Request::Preview(track, pitch, None) => player.preview_note_off(track, pitch),
 				Request::Shutdown => {
 					let _ = player.stop();
 					return;

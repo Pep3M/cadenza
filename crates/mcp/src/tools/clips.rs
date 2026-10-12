@@ -303,6 +303,7 @@ pub fn move_clip(session: &mut Session, args: MoveClipArgs) -> Result<(), McpErr
 		start: args.start_beat.map(beats_to_tick),
 		length: None,
 		track: args.track_id,
+		take: None,
 	};
 	session.document_mut().execute(Command::UpdateClip {
 		clip: args.clip_id,
@@ -323,6 +324,7 @@ pub fn resize_clip(session: &mut Session, args: ResizeClipArgs) -> Result<(), Mc
 		start: None,
 		length: Some(beats_to_tick(args.length_beats)),
 		track: None,
+		take: None,
 	};
 	session.document_mut().execute(Command::UpdateClip {
 		clip: args.clip_id,

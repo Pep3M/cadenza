@@ -129,8 +129,8 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 		}
 
 		Command::UpdateTrack { track, patch } => {
-			if patch.name.is_none() && patch.color.is_none() {
-				return Err(empty_patch("update_track", "name and/or color"));
+			if patch.name.is_none() && patch.color.is_none() && patch.input.is_none() {
+				return Err(empty_patch("update_track", "name, color and/or input"));
 			}
 			if let Some(name) = &patch.name {
 				validate::name("track", name)?;
@@ -138,10 +138,19 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			if let Some(Some(color)) = &patch.color {
 				validate::color(color)?;
 			}
+			if let Some(input) = &patch.input {
+				let t = project
+					.track(*track)
+					.ok_or(ModelError::TrackNotFound(*track))?;
+				validate::track_input(t.id, t.kind, input.as_ref())?;
+			}
 			let t = project
 				.track_mut(*track)
 				.ok_or(ModelError::TrackNotFound(*track))?;
 			let mut old = TrackPatch::default();
+			if let Some(input) = &patch.input {
+				old.input = Some(std::mem::replace(&mut t.input, *input));
+			}
 			if let Some(name) = &patch.name {
 				old.name = Some(std::mem::replace(&mut t.name, name.clone()));
 			}
@@ -959,11 +968,15 @@ fn update_clip(
 		&& patch.start.is_none()
 		&& patch.length.is_none()
 		&& patch.track.is_none()
+		&& patch.take.is_none()
 	{
 		return Err(empty_patch(
 			"update_clip",
-			"name, start, length and/or track",
+			"name, start, length, track and/or take",
 		));
+	}
+	if let Some(Some(take)) = &patch.take {
+		validate::take(take)?;
 	}
 	let (track, current) = project
 		.find_clip(clip)
@@ -996,6 +1009,7 @@ fn update_clip(
 		start: patch.start.map(|_| current.start),
 		length: patch.length.map(|_| current.length),
 		track: patch.track.map(|_| from),
+		take: patch.take.map(|_| current.take),
 	};
 
 	let source = project
@@ -1015,6 +1029,9 @@ fn update_clip(
 	}
 	if let Some(length) = patch.length {
 		updated.length = length;
+	}
+	if let Some(take) = patch.take {
+		updated.take = take;
 	}
 	let dest = project.track_mut(to).ok_or(ModelError::TrackNotFound(to))?;
 	dest.clips.push(updated);

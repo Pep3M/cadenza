@@ -418,6 +418,7 @@ pub fn build_import_command(
 					start: Tick::ZERO,
 					length: clip_length(&group.notes),
 					content: ClipContent::Midi { notes },
+					take: None,
 				};
 				let track = Track {
 					id: ids.track_id(),
@@ -427,6 +428,7 @@ pub fn build_import_command(
 					instrument: Some(builtin_instrument(group.is_drum)),
 					clips: vec![clip],
 					channel: Default::default(),
+					input: None,
 				};
 				commands.push(Command::AddTrack { track, index: None });
 			}
@@ -456,6 +458,7 @@ pub fn build_import_command(
 				start: *position,
 				length: clip_length(&all_notes),
 				content: ClipContent::Midi { notes },
+				take: None,
 			};
 			commands.push(Command::AddClip {
 				track: *track,

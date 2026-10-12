@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::project::{
 	AutomationPoint, Clip, ClipFade, Device, Marker, Note, Output, OutputRoute, Send,
-	SidechainSource, Track,
+	SidechainSource, Take, Track, TrackInput,
 };
 use crate::sample::SampleZone;
 
@@ -219,6 +219,13 @@ pub struct TrackPatch {
 		skip_serializing_if = "Option::is_none"
 	)]
 	pub color: Option<Option<String>>,
+	/// Audio tracks: the audio input (`null` removes it), absent leaves it unchanged.
+	#[serde(
+		default,
+		deserialize_with = "double_option",
+		skip_serializing_if = "Option::is_none"
+	)]
+	pub input: Option<Option<TrackInput>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -254,6 +261,13 @@ pub struct ClipPatch {
 	/// Moves the clip to another track of a compatible kind.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub track: Option<TrackId>,
+	/// Take membership (`null` makes it an ordinary clip), absent leaves it unchanged.
+	#[serde(
+		default,
+		deserialize_with = "double_option",
+		skip_serializing_if = "Option::is_none"
+	)]
+	pub take: Option<Option<Take>>,
 }
 
 /// Fields left out (or `None`) are unchanged.
@@ -336,9 +350,11 @@ impl Command {
 			Self::AddTrack { track, .. } => format!("Add track '{}'", track.name),
 			Self::RemoveTrack { .. } => "Remove track".into(),
 			Self::MoveTrack { .. } => "Move track".into(),
-			Self::UpdateTrack { patch, .. } => match &patch.name {
-				Some(name) => format!("Rename track to '{name}'"),
-				None => "Change track color".into(),
+			Self::UpdateTrack { patch, .. } => match (&patch.name, &patch.color, &patch.input) {
+				(Some(name), _, _) => format!("Rename track to '{name}'"),
+				(None, None, Some(Some(input))) => format!("Set track input to {}", input.label()),
+				(None, None, Some(None)) => "Remove track input".into(),
+				_ => "Change track color".into(),
 			},
 			Self::SetChannel { track, patch } => {
 				let what = match (
@@ -403,6 +419,7 @@ impl Command {
 			Self::UpdateSend { .. } => "Change send".into(),
 			Self::AddClip { clip, .. } => format!("Add clip '{}'", clip.name),
 			Self::RemoveClip { .. } => "Remove clip".into(),
+			Self::UpdateClip { patch, .. } if patch.take.is_some() => "Edit take".into(),
 			Self::UpdateClip { patch, .. } => {
 				match (&patch.name, patch.start, patch.length, patch.track) {
 					(Some(name), None, None, None) => format!("Rename clip to '{name}'"),

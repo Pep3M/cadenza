@@ -288,8 +288,10 @@ fn round_trips_project_export_and_import() {
 					},
 				],
 			},
+			take: None,
 		}],
 		channel: Default::default(),
+		input: None,
 	});
 
 	let bytes = export_project(&project).unwrap();

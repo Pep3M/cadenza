@@ -210,6 +210,7 @@ fn every_command_round_trips() {
 			patch: TrackPatch {
 				name: Some("Lead 2".into()),
 				color: Some(None),
+				input: None,
 			},
 		},
 		Command::UpdateTrack {
@@ -217,6 +218,7 @@ fn every_command_round_trips() {
 			patch: TrackPatch {
 				name: None,
 				color: Some(Some("#00FF00".into())),
+				input: None,
 			},
 		},
 		Command::SetChannel {
@@ -362,6 +364,7 @@ fn every_command_round_trips() {
 				start: Some(beats(12.0)),
 				length: Some(beats(8.0)),
 				track: None,
+				take: None,
 			},
 		},
 		Command::UpdateClip {
@@ -984,7 +987,8 @@ fn validation_errors() {
 				track: fx.lead,
 				patch: TrackPatch {
 					name: None,
-					color: Some(Some("orange".into()))
+					color: Some(Some("orange".into())),
+					input: None,
 				}
 			}
 		),
@@ -1308,6 +1312,7 @@ fn command_json_shape_is_stable() {
 				patch: TrackPatch {
 					name: Some("Bass".into()),
 					color: Some(None),
+					input: None,
 				},
 			},
 			json!({"op": "update_track", "track": t(1), "name": "Bass", "color": null}),

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cadenza_core::{
-	ClipId, DeviceId, NoteId, ParamAddress, TempoMap, Tick, TimeSignature, TrackId,
+	ClipId, DeviceId, NoteId, ParamAddress, TakeGroupId, TempoMap, Tick, TimeSignature, TrackId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,80 @@ pub struct Track {
 	pub clips: Vec<Clip>,
 	#[serde(default)]
 	pub channel: Channel,
+	/// Audio tracks: the audio input it records from and when it plays that input
+	/// (missing = no input assigned).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub input: Option<TrackInput>,
+}
+
+/// Which channels of the audio input device an audio track records, and when the track
+/// plays its input (through its inserts) instead of its clips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TrackInput {
+	/// First input channel, 0-based (0 = input 1 / left).
+	pub channel: u16,
+	/// `true`: channels `channel` and `channel + 1` as a stereo pair; `false`: mono.
+	#[serde(default)]
+	pub stereo: bool,
+	#[serde(default)]
+	pub monitor: MonitorMode,
+}
+
+impl TrackInput {
+	/// Mono input on `channel`.
+	pub fn mono(channel: u16) -> Self {
+		Self {
+			channel,
+			stereo: false,
+			monitor: MonitorMode::default(),
+		}
+	}
+
+	/// Stereo pair starting at `channel`.
+	pub fn stereo(channel: u16) -> Self {
+		Self {
+			channel,
+			stereo: true,
+			monitor: MonitorMode::default(),
+		}
+	}
+
+	/// Input channels used (one or two).
+	pub fn channels(&self) -> std::ops::RangeInclusive<u16> {
+		self.channel..=self.channel + u16::from(self.stereo)
+	}
+
+	/// "In 1", "In 1+2".
+	pub fn label(&self) -> String {
+		if self.stereo {
+			format!("In {}+{}", self.channel + 1, self.channel + 2)
+		} else {
+			format!("In {}", self.channel + 1)
+		}
+	}
+}
+
+/// When an audio track plays its live input (input monitoring).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorMode {
+	/// Never: the track plays its clips (monitor through the audio interface instead).
+	Off,
+	/// While the track is armed and the transport is stopped or recording.
+	#[default]
+	Auto,
+	/// Always (the input replaces the track's clips).
+	On,
+}
+
+impl MonitorMode {
+	pub fn name(self) -> &'static str {
+		match self {
+			Self::Off => "off",
+			Self::Auto => "auto",
+			Self::On => "on",
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -155,6 +229,23 @@ pub struct Clip {
 	pub start: Tick,
 	pub length: Tick,
 	pub content: ClipContent,
+	/// Set when the clip is one of several alternative takes of a region (loop
+	/// recording, comping); missing = an ordinary clip that always plays.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub take: Option<Take>,
+}
+
+/// A clip's membership in a group of alternative takes. Takes of a group are stacked
+/// over the same stretch of the track; only the active one plays, the others stay
+/// available for comping (pick another take, or split the group and pick per part).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Take {
+	pub group: TakeGroupId,
+	/// Take lane, 0 = the first take (oldest), for the expanded takes view.
+	pub lane: u32,
+	/// Whether this take plays. Commands keep exactly one active take per group.
+	#[serde(default)]
+	pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -409,6 +500,7 @@ impl Track {
 			instrument: None,
 			clips: Vec::new(),
 			channel: Channel::default(),
+			input: None,
 		}
 	}
 
@@ -509,6 +601,7 @@ impl Clip {
 			start,
 			length,
 			content: ClipContent::Midi { notes: Vec::new() },
+			take: None,
 		}
 	}
 
@@ -531,6 +624,7 @@ impl Clip {
 				fade_in: None,
 				fade_out: None,
 			},
+			take: None,
 		}
 	}
 
@@ -572,6 +666,16 @@ impl Clip {
 
 	pub fn is_midi(&self) -> bool {
 		matches!(self.content, ClipContent::Midi { .. })
+	}
+
+	/// Whether the clip is heard: ordinary clips always, takes only when active.
+	pub fn plays(&self) -> bool {
+		self.take.is_none_or(|t| t.active)
+	}
+
+	/// The take group this clip belongs to.
+	pub fn take_group(&self) -> Option<TakeGroupId> {
+		self.take.map(|t| t.group)
 	}
 }
 

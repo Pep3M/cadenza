@@ -12,6 +12,7 @@ mod persist;
 pub mod project;
 pub mod sample;
 pub mod summary;
+pub mod takes;
 pub mod validate;
 
 pub use command::{
@@ -23,8 +24,8 @@ pub use files::{FileRef, FileUse, ProjectLayout};
 pub use persist::{backup_path, write_atomic};
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
-	FORMAT_VERSION, FadeCurve, Marker, Note, Output, OutputRoute, PointShape, Project, Send,
-	SidechainSource, Track, TrackKind, automation_value,
+	FORMAT_VERSION, FadeCurve, Marker, MonitorMode, Note, Output, OutputRoute, PointShape, Project,
+	Send, SidechainSource, Take, Track, TrackInput, TrackKind, automation_value,
 };
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{

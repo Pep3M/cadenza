@@ -813,6 +813,7 @@ impl ArrangeUi {
 							patch: TrackPatch {
 								name: Some(name),
 								color: None,
+								input: None,
 							},
 						});
 					}
@@ -1590,6 +1591,7 @@ fn track_menu(
 					patch: TrackPatch {
 						name: None,
 						color: Some(Some(hex.to_owned())),
+						input: None,
 					},
 				});
 				ui.close();

@@ -183,9 +183,58 @@ pub(crate) fn note(clip: &Clip, note: &Note) -> Result<(), ModelError> {
 }
 
 /// Validates a clip in isolation (kind compatibility is checked by [`clip_on_track`]).
+/// Highest take lane (keeps the takes view bounded).
+pub const MAX_TAKE_LANE: u32 = 999;
+
+/// Highest audio input channel index a track can use (0-based).
+pub const MAX_INPUT_CHANNEL: u16 = 63;
+
+pub(crate) fn take(take: &crate::project::Take) -> Result<(), ModelError> {
+	if take.lane > MAX_TAKE_LANE {
+		return Err(ModelError::invalid(
+			"take lane",
+			take.lane,
+			format!("use 0..={MAX_TAKE_LANE}"),
+		));
+	}
+	Ok(())
+}
+
+/// Inputs belong to audio tracks and must name existing-looking channels.
+pub(crate) fn track_input(
+	track: TrackId,
+	kind: TrackKind,
+	input: Option<&crate::project::TrackInput>,
+) -> Result<(), ModelError> {
+	let Some(input) = input else {
+		return Ok(());
+	};
+	if kind != TrackKind::Audio {
+		return Err(ModelError::invalid(
+			format!("input of track {track}"),
+			input.label(),
+			format!("only Audio tracks record audio input; this is a {kind:?} track"),
+		));
+	}
+	let last = input.channel.saturating_add(u16::from(input.stereo));
+	if last > MAX_INPUT_CHANNEL {
+		return Err(ModelError::invalid(
+			format!("input of track {track}"),
+			input.label(),
+			format!(
+				"input channels are 0..={MAX_INPUT_CHANNEL} (a stereo pair uses channel and channel + 1)"
+			),
+		));
+	}
+	Ok(())
+}
+
 pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
 	start("clip", clip.start)?;
 	length("clip", clip.length)?;
+	if let Some(t) = &clip.take {
+		take(t)?;
+	}
 	match &clip.content {
 		ClipContent::Midi { notes } => {
 			let mut ids = HashSet::with_capacity(notes.len());
@@ -510,6 +559,7 @@ pub(crate) fn new_track_sidechains(project: &Project, track: &Track) -> Result<(
 /// against the project (see [`new_track_ids`]).
 pub(crate) fn track(project: &Project, track: &Track) -> Result<(), ModelError> {
 	name("track", &track.name)?;
+	track_input(track.id, track.kind, track.input.as_ref())?;
 	if let Some(c) = &track.color {
 		color(c)?;
 	}

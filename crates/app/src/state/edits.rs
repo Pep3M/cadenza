@@ -4,7 +4,7 @@
 
 use cadenza_core::{ClipId, DeviceId, NoteId, PPQ, Tick, TrackId};
 use cadenza_model::{
-	Clip, ClipContent, ClipPatch, Command, Device, Note, NotePatch, Project, Track, TrackKind,
+	Clip, ClipContent, ClipPatch, Command, Device, NotePatch, Project, Track, TrackKind,
 };
 
 /// Default colors for new tracks (cycled).
@@ -250,97 +250,29 @@ pub fn duplicate_clips(project: &Project, clips: &[ClipId]) -> Option<(Command, 
 
 /// Splits `clip` at `at` (strictly inside it) into two clips. MIDI notes starting after
 /// the split move to the new clip, notes crossing it are shortened; audio continues with
-/// the right file offset and keeps its fade-out on the right part.
+/// the right file offset and keeps its fade-out on the right part. A take is split with
+/// its whole take group (split comping: each part then picks its own take).
 /// Returns the command and the id of the new (right) clip.
 pub fn split_clip(project: &Project, clip: ClipId, at: Tick) -> Option<(Command, ClipId)> {
-	let (track, c) = project.find_clip(clip)?;
+	let (_, c) = project.find_clip(clip)?;
 	if at <= c.start + MIN_CLIP_LENGTH || at >= c.end() - MIN_CLIP_LENGTH {
 		return None;
 	}
-	let left_len = at - c.start;
-	let mut right = Clip {
-		id: ClipId::new(),
-		name: c.name.clone(),
-		start: at,
-		length: c.end() - at,
-		content: c.content.clone(),
-	};
-	// Note and fade edits first, so the left clip never holds notes past its new end.
-	let mut commands = Vec::new();
-	match (&c.content, &mut right.content) {
-		(ClipContent::Midi { notes }, ClipContent::Midi { notes: right_notes }) => {
-			let moved: Vec<&Note> = notes.iter().filter(|n| n.start >= left_len).collect();
-			*right_notes = moved
-				.iter()
-				.map(|n| Note {
-					id: NoteId::new(),
-					start: n.start - left_len,
-					..(*n).clone()
-				})
-				.collect();
-			if !moved.is_empty() {
-				commands.push(Command::RemoveNotes {
-					clip,
-					notes: moved.iter().map(|n| n.id).collect(),
-				});
+	if let Some(take) = c.take {
+		let group = cadenza_core::TakeGroupId::new();
+		let commands = cadenza_model::takes::split_group(project, take.group, at, group)?;
+		let right = commands.iter().find_map(|cmd| match cmd {
+			Command::AddClip { clip: added, .. }
+				if added.take.is_some_and(|t| t.lane == take.lane) && added.start == at =>
+			{
+				Some(added.id)
 			}
-			let shortened: Vec<NotePatch> = notes
-				.iter()
-				.filter(|n| n.start < left_len && n.end() > left_len)
-				.map(|n| NotePatch {
-					id: n.id,
-					pitch: None,
-					velocity: None,
-					start: None,
-					length: Some(left_len - n.start),
-				})
-				.collect();
-			if !shortened.is_empty() {
-				commands.push(Command::UpdateNotes {
-					clip,
-					notes: shortened,
-				});
-			}
-		}
-		(
-			ClipContent::Audio {
-				fade_in, fade_out, ..
-			},
-			ClipContent::Audio {
-				offset_seconds,
-				fade_in: right_in,
-				fade_out: right_out,
-				..
-			},
-		) => {
-			let tempo = &project.tempo;
-			let cut = tempo.tick_to_seconds(at) - tempo.tick_to_seconds(c.start);
-			*offset_seconds += cut;
-			*right_in = None;
-			let right_secs = tempo.tick_to_seconds(c.end()) - tempo.tick_to_seconds(at);
-			*right_out = fade_out.filter(|f| f.seconds < right_secs);
-			if fade_out.is_some() {
-				commands.push(Command::SetClipFades {
-					clip,
-					fade_in: fade_in.filter(|f| f.seconds < cut),
-					fade_out: None,
-				});
-			}
-		}
-		_ => return None,
+			_ => None,
+		})?;
+		return Some((batch("Split takes", commands)?, right));
 	}
-	let id = right.id;
-	commands.push(Command::UpdateClip {
-		clip,
-		patch: ClipPatch {
-			length: Some(left_len),
-			..ClipPatch::default()
-		},
-	});
-	commands.push(Command::AddClip {
-		track: track.id,
-		clip: right,
-	});
+	let id = ClipId::new();
+	let commands = cadenza_model::takes::split_clip(project, clip, at, id, None)?;
 	Some((batch("Split clip", commands)?, id))
 }
 
@@ -513,7 +445,7 @@ pub(crate) fn batch(label: &str, mut commands: Vec<Command>) -> Option<Command> 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use cadenza_model::{ClipFade, Document, FadeCurve};
+	use cadenza_model::{ClipFade, Document, FadeCurve, Note};
 
 	fn beats(b: f64) -> Tick {
 		Tick::from_beats(b)
@@ -793,7 +725,7 @@ mod tests {
 #[cfg(test)]
 mod trim_tests {
 	use super::*;
-	use cadenza_model::Document;
+	use cadenza_model::{Document, Note};
 
 	fn beats(b: f64) -> Tick {
 		Tick::from_beats(b)

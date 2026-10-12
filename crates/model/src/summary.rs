@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::project::{
 	Channel, Clip, ClipContent, Device, DeviceKind, Output, OutputRoute, Project, SidechainSource,
-	Track, TrackKind,
+	Take, Track, TrackInput, TrackKind,
 };
 use crate::sample::{LoopMode, SampleZone};
 
@@ -69,6 +69,9 @@ pub struct TrackSummary {
 	pub clips: Vec<ClipSummary>,
 	/// Addresses of automated parameters on this track.
 	pub automation: Vec<String>,
+	/// Audio input it records from (audio tracks).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub input: Option<TrackInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -137,6 +140,9 @@ pub struct ClipSummary {
 	/// Audio clip fades, e.g. "in 0.010 s linear, out 2.000 s exponential".
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub fades: Option<String>,
+	/// One of several alternative takes of a region; only the active take plays.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub take: Option<Take>,
 }
 
 impl Project {
@@ -220,6 +226,7 @@ impl Project {
 				.collect(),
 			clips: track.clips.iter().map(clip_summary).collect(),
 			automation: self.automation_addresses(Some(track.id)),
+			input: track.input,
 		}
 	}
 
@@ -351,6 +358,7 @@ fn clip_summary(clip: &Clip) -> ClipSummary {
 		pitch_range,
 		file,
 		fades,
+		take: clip.take,
 	}
 }
 

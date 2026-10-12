@@ -89,6 +89,7 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 				patch: TrackPatch {
 					name: Some(name.trim().to_owned()),
 					color: None,
+					input: None,
 				},
 			});
 		}
@@ -113,6 +114,7 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 					patch: TrackPatch {
 						name: None,
 						color: Some(Some(hex.to_owned())),
+						input: None,
 					},
 				});
 			}

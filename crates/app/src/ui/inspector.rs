@@ -438,46 +438,53 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 		ui.label(RichText::new("No editable parameters").color(theme::TEXT_FAINT));
 		return;
 	}
-	Grid::new(("params", d.id))
-		.num_columns(2)
-		.spacing([8.0, 3.0])
-		.striped(true)
-		.show(ui, |ui| {
-			for ParamRow {
-				id: pid,
-				name,
-				min,
-				max,
-				default,
-				unit,
-			} in params
+	// One row per parameter: fixed-width name, then a slider filling the rest.
+	let label_w = 104.0;
+	for ParamRow {
+		id: pid,
+		name,
+		min,
+		max,
+		default,
+		unit,
+	} in params
+	{
+		ui.horizontal(|ui| {
+			ui.add_sized(
+				[label_w, 18.0],
+				egui::Label::new(
+					RichText::new(&name)
+						.font(theme::small())
+						.color(theme::TEXT_DIM),
+				)
+				.truncate(),
+			)
+			.on_hover_text(&name);
+			let current = d.params.get(&pid).copied().unwrap_or(default);
+			ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
+			let (g, resp) =
+				widgets::edit_value(ui, Id::new(("param", d.id, &pid)), current, |ui, v| {
+					let mut s =
+						egui::Slider::new(v, min..=max.max(min + f32::EPSILON)).max_decimals(2);
+					if !unit.is_empty() {
+						s = s.suffix(format!(" {unit}"));
+					}
+					ui.add(s)
+				});
+			if resp.double_clicked() {
+				state.apply(Command::ResetParam {
+					address: ParamAddress::device(r.track, d.id, pid.clone()),
+				});
+			} else if let Gesture::Commit(v) = g
+				&& v != current
 			{
-				ui.add(egui::Label::new(RichText::new(&name).font(theme::small())).truncate());
-				let current = d.params.get(&pid).copied().unwrap_or(default);
-				let (g, resp) =
-					widgets::edit_value(ui, Id::new(("param", d.id, &pid)), current, |ui, v| {
-						let mut s =
-							egui::Slider::new(v, min..=max.max(min + f32::EPSILON)).max_decimals(2);
-						if !unit.is_empty() {
-							s = s.suffix(format!(" {unit}"));
-						}
-						ui.add(s)
-					});
-				if resp.double_clicked() {
-					state.apply(Command::ResetParam {
-						address: ParamAddress::device(r.track, d.id, pid.clone()),
-					});
-				} else if let Gesture::Commit(v) = g
-					&& v != current
-				{
-					state.apply(Command::SetParam {
-						address: ParamAddress::device(r.track, d.id, pid.clone()),
-						value: v,
-					});
-				}
-				ui.end_row();
+				state.apply(Command::SetParam {
+					address: ParamAddress::device(r.track, d.id, pid.clone()),
+					value: v,
+				});
 			}
 		});
+	}
 }
 
 fn history(ui: &mut Ui, state: &mut AppState) {

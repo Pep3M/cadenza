@@ -313,6 +313,9 @@ pub fn paint_meter(p: &egui::Painter, rect: Rect, levels: MeterLevels) {
 /// Small square toggle (M / S / bypass) colored when on.
 pub fn toggle(ui: &mut Ui, on: bool, label: &str, on_color: Color32, size: Vec2) -> Response {
 	let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label)
+	});
 	if ui.is_rect_visible(rect) {
 		paint_toggle(ui.painter(), rect, on, label, on_color, response.hovered());
 	}

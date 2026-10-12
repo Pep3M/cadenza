@@ -497,8 +497,8 @@ fn toasts(ctx: &egui::Context, state: &AppState) {
 						.corner_radius(4)
 						.inner_margin(Margin::symmetric(10, 6))
 						.show(ui, |ui| {
-							ui.set_max_width(420.0);
-							ui.horizontal(|ui| {
+							ui.set_max_width(440.0);
+							ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
 								ui.label(RichText::new(icon).color(accent));
 								ui.add(
 									egui::Label::new(RichText::new(&n.text).color(theme::TEXT))

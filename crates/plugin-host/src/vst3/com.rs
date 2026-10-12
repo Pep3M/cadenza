@@ -10,6 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use vst3::Steinberg::TBool;
 use vst3::Steinberg::Vst::{
 	IAttributeList, IAttributeListTrait, IAudioProcessor, IComponent, IComponentHandler,
 	IComponentHandler2, IComponentHandler2Trait, IComponentHandlerTrait, IConnectionPoint,
@@ -175,9 +176,18 @@ impl IPlugInterfaceSupportTrait for HostApplication {
 
 // ------------------------------------------------------- component handler
 
+/// An edit reported by the plugin's controller (its GUI), normalized.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum RawEdit {
+	Begin(ParamID),
+	Value(ParamID, ParamValue),
+	End(ParamID),
+}
+
 /// Requests a plugin made through `IComponentHandler`, consumed by the host
-/// (on the next `prepare`, like the CLAP host flags).
-#[derive(Debug, Default)]
+/// (on the next `prepare`, like the CLAP host flags), plus the edits its GUI
+/// made.
+#[derive(Default)]
 pub(crate) struct Vst3Flags {
 	/// Re-activate before the next process (`kReloadComponent`, `kIoChanged`,
 	/// `kLatencyChanged`).
@@ -185,17 +195,34 @@ pub(crate) struct Vst3Flags {
 	pub latency_changed: AtomicBool,
 	pub params_changed: AtomicBool,
 	pub state_dirty: AtomicBool,
+	/// GUI edits waiting for the main thread to report them (converted to
+	/// plain values there).
+	pub edits: Mutex<Vec<RawEdit>>,
+	/// GUI values on their way to the audio processor (the host must deliver
+	/// controller edits to the processor itself).
+	pub to_audio: Mutex<Option<rtrb::Producer<(ParamID, ParamValue)>>>,
 }
 
 impl Vst3Flags {
 	pub fn take(flag: &AtomicBool) -> bool {
 		flag.swap(false, Ordering::AcqRel)
 	}
+
+	fn edit(&self, edit: RawEdit) {
+		self.edits
+			.lock()
+			.unwrap_or_else(|e| e.into_inner())
+			.push(edit);
+	}
+
+	pub fn take_edits(&self) -> Vec<RawEdit> {
+		std::mem::take(&mut *self.edits.lock().unwrap_or_else(|e| e.into_inner()))
+	}
 }
 
-/// `IComponentHandler(2)`: edits from the plugin's own UI are ignored for now
-/// (there is no editor yet); restart requests only flip atomic flags, so the
-/// plugin may call them from any thread.
+/// `IComponentHandler(2)`: GUI edits are queued for the audio processor and
+/// for the host (see [`Vst3Flags`]); restart requests only flip atomic flags,
+/// so the plugin may call them from any thread.
 pub(crate) struct ComponentHandler {
 	pub flags: Arc<Vst3Flags>,
 }
@@ -205,16 +232,38 @@ impl Class for ComponentHandler {
 }
 
 impl IComponentHandlerTrait for ComponentHandler {
-	unsafe fn beginEdit(&self, _id: ParamID) -> tresult {
-		kResultOk
+	unsafe fn beginEdit(&self, id: ParamID) -> tresult {
+		guard(kResultFalse, || {
+			self.flags.edit(RawEdit::Begin(id));
+			kResultOk
+		})
 	}
 
-	unsafe fn performEdit(&self, _id: ParamID, _value: ParamValue) -> tresult {
-		kResultOk
+	unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
+		guard(kResultFalse, || {
+			if !value.is_finite() {
+				return kInvalidArgument;
+			}
+			let value = value.clamp(0.0, 1.0);
+			if let Some(tx) = self
+				.flags
+				.to_audio
+				.lock()
+				.unwrap_or_else(|e| e.into_inner())
+				.as_mut()
+			{
+				let _ = tx.push((id, value));
+			}
+			self.flags.edit(RawEdit::Value(id, value));
+			kResultOk
+		})
 	}
 
-	unsafe fn endEdit(&self, _id: ParamID) -> tresult {
-		kResultOk
+	unsafe fn endEdit(&self, id: ParamID) -> tresult {
+		guard(kResultFalse, || {
+			self.flags.edit(RawEdit::End(id));
+			kResultOk
+		})
 	}
 
 	unsafe fn restartComponent(&self, flags: int32) -> tresult {
@@ -240,7 +289,7 @@ impl IComponentHandlerTrait for ComponentHandler {
 }
 
 impl IComponentHandler2Trait for ComponentHandler {
-	unsafe fn setDirty(&self, state: u8) -> tresult {
+	unsafe fn setDirty(&self, state: TBool) -> tresult {
 		if state != 0 {
 			self.flags.state_dirty.store(true, Ordering::Release);
 		}

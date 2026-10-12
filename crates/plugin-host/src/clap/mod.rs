@@ -23,12 +23,18 @@
 //!   thread, that thread *is* the audio thread for the duration of the call,
 //!   which is what CLAP requires (the two roles are never active at once).
 //! - **Host callbacks** only flip atomic flags (see `host.rs`), so a plugin can
-//!   call them from any thread without blocking.
+//!   call them from any thread without blocking. Timer and posix-fd
+//!   registrations (main thread) are served by the main thread's event loop.
+//! - **Editors** (`gui` extension) live on the main thread too (see
+//!   `editor.rs` and [`crate::editor`]); the parameter events a plugin outputs
+//!   from `process`/`params.flush` (GUI edits) are pushed by the audio thread
+//!   into a wait-free ring read by the editor handle.
 //!
 //! A plugin that crashes or panics across the FFI boundary takes the whole
 //! process down; in-process hosting cannot prevent that. Scanning is always
 //! out-of-process, and processing can be too (see [`crate::sandbox`]).
 
+pub(crate) mod editor;
 pub(crate) mod events;
 pub(crate) mod host;
 pub(crate) mod instance;
@@ -333,6 +339,10 @@ fn describe(
 pub(crate) struct Hosted {
 	pub instance: PluginInstance<CadenzaHost>,
 	pub flags: Arc<HostFlags>,
+	/// The open editor, if any.
+	pub editor: Option<editor::ClapEditor>,
+	/// Editor notifications shared with the instance's `PluginEditor` handles.
+	pub shared: Option<Arc<crate::editor::EditorShared>>,
 }
 
 /// CLAP state owned by the plugin main thread (see [`crate::main_thread`]).
@@ -375,9 +385,4 @@ pub(crate) fn run_on_main<R: Send + 'static>(
 	f: impl FnOnce(&mut ClapState) -> R + Send + 'static,
 ) -> Result<R, PluginError> {
 	crate::main_thread::run_on_main(move |state| f(&mut state.clap))
-}
-
-/// Queues `f` with the CLAP state on the plugin main thread without waiting.
-pub(crate) fn post_to_main(f: impl FnOnce(&mut ClapState) + Send + 'static) {
-	crate::main_thread::post_to_main(move |state| f(&mut state.clap));
 }

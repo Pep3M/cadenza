@@ -9,17 +9,18 @@ use clack_extensions::tail::{PluginTail, TailLength};
 use clack_host::events::EventFlags;
 use clack_host::events::EventHeader;
 use clack_host::events::event_types::{TransportEvent, TransportFlags};
-use clack_host::events::io::{InputEvents, OutputEvents};
+use clack_host::events::io::{InputEvents, OutputEventBuffer, OutputEvents, TryPushError};
+use clack_host::events::spaces::CoreEventSpace;
 use clack_host::prelude::*;
 use clack_host::utils::BeatTime;
 
 use super::events::{EventList, ParamQueue};
 use super::host::{CadenzaHost, HostAudioProcessor, HostFlags};
 use super::{
-	Hosted, PortLayout, audio_config, new_instance, post_to_main, query_latency, query_ports,
-	run_on_main,
+	Hosted, PortLayout, audio_config, new_instance, query_latency, query_ports, run_on_main,
 };
-use crate::descriptor::{PluginDescriptor, PluginRole};
+use crate::descriptor::{PluginDescriptor, PluginFormat, PluginRole};
+use crate::editor::{EditorShared, FeedbackKind, FeedbackSender, LocalEditor, PluginEditor};
 use crate::error::PluginError;
 use crate::ports::KeyInput;
 
@@ -42,6 +43,44 @@ pub(crate) fn default_tail(desc: &PluginDescriptor) -> f32 {
 				0.0
 			}
 		}
+	}
+}
+
+/// Collects the parameter events a plugin outputs (edits made in its GUI)
+/// into the editor feedback ring. Realtime-safe: lookups in a sorted slice,
+/// pushes into a wait-free ring, no allocation.
+struct ParamOutput<'a> {
+	/// (CLAP param id, descriptor index), sorted by id.
+	lookup: &'a [(u32, u32)],
+	sender: &'a mut FeedbackSender,
+}
+
+impl ParamOutput<'_> {
+	fn send(&mut self, kind: FeedbackKind, id: Option<ClapId>, value: f64) {
+		let Some(id) = id else {
+			return;
+		};
+		if let Ok(i) = self.lookup.binary_search_by_key(&id.get(), |&(id, _)| id) {
+			self.sender.send(kind, self.lookup[i].1, value);
+		}
+	}
+}
+
+impl OutputEventBuffer for ParamOutput<'_> {
+	fn try_push(&mut self, event: &UnknownEvent) -> Result<(), TryPushError> {
+		match event.as_core_event() {
+			Some(CoreEventSpace::ParamValue(e)) => {
+				self.send(FeedbackKind::Value, e.param_id(), e.value());
+			}
+			Some(CoreEventSpace::ParamGestureBegin(e)) => {
+				self.send(FeedbackKind::Begin, e.param_id(), 0.0);
+			}
+			Some(CoreEventSpace::ParamGestureEnd(e)) => {
+				self.send(FeedbackKind::End, e.param_id(), 0.0);
+			}
+			_ => {}
+		}
+		Ok(())
 	}
 }
 
@@ -77,6 +116,10 @@ pub struct ClapProcessor {
 	/// The plugin refused to start or failed a process call; it now outputs
 	/// silence (instruments) or passes audio through (effects).
 	failed: bool,
+	/// (CLAP param id, descriptor index), sorted by id.
+	param_lookup: Vec<(u32, u32)>,
+	feedback: FeedbackSender,
+	editor: Arc<EditorShared>,
 }
 
 impl ClapProcessor {
@@ -87,7 +130,10 @@ impl ClapProcessor {
 		state: Option<&[u8]>,
 	) -> Result<Self, PluginError> {
 		let flags = Arc::new(HostFlags::default());
+		let (editor, ring) =
+			EditorShared::new(&desc.id, desc.params.iter().map(|p| p.id.clone()).collect());
 		let (id, path, host_flags) = (desc.id.clone(), desc.path.clone(), flags.clone());
+		let shared = editor.clone();
 		let (key, midi_dialect) = run_on_main(move |main| -> Result<_, PluginError> {
 			let entry = main.entry(&path)?;
 			let mut instance = new_instance(&entry, &id, &path, host_flags.clone())?;
@@ -95,11 +141,13 @@ impl ClapProcessor {
 			let key = main.insert(Hosted {
 				instance,
 				flags: host_flags,
+				editor: None,
+				shared: Some(shared),
 			});
 			Ok((key, caps.midi_dialect))
 		})??;
 
-		let param_ids = desc
+		let param_ids: Vec<ClapId> = desc
 			.params
 			.iter()
 			.map(|p| {
@@ -109,6 +157,12 @@ impl ClapProcessor {
 					.unwrap_or(ClapId::new(u32::MAX - 1))
 			})
 			.collect();
+		let mut param_lookup: Vec<(u32, u32)> = param_ids
+			.iter()
+			.enumerate()
+			.map(|(i, id)| (id.get(), i as u32))
+			.collect();
+		param_lookup.sort_unstable();
 		let mut processor = Self {
 			key,
 			id: desc.id.clone(),
@@ -140,6 +194,9 @@ impl ClapProcessor {
 			default_tail: default_tail(desc),
 			steady_time: 0,
 			failed: false,
+			param_lookup,
+			feedback: FeedbackSender::new(ring),
+			editor,
 		};
 		if let Some(state) = state
 			&& !processor.load_state(state)
@@ -218,13 +275,25 @@ impl ClapProcessor {
 		Ok(())
 	}
 
-	/// Delivers queued parameter changes without processing audio, so that a
-	/// state save right after `set_param` reflects them. Not real-time.
-	fn flush_params(&mut self) {
+	/// A handle to this instance's editor (usable while the processor runs on
+	/// the audio thread).
+	pub fn editor(&self) -> PluginEditor {
+		PluginEditor::local(LocalEditor {
+			format: PluginFormat::Clap,
+			key: self.key,
+			shared: self.editor.clone(),
+		})
+	}
+
+	/// Delivers queued parameter changes without processing audio (CLAP
+	/// `params.flush`), collecting the plugin's own parameter events (GUI
+	/// edits). Realtime-safe; `force` flushes even with nothing queued (the
+	/// plugin asked for it).
+	fn flush_params(&mut self, force: bool) {
 		let Some(audio) = self.audio.as_mut() else {
 			return;
 		};
-		if self.queue.is_empty() {
+		if self.queue.is_empty() && !force {
 			return;
 		}
 		self.events.clear();
@@ -234,10 +303,14 @@ impl ClapProcessor {
 		});
 		let mut handle = audio.plugin_handle();
 		if let Some(params) = handle.get_extension::<PluginParams>() {
+			let mut output = ParamOutput {
+				lookup: &self.param_lookup,
+				sender: &mut self.feedback,
+			};
 			params.flush_active(
 				&mut handle,
 				&InputEvents::from_buffer(&self.events),
-				&mut OutputEvents::void(),
+				&mut OutputEvents::from_buffer(&mut output),
 			);
 		}
 		self.events.clear();
@@ -353,6 +426,11 @@ impl Processor for ClapProcessor {
 		self.ports.fill_inputs(&mut self.in_bufs, n, main, key);
 
 		let transport_event = transport_event(transport);
+		HostFlags::take(&self.flags.flush);
+		let mut output = ParamOutput {
+			lookup: &self.param_lookup,
+			sender: &mut self.feedback,
+		};
 		let status = {
 			let mut rest: &mut [Vec<f32>] = &mut self.in_bufs;
 			let inputs = self
@@ -384,7 +462,7 @@ impl Processor for ClapProcessor {
 				&inputs,
 				&mut outputs,
 				&InputEvents::from_buffer(&self.events),
-				&mut OutputEvents::void(),
+				&mut OutputEvents::from_buffer(&mut output),
 				Some(self.steady_time),
 				Some(&transport_event),
 			)
@@ -435,6 +513,14 @@ impl Processor for ClapProcessor {
 		}
 	}
 
+	fn idle(&mut self) {
+		if self.failed {
+			return;
+		}
+		let requested = HostFlags::take(&self.flags.flush);
+		self.flush_params(requested);
+	}
+
 	fn latency(&self) -> u32 {
 		self.latency
 	}
@@ -444,7 +530,7 @@ impl Processor for ClapProcessor {
 	}
 
 	fn save_state(&mut self) -> Option<Vec<u8>> {
-		self.flush_params();
+		self.flush_params(false);
 		let key = self.key;
 		run_on_main(move |main| {
 			let hosted = main.instances.get_mut(&key)?;
@@ -503,8 +589,10 @@ impl Drop for ClapProcessor {
 			a.ensure_processing_stopped();
 			a.into_stopped()
 		});
-		post_to_main(move |main| {
-			if let Some(mut hosted) = main.instances.remove(&key) {
+		crate::main_thread::post_to_main(move |main| {
+			// The editor goes first: its view must not outlive the instance.
+			super::editor::close(main, key);
+			if let Some(mut hosted) = main.clap.instances.remove(&key) {
 				if let Some(processor) = processor {
 					hosted.instance.deactivate(processor);
 				}

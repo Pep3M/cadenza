@@ -355,17 +355,17 @@ fn an_idle_dead_child_is_noticed_and_instruments_go_silent() {
 #[cfg(target_os = "linux")]
 #[test]
 fn dropped_instances_leave_no_processes_or_shared_memory() {
-	let shm_before = std::fs::read_dir("/dev/shm")
-		.map(|d| d.count())
-		.unwrap_or(0);
-	let pids: Vec<u32> = (0..3)
+	// Checks this test's own shared memory names (other tests running in
+	// parallel create and unlink theirs meanwhile).
+	let (pids, names): (Vec<u32>, Vec<String>) = (0..3)
 		.map(|_| {
 			let p = sandboxed(GAIN_ID, None);
 			let pid = p.pid().unwrap();
+			let name = p.shm_name().unwrap();
 			drop(p);
-			pid
+			(pid, name)
 		})
-		.collect();
+		.unzip();
 	let started = Instant::now();
 	for pid in pids {
 		// Reaped: no /proc entry (not even a zombie).
@@ -377,19 +377,10 @@ fn dropped_instances_leave_no_processes_or_shared_memory() {
 			std::thread::sleep(Duration::from_millis(10));
 		}
 	}
-	let ours = std::fs::read_dir("/dev/shm")
-		.unwrap()
-		.filter_map(Result::ok)
-		.filter(|e| {
-			e.file_name()
-				.to_string_lossy()
-				.starts_with(&format!("cdz{:x}.", std::process::id()))
-		})
-		.count();
-	assert_eq!(
-		ours, 0,
-		"shared memory names left behind (before: {shm_before})"
-	);
+	for name in names {
+		let path = std::path::Path::new("/dev/shm").join(name.trim_start_matches('/'));
+		assert!(!path.exists(), "shared memory {name} left behind");
+	}
 }
 
 #[test]

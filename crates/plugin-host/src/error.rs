@@ -68,6 +68,9 @@ pub enum PluginError {
 	#[error("plugin catalog cache '{}' error: {reason}", path.display())]
 	Cache { path: PathBuf, reason: String },
 
+	#[error("plugin '{id}' cannot show its editor: {reason}")]
+	Editor { id: String, reason: String },
+
 	#[error("plugin host main thread is unavailable: {0}")]
 	HostThread(String),
 }

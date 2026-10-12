@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 cadenza-dsp.workspace = true
 clack-host.workspace = true
-clack-extensions = { workspace = true, features = ["clack-host", "audio-ports", "note-ports", "params", "state", "latency", "tail", "log", "thread-check", "preset-discovery"] }
+clack-extensions = { workspace = true, features = ["clack-host", "audio-ports", "note-ports", "params", "state", "latency", "tail", "log", "thread-check", "preset-discovery", "gui", "timer", "posix-fd"] }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -17,6 +17,11 @@ base64.workspace = true
 vst3.workspace = true
 libloading.workspace = true
 libc.workspace = true
+rtrb.workspace = true
+
+# Plugin editor windows (X11, through XWayland on Wayland desktops).
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

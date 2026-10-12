@@ -17,7 +17,8 @@
 //!   audio thread). `&mut self` guarantees these never overlap with each other
 //!   or with main-thread jobs the processor itself issues (`prepare`, state).
 //! - **Host callbacks** (`IComponentHandler`) only flip atomic flags that the
-//!   next `prepare` consumes, so plugins may call them from any thread.
+//!   next `prepare` consumes, or queue GUI edits (see below), so plugins may
+//!   call them from any thread.
 //! - Every host-implemented COM method catches panics at the FFI boundary.
 //!
 //! # Parameters
@@ -29,16 +30,26 @@
 //! per block. `save_state` instead converts pending values exactly with the
 //! controller's `plainParamToNormalized` on the main thread, flushes them with
 //! a zero-sample `process`, and mirrors every value sent so far into the
-//! controller (`setParamNormalized`) before saving. Output parameter changes
-//! and output events from the plugin are accepted and ignored.
+//! controller (`setParamNormalized`) before saving, and while its editor is
+//! open (so the GUI follows automation and Cadenza's controls). Output
+//! parameter changes and output events from the processor are accepted and
+//! ignored.
 //!
-//! No editor (`IPlugView`) yet: plugin GUIs are future work.
+//! # Editor
+//!
+//! `IPlugView`s are embedded into an X11 window (`X11EmbedWindowID`) with a
+//! plug frame that is also the Linux `IRunLoop` (fd handlers and timers run by
+//! the plugin main thread), see `editor.rs` and [`crate::editor`]. Edits made in
+//! the GUI arrive as `beginEdit`/`performEdit`/`endEdit`: the value goes to
+//! the processor through a wait-free ring (the host's job in VST3) and the
+//! edit is reported to the host as a plain value.
 
 // VST3 enum constants are `c_uint` on Unix but `c_int` on Windows, so casts
 // that are no-ops on one platform are required on the other.
 #![allow(clippy::unnecessary_cast)]
 
 pub(crate) mod com;
+pub(crate) mod editor;
 pub(crate) mod instance;
 pub(crate) mod module;
 pub(crate) mod moduleinfo;

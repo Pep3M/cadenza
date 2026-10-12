@@ -13,16 +13,21 @@ use vst3::Steinberg::Vst::{
 use vst3::Steinberg::{kResultFalse, kResultOk};
 
 use super::com::{SendPtr, Vst3Flags, tuid_from_hex};
+use super::editor::{Attachment, ParamMirror};
 use super::plugin::Vst3Plugin;
 use super::rt::{EventList, HeldNotes, ParamCurves, ParameterChanges, iface};
 use crate::ProcessMode;
 use crate::clap::PortLayout;
 use crate::clap::events::ParamQueue;
 use crate::clap::instance::{MAX_TAIL_SECONDS, NOTE_EVENT_CAPACITY, default_tail};
-use crate::descriptor::{PluginDescriptor, PluginRole};
+use crate::descriptor::{PluginDescriptor, PluginFormat, PluginRole};
+use crate::editor::{EditorShared, LocalEditor, PluginEditor};
 use crate::error::PluginError;
 use crate::main_thread::{post_to_main, run_on_main};
 use crate::ports::KeyInput;
+
+/// GUI edits in flight from the controller to the processor.
+const GUI_EDIT_CAPACITY: usize = 512;
 
 /// Room for parameter changes the plugin reports back (ignored, but the
 /// plugin must have somewhere to put them).
@@ -101,9 +106,15 @@ pub struct Vst3Processor {
 	curves: ParamCurves,
 	/// Pending plain values from `set_param`.
 	queue: ParamQueue,
-	/// Normalized values sent to the processor but not yet mirrored into the
-	/// controller (done off the audio thread, before saving state).
-	controller_sync: ParamQueue,
+	/// Normalized values sent to the processor on the host's behalf, mirrored
+	/// into the controller off the audio thread (GUI, state saves).
+	mirror: Arc<ParamMirror>,
+	/// Edits made in the plugin's GUI (normalized), for the processor.
+	gui_edits: rtrb::Consumer<(u32, f64)>,
+	/// GUI edits delivered by an idle (zero-sample) flush, sent again with the
+	/// next block: not every plugin applies changes in a zero-sample call.
+	gui_resend: Vec<(u32, f64)>,
+	editor: Arc<EditorShared>,
 	events: ComWrapper<EventList>,
 	out_events: ComWrapper<EventList>,
 	changes: ComWrapper<ParameterChanges>,
@@ -152,6 +163,12 @@ impl Vst3Processor {
 			.collect();
 		let stepped: Vec<bool> = desc.params.iter().map(|p| p.stepped).collect();
 		let flags = Arc::new(Vst3Flags::default());
+		let (gui_tx, gui_edits) = rtrb::RingBuffer::new(GUI_EDIT_CAPACITY);
+		*flags.to_audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(gui_tx);
+		let (editor, _) =
+			EditorShared::new(&desc.id, desc.params.iter().map(|p| p.id.clone()).collect());
+		let mirror = Arc::new(ParamMirror::new(desc.params.len()));
+		let attachment = Attachment::new(editor.clone(), mirror.clone(), param_ids.clone());
 
 		enum Failure {
 			Plugin(PluginError),
@@ -166,7 +183,7 @@ impl Vst3Processor {
 		let created = run_on_main(move |main| {
 			let module = main.vst3.module(&path).map_err(Failure::Plugin)?;
 			let result = Vst3Plugin::create(module, &cid, host_flags);
-			let plugin = match result {
+			let mut plugin = match result {
 				Ok(p) => p,
 				Err(e) => {
 					main.vst3.release_unused(&path);
@@ -174,6 +191,7 @@ impl Vst3Processor {
 				}
 			};
 			let curves = plugin.curves(&ids, &stepped);
+			plugin.attachment = Some(attachment);
 			let audio = SendPtr(plugin.processor.clone());
 			let key = main.vst3.insert(plugin);
 			Ok((key, audio, curves))
@@ -198,7 +216,10 @@ impl Vst3Processor {
 				.collect(),
 			curves,
 			queue: ParamQueue::new(count),
-			controller_sync: ParamQueue::new(count),
+			mirror,
+			gui_edits,
+			gui_resend: Vec::with_capacity(GUI_EDIT_CAPACITY),
+			editor,
 			events: EventList::with_capacity(NOTE_EVENT_CAPACITY + 128),
 			out_events: EventList::with_capacity(0),
 			changes: ParameterChanges::with_capacity(count),
@@ -361,20 +382,40 @@ impl Vst3Processor {
 		status == kResultOk || status == kResultFalse
 	}
 
+	/// A handle to this instance's editor (usable while the processor runs on
+	/// the audio thread).
+	pub fn editor(&self) -> PluginEditor {
+		PluginEditor::local(LocalEditor {
+			format: PluginFormat::Vst3,
+			key: self.key,
+			shared: self.editor.clone(),
+		})
+	}
+
 	/// Moves queued plain values into the input parameter changes using the
-	/// audio-thread curves.
-	fn queue_param_changes(&mut self) {
-		let (ids, curves, changes, sync) = (
-			&self.param_ids,
-			&self.curves,
-			&self.changes,
-			&mut self.controller_sync,
-		);
+	/// audio-thread curves, then the GUI's edits (re-sent ones first, so a
+	/// newer value always wins). `idle`: a zero-sample flush; GUI edits are
+	/// kept to be sent again with the next block.
+	fn queue_param_changes(&mut self, idle: bool) {
+		for &(id, v) in &self.gui_resend {
+			self.changes.push(id, v);
+		}
+		if !idle {
+			self.gui_resend.clear();
+		}
+		let (ids, curves, changes, mirror) =
+			(&self.param_ids, &self.curves, &self.changes, &self.mirror);
 		self.queue.drain(|i, plain| {
 			let normalized = curves.normalize(i, plain);
 			changes.push(ids[i], normalized);
-			sync.set(i, normalized);
+			mirror.set(i, normalized);
 		});
+		while let Ok((id, v)) = self.gui_edits.pop() {
+			self.changes.push(id, v);
+			if idle && self.gui_resend.len() < self.gui_resend.capacity() {
+				self.gui_resend.push((id, v));
+			}
+		}
 	}
 
 	/// Delivers queued parameter changes with exact normalization (through
@@ -409,7 +450,7 @@ impl Vst3Processor {
 				.and_then(|e| e[k])
 				.unwrap_or_else(|| self.curves.normalize(i, plain));
 			self.changes.push(self.param_ids[i], normalized);
-			self.controller_sync.set(i, normalized);
+			self.mirror.set(i, normalized);
 		}
 		self.events.clear();
 		self.call_process(0);
@@ -476,7 +517,7 @@ impl Processor for Vst3Processor {
 
 		self.changes.clear();
 		self.events.clear();
-		self.queue_param_changes();
+		self.queue_param_changes(false);
 		if self.release_held {
 			self.held.release_all(&self.events, 0);
 			self.release_held = false;
@@ -558,6 +599,20 @@ impl Processor for Vst3Processor {
 		self.release_held = self.held != HeldNotes::default();
 	}
 
+	fn idle(&mut self) {
+		if self.failed || self.audio.is_none() {
+			return;
+		}
+		if self.queue.is_empty() && self.gui_edits.is_empty() {
+			return;
+		}
+		self.changes.clear();
+		self.events.clear();
+		self.queue_param_changes(true);
+		self.call_process(0);
+		self.changes.clear();
+	}
+
 	fn latency(&self) -> u32 {
 		self.latency
 	}
@@ -568,17 +623,10 @@ impl Processor for Vst3Processor {
 
 	fn save_state(&mut self) -> Option<Vec<u8>> {
 		self.flush_params();
-		let mut sync = Vec::new();
-		let ids = &self.param_ids;
-		self.controller_sync.drain(|i, v| sync.push((ids[i], v)));
 		let key = self.key;
-		run_on_main(move |main| {
-			let plugin = main.vst3.instances.get(&key)?;
-			plugin.sync_controller(&sync);
-			plugin.save_state()
-		})
-		.ok()
-		.flatten()
+		run_on_main(move |main| main.vst3.instances.get(&key)?.save_state_synced())
+			.ok()
+			.flatten()
 	}
 
 	fn load_state(&mut self, data: &[u8]) -> bool {
@@ -599,8 +647,10 @@ impl Drop for Vst3Processor {
 		let key = self.key;
 		let audio = self.audio.take();
 		post_to_main(move |main| {
-			// Release the audio-thread reference before the teardown.
+			// Release the audio-thread reference before the teardown; the
+			// editor goes first.
 			drop(audio);
+			super::editor::close(main, key);
 			main.vst3.remove(key);
 		});
 	}

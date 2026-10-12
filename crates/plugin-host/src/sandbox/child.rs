@@ -4,10 +4,14 @@
 //!
 //! Threads: the process main thread runs the control loop; a dedicated
 //! `cadenza-sandbox-audio` thread waits on the request futex and processes
-//! blocks. The host never overlaps a control request with an audio request
+//! blocks; the plugin's own main thread (`cadenza-plugin-main`, as in any
+//! host process) owns the instance and runs its editor and event loop. The
+//! host never overlaps a processor control request with an audio request
 //! (both need `&mut` on its side), so the mutex around the processor is never
-//! contended. Losing the host (stdin EOF, or `PR_SET_PDEATHSIG` on Linux)
-//! ends the process immediately.
+//! contended; editor requests may arrive while audio runs and therefore never
+//! touch that mutex (they go through the instance's editor handle). Losing
+//! the host (stdin EOF, or `PR_SET_PDEATHSIG` on Linux) ends the process
+//! immediately.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -20,13 +24,13 @@ use base64::Engine as _;
 use cadenza_dsp::{MidiEvent, Processor};
 
 use super::protocol::WirePreset;
-use super::protocol::{Reply, Request, read_frame, write_frame};
+use super::protocol::{Envelope, Reply, Request, read_frame, write_frame};
 use super::shm::{
-	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_PROCESS, CMD_RESET, Layout, Region,
-	W_ACK_SEQ, W_REQ_SEQ,
+	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_IDLE, CMD_PROCESS, CMD_RESET, Layout,
+	Region, W_ACK_SEQ, W_REQ_SEQ,
 };
 use super::sync;
-use crate::ProcessMode;
+use crate::{PluginEditor, ProcessMode};
 
 struct Args {
 	shm: String,
@@ -134,14 +138,20 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 	};
 
 	let mut stdin = std::io::stdin().lock();
-	let processor = match read_frame::<Request>(&mut stdin) {
-		Ok(Request::Init {
+	let (init_id, init) = match read_frame::<Envelope<Request>>(&mut stdin) {
+		Ok(e) => (e.id, e.body),
+		Err(_) => exit_now(1),
+	};
+	let reply =
+		|out: &mut std::fs::File, id: u64, body: &Reply| write_frame(out, &Envelope { id, body });
+	let (processor, editor) = match init {
+		Request::Init {
 			descriptor,
 			sample_rate,
 			max_block,
 			offline,
 			state,
-		}) => {
+		} => {
 			let mode = if offline {
 				ProcessMode::Offline
 			} else {
@@ -156,7 +166,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 				None => Ok(None),
 			};
 			match state.and_then(|state| {
-				crate::instantiate_with_mode(
+				crate::instantiate_with_editor(
 					&descriptor,
 					sample_rate,
 					max_block,
@@ -166,8 +176,9 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 			}) {
 				Ok(p) => p,
 				Err(e) => {
-					let _ = write_frame(
+					let _ = reply(
 						&mut out,
+						init_id,
 						&Reply {
 							state_rejected: matches!(e, crate::PluginError::State { .. }),
 							error: Some(e.to_string()),
@@ -178,7 +189,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 				}
 			}
 		}
-		Ok(_) | Err(_) => exit_now(1),
+		_ => exit_now(1),
 	};
 	let processor = Arc::new(Mutex::new(processor));
 	{
@@ -191,20 +202,60 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 		}
 	}
 	let ready = reply_ok(&mut lock(&processor));
-	if write_frame(&mut out, &ready).is_err() {
+	if reply(&mut out, init_id, &ready).is_err() {
 		exit_now(1);
 	}
 
 	loop {
-		let request = match read_frame::<Request>(&mut stdin) {
+		let request = match read_frame::<Envelope<Request>>(&mut stdin) {
 			Ok(r) => r,
 			// EOF: the host dropped us or died.
 			Err(_) => exit_now(0),
 		};
-		let reply = handle(&processor, request);
-		if write_frame(&mut out, &reply).is_err() {
+		let body = match request.body {
+			Request::EditorOpen { .. }
+			| Request::EditorClose
+			| Request::EditorPoll
+			| Request::EditorState => handle_editor(&editor, request.body),
+			other => handle(&processor, other),
+		};
+		if reply(&mut out, request.id, &body).is_err() {
 			exit_now(0);
 		}
+	}
+}
+
+/// Editor requests: served through the instance's editor handle on the
+/// plugin main thread, without the processor (busy on the audio thread).
+fn handle_editor(editor: &PluginEditor, request: Request) -> Reply {
+	let error = |e: crate::PluginError| Reply {
+		error: Some(e.to_string()),
+		..Reply::default()
+	};
+	match request {
+		Request::EditorOpen { title } => match editor.open(&title) {
+			Ok(()) => Reply::default(),
+			Err(e) => error(e),
+		},
+		Request::EditorClose => match editor.close() {
+			Ok(()) => Reply::default(),
+			Err(e) => error(e),
+		},
+		Request::EditorPoll => Reply {
+			events: editor.poll(),
+			..Reply::default()
+		},
+		Request::EditorState => match editor.save_state() {
+			Ok(state) => Reply {
+				state: state.map(|s| crate::encode_state(&s)),
+				..Reply::default()
+			},
+			Err(e) => error(e),
+		},
+		_ => Reply {
+			error: Some("not an editor request".into()),
+			..Reply::default()
+		},
 	}
 }
 
@@ -282,6 +333,13 @@ fn handle(processor: &Mutex<Box<dyn Processor>>, request: Request) -> Reply {
 			let _ = std::io::stderr().flush();
 			exit_now(0)
 		}
+		Request::EditorOpen { .. }
+		| Request::EditorClose
+		| Request::EditorPoll
+		| Request::EditorState => Reply {
+			error: Some("editor requests are not processor requests".into()),
+			..reply_ok(&mut p)
+		},
 	}
 }
 
@@ -339,6 +397,7 @@ fn audio_loop(region: &Region, layout: Layout, processor: &Mutex<Box<dyn Process
 					}
 				}
 				CMD_RESET => p.reset(),
+				CMD_IDLE => p.idle(),
 				_ => {}
 			}
 		}

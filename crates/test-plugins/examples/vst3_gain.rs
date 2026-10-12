@@ -9,18 +9,26 @@
 //!
 //! Component state is the gain and mute values (normalized, f64 LE); the
 //! controller state is the 4 bytes `CTRL`.
+//!
+//! Editor: `createView("editor")` returns a view that accepts
+//! `X11EmbedWindowID` parents (it draws nothing). Once attached it registers a
+//! 10 ms timer on the frame's `IRunLoop`; the first tick scripts a GUI edit
+//! (`beginEdit(0)`, `performEdit(0, -6 dB)`, `endEdit(0)` on the component
+//! handler), the second asks the frame to resize the view to 320x240.
 
 #![allow(non_snake_case)]
 // VST3 enum constants are `c_uint` on Unix but `c_int` on Windows.
 #![allow(clippy::unnecessary_cast)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use vst3::Steinberg::Linux::{IRunLoop, IRunLoopTrait, ITimerHandler, ITimerHandlerTrait};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
-use vst3::{Class, ComRef, ComWrapper, uid};
+use vst3::{Class, ComPtr, ComRef, ComWrapper, uid};
 
 const LATENCY: u32 = 32;
 
@@ -286,6 +294,158 @@ impl IAudioProcessorTrait for GainProcessor {
 struct GainController {
 	gain: Cell<f64>,
 	mute: Cell<f64>,
+	handler: Rc<RefCell<Option<ComPtr<IComponentHandler>>>>,
+}
+
+/// State shared by the test editor view and its timer.
+#[derive(Default)]
+struct ViewState {
+	handler: Rc<RefCell<Option<ComPtr<IComponentHandler>>>>,
+	frame: RefCell<Option<ComPtr<IPlugFrame>>>,
+	/// The view itself (no reference held: it owns this state).
+	view: Cell<*mut IPlugView>,
+	ticks: Cell<u32>,
+	size: Cell<(i32, i32)>,
+}
+
+struct ViewTimer(Rc<ViewState>);
+
+impl Class for ViewTimer {
+	type Interfaces = (ITimerHandler,);
+}
+
+impl ITimerHandlerTrait for ViewTimer {
+	unsafe fn onTimer(&self) {
+		let s = &self.0;
+		s.ticks.set(s.ticks.get() + 1);
+		match s.ticks.get() {
+			1 => {
+				if let Some(h) = s.handler.borrow().as_ref() {
+					unsafe {
+						h.beginEdit(0);
+						h.performEdit(0, db_to_normalized(-6.0));
+						h.endEdit(0);
+					}
+				}
+			}
+			2 => {
+				let frame = s.frame.borrow().clone();
+				if let Some(frame) = frame {
+					let mut rect = ViewRect {
+						left: 0,
+						top: 0,
+						right: 320,
+						bottom: 240,
+					};
+					unsafe { frame.resizeView(s.view.get(), &mut rect) };
+				}
+			}
+			_ => {}
+		}
+	}
+}
+
+struct GainView {
+	state: Rc<ViewState>,
+	timer: ComWrapper<ViewTimer>,
+}
+
+impl Class for GainView {
+	type Interfaces = (IPlugView,);
+}
+
+impl GainView {
+	fn timer_ptr(&self) -> *mut ITimerHandler {
+		self.timer
+			.as_com_ref::<ITimerHandler>()
+			.map_or(std::ptr::null_mut(), |r| r.as_ptr())
+	}
+
+	fn run_loop(&self) -> Option<ComPtr<IRunLoop>> {
+		self.state.frame.borrow().as_ref()?.cast::<IRunLoop>()
+	}
+}
+
+impl IPlugViewTrait for GainView {
+	unsafe fn isPlatformTypeSupported(&self, r#type: FIDString) -> tresult {
+		let wanted = unsafe { std::ffi::CStr::from_ptr(kPlatformTypeX11EmbedWindowID) };
+		if !r#type.is_null() && unsafe { std::ffi::CStr::from_ptr(r#type) } == wanted {
+			kResultTrue
+		} else {
+			kResultFalse
+		}
+	}
+
+	unsafe fn attached(&self, parent: *mut c_void, _type: FIDString) -> tresult {
+		if parent.is_null() {
+			return kInvalidArgument;
+		}
+		if let Some(run_loop) = self.run_loop() {
+			unsafe { run_loop.registerTimer(self.timer_ptr(), 10) };
+		}
+		kResultOk
+	}
+
+	unsafe fn removed(&self) -> tresult {
+		if let Some(run_loop) = self.run_loop() {
+			unsafe { run_loop.unregisterTimer(self.timer_ptr()) };
+		}
+		kResultOk
+	}
+
+	unsafe fn onWheel(&self, _distance: f32) -> tresult {
+		kResultFalse
+	}
+
+	unsafe fn onKeyDown(&self, _key: char16, _code: int16, _modifiers: int16) -> tresult {
+		kResultFalse
+	}
+
+	unsafe fn onKeyUp(&self, _key: char16, _code: int16, _modifiers: int16) -> tresult {
+		kResultFalse
+	}
+
+	unsafe fn getSize(&self, size: *mut ViewRect) -> tresult {
+		if size.is_null() {
+			return kInvalidArgument;
+		}
+		let (w, h) = self.state.size.get();
+		unsafe {
+			*size = ViewRect {
+				left: 0,
+				top: 0,
+				right: w,
+				bottom: h,
+			}
+		};
+		kResultOk
+	}
+
+	unsafe fn onSize(&self, size: *mut ViewRect) -> tresult {
+		if size.is_null() {
+			return kInvalidArgument;
+		}
+		let r = unsafe { *size };
+		self.state.size.set((r.right - r.left, r.bottom - r.top));
+		kResultOk
+	}
+
+	unsafe fn onFocus(&self, _state: TBool) -> tresult {
+		kResultOk
+	}
+
+	unsafe fn setFrame(&self, frame: *mut IPlugFrame) -> tresult {
+		*self.state.frame.borrow_mut() = unsafe { ComRef::from_raw(frame) }.map(|f| f.to_com_ptr());
+		kResultOk
+	}
+
+	unsafe fn canResize(&self) -> tresult {
+		kResultTrue
+	}
+
+	unsafe fn checkSizeConstraint(&self, _rect: *mut ViewRect) -> tresult {
+		kResultOk
+	}
 }
 
 impl Class for GainController {
@@ -413,12 +573,29 @@ impl IEditControllerTrait for GainController {
 		kResultOk
 	}
 
-	unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
+	unsafe fn setComponentHandler(&self, handler: *mut IComponentHandler) -> tresult {
+		*self.handler.borrow_mut() = unsafe { ComRef::from_raw(handler) }.map(|h| h.to_com_ptr());
 		kResultOk
 	}
 
-	unsafe fn createView(&self, _name: *const c_char) -> *mut IPlugView {
-		std::ptr::null_mut()
+	unsafe fn createView(&self, name: *const c_char) -> *mut IPlugView {
+		if name.is_null() || unsafe { std::ffi::CStr::from_ptr(name) } != c"editor" {
+			return std::ptr::null_mut();
+		}
+		let state = Rc::new(ViewState {
+			handler: self.handler.clone(),
+			size: Cell::new((300, 200)),
+			..ViewState::default()
+		});
+		let view = ComWrapper::new(GainView {
+			timer: ComWrapper::new(ViewTimer(state.clone())),
+			state: state.clone(),
+		});
+		let Some(ptr) = view.to_com_ptr::<IPlugView>() else {
+			return std::ptr::null_mut();
+		};
+		state.view.set(ptr.as_ptr());
+		ptr.into_raw()
 	}
 }
 
@@ -471,6 +648,7 @@ impl IPluginFactoryTrait for Factory {
 			GainController::CID => ComWrapper::new(GainController {
 				gain: Cell::new(db_to_normalized(0.0)),
 				mute: Cell::new(0.0),
+				handler: Rc::default(),
 			})
 			.to_com_ptr::<FUnknown>(),
 			_ => None,

@@ -191,3 +191,35 @@ pub fn routing_descriptor(id: &str) -> &'static PluginDescriptor {
 		.find(|d| d.id == id)
 		.unwrap_or_else(|| panic!("{id} not scanned"))
 }
+
+pub const GUI_ID: &str = "dev.cadenza.test.gui";
+
+/// Descriptor of the scripted-editor test effect (`cadenza-gui.clap`).
+pub fn gui_descriptor() -> &'static PluginDescriptor {
+	static DESC: OnceLock<PluginDescriptor> = OnceLock::new();
+	DESC.get_or_init(|| {
+		let library = build_cdylib(&["--example", "clap_gui"], "clap_gui");
+		let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+			.join(format!("cadenza-test-gui-{}", std::process::id()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let dest = dir.join("cadenza-gui.clap");
+		std::fs::copy(&library, &dest).unwrap();
+		let mut descs = scan_in_subprocess(&scanner(), &dest, Duration::from_secs(20))
+			.expect("scan GUI test plugin");
+		assert_eq!(descs.len(), 1);
+		descs.remove(0)
+	})
+}
+
+/// Descriptor of the VST3 test gain (`CadenzaTestGain.vst3`, with a scripted
+/// editor view).
+pub fn vst3_gain_descriptor() -> &'static PluginDescriptor {
+	static DESC: OnceLock<PluginDescriptor> = OnceLock::new();
+	DESC.get_or_init(|| {
+		scan_in_subprocess(&scanner(), vst3_bundle(), Duration::from_secs(20))
+			.expect("scan VST3 test gain")
+			.into_iter()
+			.find(|d| d.id == VST3_GAIN_ID)
+			.expect("VST3 test gain scanned")
+	})
+}

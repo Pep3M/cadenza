@@ -20,6 +20,13 @@
 //!   time per block. The audio thread never allocates, locks or does I/O.
 //! - **Control** (create, prepare, state, shutdown) is length-prefixed JSON
 //!   over the child's stdin/stdout, off the audio thread, with a deadline.
+//! - **Editors** (see [`crate::editor`]) use the same control channel through
+//!   a [`crate::PluginEditor`] handle that does not need the processor (which
+//!   may be on the audio thread meanwhile): the child creates the window and
+//!   runs the GUI on its own plugin main thread, queues edits made there, and
+//!   hands them over when the host polls. With an editor open and the
+//!   transport stopped, `Processor::idle` sends an idle round trip so the
+//!   plugin can flush parameter changes.
 //!
 //! # Failure semantics
 //!
@@ -50,7 +57,7 @@ mod sync;
 
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -60,12 +67,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::descriptor::{PluginDescriptor, PluginRole};
+use crate::editor::EditorEvent;
 use crate::error::PluginError;
 use crate::{ProcessMode, encode_state};
 use protocol::{Reply, Request};
 use shm::{
-	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_PARAMS, CMD_PROCESS, CMD_RESET, Layout,
-	Region, W_ACK_SEQ, W_REQ_SEQ,
+	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_IDLE, CMD_PARAMS, CMD_PROCESS, CMD_RESET,
+	Layout, Region, W_ACK_SEQ, W_REQ_SEQ,
 };
 
 use crate::ports::KeyInput;
@@ -420,12 +428,74 @@ fn reap_later(child: Child) {
 
 // ------------------------------------------------------------ connection
 
-/// One live sandbox child and its channels.
+/// The control pipes of one sandbox child.
+struct Pipes {
+	stdin: ChildStdin,
+	stdout: ChildStdout,
+	next_id: u64,
+}
+
+impl Pipes {
+	#[cfg(unix)]
+	fn request(&mut self, req: &Request, timeout: Duration) -> std::io::Result<Reply> {
+		self.next_id += 1;
+		let id = self.next_id;
+		protocol::write_frame(&mut self.stdin, &protocol::Envelope { id, body: req })?;
+		protocol::read_reply_until(&mut self.stdout, id, Instant::now() + timeout)
+	}
+
+	#[cfg(not(unix))]
+	fn request(&mut self, _req: &Request, _timeout: Duration) -> std::io::Result<Reply> {
+		Err(std::io::Error::other(
+			"sandboxed hosting is not implemented on this OS",
+		))
+	}
+}
+
+/// The control channel of the current child, shared by its processor and its
+/// editor handles (never used on the audio thread).
+struct Link {
+	pipes: Mutex<Option<Pipes>>,
+	/// An editor is open (as far as the host knows).
+	editor_open: AtomicBool,
+	status: Arc<Status>,
+	control_timeout: Duration,
+}
+
+impl Link {
+	fn lock(&self) -> MutexGuard<'_, Option<Pipes>> {
+		self.pipes.lock().unwrap_or_else(|e| e.into_inner())
+	}
+
+	fn request(&self, req: &Request, timeout: Duration) -> std::io::Result<Reply> {
+		match self.lock().as_mut() {
+			Some(p) => p.request(req, timeout),
+			None => Err(std::io::Error::new(
+				std::io::ErrorKind::NotConnected,
+				"the sandbox process is gone",
+			)),
+		}
+	}
+
+	/// Asks the child to exit and drops the pipes (EOF on its stdin).
+	fn shutdown(&self) {
+		if let Some(mut p) = self.lock().take() {
+			p.next_id += 1;
+			let _ = protocol::write_frame(
+				&mut p.stdin,
+				&protocol::Envelope {
+					id: p.next_id,
+					body: &Request::Shutdown,
+				},
+			);
+		}
+	}
+}
+
+/// One live sandbox child and its shared memory.
 struct Connection {
 	child: Child,
 	pid: u32,
-	stdin: ChildStdin,
-	stdout: ChildStdout,
 	region: Region,
 	layout: Layout,
 	seq: u32,
@@ -447,7 +517,7 @@ impl Connection {
 		state: Option<&[u8]>,
 		mode: ProcessMode,
 		options: &SandboxOptions,
-	) -> Result<(Connection, Reply), PluginError> {
+	) -> Result<(Connection, Pipes, Reply), PluginError> {
 		let fail = |reason: String| PluginError::Sandbox {
 			id: desc.id.clone(),
 			reason,
@@ -485,11 +555,14 @@ impl Connection {
 			reap_later(child);
 			return Err(fail("the sandbox process has no control pipes".into()));
 		};
+		let mut pipes = Pipes {
+			stdin,
+			stdout,
+			next_id: 0,
+		};
 		let mut conn = Connection {
 			child,
 			pid,
-			stdin,
-			stdout,
 			region,
 			layout,
 			seq: 0,
@@ -501,19 +574,21 @@ impl Connection {
 			offline: mode == ProcessMode::Offline,
 			state: state.map(encode_state),
 		};
-		let reply = conn.request(&init, options.control_timeout);
+		let reply = pipes.request(&init, options.control_timeout);
 		// The child has mapped the region (or is gone): drop the name.
 		conn.region.unlink();
 		let reply = match reply {
 			Ok(r) => r,
 			Err(e) => {
 				let detail = describe_spawn_failure(&mut conn.child, e);
-				conn.close();
+				drop(pipes);
+				reap_later(conn.child);
 				return Err(fail(detail));
 			}
 		};
 		if let Some(error) = reply.error.clone() {
-			conn.close();
+			drop(pipes);
+			reap_later(conn.child);
 			return Err(if reply.state_rejected {
 				PluginError::State {
 					id: desc.id.clone(),
@@ -523,30 +598,113 @@ impl Connection {
 				fail(error)
 			});
 		}
-		Ok((conn, reply))
+		Ok((conn, pipes, reply))
+	}
+}
+
+/// Editor side of a sandboxed instance (see [`crate::PluginEditor`]).
+pub(crate) struct EditorLink {
+	link: Arc<Link>,
+}
+
+/// How long an editor poll may take before it is skipped.
+const EDITOR_POLL_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long closing an editor may take.
+const EDITOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+impl EditorLink {
+	pub fn plugin_id(&self) -> &str {
+		&self.link.status.plugin_id
 	}
 
-	#[cfg(unix)]
-	fn request(&mut self, req: &Request, timeout: Duration) -> std::io::Result<Reply> {
-		protocol::write_frame(&mut self.stdin, req)?;
-		protocol::read_frame_until(&mut self.stdout, Instant::now() + timeout)
+	fn error(&self, reason: impl Into<String>) -> PluginError {
+		PluginError::Editor {
+			id: self.plugin_id().to_string(),
+			reason: reason.into(),
+		}
 	}
 
-	#[cfg(not(unix))]
-	fn request(&mut self, _req: &Request, _timeout: Duration) -> std::io::Result<Reply> {
-		Err(std::io::Error::other(
-			"sandboxed hosting is not implemented on this OS",
-		))
+	fn alive(&self) -> Result<(), PluginError> {
+		if self.link.status.state.load(Ordering::Acquire) != HEALTHY {
+			return Err(self
+				.error("the plugin's sandbox process crashed; reload the project to restart it"));
+		}
+		Ok(())
 	}
 
-	/// Asks the child to exit and hands it to the reaper.
-	fn close(self) {
-		let Connection {
-			child, mut stdin, ..
-		} = self;
-		let _ = protocol::write_frame(&mut stdin, &Request::Shutdown);
-		drop(stdin);
-		reap_later(child);
+	pub fn open(&self, title: &str) -> Result<(), PluginError> {
+		self.alive()?;
+		let reply = self
+			.link
+			.request(
+				&Request::EditorOpen {
+					title: title.to_string(),
+				},
+				self.link.control_timeout,
+			)
+			.map_err(|e| self.error(format!("the sandbox process did not answer ({e})")))?;
+		if let Some(e) = reply.error {
+			return Err(self.error(e));
+		}
+		self.link.editor_open.store(true, Ordering::Release);
+		Ok(())
+	}
+
+	pub fn close(&self) -> Result<(), PluginError> {
+		if !self.link.editor_open.swap(false, Ordering::AcqRel) {
+			return Ok(());
+		}
+		self.link
+			.request(&Request::EditorClose, EDITOR_CLOSE_TIMEOUT)
+			.map(|_| ())
+			.map_err(|e| self.error(format!("the sandbox process did not answer ({e})")))
+	}
+
+	pub fn is_open(&self) -> bool {
+		self.link.editor_open.load(Ordering::Acquire)
+	}
+
+	pub fn poll(&self) -> Vec<EditorEvent> {
+		if !self.is_open() {
+			return Vec::new();
+		}
+		let lost = || {
+			// The window disappeared with the process.
+			self.link.editor_open.store(false, Ordering::Release);
+			vec![EditorEvent::Closed]
+		};
+		if self.link.status.state.load(Ordering::Acquire) != HEALTHY {
+			return lost();
+		}
+		match self.link.request(&Request::EditorPoll, EDITOR_POLL_TIMEOUT) {
+			Ok(reply) => {
+				if reply.events.contains(&EditorEvent::Closed) {
+					self.link.editor_open.store(false, Ordering::Release);
+				}
+				reply.events
+			}
+			Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Vec::new(),
+			Err(_) => lost(),
+		}
+	}
+
+	pub fn save_state(&self) -> Result<Option<Vec<u8>>, PluginError> {
+		self.alive()?;
+		let reply = self
+			.link
+			.request(&Request::EditorState, self.link.control_timeout)
+			.map_err(|e| self.error(format!("the sandbox process did not answer ({e})")))?;
+		if let Some(e) = reply.error {
+			return Err(self.error(e));
+		}
+		reply
+			.state
+			.map(|s| {
+				base64::engine::general_purpose::STANDARD
+					.decode(s)
+					.map_err(|e| self.error(format!("bad state from the sandbox ({e})")))
+			})
+			.transpose()
 	}
 }
 
@@ -588,6 +746,7 @@ pub struct SandboxedProcessor {
 	mode: ProcessMode,
 	status: Arc<Status>,
 	conn: Option<Connection>,
+	link: Arc<Link>,
 	crashed: bool,
 	sample_rate: f32,
 	max_block: usize,
@@ -617,7 +776,8 @@ impl SandboxedProcessor {
 		mode: ProcessMode,
 		options: SandboxOptions,
 	) -> Result<Self, PluginError> {
-		let (conn, reply) = Connection::spawn(desc, sample_rate, max_block, state, mode, &options)?;
+		let (conn, pipes, reply) =
+			Connection::spawn(desc, sample_rate, max_block, state, mode, &options)?;
 		let n = desc.params.len();
 		let status = Arc::new(Status {
 			state: AtomicU8::new(HEALTHY),
@@ -632,6 +792,12 @@ impl SandboxedProcessor {
 				last_state: state.map(<[u8]>::to_vec),
 			}),
 		});
+		let link = Arc::new(Link {
+			pipes: Mutex::new(Some(pipes)),
+			editor_open: AtomicBool::new(false),
+			status: status.clone(),
+			control_timeout: options.control_timeout,
+		});
 		let mut p = Self {
 			desc: desc.clone(),
 			info: desc.device_info(),
@@ -639,6 +805,7 @@ impl SandboxedProcessor {
 			mode,
 			status,
 			conn: Some(conn),
+			link,
 			crashed: false,
 			sample_rate,
 			max_block: max_block.max(1),
@@ -680,6 +847,20 @@ impl SandboxedProcessor {
 		self.status.crash_info()
 	}
 
+	/// A handle to the plugin's editor, which runs in the sandbox process.
+	pub fn editor(&self) -> crate::PluginEditor {
+		crate::PluginEditor::sandboxed(EditorLink {
+			link: self.link.clone(),
+		})
+	}
+
+	/// Name of the shared memory block of the running child (unlinked once
+	/// the child mapped it). For leak tests.
+	#[doc(hidden)]
+	pub fn shm_name(&self) -> Option<String> {
+		self.conn.as_ref().map(|c| c.region.name().to_string())
+	}
+
 	/// Process id of the sandbox child, if one is running.
 	pub fn pid(&self) -> Option<u32> {
 		self.conn.as_ref().map(|c| c.pid)
@@ -697,8 +878,10 @@ impl SandboxedProcessor {
 		self.status.lock().pid = None;
 		if let Some(conn) = self.conn.take() {
 			kill_now(conn.pid);
-			conn.close();
+			self.link.shutdown();
+			reap_later(conn.child);
 		}
+		self.link.editor_open.store(false, Ordering::Release);
 		self.crashed = true;
 		let state = self.status.lock().last_state.clone();
 		let spawned = Connection::spawn(
@@ -709,7 +892,7 @@ impl SandboxedProcessor {
 			self.mode,
 			&self.options,
 		);
-		let (conn, reply) = match spawned {
+		let (conn, pipes, reply) = match spawned {
 			Ok(c) => c,
 			Err(e) => {
 				let mut inner = self.status.lock();
@@ -725,6 +908,7 @@ impl SandboxedProcessor {
 			inner.info = None;
 			inner.lost_detail.clear();
 		}
+		*self.link.lock() = Some(pipes);
 		self.status.state.store(HEALTHY, Ordering::Release);
 		self.conn = Some(conn);
 		self.crashed = false;
@@ -880,8 +1064,7 @@ impl SandboxedProcessor {
 			}
 		}
 		let timeout = self.options.control_timeout;
-		let conn = self.conn.as_mut()?;
-		match conn.request(req, timeout) {
+		match self.link.request(req, timeout) {
 			Ok(reply) => {
 				self.apply_reply(&reply);
 				Some(reply)
@@ -1051,6 +1234,22 @@ impl Processor for SandboxedProcessor {
 		accepted
 	}
 
+	fn idle(&mut self) {
+		// Only while an editor is open: that is when the plugin has parameter
+		// changes to flush on its own.
+		if self.crashed || !self.link.editor_open.load(Ordering::Acquire) {
+			return;
+		}
+		let t = Transport::default();
+		match self.round_trip(CMD_IDLE, 0, &t) {
+			Wait::Done => {}
+			how => {
+				let timeout = self.timeout();
+				self.fail(how, timeout);
+			}
+		}
+	}
+
 	fn reset(&mut self) {
 		if self.crashed {
 			return;
@@ -1103,8 +1302,10 @@ impl Processor for SandboxedProcessor {
 impl Drop for SandboxedProcessor {
 	fn drop(&mut self) {
 		self.status.lock().pid = None;
+		self.link.editor_open.store(false, Ordering::Release);
+		self.link.shutdown();
 		if let Some(conn) = self.conn.take() {
-			conn.close();
+			reap_later(conn.child);
 		}
 	}
 }

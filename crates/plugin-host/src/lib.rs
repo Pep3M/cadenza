@@ -12,12 +12,14 @@
 //!
 //! CLAP ([`clap`]) and VST3 ([`vst3`]) are peer formats behind the same
 //! descriptor, catalog, scanner and `instantiate` API. Both share one plugin
-//! main thread (`cadenza-plugin-main`, see `main_thread.rs`).
+//! main thread (`cadenza-plugin-main`, see `main_thread.rs`), which is also
+//! the event loop of plugin editor windows ([`editor`], [`PluginEditor`]).
 
 pub mod catalog;
 pub mod clap;
 pub mod descriptor;
 pub mod discovery;
+pub mod editor;
 mod error;
 pub(crate) mod main_thread;
 mod ports;
@@ -33,6 +35,7 @@ use serde::{Deserialize, Serialize};
 pub use catalog::{BlockedPlugin, FileStamp, PluginCatalog, ScanReport, default_cache_path};
 pub use descriptor::{AuxOutput, PluginDescriptor, PluginFormat, PluginParam, PluginRole};
 pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, find_vst3_files};
+pub use editor::{EDITORS_SUPPORTED, EditorEvent, PluginEditor};
 pub use error::PluginError;
 pub use sandbox::{
 	CrashInfo, CrashReason, SANDBOX_ENV, SandboxMonitor, SandboxOptions, SandboxedProcessor,
@@ -94,6 +97,30 @@ pub fn instantiate_with_mode(
 			state,
 			mode,
 		)?)),
+	}
+}
+
+/// Like [`instantiate_with_mode`], also returning a handle to the instance's
+/// editor (see [`editor`]), which stays usable while the processor runs on the
+/// audio thread.
+pub fn instantiate_with_editor(
+	desc: &PluginDescriptor,
+	sample_rate: f32,
+	max_block: usize,
+	state: Option<&[u8]>,
+	mode: ProcessMode,
+) -> Result<(Box<dyn Processor>, PluginEditor), PluginError> {
+	match desc.format {
+		PluginFormat::Clap => {
+			let p = clap::ClapProcessor::create(desc, sample_rate, max_block, state)?;
+			let editor = p.editor();
+			Ok((Box::new(p), editor))
+		}
+		PluginFormat::Vst3 => {
+			let p = vst3::Vst3Processor::create(desc, sample_rate, max_block, state, mode)?;
+			let editor = p.editor();
+			Ok((Box::new(p), editor))
+		}
 	}
 }
 

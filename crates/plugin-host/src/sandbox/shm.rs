@@ -50,6 +50,9 @@ pub(crate) const CMD_PROCESS: u32 = 1;
 pub(crate) const CMD_RESET: u32 = 2;
 /// Only deliver the queued parameter changes (before a state save).
 pub(crate) const CMD_PARAMS: u32 = 3;
+/// Deliver queued parameter changes and call `Processor::idle` (transport
+/// stopped while an editor is open).
+pub(crate) const CMD_IDLE: u32 = 4;
 
 const EV_NOTE_ON: u32 = 1;
 const EV_NOTE_OFF: u32 = 2;

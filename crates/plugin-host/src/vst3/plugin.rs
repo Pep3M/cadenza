@@ -56,6 +56,10 @@ pub(crate) struct Vst3Plugin {
 	handler: ComWrapper<ComponentHandler>,
 	active: bool,
 	processing: bool,
+	/// The open editor, if any (torn down before the controller).
+	pub(crate) editor: Option<super::editor::Vst3Editor>,
+	/// Link to the processor's editor handles and parameter mirror.
+	pub(crate) attachment: Option<super::editor::Attachment>,
 	/// Declared last: the module must outlive every interface above.
 	module: Rc<Module>,
 }
@@ -102,6 +106,8 @@ impl Vst3Plugin {
 			handler,
 			active: false,
 			processing: false,
+			editor: None,
+			attachment: None,
 			module,
 		};
 		// From here on `Drop` performs the teardown on any failure.
@@ -452,15 +458,12 @@ impl Vst3Plugin {
 		v.is_finite().then(|| v.clamp(0.0, 1.0))
 	}
 
-	/// Informs the controller of values the processor received, so its state
-	/// (and future UI) matches what is playing.
-	pub fn sync_controller(&self, values: &[(u32, f64)]) {
-		if let Some(c) = &self.controller {
-			for &(id, v) in values {
-				// SAFETY: plain controller call on the main thread.
-				unsafe { c.setParamNormalized(id, v) };
-			}
-		}
+	pub fn controller(&self) -> Option<&ComPtr<IEditController>> {
+		self.controller.as_ref()
+	}
+
+	pub fn flags(&self) -> &Arc<Vst3Flags> {
+		&self.handler.flags
 	}
 
 	/// Component + controller state as one framed blob.
@@ -506,8 +509,9 @@ impl Vst3Plugin {
 	}
 }
 
-impl Drop for Vst3Plugin {
-	fn drop(&mut self) {
+impl Vst3Plugin {
+	/// Deactivates and terminates (called from `Drop`, after the editor).
+	pub(crate) fn teardown(&mut self) {
 		self.deactivate();
 		// SAFETY: teardown in SDK order; each object is terminated once.
 		unsafe {

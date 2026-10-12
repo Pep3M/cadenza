@@ -184,7 +184,11 @@ fn piano_roll_draws_transposes_and_undoes_notes() {
 		.unwrap()
 		.clone();
 	assert_eq!(added.pitch, pitch);
-	assert!(added.length > Tick(PPQ / 4), "dragging set the length");
+	// FL Studio: the click places a note of the last length and the drag moves it
+	// (snapped to the piano roll's default step).
+	assert_eq!(added.length, Tick(PPQ / 4), "the last note length");
+	assert!(added.start > Tick(PPQ), "dragging moved it later");
+	assert_eq!(added.start.0 % (PPQ / 4), 0, "snapped to the step");
 	assert!(
 		h.state().state.previewing.is_empty(),
 		"released on mouse up"
@@ -213,6 +217,288 @@ fn piano_roll_draws_transposes_and_undoes_notes() {
 	h.run_steps(2);
 	assert!(!h.state().state.view.panels.visible(PanelKind::PianoRoll));
 	assert!(h.state().state.view.panels.visible(PanelKind::Mixer));
+}
+
+/// The Keys clip of the example, emptied and refilled with C4, D4, E4 at beats 0, 1, 2
+/// (one beat each), open in a focused piano roll.
+fn fl_piano() -> (Harness<'static, CadenzaApp>, cadenza_core::ClipId) {
+	let mut a = app();
+	let clip = {
+		let p = a.state.project();
+		let t = p.tracks.iter().find(|t| t.name == "Keys").unwrap();
+		t.clips.iter().find(|c| c.is_midi()).unwrap().clone()
+	};
+	let old: Vec<_> = clip.notes().iter().map(|n| n.id).collect();
+	assert!(a.state.apply(cadenza_model::Command::RemoveNotes {
+		clip: clip.id,
+		notes: old,
+	}));
+	assert!(
+		a.state.apply(cadenza_model::Command::AddNotes {
+			clip: clip.id,
+			notes: [60, 62, 64]
+				.iter()
+				.enumerate()
+				.map(|(i, p)| cadenza_model::Note::new(*p, Tick(PPQ * i as i64), Tick(PPQ), 0.8))
+				.collect(),
+		})
+	);
+	assert!(a.state.open_piano_roll(clip.id));
+	// Short steps so two clicks fall within the double-click delay.
+	let mut h = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.with_step_dt(1.0 / 60.0)
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			a,
+		);
+	h.run_steps(3);
+	h.state_mut().state.view.panels.focus = Some(PanelKind::PianoRoll);
+	(h, clip.id)
+}
+
+fn clip_notes(h: &Harness<'_, CadenzaApp>, clip: cadenza_core::ClipId) -> Vec<cadenza_model::Note> {
+	let mut n = h
+		.state()
+		.state
+		.project()
+		.find_clip(clip)
+		.unwrap()
+		.1
+		.notes()
+		.to_vec();
+	n.sort_by_key(|n| (n.start, n.pitch));
+	n
+}
+
+/// Screen position of beat `beat` (relative to the clip) on `pitch`'s row.
+fn note_pos(
+	h: &Harness<'_, CadenzaApp>,
+	clip: cadenza_core::ClipId,
+	beat: f64,
+	pitch: u8,
+) -> egui::Pos2 {
+	let grid = h.state().piano_grid().unwrap();
+	let s = &h.state().state;
+	let v = &s.view.piano;
+	let start = s.project().find_clip(clip).unwrap().1.start;
+	pos2(
+		grid.left() + v.timeline.tick_to_x(start + Tick::from_beats(beat)),
+		grid.top() + v.pitch_to_y(pitch) + v.row_height * 0.5,
+	)
+}
+
+fn right_button(h: &Harness<'_, CadenzaApp>, pos: egui::Pos2, pressed: bool) {
+	h.event(egui::Event::PointerButton {
+		pos,
+		button: egui::PointerButton::Secondary,
+		pressed,
+		modifiers: Modifiers::NONE,
+	});
+}
+
+#[test]
+fn piano_roll_right_button_sweep_deletes_every_note_passed_in_one_step() {
+	let (mut h, clip) = fl_piano();
+	let undo_depth = h.state().state.document().history_labels().len();
+	// Hold the right button on C4 and sweep diagonally over D4 to E4.
+	let a = note_pos(&h, clip, 0.5, 60);
+	let b = note_pos(&h, clip, 2.5, 64);
+	h.hover_at(a);
+	h.run_steps(1);
+	right_button(&h, a, true);
+	h.run_steps(1);
+	for i in 1..=8 {
+		h.hover_at(a + (b - a) * (i as f32 / 8.0));
+		h.run_steps(1);
+		if i == 4 {
+			assert_eq!(clip_notes(&h, clip).len(), 3, "deleted only on release");
+		}
+	}
+	right_button(&h, b, false);
+	h.run_steps(2);
+	assert!(
+		clip_notes(&h, clip).is_empty(),
+		"every note under the sweep"
+	);
+	assert_eq!(h.state().state.undo_label(), Some("Remove 3 notes"));
+	assert_eq!(
+		h.state().state.document().history_labels().len(),
+		undo_depth + 1,
+		"one undo step"
+	);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+	h.run_steps(2);
+	assert_eq!(clip_notes(&h, clip).len(), 3);
+
+	// A plain right-click deletes just the note under the pointer.
+	let d4 = note_pos(&h, clip, 1.5, 62);
+	h.hover_at(d4);
+	h.run_steps(1);
+	right_button(&h, d4, true);
+	h.run_steps(1);
+	right_button(&h, d4, false);
+	h.run_steps(2);
+	let left: Vec<u8> = clip_notes(&h, clip).iter().map(|n| n.pitch).collect();
+	assert_eq!(left, vec![60, 64]);
+}
+
+#[test]
+fn piano_roll_double_click_opens_note_properties() {
+	let (mut h, clip) = fl_piano();
+	let e4 = note_pos(&h, clip, 2.5, 64);
+	h.hover_at(e4);
+	h.run_steps(1);
+	for _ in 0..2 {
+		for pressed in [true, false] {
+			h.event(egui::Event::PointerButton {
+				pos: e4,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: Modifiers::NONE,
+			});
+		}
+		h.run_steps(1);
+	}
+	h.run_steps(2);
+	assert!(
+		h.query_by_label("Pitch").is_some(),
+		"the properties popover"
+	);
+	assert_eq!(clip_notes(&h, clip).len(), 3, "a double-click adds nothing");
+	h.key_press(Key::Escape);
+	h.run_steps(2);
+	assert!(h.query_by_label("Pitch").is_none(), "Esc closes it");
+}
+
+#[test]
+fn piano_roll_keys_clone_transpose_and_nudge_like_fl() {
+	let (mut h, clip) = fl_piano();
+	// Ctrl+A, Ctrl+B: the 3-beat phrase is cloned right after itself, selected; again
+	// appends once more.
+	h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+	h.run_steps(2);
+	let notes = clip_notes(&h, clip);
+	assert_eq!(notes.len(), 6);
+	let starts: Vec<f64> = notes.iter().map(|n| n.start.beats()).collect();
+	assert_eq!(starts, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+	assert_eq!(h.state().state.view.piano.selected.len(), 3, "the copies");
+	assert_eq!(h.state().state.undo_label(), Some("Clone notes"));
+	h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+	h.run_steps(2);
+	assert_eq!(clip_notes(&h, clip).len(), 9);
+	assert_eq!(clip_notes(&h, clip)[8].start, Tick(PPQ * 8));
+	let clip_len = h.state().state.project().find_clip(clip).unwrap().1.length;
+	assert!(clip_len >= Tick(PPQ * 9), "the clip holds the copies");
+
+	// Ctrl+D deselects (FL); arrows then move every note.
+	h.key_press_modifiers(Modifiers::COMMAND, Key::D);
+	h.run_steps(1);
+	assert!(h.state().state.view.piano.selected.is_empty());
+	h.key_press(Key::ArrowUp);
+	h.run_steps(1);
+	assert!(
+		clip_notes(&h, clip)
+			.iter()
+			.take(3)
+			.map(|n| n.pitch)
+			.eq([61, 63, 65])
+	);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowDown);
+	h.run_steps(1);
+	assert_eq!(clip_notes(&h, clip)[0].pitch, 49, "Ctrl+Down: an octave");
+	h.key_press(Key::ArrowRight);
+	h.run_steps(1);
+	assert_eq!(
+		clip_notes(&h, clip)[0].start,
+		Tick(PPQ / 4),
+		"one step (1/16)"
+	);
+	h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
+	h.run_steps(1);
+	assert_eq!(
+		clip_notes(&h, clip)[0].start,
+		Tick::ZERO,
+		"clamped at the clip start"
+	);
+
+	// Ctrl+C at the untouched playhead, Ctrl+V: pasted where they were, selected.
+	let first = clip_notes(&h, clip)[0].id;
+	h.state_mut().state.view.piano.select([first], false);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::C);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::V);
+	h.run_steps(2);
+	let notes = clip_notes(&h, clip);
+	assert_eq!(notes.len(), 10);
+	assert_eq!(notes.iter().filter(|n| n.start == Tick::ZERO).count(), 2);
+	// Moving the playhead first: pasted at the playhead.
+	let start = h.state().state.project().find_clip(clip).unwrap().1.start;
+	h.state_mut().state.seek(start + Tick(PPQ * 10));
+	h.key_press_modifiers(Modifiers::COMMAND, Key::V);
+	h.run_steps(2);
+	assert!(
+		clip_notes(&h, clip)
+			.iter()
+			.any(|n| n.start == Tick(PPQ * 10))
+	);
+}
+
+#[test]
+fn piano_roll_shift_drag_duplicates_and_paint_tool_paints_steps() {
+	let (mut h, clip) = fl_piano();
+	// Shift+drag C4 one beat up a semitone... to the right: a copy, the original stays.
+	let a = note_pos(&h, clip, 0.5, 60);
+	let b = note_pos(&h, clip, 4.5, 60);
+	h.hover_at(a);
+	h.run_steps(1);
+	h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+	h.run_steps(1);
+	h.drag_at(a);
+	h.run_steps(1);
+	h.hover_at(b);
+	h.run_steps(1);
+	h.drop_at(b);
+	h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+	h.run_steps(2);
+	let c4: Vec<f64> = clip_notes(&h, clip)
+		.iter()
+		.filter(|n| n.pitch == 60)
+		.map(|n| n.start.beats())
+		.collect();
+	assert_eq!(c4, vec![0.0, 4.0]);
+	assert_eq!(h.state().state.undo_label(), Some("Duplicate notes"));
+
+	// B: paint tool. A drag over an empty row paints a note per step.
+	h.key_press(Key::B);
+	h.run_steps(1);
+	assert_eq!(
+		h.state().state.view.piano.tool,
+		cadenza_app::state::piano::Tool::Paint
+	);
+	h.state_mut().state.view.piano.last_length = Tick(PPQ / 4);
+	let a = note_pos(&h, clip, 0.05, 67);
+	let b = note_pos(&h, clip, 0.95, 67);
+	h.hover_at(a);
+	h.run_steps(1);
+	h.drag_at(a);
+	h.run_steps(1);
+	for i in 1..=6 {
+		h.hover_at(a + (b - a) * (i as f32 / 6.0));
+		h.run_steps(1);
+	}
+	h.drop_at(b);
+	h.run_steps(2);
+	let g4: Vec<f64> = clip_notes(&h, clip)
+		.iter()
+		.filter(|n| n.pitch == 67)
+		.map(|n| n.start.beats())
+		.collect();
+	assert_eq!(g4, vec![0.0, 0.25, 0.5, 0.75]);
+	assert_eq!(h.state().state.undo_label(), Some("Paint notes"));
 }
 
 #[test]
@@ -602,7 +888,9 @@ fn adding_an_instrument_then_f7_opens_a_new_clip_and_l_toggles_pattern_mode() {
 	assert_eq!(h.state().state.view.transport.mode, PlayMode::Song);
 	assert_eq!(h.state().state.play_config().unwrap().audition, None);
 
-	// Ctrl+L: a loop region on the playhead's bar.
+	// Ctrl+L: a loop region on the playhead's bar (from the arrange: in a focused piano
+	// roll Ctrl+L is quick legato, like FL Studio).
+	h.state_mut().state.view.panels.focus = Some(PanelKind::Arrange);
 	h.key_press_modifiers(Modifiers::COMMAND, Key::L);
 	h.run_steps(2);
 	assert!(h.state().state.view.transport.loop_on);
@@ -1367,4 +1655,136 @@ fn render_sampler_screens() {
 	h.hover_at(pos2(900.0, 600.0));
 	shot(&mut h, "alt_drop_new_sampler");
 	egui::DragAndDrop::clear_payload(&h.ctx);
+}
+
+/// The FL Studio-style piano roll mid-gesture (selection, properties popover, right-button
+/// sweep, paint, velocity line, snap menu).
+/// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
+#[test]
+#[ignore]
+fn render_piano_fl_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let (h, clip) = fl_piano();
+	let mut h = {
+		let mut app = h.into_state();
+		// A melody with varied velocities, two notes selected.
+		let notes: Vec<cadenza_model::Note> = [
+			(67, 3.0, 0.5, 0.35),
+			(69, 3.5, 0.5, 0.55),
+			(71, 4.0, 1.0, 1.0),
+			(72, 5.0, 2.0, 0.7),
+		]
+		.iter()
+		.map(|(p, s, l, v)| {
+			cadenza_model::Note::new(*p, Tick::from_beats(*s), Tick::from_beats(*l), *v)
+		})
+		.collect();
+		let ids: Vec<_> = notes.iter().take(2).map(|n| n.id).collect();
+		assert!(
+			app.state
+				.apply(cadenza_model::Command::AddNotes { clip, notes })
+		);
+		app.state.view.piano.select(ids, false);
+		app.state.view.piano.framed = None;
+		Harness::builder()
+			.with_size(vec2(1600.0, 1000.0))
+			.with_step_dt(1.0 / 60.0)
+			.wgpu()
+			.build_ui_state(
+				|ui, app: &mut CadenzaApp| {
+					app.logic(ui.ctx());
+					app.ui(ui);
+				},
+				app,
+			)
+	};
+	let shot = |h: &mut Harness<'_, CadenzaApp>, name: &str| {
+		h.run_steps(3);
+		h.render()
+			.unwrap()
+			.save(dir.join(format!("{name}.png")))
+			.unwrap();
+	};
+	h.state_mut().state.view.panels.focus = Some(PanelKind::PianoRoll);
+	h.state_mut().state.view.panels.toggle_maximize();
+	shot(&mut h, "piano_fl");
+
+	// Double-click a note: the properties popover.
+	let e4 = note_pos(&h, clip, 2.5, 64);
+	h.hover_at(e4);
+	h.run_steps(1);
+	for _ in 0..2 {
+		h.drag_at(e4);
+		h.run_steps(1);
+		h.event(egui::Event::PointerButton {
+			pos: e4,
+			button: egui::PointerButton::Primary,
+			pressed: false,
+			modifiers: Modifiers::NONE,
+		});
+		h.run_steps(1);
+	}
+	shot(&mut h, "piano_fl_properties");
+	h.key_press(Key::Escape);
+	h.run_steps(1);
+
+	// Right button held, halfway through a sweep (the passed notes are gone).
+	let a = note_pos(&h, clip, 0.5, 60);
+	let b = note_pos(&h, clip, 2.5, 64);
+	h.hover_at(a);
+	h.run_steps(1);
+	right_button(&h, a, true);
+	h.run_steps(1);
+	let mid = a + (b - a) * 0.55;
+	h.hover_at(mid);
+	shot(&mut h, "piano_fl_sweep");
+	right_button(&h, mid, false);
+	h.run_steps(1);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+
+	// Paint tool mid-drag.
+	h.key_press(Key::B);
+	h.run_steps(1);
+	let a = note_pos(&h, clip, 8.05, 62);
+	h.hover_at(a);
+	h.run_steps(1);
+	h.drag_at(a);
+	h.run_steps(1);
+	for i in 1..=4 {
+		h.hover_at(note_pos(&h, clip, 8.05 + f64::from(i) * 0.3, 62 + i as u8));
+		h.run_steps(1);
+	}
+	shot(&mut h, "piano_fl_paint");
+	h.drop_at(note_pos(&h, clip, 9.3, 66));
+	h.run_steps(1);
+	h.key_press(Key::P);
+
+	// Velocity lane: a right-drag line.
+	let lane_y = {
+		let grid = h.state().piano_grid().unwrap();
+		grid.bottom() + 30.0
+	};
+	let x0 = note_pos(&h, clip, 0.0, 60).x + 1.0;
+	let x1 = note_pos(&h, clip, 7.0, 60).x;
+	h.hover_at(pos2(x0, lane_y + 30.0));
+	h.run_steps(1);
+	right_button(&h, pos2(x0, lane_y + 30.0), true);
+	h.run_steps(1);
+	h.hover_at(pos2(x1, lane_y - 25.0));
+	shot(&mut h, "piano_fl_velocity_line");
+	right_button(&h, pos2(x1, lane_y - 25.0), false);
+	h.run_steps(1);
+
+	// The snap ("magnet") menu, right of the tools.
+	let grid = h.state().piano_grid().unwrap();
+	let at = pos2(grid.left() + 580.0, grid.top() - 37.0);
+	h.hover_at(at);
+	h.run_steps(1);
+	h.drag_at(at);
+	h.run_steps(1);
+	h.drop_at(at);
+	shot(&mut h, "piano_fl_snap_menu");
 }

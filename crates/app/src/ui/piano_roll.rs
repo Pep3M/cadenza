@@ -1,11 +1,16 @@
 //! Piano roll: edits the notes of one MIDI clip (opened by double-clicking it, F7
-//! toggles the panel). Vertical keyboard (click to hear), note grid on the song's time
-//! axis with the clip boundaries, scale highlighting, ghost notes of other clips and a
-//! velocity lane. Every gesture is previewed locally and committed as one command
-//! (see [`crate::state::piano`]); notes are auditioned through the track's instrument,
-//! also while the transport is stopped.
+//! toggles the panel). Vertical keyboard (click/drag to hear), note grid on the song's
+//! time axis with the clip boundaries, scale highlighting, ghost notes of other clips
+//! and a velocity lane.
+//!
+//! FL Studio-like editing: the draw tool does nearly everything (click adds a note and
+//! keeps dragging it, notes move/resize, right-drag sweeps delete, Ctrl+drag selects,
+//! Shift+drag duplicates); paint (B) and slice (C) tools; Ctrl+B clones the selection.
+//! Every gesture is previewed locally and committed as one command (see
+//! [`crate::state::piano`]); notes are auditioned through the track's instrument, also
+//! while the transport is stopped.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{NoteId, PPQ, Tick, TrackId};
 use cadenza_model::{Clip, Note};
@@ -16,7 +21,7 @@ use egui::{
 };
 
 use crate::state::AppState;
-use crate::state::piano::{self, Ghosts, MIN_NOTE_LENGTH, PianoView, Tool};
+use crate::state::piano::{self, Ghosts, MIN_NOTE_LENGTH, PianoSnap, PianoView, Tool};
 use crate::state::timeline;
 use crate::theme;
 use crate::ui::arrange;
@@ -25,17 +30,28 @@ use crate::ui::widgets;
 const TOOLBAR: f32 = 30.0;
 const RULER: f32 = 22.0;
 const VELOCITY_LANE: f32 = 78.0;
-/// Pixels at a note's end that resize instead of moving.
+/// Pixels at a note's edges that resize instead of moving.
 const EDGE: f32 = 6.0;
+
+/// Which part of a note the pointer is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+	Body,
+	Start,
+	End,
+}
 
 #[derive(Debug, Clone)]
 enum Gesture {
-	/// A new note: start (relative to the clip), pitch, current end (relative).
+	/// A note placed by a click on empty grid: it follows the pointer (pitch and snapped
+	/// time) until the button is released, then it is added.
 	Draw {
+		/// Start relative to the clip.
 		start: Tick,
 		pitch: u8,
-		end: Tick,
-		moved: bool,
+		/// Absolute start at the press.
+		anchor: Tick,
+		press_tick: Tick,
 	},
 	Move {
 		ids: BTreeSet<NoteId>,
@@ -47,36 +63,81 @@ enum Gesture {
 		moved: bool,
 		/// The pressed note.
 		note: NoteId,
-		/// Shift/Ctrl held at the press.
-		add: bool,
-		/// The pressed note was already selected.
-		was_selected: bool,
+		/// Shift held at the press: duplicate instead of moving.
+		copy: bool,
 	},
 	Resize {
 		ids: BTreeSet<NoteId>,
-		anchor_end: Tick,
+		/// Absolute end (right edge) or start (left edge) of the pressed note.
+		anchor: Tick,
 		press_tick: Tick,
 		delta: Tick,
+		left: bool,
 	},
 	Rubber {
 		from: (Tick, f32),
 		to: Pos2,
 		add: bool,
+		/// Note under a Ctrl+press: a click without a drag toggles it.
+		note: Option<NoteId>,
 	},
+	/// Paint tool: notes at every `spacing` from `first` (absolute), keyed by cell.
+	Paint {
+		first: Tick,
+		spacing: Tick,
+		cells: BTreeMap<i64, u8>,
+		last: i64,
+	},
+	/// Slice tool: a vertical cut at `at` (absolute) from the press row to the pointer.
+	Slice { at: Tick, from_y: f32, to: Pos2 },
+}
+
+/// Right button held on the grid: every note the pointer passes over is deleted on
+/// release (one undo step).
+#[derive(Debug, Clone)]
+struct Erase {
+	hits: BTreeSet<NoteId>,
+	last: Pos2,
 }
 
 #[derive(Debug, Clone)]
-struct VelocityDrag {
-	values: HashMap<NoteId, f32>,
-	/// Relative edit of the whole selection, anchored on this note's original velocity.
-	relative: Option<(f32, f32)>,
+enum VelocityDrag {
+	/// Drag over the bars sets them; on a multi-selection the drag is relative,
+	/// anchored on this press value.
+	Paint {
+		values: HashMap<NoteId, f32>,
+		relative: Option<f32>,
+	},
+	/// Alt+drag or right-drag: a straight line (absolute tick, value) to (tick, value).
+	Line {
+		from: (Tick, f32),
+		to: (Tick, f32),
+		values: HashMap<NoteId, f32>,
+	},
+}
+
+impl VelocityDrag {
+	fn values(&self) -> &HashMap<NoteId, f32> {
+		match self {
+			VelocityDrag::Paint { values, .. } | VelocityDrag::Line { values, .. } => values,
+		}
+	}
+}
+
+/// The note properties popover (double-click a note).
+#[derive(Debug, Clone)]
+struct Props {
+	note: Note,
+	pos: Pos2,
 }
 
 /// View-local state of the piano roll.
 #[derive(Default)]
 pub struct PianoUi {
 	gesture: Option<Gesture>,
+	erase: Option<Erase>,
 	velocity: Option<VelocityDrag>,
+	props: Option<Props>,
 	/// Key held on the keyboard (auditioning).
 	key: Option<u8>,
 	/// Pitch sounding for the current note gesture.
@@ -141,10 +202,28 @@ fn target(state: &AppState) -> Option<Target> {
 	})
 }
 
-/// Grid step for snapping (None: snap off or Alt held).
+/// The piano roll's snap step (its own "magnet"; `Main` follows the global snap).
+pub fn snap_step(state: &AppState) -> Option<Tick> {
+	let ts = state.project().time_signature;
+	let main = state
+		.view
+		.snap
+		.then(|| state.view.piano.timeline.grid(ts).step);
+	state.view.piano.snap.step(ts, main)
+}
+
+/// Grid step for a mouse gesture (None: snap off or Alt held).
 fn step(state: &AppState, ui: &Ui) -> Option<Tick> {
-	let free = ui.input(|i| i.modifiers.alt);
-	(state.view.snap && !free).then(|| {
+	if ui.input(|i| i.modifiers.alt) {
+		None
+	} else {
+		snap_step(state)
+	}
+}
+
+/// The step keyboard nudges and quantize use: the snap, else the visible grid.
+fn key_step(state: &AppState) -> Tick {
+	snap_step(state).unwrap_or_else(|| {
 		state
 			.view
 			.piano
@@ -175,7 +254,7 @@ impl PianoUi {
 				.frame(&t.clip, g.grid.width(), g.grid.height());
 		}
 		self.navigate(ui, state, &g);
-		if state.is_playing() && self.gesture.is_none() {
+		if state.is_playing() && self.gesture.is_none() && self.erase.is_none() {
 			state.view.piano.timeline.follow_mode(
 				state.view.follow,
 				state.position().beats(),
@@ -193,13 +272,14 @@ impl PianoUi {
 		ruler(ui, state, &g, &t);
 		self.scrollbars(ui, state, &g, &t);
 		self.toolbar(ui, state, &g, Some(&t));
-		// Playhead.
+		// Playhead (wraps with the pattern loop).
 		let x = g.grid.left() + state.view.piano.timeline.tick_to_x(state.position());
 		if (g.grid.left()..=g.grid.right()).contains(&x) {
 			let bottom = g.velocity.map_or(g.grid.bottom(), |r| r.bottom());
 			ui.painter()
 				.vline(x, g.ruler.top()..=bottom, Stroke::new(1.5, theme::PLAYHEAD));
 		}
+		self.properties(ui, state, &t);
 	}
 
 	/// Wheel, Ctrl+wheel (zoom at the pointer), Alt+wheel (key height), middle-drag.
@@ -258,8 +338,9 @@ impl PianoUi {
 			v.scroll_y -= delta.y;
 			ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
 		}
-		// Auto-scroll while dragging notes or a rubber band near the edges.
-		if self.gesture.is_some()
+		// Auto-scroll while dragging notes, painting, erasing or a rubber band near the
+		// edges.
+		if (self.gesture.is_some() || self.erase.is_some())
 			&& let Some(p) = ui.ctx().pointer_latest_pos()
 		{
 			let dx = timeline::edge_scroll(p.x, g.grid.left(), g.grid.right());
@@ -318,49 +399,54 @@ impl PianoUi {
 		}
 		ui.separator();
 		let v = &mut state.view.piano;
-		for (tool, label, key, tip) in [
-			(
-				Tool::Draw,
-				"✏ Draw",
-				"P",
-				"Click to add notes, drag to set the length",
-			),
-			(
-				Tool::Select,
-				"⬚ Select",
-				"E",
-				"Click to select, drag a rubber band",
-			),
-		] {
+		for tool in Tool::ALL {
 			if ui
-				.selectable_label(v.tool == tool, label)
-				.on_hover_text(format!("{tip} ({key})"))
+				.selectable_label(v.tool == tool, tool.label())
+				.on_hover_text(format!("{} ({})", tool.tip(), tool.key()))
 				.clicked()
 			{
 				v.tool = tool;
 			}
 		}
 		ui.separator();
-		let snap = state.view.snap;
-		if ui
-			.selectable_label(snap, "Snap")
-			.on_hover_text(
-				"Snap to the grid (shared with the arrange view; Alt while dragging: free)",
-			)
-			.clicked()
-		{
-			state.view.snap = !snap;
-		}
-		let grid = state
-			.view
-			.piano
-			.timeline
-			.grid(state.project().time_signature);
 		ui.label(
-			RichText::new(arrange::grid_name(grid.step, grid.bar))
+			RichText::new("Snap:")
 				.font(theme::small())
-				.color(theme::TEXT_DIM),
+				.color(theme::TEXT_FAINT),
 		);
+		let main_name = {
+			let grid = state
+				.view
+				.piano
+				.timeline
+				.grid(state.project().time_signature);
+			if state.view.snap {
+				format!("Main ({})", arrange::grid_name(grid.step, grid.bar))
+			} else {
+				"Main (off)".to_string()
+			}
+		};
+		let v = &mut state.view.piano;
+		let name = |s: PianoSnap| {
+			if s == PianoSnap::Main {
+				main_name.clone()
+			} else {
+				s.name().to_string()
+			}
+		};
+		egui::ComboBox::from_id_salt("piano-snap")
+			.width(96.0)
+			.selected_text(RichText::new(name(v.snap)).font(theme::small()))
+			.show_ui(ui, |ui| {
+				for s in PianoSnap::ALL {
+					ui.selectable_value(&mut v.snap, s, name(s));
+				}
+			})
+			.response
+			.on_hover_text(
+				"Piano roll snap (FL's magnet). Main follows the arrange snap; Alt while \
+				 dragging: free",
+			);
 		ui.separator();
 		scale_picker(ui, &mut state.view.piano);
 		let v = &mut state.view.piano;
@@ -417,7 +503,7 @@ impl PianoUi {
 				ui.separator();
 				if ui
 					.button("Quantize")
-					.on_hover_text("Move the selected notes (or all) onto the grid (Q)")
+					.on_hover_text("Move the selected notes (or all) onto the snap grid (Ctrl+Q)")
 					.clicked()
 				{
 					quantize(state);
@@ -491,8 +577,9 @@ impl PianoUi {
 				Stroke::new(1.5, t.color.gamma_multiply(0.8)),
 			);
 		}
+		let visible_pitch = |pitch: u8| (bottom_pitch..=top_pitch).contains(&pitch);
 
-		// Ghost notes of other clips.
+		// Ghost notes of other clips (dim, behind).
 		if v.ghosts != Ghosts::Off {
 			for track in &state.project().tracks {
 				if v.ghosts == Ghosts::SameTrack && track.id != t.track {
@@ -504,14 +591,18 @@ impl PianoUi {
 					.iter()
 					.filter(|c| c.id != clip.id && c.is_midi())
 				{
-					for n in c.notes() {
+					let (c0, c1) = (tl.tick_to_x(c.start), tl.tick_to_x(c.end()));
+					if c1 < 0.0 || c0 > area.width() {
+						continue;
+					}
+					for n in c.notes().iter().filter(|n| visible_pitch(n.pitch)) {
 						let r = note_rect(&v, area, c.start, n.start, n.length, n.pitch);
 						if r.intersects(area) {
-							p.rect_filled(r, CornerRadius::same(2), color.gamma_multiply(0.18));
+							p.rect_filled(r, CornerRadius::same(2), color.gamma_multiply(0.16));
 							p.rect_stroke(
 								r,
 								CornerRadius::same(2),
-								Stroke::new(1.0, color.gamma_multiply(0.35)),
+								Stroke::new(1.0, color.gamma_multiply(0.32)),
 								StrokeKind::Inside,
 							);
 						}
@@ -524,95 +615,154 @@ impl PianoUi {
 		let pointer = ui.ctx().pointer_latest_pos();
 		let hover = response.hover_pos();
 		let snap = step(state, ui);
-		let (pressed, down, released, shift, ctrl) = ui.input(|i| {
+		let (pressed, down, released, r_pressed, r_down, mods) = ui.input(|i| {
 			(
 				i.pointer.primary_pressed(),
 				i.pointer.primary_down(),
 				i.pointer.primary_released(),
-				i.modifiers.shift,
-				i.modifiers.command,
+				i.pointer.button_pressed(PointerButton::Secondary),
+				i.pointer.secondary_down(),
+				i.modifiers,
 			)
 		});
-		let hit = |pos: Pos2| -> Option<(Note, bool)> {
+		let hit = |pos: Pos2| -> Option<(Note, Edge)> {
 			let abs = tl.x_to_tick(pos.x - area.left());
 			let pitch = v.y_to_pitch(pos.y - area.top());
 			let n = piano::note_at(clip, abs - clip.start, pitch)?;
-			let end_x = area.left() + tl.tick_to_x(clip.start + n.end());
-			let near_end = pos.x > end_x - EDGE.min(note_px(&v, n.length) * 0.4);
-			Some((n.clone(), near_end))
+			let x0 = area.left() + tl.tick_to_x(clip.start + n.start);
+			let w = note_px(&v, n.length);
+			let edge = if pos.x > x0 + w - EDGE.min(w * 0.4) {
+				Edge::End
+			} else if w >= EDGE * 4.0 && pos.x < x0 + EDGE.min(w * 0.25) {
+				Edge::Start
+			} else {
+				Edge::Body
+			};
+			Some((n.clone(), edge))
 		};
 
 		// Cursor feedback.
 		if let Some(pos) = hover
 			&& self.gesture.is_none()
+			&& self.erase.is_none()
 			&& !self.pan
 		{
-			match hit(pos) {
-				Some((_, true)) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
-				Some(_) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
-				None if v.tool == Tool::Draw && !shift => {
-					ui.ctx().set_cursor_icon(CursorIcon::Crosshair)
+			let icon = match (hit(pos), v.tool) {
+				_ if mods.command => CursorIcon::Default,
+				(Some(_), Tool::Slice) | (None, Tool::Draw | Tool::Paint | Tool::Slice) => {
+					CursorIcon::Crosshair
 				}
-				None => {}
-			}
+				(Some((_, Edge::Start | Edge::End)), _) => CursorIcon::ResizeHorizontal,
+				(Some(_), _) if mods.shift => CursorIcon::Copy,
+				(Some(_), _) => CursorIcon::Move,
+				(None, Tool::Select) => CursorIcon::Default,
+			};
+			ui.ctx().set_cursor_icon(icon);
+		}
+
+		// Double-click a note: its properties.
+		if response.double_clicked()
+			&& let Some(pos) = response.interact_pointer_pos()
+			&& let Some((n, _)) = hit(pos)
+		{
+			self.gesture = None;
+			self.props = Some(Props {
+				note: n,
+				pos: pos + vec2(12.0, 12.0),
+			});
 		}
 
 		// Press: start a gesture.
 		if pressed
 			&& response.hovered()
+			&& self.erase.is_none()
 			&& let Some(pos) = pointer
 		{
+			self.props = None;
 			let abs = tl.x_to_tick(pos.x - area.left());
 			let pitch = v.y_to_pitch(pos.y - area.top());
-			match hit(pos) {
-				Some((n, near_end)) => {
-					let in_sel = v.selected.contains(&n.id);
-					if !in_sel {
-						state.view.piano.select([n.id], shift || ctrl);
-					}
-					let ids = state.view.piano.selected.clone();
-					if near_end {
-						self.gesture = Some(Gesture::Resize {
-							ids,
-							anchor_end: clip.start + n.end(),
-							press_tick: abs,
-							delta: Tick::ZERO,
-						});
-					} else {
-						self.gesture = Some(Gesture::Move {
-							ids,
-							anchor_start: clip.start + n.start,
-							press_tick: abs,
-							press_pitch: pitch,
-							dt: Tick::ZERO,
-							dp: 0,
-							moved: false,
-							note: n.id,
-							add: shift || ctrl,
-							was_selected: in_sel,
-						});
-						self.sound(state, t.track, n.pitch, n.velocity);
-					}
-					state.view.piano.last_length = n.length;
-					state.view.piano.last_velocity = n.velocity;
+			let under = hit(pos);
+			if mods.command {
+				// Ctrl: select (rubber band; a click toggles the note under the pointer).
+				self.gesture = Some(Gesture::Rubber {
+					from: (abs, pos.y - area.top() + v.scroll_y),
+					to: pos,
+					add: true,
+					note: under.map(|(n, _)| n.id),
+				});
+			} else if v.tool == Tool::Slice {
+				self.gesture = Some(Gesture::Slice {
+					at: piano::snap_abs(abs, snap),
+					from_y: pos.y - area.top() + v.scroll_y,
+					to: pos,
+				});
+			} else if let Some((n, edge)) = under {
+				let in_sel = v.selected.contains(&n.id);
+				if !in_sel {
+					state.view.piano.select([n.id], false);
 				}
-				None if v.tool == Tool::Draw && !shift && !ctrl => {
-					let start = piano::snap_floor(abs, snap) - clip.start;
-					state.view.piano.selected.clear();
-					self.gesture = Some(Gesture::Draw {
-						start,
-						pitch,
-						end: start + v.last_length,
+				let ids = state.view.piano.selected.clone();
+				self.gesture = Some(match edge {
+					Edge::End | Edge::Start if !mods.shift => Gesture::Resize {
+						ids,
+						anchor: clip.start + if edge == Edge::End { n.end() } else { n.start },
+						press_tick: abs,
+						delta: Tick::ZERO,
+						left: edge == Edge::Start,
+					},
+					_ => Gesture::Move {
+						ids,
+						anchor_start: clip.start + n.start,
+						press_tick: abs,
+						press_pitch: pitch,
+						dt: Tick::ZERO,
+						dp: 0,
 						moved: false,
-					});
-					self.sound(state, t.track, pitch, v.last_velocity);
-				}
-				None => {
-					self.gesture = Some(Gesture::Rubber {
-						from: (abs, pos.y - area.top() + v.scroll_y),
-						to: pos,
-						add: shift || ctrl,
-					});
+						note: n.id,
+						copy: mods.shift,
+					},
+				});
+				self.sound(state, t.track, n.pitch, n.velocity);
+				state.view.piano.last_length = n.length;
+				state.view.piano.last_velocity = n.velocity;
+			} else {
+				match v.tool {
+					Tool::Draw => {
+						let anchor = piano::snap_floor(abs, snap);
+						state.view.piano.selected.clear();
+						self.gesture = Some(Gesture::Draw {
+							start: Tick((anchor - clip.start).0.max(0)),
+							pitch,
+							anchor,
+							press_tick: abs,
+						});
+						self.sound(state, t.track, pitch, v.last_velocity);
+					}
+					Tool::Paint => {
+						let spacing = match snap {
+							Some(s) => {
+								Tick(((v.last_length.0 + s.0 - 1) / s.0.max(1)).max(1) * s.0.max(1))
+							}
+							None => v.last_length,
+						};
+						let first = piano::snap_floor(abs, snap);
+						state.view.piano.selected.clear();
+						self.gesture = Some(Gesture::Paint {
+							first,
+							spacing: Tick(spacing.0.max(MIN_NOTE_LENGTH.0)),
+							cells: [(0, pitch)].into_iter().collect(),
+							last: 0,
+						});
+						self.sound(state, t.track, pitch, v.last_velocity);
+					}
+					Tool::Select | Tool::Slice => {
+						self.gesture = Some(Gesture::Rubber {
+							from: (abs, pos.y - area.top() + v.scroll_y),
+							to: pos,
+							add: mods.shift,
+							note: None,
+						});
+					}
 				}
 			}
 		}
@@ -624,16 +774,16 @@ impl PianoUi {
 			let mut sound = None;
 			match gesture {
 				Gesture::Draw {
-					start, end, moved, ..
+					start,
+					pitch: p,
+					anchor,
+					press_tick,
 				} => {
-					let start_abs = clip.start + *start;
-					let min = snap.unwrap_or(MIN_NOTE_LENGTH);
-					if (abs - start_abs).0.abs() > tl.px_to_ticks(3.0).0 {
-						*moved = true;
-					}
-					if *moved {
-						let e = piano::snap_abs(abs, snap);
-						*end = Tick((e - clip.start).0.max(start.0 + min.0));
+					let at = piano::snap_abs(*anchor + (abs - *press_tick), snap);
+					*start = Tick((at - clip.start).0.max(0));
+					if *p != pitch {
+						*p = pitch;
+						sound = Some((pitch, v.last_velocity));
 					}
 				}
 				Gesture::Move {
@@ -644,93 +794,163 @@ impl PianoUi {
 					dt,
 					dp,
 					moved,
+					note,
 					..
 				} => {
 					let raw = *anchor_start + (abs - *press_tick);
 					let snapped = piano::snap_abs(raw, snap);
-					let vertical_only = shift && *moved;
 					let (t_off, p_off) = piano::clamp_move(
 						clip,
 						ids,
-						if vertical_only {
-							Tick::ZERO
-						} else {
-							snapped - *anchor_start
-						},
+						snapped - *anchor_start,
 						i32::from(pitch) - i32::from(*press_pitch),
 					);
 					if t_off != *dt || p_off != *dp {
 						*moved = true;
-						if p_off != *dp {
-							sound = Some(p_off);
+						if p_off != *dp
+							&& let Some(n) = clip.notes().iter().find(|n| n.id == *note)
+						{
+							let p = (i32::from(n.pitch) + p_off).clamp(0, 127) as u8;
+							sound = Some((p, n.velocity));
 						}
 					}
 					*dt = t_off;
 					*dp = p_off;
 				}
 				Gesture::Resize {
-					anchor_end,
+					anchor,
 					press_tick,
 					delta,
 					..
 				} => {
-					let end = piano::snap_abs(*anchor_end + (abs - *press_tick), snap);
-					*delta = end - *anchor_end;
+					let at = piano::snap_abs(*anchor + (abs - *press_tick), snap);
+					*delta = at - *anchor;
 				}
-				Gesture::Rubber { to, .. } => *to = pos,
+				Gesture::Rubber { to, .. } | Gesture::Slice { to, .. } => *to = pos,
+				Gesture::Paint {
+					first,
+					spacing,
+					cells,
+					last,
+				} => {
+					let k = piano::paint_cell(*first, *spacing, abs);
+					let (lo, hi) = (k.min(*last), k.max(*last));
+					for cell in lo..=hi {
+						if !cells.contains_key(&cell)
+							&& *first + Tick(cell * spacing.0) >= clip.start
+						{
+							cells.insert(cell, pitch);
+							sound = Some((pitch, v.last_velocity));
+						}
+					}
+					*last = k;
+				}
 			}
-			if let Some(dp) = sound
-				&& let Some(Gesture::Move { ids, .. }) = &self.gesture
-				&& let Some(n) = clip.notes().iter().find(|n| ids.contains(&n.id))
-			{
-				let pitch = (i32::from(n.pitch) + dp).clamp(0, 127) as u8;
-				self.sound(state, t.track, pitch, n.velocity);
+			if let Some((pitch, velocity)) = sound {
+				self.sound(state, t.track, pitch, velocity);
 			}
 		}
 
 		// Release: commit one command.
 		if released && let Some(gesture) = self.gesture.take() {
 			self.silence(state, t.track);
-			if let Gesture::Rubber { from, to, add } = gesture {
-				let (t0, y0) = from;
-				let t1 = tl.x_to_tick(to.x - area.left());
-				let y1 = to.y - area.top() + v.scroll_y;
-				let pitch = |y: f32| (127.0 - (y / v.row_height).floor()).clamp(0.0, 127.0) as u8;
-				let ids = piano::notes_in_rect(
-					clip,
-					t0 - clip.start,
-					t1 - clip.start,
-					pitch(y0),
-					pitch(y1),
-				);
-				state.view.piano.select(ids, add);
-			} else {
-				commit(state, clip, gesture, &v);
+			match gesture {
+				Gesture::Rubber {
+					from,
+					to,
+					add,
+					note,
+				} => {
+					let a = pos2(
+						area.left() + tl.tick_to_x(from.0),
+						area.top() + from.1 - v.scroll_y,
+					);
+					let clicked = a.distance(to) < 3.0;
+					if clicked {
+						match note {
+							Some(id) if v.selected.contains(&id) => {
+								state.view.piano.selected.remove(&id);
+							}
+							Some(id) => state.view.piano.select([id], true),
+							None if !add => state.view.piano.selected.clear(),
+							None => {}
+						}
+					} else {
+						let t1 = tl.x_to_tick(to.x - area.left());
+						let y1 = to.y - area.top() + v.scroll_y;
+						let pitch =
+							|y: f32| (127.0 - (y / v.row_height).floor()).clamp(0.0, 127.0) as u8;
+						let ids = piano::notes_in_rect(
+							clip,
+							from.0 - clip.start,
+							t1 - clip.start,
+							pitch(from.1),
+							pitch(y1),
+						);
+						state.view.piano.select(ids, add);
+					}
+				}
+				Gesture::Slice { at, from_y, to } => {
+					let y1 = to.y - area.top() + v.scroll_y;
+					let pitch =
+						|y: f32| (127.0 - (y / v.row_height).floor()).clamp(0.0, 127.0) as u8;
+					if let Some(cmd) = piano::slice_notes(
+						state.project(),
+						clip.id,
+						at - clip.start,
+						pitch(from_y),
+						pitch(y1),
+					) {
+						state.apply(cmd);
+					}
+				}
+				gesture => commit(state, clip, gesture, &v),
 			}
 		}
 
-		// Right-click deletes the note under the pointer (or the selection it belongs to).
-		if response.secondary_clicked()
-			&& let Some(pos) = response.interact_pointer_pos()
-			&& let Some((n, _)) = hit(pos)
+		// Right button: delete every note the pointer passes over (one step on release).
+		if r_pressed
+			&& response.hovered()
+			&& self.gesture.is_none()
+			&& let Some(pos) = pointer
 		{
-			let ids = if v.selected.contains(&n.id) {
-				v.selected.clone()
-			} else {
-				[n.id].into_iter().collect()
-			};
-			if let Some(cmd) = piano::delete_notes(state.project(), clip.id, &ids) {
-				state.apply(cmd);
+			let a = (pos.x - area.left(), pos.y - area.top());
+			self.erase = Some(Erase {
+				hits: piano::sweep_hits(clip, &v, a, a),
+				last: pos,
+			});
+		}
+		if let Some(e) = self.erase.as_mut() {
+			if let Some(pos) = pointer {
+				if area.contains(pos) && area.contains(e.last) {
+					let a = (e.last.x - area.left(), e.last.y - area.top());
+					let b = (pos.x - area.left(), pos.y - area.top());
+					e.hits.extend(piano::sweep_hits(clip, &v, a, b));
+				}
+				e.last = pos;
+			}
+			if !r_down {
+				let hits = std::mem::take(&mut e.hits);
+				self.erase = None;
+				state.view.piano.selected.retain(|id| !hits.contains(id));
+				if let Some(cmd) = piano::delete_notes(state.project(), clip.id, &hits) {
+					state.apply(cmd);
+				}
 			}
 		}
 
-		// Notes (with the gesture preview applied).
+		// Notes (with the gesture preview applied), culled to the visible rows/columns.
 		let v = &state.view.piano;
 		let (move_off, resize_off) = match &self.gesture {
-			Some(Gesture::Move { ids, dt, dp, .. }) => (Some((ids, *dt, *dp)), None),
-			Some(Gesture::Resize { ids, delta, .. }) => (None, Some((ids, *delta))),
+			Some(Gesture::Move {
+				ids, dt, dp, copy, ..
+			}) => (Some((ids, *dt, *dp, *copy)), None),
+			Some(Gesture::Resize {
+				ids, delta, left, ..
+			}) => (None, Some((ids, *delta, *left))),
 			_ => (None, None),
 		};
+		let erased = self.erase.as_ref().map(|e| &e.hits);
 		let rubber = match &self.gesture {
 			Some(Gesture::Rubber { from, to, .. }) => {
 				let a = pos2(
@@ -743,24 +963,53 @@ impl PianoUi {
 		};
 		let in_rubber = |r: Rect| rubber.is_some_and(|rb| rb.intersects(r));
 		let pr = ui.painter_at(area);
+		let (t_lo, t_hi) = (
+			tl.x_to_tick(0.0) - clip.start,
+			tl.x_to_tick(area.width()) - clip.start,
+		);
 		for n in clip.notes() {
+			if erased.is_some_and(|h| h.contains(&n.id)) {
+				continue;
+			}
 			let mut start = n.start;
 			let mut pitch = n.pitch;
 			let mut length = n.length;
-			let mut dragged = false;
-			if let Some((ids, dt, dp)) = move_off
+			let mut ghost_origin = false;
+			if let Some((ids, dt, dp, copy)) = move_off
 				&& ids.contains(&n.id)
+				&& (dt.0 != 0 || dp != 0)
 			{
+				if copy {
+					// Duplicate drag: the original stays, the copy is drawn moved.
+					let r = note_rect(v, area, clip.start, n.start, n.length, n.pitch);
+					if r.intersects(area) {
+						paint_note(&pr, r, t.color, n.velocity, false, n.pitch, v.row_height);
+					}
+				} else {
+					ghost_origin = true;
+				}
 				start = start + dt;
 				pitch = (i32::from(pitch) + dp).clamp(0, 127) as u8;
-				dragged = dt.0 != 0 || dp != 0;
 			}
-			if let Some((ids, d)) = resize_off
+			if let Some((ids, d, left)) = resize_off
 				&& ids.contains(&n.id)
 			{
-				length = Tick((length + d).0.max(MIN_NOTE_LENGTH.0));
+				if left {
+					let s = Tick(
+						(n.start + d)
+							.0
+							.clamp(0, (n.end() - MIN_NOTE_LENGTH).0.max(0)),
+					);
+					length = n.end() - s;
+					start = s;
+				} else {
+					length = Tick((length + d).0.max(MIN_NOTE_LENGTH.0));
+				}
 			}
-			if dragged {
+			if !visible_pitch(pitch) || start > t_hi || start + length < t_lo {
+				continue;
+			}
+			if ghost_origin {
 				let orig = note_rect(v, area, clip.start, n.start, n.length, n.pitch);
 				pr.rect_stroke(
 					orig,
@@ -770,19 +1019,38 @@ impl PianoUi {
 				);
 			}
 			let r = note_rect(v, area, clip.start, start, length, pitch);
-			if !r.intersects(area) {
-				continue;
-			}
 			let selected = v.selected.contains(&n.id) || in_rubber(r);
 			paint_note(&pr, r, t.color, n.velocity, selected, pitch, v.row_height);
 		}
-		// The note being drawn.
-		if let Some(Gesture::Draw {
-			start, pitch, end, ..
-		}) = &self.gesture
-		{
-			let r = note_rect(v, area, clip.start, *start, *end - *start, *pitch);
-			paint_note(&pr, r, t.color, v.last_velocity, true, *pitch, v.row_height);
+		match &self.gesture {
+			// The note being placed.
+			Some(Gesture::Draw { start, pitch, .. }) => {
+				let r = note_rect(v, area, clip.start, *start, v.last_length, *pitch);
+				paint_note(&pr, r, t.color, v.last_velocity, true, *pitch, v.row_height);
+			}
+			Some(Gesture::Paint {
+				first,
+				spacing,
+				cells,
+				..
+			}) => {
+				for (k, pitch) in cells {
+					let s = *first + Tick(k * spacing.0) - clip.start;
+					let r = note_rect(v, area, clip.start, s, v.last_length, *pitch);
+					paint_note(&pr, r, t.color, v.last_velocity, true, *pitch, v.row_height);
+				}
+			}
+			Some(Gesture::Slice { at, from_y, to }) => {
+				let x = area.left() + tl.tick_to_x(*at);
+				let y0 = area.top() + from_y - v.scroll_y;
+				let (a, b) = (y0.min(to.y), y0.max(to.y));
+				let (a, b) = (
+					a - (a - area.top() + v.scroll_y).rem_euclid(v.row_height),
+					b - (b - area.top() + v.scroll_y).rem_euclid(v.row_height) + v.row_height,
+				);
+				pr.vline(x, a..=b, Stroke::new(2.0, theme::NOTE_SELECTED));
+			}
+			_ => {}
 		}
 		if let Some(rb) = rubber {
 			pr.rect_filled(rb, 0.0, theme::ACCENT.gamma_multiply(0.12));
@@ -806,6 +1074,116 @@ impl PianoUi {
 		}
 	}
 
+	/// The note properties popover (double-click a note); each finished edit is one
+	/// command.
+	fn properties(&mut self, ui: &mut Ui, state: &mut AppState, t: &Target) {
+		let Some(props) = self.props.as_mut() else {
+			return;
+		};
+		if !t.clip.notes().iter().any(|n| n.id == props.note.id) {
+			self.props = None;
+			return;
+		}
+		let mut commit = false;
+		let mut close = false;
+		let area = egui::Area::new(Id::new("piano-note-props"))
+			.order(egui::Order::Foreground)
+			.fixed_pos(props.pos)
+			.show(ui.ctx(), |ui| {
+				egui::Frame::popup(ui.style()).show(ui, |ui| {
+					ui.set_max_width(180.0);
+					ui.horizontal(|ui| {
+						ui.label(
+							RichText::new("NOTE")
+								.font(theme::small())
+								.color(theme::TEXT_FAINT),
+						);
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							close = ui.small_button("×").on_hover_text("Close (Esc)").clicked();
+						});
+					});
+					let n = &mut props.note;
+					let mut done = |r: egui::Response| {
+						commit |= (r.changed() && !r.dragged()) || r.drag_stopped();
+					};
+					egui::Grid::new("piano-note-props-grid")
+						.num_columns(2)
+						.spacing(vec2(8.0, 4.0))
+						.show(ui, |ui| {
+							ui.label("Pitch");
+							done(
+								ui.add(
+									egui::DragValue::new(&mut n.pitch)
+										.range(0..=127)
+										.custom_formatter(|p, _| {
+											cadenza_theory::format_pitch(p as u8, false)
+										}),
+								),
+							);
+							ui.end_row();
+							ui.label("Velocity");
+							let mut vel = (n.velocity * 100.0).round();
+							let r = ui.add(
+								egui::DragValue::new(&mut vel)
+									.range(0.0..=100.0)
+									.suffix(" %"),
+							);
+							n.velocity = vel / 100.0;
+							done(r);
+							ui.end_row();
+							ui.label("Start");
+							let mut start = n.start.beats();
+							let r = ui.add(
+								egui::DragValue::new(&mut start)
+									.range(0.0..=100_000.0)
+									.speed(0.0625)
+									.max_decimals(3)
+									.suffix(" beats"),
+							);
+							n.start = Tick::from_beats(start);
+							done(r);
+							ui.end_row();
+							ui.label("Length");
+							let mut length = n.length.beats();
+							let r = ui.add(
+								egui::DragValue::new(&mut length)
+									.range(MIN_NOTE_LENGTH.beats()..=10_000.0)
+									.speed(0.0625)
+									.max_decimals(3)
+									.suffix(" beats"),
+							);
+							n.length = Tick::from_beats(length);
+							done(r);
+							ui.end_row();
+						});
+				});
+			});
+		let outside = ui.input(|i| i.pointer.any_pressed())
+			&& !area.response.contains_pointer()
+			&& !ui.ctx().is_being_dragged(area.response.id);
+		if commit {
+			let note = props.note.clone();
+			if let Some(cmd) = piano::set_note(state.project(), t.clip.id, &note) {
+				state.apply(cmd);
+			}
+			if let Some(n) = state
+				.project()
+				.find_clip(t.clip.id)
+				.and_then(|(_, c)| c.notes().iter().find(|n| n.id == note.id))
+				.cloned()
+			{
+				state.view.piano.last_length = n.length;
+				state.view.piano.last_velocity = n.velocity;
+				if let Some(p) = self.props.as_mut() {
+					p.note = n;
+				}
+			}
+		}
+		if close || (outside && !commit) {
+			self.props = None;
+		}
+	}
+
 	fn keyboard(&mut self, ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 		let area = g.keys;
 		let p = ui.painter_at(area);
@@ -816,6 +1194,7 @@ impl PianoUi {
 			.on_hover_cursor(CursorIcon::PointingHand);
 		let pitch_at = |y: f32| v.y_to_pitch(y - area.top());
 		let down = ui.input(|i| i.pointer.primary_down());
+		// Dragging along the keys glides from note to note.
 		let held = if response.is_pointer_button_down_on() || (self.key.is_some() && down) {
 			ui.ctx().pointer_latest_pos().map(|pos| pitch_at(pos.y))
 		} else {
@@ -965,11 +1344,12 @@ impl PianoUi {
 		let clip = &t.clip;
 		let value_at = |y: f32| ((inner.bottom() - y) / inner.height()).clamp(0.0, 1.0);
 		let response = ui.interact(lane, Id::new("piano-velocity"), Sense::click_and_drag());
-		let (pressed, down, released) = ui.input(|i| {
+		let (pressed, r_pressed, down, alt) = ui.input(|i| {
 			(
 				i.pointer.primary_pressed(),
-				i.pointer.primary_down(),
-				i.pointer.primary_released(),
+				i.pointer.button_pressed(PointerButton::Secondary),
+				i.pointer.primary_down() || i.pointer.secondary_down(),
+				i.modifiers.alt,
 			)
 		});
 		let bar_x = |n: &Note| lane.left() + tl.tick_to_x(clip.start + n.start);
@@ -978,56 +1358,69 @@ impl PianoUi {
 			let x1 = x0 + note_px(&v, n.length).max(6.0);
 			(x0 - 3.0..=x1).contains(&x)
 		};
-		if pressed
+		if (pressed || r_pressed)
 			&& response.hovered()
 			&& let Some(pos) = ui.ctx().pointer_latest_pos()
 		{
-			let anchor = clip
-				.notes()
-				.iter()
-				.filter(|n| near(n, pos.x))
-				.min_by(|a, b| {
-					(bar_x(a) - pos.x)
-						.abs()
-						.total_cmp(&(bar_x(b) - pos.x).abs())
-				});
-			let relative = anchor
-				.filter(|n| v.selected.contains(&n.id) && v.selected.len() > 1)
-				.map(|n| (n.velocity, value_at(pos.y)));
-			self.velocity = Some(VelocityDrag {
-				values: HashMap::new(),
-				relative,
+			let at = (tl.x_to_tick(pos.x - lane.left()), value_at(pos.y));
+			self.velocity = Some(if r_pressed || alt {
+				VelocityDrag::Line {
+					from: at,
+					to: at,
+					values: HashMap::new(),
+				}
+			} else {
+				let anchor = clip
+					.notes()
+					.iter()
+					.filter(|n| near(n, pos.x))
+					.min_by(|a, b| {
+						(bar_x(a) - pos.x)
+							.abs()
+							.total_cmp(&(bar_x(b) - pos.x).abs())
+					});
+				VelocityDrag::Paint {
+					values: HashMap::new(),
+					relative: anchor
+						.filter(|n| v.selected.contains(&n.id) && v.selected.len() > 1)
+						.map(|_| value_at(pos.y)),
+				}
 			});
 		}
-		if down
-			&& let (Some(drag), Some(pos)) = (self.velocity.as_mut(), ui.ctx().pointer_latest_pos())
-		{
+		if let (Some(drag), Some(pos)) = (self.velocity.as_mut(), ui.ctx().pointer_latest_pos()) {
 			let value = value_at(pos.y);
-			match drag.relative {
-				Some((_, press)) => {
+			match drag {
+				VelocityDrag::Paint {
+					values,
+					relative: Some(press),
+				} => {
 					for n in clip.notes().iter().filter(|n| v.selected.contains(&n.id)) {
-						drag.values
-							.insert(n.id, (n.velocity + value - press).clamp(0.0, 1.0));
+						values.insert(n.id, (n.velocity + value - *press).clamp(0.0, 1.0));
 					}
 				}
-				None => {
+				VelocityDrag::Paint { values, .. } => {
 					for n in clip.notes().iter().filter(|n| {
 						near(n, pos.x) && (v.selected.is_empty() || v.selected.contains(&n.id))
 					}) {
-						drag.values.insert(n.id, value);
+						values.insert(n.id, value);
 					}
+				}
+				VelocityDrag::Line { from, to, values } => {
+					*to = (tl.x_to_tick(pos.x - lane.left()), value);
+					*values = piano::velocity_line(clip, &v.selected, *from, *to);
 				}
 			}
 		}
-		if released && let Some(drag) = self.velocity.take() {
-			if let Some(cmd) = piano::set_velocities(state.project(), clip.id, &drag.values) {
+		if !down && let Some(drag) = self.velocity.take() {
+			let values = drag.values();
+			if let Some(cmd) = piano::set_velocities(state.project(), clip.id, values) {
 				state.apply(cmd);
 			}
-			if let Some(last) = drag.values.values().last() {
+			if let Some(last) = values.values().last() {
 				state.view.piano.last_velocity = *last;
 			}
 		}
-		let preview = self.velocity.as_ref().map(|d| &d.values);
+		let preview = self.velocity.as_ref().map(VelocityDrag::values);
 		for n in clip.notes() {
 			let x = bar_x(n);
 			if x < lane.left() - 4.0 || x > lane.right() {
@@ -1040,7 +1433,7 @@ impl PianoUi {
 			let selected = v.selected.contains(&n.id);
 			let top = inner.bottom() - vel * inner.height();
 			let color = if selected {
-				Color32::WHITE
+				theme::NOTE_SELECTED
 			} else {
 				theme::mix(t.color, Color32::WHITE, 0.2)
 			};
@@ -1050,6 +1443,16 @@ impl PianoUi {
 				Stroke::new(2.0, color.gamma_multiply(0.8)),
 			);
 			p.circle_filled(pos2(x + 1.0, top), 3.0, color);
+		}
+		if let Some(VelocityDrag::Line { from, to, .. }) = &self.velocity {
+			let y = |v: f32| inner.bottom() - v * inner.height();
+			p.line_segment(
+				[
+					pos2(lane.left() + tl.tick_to_x(from.0), y(from.1)),
+					pos2(lane.left() + tl.tick_to_x(to.0), y(to.1)),
+				],
+				Stroke::new(1.5, theme::NOTE_SELECTED),
+			);
 		}
 		if response.hovered() {
 			ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
@@ -1099,7 +1502,8 @@ impl PianoUi {
 		}
 	}
 
-	/// Piano-roll keys (only while the piano roll has the focus). Consumes what it uses.
+	/// Piano-roll keys (only while the piano roll has the focus), FL Studio defaults.
+	/// Consumes what it uses (so Ctrl+D / Ctrl+L / Ctrl+B mean the piano roll's here).
 	pub fn shortcuts(&mut self, ctx: &egui::Context, state: &mut AppState) {
 		if ctx.egui_wants_keyboard_input() {
 			return;
@@ -1110,76 +1514,118 @@ impl PianoUi {
 		let pressed = |m: Modifiers, k: Key| {
 			ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
 		};
+		let cmd = Modifiers::COMMAND;
+		if self.props.is_some() && pressed(Modifiers::NONE, Key::Escape) {
+			self.props = None;
+			return;
+		}
 		let clip = t.clip.id;
-		let ts = state.project().time_signature;
-		let grid_step = state.view.piano.timeline.grid(ts).step;
 		let sel = state.view.piano.selected.clone();
-		if pressed(Modifiers::NONE, Key::P) || pressed(Modifiers::NONE, Key::B) {
-			state.view.piano.tool = Tool::Draw;
+		for tool in Tool::ALL {
+			let key = match tool {
+				Tool::Draw => Key::P,
+				Tool::Paint => Key::B,
+				Tool::Select => Key::E,
+				Tool::Slice => Key::C,
+			};
+			if pressed(Modifiers::NONE, key) {
+				state.view.piano.tool = tool;
+			}
 		}
-		if pressed(Modifiers::NONE, Key::E) {
-			state.view.piano.tool = Tool::Select;
-		}
-		if pressed(Modifiers::COMMAND, Key::A) {
+		if pressed(cmd, Key::A) {
 			state
 				.view
 				.piano
 				.select(t.clip.notes().iter().map(|n| n.id), false);
 		}
-		if pressed(Modifiers::NONE, Key::Escape) {
+		if pressed(cmd, Key::D) || pressed(Modifiers::NONE, Key::Escape) {
 			state.view.piano.selected.clear();
 		}
-		if pressed(Modifiers::COMMAND, Key::C) {
-			state.view.piano.clipboard = piano::copy_notes(&t.clip, &sel);
-			if !sel.is_empty() {
-				state
-					.notices
-					.info(format!("Copied {} notes", state.view.piano.clipboard.len()));
+		let playhead = state.position();
+		if pressed(cmd, Key::C) && !sel.is_empty() {
+			state.view.piano.clipboard = piano::clipboard(&t.clip, &sel, playhead);
+			state.notices.info(format!("Copied {} notes", sel.len()));
+		}
+		if pressed(cmd, Key::X) && !sel.is_empty() {
+			state.view.piano.clipboard = piano::clipboard(&t.clip, &sel, playhead);
+			if let Some(cmd) = piano::cut_notes(state.project(), clip, &sel) {
+				state.apply(cmd);
 			}
 		}
-		if pressed(Modifiers::COMMAND, Key::V) {
-			let at = state.position() - t.clip.start;
+		if pressed(cmd, Key::V) {
 			let board = state.view.piano.clipboard.clone();
-			if let Some((cmd, ids)) = piano::paste_notes(state.project(), clip, &board, at)
+			let at = board.paste_at(playhead, state.is_playing()) - t.clip.start;
+			if let Some((cmd, ids)) = piano::paste_notes(state.project(), clip, &board.notes, at)
 				&& state.apply(cmd)
 			{
 				state.view.piano.select(ids, false);
 			}
 		}
-		if pressed(Modifiers::COMMAND, Key::D)
-			&& let Some((cmd, ids)) = piano::duplicate_notes(state.project(), clip, &sel)
-			&& state.apply(cmd)
-		{
-			state.view.piano.select(ids, false);
+		if pressed(cmd, Key::B) {
+			let step = snap_step(state);
+			match piano::clone_notes(state.project(), clip, &sel, step) {
+				Some((cmd, ids)) => {
+					if state.apply(cmd) {
+						state.view.piano.select(ids, false);
+					}
+				}
+				None => state
+					.notices
+					.info("Select notes to clone (Ctrl+A selects all)"),
+			}
 		}
 		if (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
 			&& let Some(cmd) = piano::delete_notes(state.project(), clip, &sel)
 		{
 			state.apply(cmd);
 		}
-		if pressed(Modifiers::NONE, Key::Q) {
+		if pressed(cmd, Key::Q) || pressed(Modifiers::NONE, Key::Q) {
 			quantize(state);
 		}
+		if pressed(cmd, Key::U) {
+			match piano::glue_notes(state.project(), clip, &sel) {
+				Some(cmd) => {
+					state.apply(cmd);
+				}
+				None => state
+					.notices
+					.info("Glue joins selected notes of the same pitch: select two or more"),
+			}
+		}
+		if pressed(cmd, Key::L) {
+			let ids = piano::targets(&t.clip, &sel);
+			if let Some(cmd) = piano::legato_notes(state.project(), clip, &ids) {
+				state.apply(cmd);
+			}
+		}
+		let step = key_step(state);
+		let bar = state.project().time_signature.ticks_per_bar();
+		// Shifted (and Ctrl) variants first: a plain arrow also matches Shift+arrow.
 		let moves = [
 			(Modifiers::SHIFT, Key::ArrowUp, Tick::ZERO, 12),
 			(Modifiers::SHIFT, Key::ArrowDown, Tick::ZERO, -12),
+			(cmd, Key::ArrowUp, Tick::ZERO, 12),
+			(cmd, Key::ArrowDown, Tick::ZERO, -12),
 			(Modifiers::NONE, Key::ArrowUp, Tick::ZERO, 1),
 			(Modifiers::NONE, Key::ArrowDown, Tick::ZERO, -1),
-			(Modifiers::NONE, Key::ArrowLeft, Tick(-grid_step.0), 0),
-			(Modifiers::NONE, Key::ArrowRight, grid_step, 0),
+			(Modifiers::SHIFT, Key::ArrowLeft, Tick(-bar.0), 0),
+			(Modifiers::SHIFT, Key::ArrowRight, bar, 0),
+			(Modifiers::NONE, Key::ArrowLeft, Tick(-step.0), 0),
+			(Modifiers::NONE, Key::ArrowRight, step, 0),
 		];
+		let ids = piano::targets(&t.clip, &sel);
 		for (m, k, dt, dp) in moves {
 			if pressed(m, k)
-				&& let Some(cmd) = piano::move_notes(state.project(), clip, &sel, dt, dp)
+				&& let Some(cmd) = piano::move_notes(state.project(), clip, &ids, dt, dp)
 			{
 				state.apply(cmd);
-				// Audition the transposed selection's lowest note.
+				// Audition the transposed notes' lowest one.
 				if dp != 0
 					&& let Some(n) = t
 						.clip
 						.notes()
 						.iter()
-						.filter(|n| sel.contains(&n.id))
+						.filter(|n| ids.contains(&n.id))
 						.min_by_key(|n| n.pitch)
 				{
 					let pitch = (i32::from(n.pitch) + dp).clamp(0, 127) as u8;
@@ -1203,30 +1649,47 @@ impl PianoUi {
 	/// Releases anything the piano roll is sounding (panel hidden, clip changed).
 	pub fn release(&mut self, state: &mut AppState) {
 		self.gesture = None;
+		self.erase = None;
 		self.velocity = None;
+		self.props = None;
 		self.key = None;
 		self.sounding = None;
 		state.release_previews();
 	}
 }
 
-/// Commits a finished gesture as one command.
+/// Commits a finished note gesture as one command.
 fn commit(state: &mut AppState, clip: &Clip, gesture: Gesture, v: &PianoView) {
 	let id = clip.id;
 	match gesture {
-		Gesture::Draw {
-			start,
-			pitch,
-			end,
-			moved,
+		Gesture::Draw { start, pitch, .. } => {
+			if let Some((cmd, note)) = piano::add_note(
+				state.project(),
+				id,
+				start,
+				pitch,
+				v.last_length,
+				v.last_velocity,
+			) && state.apply(cmd)
+			{
+				state.view.piano.select([note], false);
+			}
+		}
+		Gesture::Paint {
+			first,
+			spacing,
+			cells,
+			..
 		} => {
-			let length = if moved { end - start } else { v.last_length };
-			if let Some((cmd, note)) =
-				piano::add_note(state.project(), id, start, pitch, length, v.last_velocity)
+			let cells: Vec<(Tick, u8)> = cells
+				.iter()
+				.map(|(k, pitch)| (first + Tick(k * spacing.0) - clip.start, *pitch))
+				.collect();
+			if let Some((cmd, ids)) =
+				piano::paint_notes(state.project(), id, &cells, v.last_length, v.last_velocity)
 				&& state.apply(cmd)
 			{
-				state.view.piano.last_length = length;
-				state.view.piano.select([note], false);
+				state.view.piano.select(ids, false);
 			}
 		}
 		Gesture::Move {
@@ -1235,26 +1698,33 @@ fn commit(state: &mut AppState, clip: &Clip, gesture: Gesture, v: &PianoView) {
 			dp,
 			moved,
 			note,
-			add,
-			was_selected,
+			copy,
 			..
 		} => {
 			if !moved {
-				// A click: Shift/Ctrl toggles an already selected note, a plain click on a
-				// note of a group narrows the selection to it.
-				if add && was_selected {
-					state.view.piano.selected.remove(&note);
-				} else if !add {
-					state.view.piano.select([note], false);
-				}
+				// A click on a note of a group narrows the selection to it.
+				state.view.piano.select([note], false);
 				return;
 			}
-			if let Some(cmd) = piano::move_notes(state.project(), id, &ids, dt, dp) {
+			if copy {
+				if let Some((cmd, copies)) = piano::copy_moved(state.project(), id, &ids, dt, dp)
+					&& state.apply(cmd)
+				{
+					state.view.piano.select(copies, false);
+				}
+			} else if let Some(cmd) = piano::move_notes(state.project(), id, &ids, dt, dp) {
 				state.apply(cmd);
 			}
 		}
-		Gesture::Resize { ids, delta, .. } => {
-			if let Some(cmd) = piano::resize_notes(state.project(), id, &ids, delta)
+		Gesture::Resize {
+			ids, delta, left, ..
+		} => {
+			let cmd = if left {
+				piano::resize_start_notes(state.project(), id, &ids, delta)
+			} else {
+				piano::resize_notes(state.project(), id, &ids, delta)
+			};
+			if let Some(cmd) = cmd
 				&& state.apply(cmd)
 				&& let Some(n) = state
 					.project()
@@ -1265,21 +1735,16 @@ fn commit(state: &mut AppState, clip: &Clip, gesture: Gesture, v: &PianoView) {
 				state.view.piano.last_length = n.length;
 			}
 		}
-		Gesture::Rubber { .. } => {}
+		Gesture::Rubber { .. } | Gesture::Slice { .. } => {}
 	}
 }
 
-/// Quantizes the selection (or the whole clip) to the current grid.
+/// Quantizes the selection (or the whole clip) to the snap (else the visible grid).
 pub fn quantize(state: &mut AppState) {
 	let Some(clip) = state.view.piano.clip else {
 		return;
 	};
-	let step = state
-		.view
-		.piano
-		.timeline
-		.grid(state.project().time_signature)
-		.step;
+	let step = key_step(state);
 	let sel = state.view.piano.selected.clone();
 	match piano::quantize_notes(state.project(), clip, &sel, step, 1.0) {
 		Some(cmd) => {
@@ -1316,18 +1781,17 @@ fn paint_note(
 	pitch: u8,
 	row_height: f32,
 ) {
-	// Brighter for louder notes; selected notes are lighter with a white outline.
-	let base = theme::mix(color, Color32::WHITE, 0.15);
+	// Brighter for louder notes; selected notes turn warm red (FL Studio).
+	let base = if selected {
+		theme::NOTE_SELECTED
+	} else {
+		theme::mix(color, Color32::WHITE, 0.15)
+	};
 	let fill = theme::mix(
 		theme::mix(base, theme::BG_DEEP, 0.55),
 		base,
 		0.35 + 0.65 * velocity,
 	);
-	let fill = if selected {
-		theme::mix(fill, Color32::WHITE, 0.35)
-	} else {
-		fill
-	};
 	p.rect_filled(r, CornerRadius::same(2), fill);
 	// Velocity tick along the top edge.
 	let vw = (r.width() - 2.0).max(0.0) * velocity;
@@ -1340,7 +1804,7 @@ fn paint_note(
 		r,
 		CornerRadius::same(2),
 		if selected {
-			Stroke::new(1.5, Color32::WHITE)
+			Stroke::new(1.5, theme::mix(theme::NOTE_SELECTED, Color32::WHITE, 0.6))
 		} else {
 			Stroke::new(1.0, theme::mix(color, theme::BG_DEEP, 0.5))
 		},

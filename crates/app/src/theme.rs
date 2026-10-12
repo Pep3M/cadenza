@@ -32,6 +32,8 @@ pub const PLAYHEAD: Color32 = Color32::from_rgb(0xff, 0x5f, 0x4f);
 pub const PLAYING: Color32 = Color32::from_rgb(0x46, 0xc8, 0x6c);
 /// Pattern mode (the transport switch, the looped clip span).
 pub const PATTERN: Color32 = Color32::from_rgb(0xf0, 0x8c, 0x3c);
+/// Selected notes in the piano roll (FL Studio-like warm red).
+pub const NOTE_SELECTED: Color32 = Color32::from_rgb(0xf2, 0x6b, 0x6b);
 /// The arrange loop region.
 pub const LOOP: Color32 = Color32::from_rgb(0x6f, 0xa8, 0xff);
 pub const MUTE: Color32 = Color32::from_rgb(0xe3, 0x8b, 0x2c);

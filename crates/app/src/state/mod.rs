@@ -2227,6 +2227,7 @@ impl AppState {
 			piano_row_height: v.piano.row_height,
 			piano_velocity_lane: v.piano.velocity_lane,
 			piano_ghosts: v.piano.ghosts,
+			piano_snap: v.piano.snap,
 			piano_scale: v
 				.piano
 				.scale
@@ -2262,6 +2263,7 @@ impl AppState {
 			.clamp(piano::MIN_ROW_HEIGHT, piano::MAX_ROW_HEIGHT);
 		v.piano.velocity_lane = p.piano_velocity_lane;
 		v.piano.ghosts = p.piano_ghosts;
+		v.piano.snap = p.piano_snap;
 		v.piano.scale = cadenza_theory::Scale::parse(&p.piano_scale).ok();
 		v.bookmarks = p.bookmarks;
 		self.ai.settings = p.ai.sanitized();

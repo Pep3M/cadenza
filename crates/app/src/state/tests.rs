@@ -241,3 +241,119 @@ fn transport_without_audio_keeps_a_position() {
 	assert!(!s.is_playing());
 	assert_eq!(s.notices.count(notices::Level::Warning), 1);
 }
+
+#[test]
+fn drops_create_tracks_and_import_midi_at_the_drop_beat() {
+	let (mut s, keys) = state_with_song();
+	let synth = s
+		.browser_items()
+		.iter()
+		.find(|i| i.id == "electric_piano")
+		.unwrap()
+		.clone();
+	let verb = s
+		.browser_items()
+		.iter()
+		.find(|i| i.id == "reverb")
+		.unwrap()
+		.clone();
+	let at = Tick(PPQ * 8);
+	assert!(s.drop_payload(&Payload::Device(synth), DropTarget::Below { at }, false));
+	let t = s.project().tracks.last().unwrap().clone();
+	assert_eq!(t.kind, TrackKind::Instrument);
+	assert_eq!(t.instrument.as_ref().unwrap().name, "Electric Piano");
+	assert_eq!(
+		s.undo_label().map(str::to_owned),
+		Some(format!("Add track '{}'", t.name))
+	);
+	assert!(s.drop_payload(
+		&Payload::Device(verb),
+		DropTarget::InsertSlot {
+			track: Some(keys),
+			slot: 0
+		},
+		false
+	));
+	assert_eq!(
+		s.project().track(keys).unwrap().channel.inserts[0].name,
+		"Reverb"
+	);
+
+	// A MIDI file dropped below the tracks: new tracks starting at the drop beat, one
+	// undo step.
+	let dir = tempfile::tempdir().unwrap();
+	let mid = dir.path().join("riff.mid");
+	std::fs::write(&mid, cadenza_midi_io::export_project(s.project()).unwrap()).unwrap();
+	let before = s.project().tracks.len();
+	let history = s.document().history_labels().len();
+	assert!(s.drop_payload(&Payload::File(mid), DropTarget::Below { at }, false));
+	assert!(s.project().tracks.len() > before);
+	assert_eq!(s.document().history_labels().len(), history + 1);
+	let new = &s.project().tracks[before];
+	assert!(
+		new.clips.iter().all(|c| c.start >= at),
+		"shifted to the drop beat"
+	);
+	// Rejected drops change nothing.
+	assert!(!s.drop_payload(
+		&Payload::File(dir.path().join("notes.txt")),
+		DropTarget::Window,
+		false
+	));
+}
+
+#[test]
+fn note_previews_are_tracked_and_released() {
+	let (mut s, keys) = state_with_song();
+	let clip = s.project().track(keys).unwrap().clips[0].id;
+	assert!(s.open_piano_roll(clip));
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+	assert_eq!(s.piano_track(), Some(keys));
+	s.preview_note_on(keys, 60, 0.8);
+	s.preview_note_on(keys, 64, 0.8);
+	s.preview_note_on(keys, 64, 0.8);
+	assert_eq!(s.previewing.len(), 2);
+	s.preview_note_off(keys, 60);
+	assert_eq!(s.previewing, vec![(keys, 64)]);
+	// Another track: the held notes are released first.
+	let other = TrackId::new();
+	s.preview_note_on(other, 50, 0.8);
+	assert_eq!(s.previewing, vec![(other, 50)]);
+	s.close_piano_roll();
+	assert!(s.previewing.is_empty());
+	assert!(!s.view.panels.visible(PanelKind::PianoRoll));
+	// Removing the clip closes the editor's selection state.
+	s.view.piano.selected.insert(cadenza_core::NoteId::new());
+	s.apply(Command::RemoveClip { clip });
+	assert_eq!(s.view.piano.clip, None);
+	assert!(s.view.piano.selected.is_empty());
+}
+
+#[test]
+fn prefs_restore_layout_and_zoom() {
+	let (mut s, _) = state_with_song();
+	s.view.panels.toggle(PanelKind::Inspector);
+	s.view.timeline.px_per_beat = 40.0;
+	s.view.piano.scale = cadenza_theory::Scale::parse("D dorian").ok();
+	s.view.follow = FollowMode::Continuous;
+	s.view.panels.open_piano_roll();
+	let prefs = s.prefs();
+	assert!(
+		prefs.panels.mixer,
+		"the mixer only yielded to the piano roll"
+	);
+	let mut t = AppState::headless();
+	t.apply_prefs(prefs);
+	assert!(!t.view.panels.inspector);
+	assert!(!t.view.panels.piano_roll, "no clip to show yet");
+	assert_eq!(t.view.timeline.px_per_beat, 40.0);
+	assert_eq!(t.view.follow, FollowMode::Continuous);
+	assert_eq!(t.view.piano.scale, s.view.piano.scale);
+	// Out-of-range values are clamped.
+	let mut bad = t.prefs();
+	bad.px_per_beat = 1e9;
+	bad.track_height = -3.0;
+	t.apply_prefs(bad);
+	assert_eq!(t.view.timeline.px_per_beat, timeline::MAX_PX_PER_BEAT);
+	assert_eq!(t.view.track_height, MIN_TRACK_HEIGHT);
+}

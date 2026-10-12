@@ -22,7 +22,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
 | `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play`, `mcp`, `scan-plugins`, `list-plugins`, `compose` | all |
-| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash) | — |
+| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output) | — |
 
 Future: `cadenza-ui`, audio editing (destructive + clip-based), sandbox on Windows/macOS.
 
@@ -76,7 +76,10 @@ pub enum Output { Master, Bus(TrackId) }
 pub struct Send { id: DeviceId, target: TrackId /* Bus track */, level_db: f32, pre_fader: bool }
 pub struct Device { id: DeviceId, kind: DeviceKind, name: String, bypass: bool,
 	params: BTreeMap<String, f32> /* plain (unnormalized) values by param id */,
-	state: Option<String> /* opaque plugin state, base64 */ }
+	state: Option<String> /* opaque plugin state, base64; params apply on top */,
+	sidechain: Option<SidechainSource { track: TrackId, pre_fader: bool }> /* key input */,
+	aux_outputs: Vec<OutputRoute { port: u32 /* 1-based extra output */, bus: Option<TrackId> /* None = own track */ }> }
+// New fields are optional in JSON (missing = None/empty), so format_version stays 1.
 pub enum DeviceKind { Builtin { id: String }, Clap { plugin_id: String, path: PathBuf },
 	Vst3 { class_id: String, path: PathBuf } }
 pub struct Clip { id: ClipId, name: String, start: Tick, length: Tick, content: ClipContent }
@@ -92,7 +95,9 @@ patch, `track: Option<TrackId>` = None means master), SetInstrument, InsertDevic
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
-Batch { label, commands }.
+SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
+SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
+(instrument only), Batch { label, commands }.
 
 Implemented extras: `ResetParam` (inverse of a first `SetParam`), `UpdateSend`, optional `index`
 on AddTrack/InsertDevice/AddSend, `UpdateClip` can move a clip to another track. Instruments are
@@ -107,6 +112,9 @@ here (model doesn't know devices) — callers with registry access (mcp) must va
 `Project::summary() -> ProjectSummary` (compact, AI-oriented view: tracks, devices, clips with
 note counts, ranges in beats). Validation: pitch 0..=127, velocity 0..=1, positive lengths,
 existing ids, bus outputs must target Bus tracks with no cycles, instruments only on Instrument tracks.
+The cycle check covers outputs, sends, instrument output routes and sidechains (source -> keyed
+track); a device cannot be keyed by its own track; only instruments have `aux_outputs`. Removing
+a track disconnects sidechains keyed by it and drops output routes to it (undo restores).
 
 ### cadenza-dsp
 
@@ -126,10 +134,15 @@ pub trait Processor: Send {
 	fn reset(&mut self);
 	fn latency(&self) -> u32 { 0 }
 	fn tail_seconds(&self) -> f32 { 0.0 }
+	fn save_state/load_state, presets() -> Vec<PresetInfo>, load_preset(key)  // non-realtime, plugins
+	fn has_sidechain(&self) -> bool; fn set_sidechain(&mut self, l, r)        // key for the next block only
+	fn aux_output_count(&self) -> usize; fn aux_output(&self, i) -> Option<(&[f32], &[f32])> // last block
 }
 pub fn registry() -> &'static [&'static DeviceInfo];
 pub fn create(id: &str) -> Option<Box<dyn Processor>>;
+pub fn factory_presets(id: &str) -> &'static [FactoryPreset { name, description, params }];
 ```
+The built-in `compressor` has a sidechain input (detector keyed by it when set).
 Instruments receive silence in `left/right` and must write (not add) their output.
 Events are sorted by `offset` within the block.
 
@@ -150,7 +163,18 @@ pub struct LevelStats { peak_db, true_peak_db, rms_db, lufs_integrated /* BS.177
 pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing(),
 	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>
 pub fn compile_hosted(project, sample_rate, max_block, plugins, &PluginHosting) -> Result<Graph, EngineError>; // Graph::plugin_crashes()
+pub fn capture_state(&Device, plugins, &PluginHosting) -> Result<Option<String>, EngineError>; // fresh instance: state + params
+pub fn plugin_presets(&Device, plugins, &PluginHosting) -> Result<Vec<PresetInfo>, EngineError>;
+pub fn preset_state(&Device, key, plugins, &PluginHosting) -> Result<String /*base64*/, EngineError>;
 ```
+Routing: tracks are processed in an order that respects outputs/sends, instrument output routes
+and sidechain keys (stable: non-bus tracks, then buses, moved only when needed). A keyed device
+gets the source's pre-fader (post-inserts, ignores mute) or post-fader signal; PDC aligns key and
+main signal at the device (delaying whichever is earlier; instruments delay their notes). Extra
+instrument outputs mix into the track after the instrument or into a bus accumulator (PDC-tapped
+after the instrument). Unusable sidechains/routes are ignored with warnings. CLAP: the first
+non-main input port is the sidechain; VST3: the first `kAux` input bus; every non-main output
+port/bus with channels is an extra output (sandboxed too, via extra shm channels).
 Plugin hosting: CLAP/VST3 devices run **sandboxed by default** (one `cadenza-plugin-sandbox`
 process each, found via `CADENZA_PLUGIN_SANDBOX` or next to the executable); opt out with
 `PluginHosting::in_process()` / `CADENZA_PLUGIN_HOSTING=in-process` (debugging, benchmarks). A
@@ -159,6 +183,13 @@ hangs is bypassed (instrument silent, effect pass-through), the render completes
 `MixReport.warnings` names track, device, reason and approximate time. The `Player` polls
 sandbox monitors off the audio thread; `load` re-creates every device, which restarts crashed
 plugins (MCP: `transport_status.plugin_crashes`, `restart_plugins`).
+Plugin state is captured explicitly (MCP `capture_plugin_state`, automatically on `save_project`,
+and after loading a plugin preset) from a fresh instance, then stored with `SetDeviceState`.
+MCP preset tools: `list_presets`/`load_preset`/`save_preset` (user presets in
+`$CADENZA_PRESET_DIR` or `$XDG_DATA_HOME/cadenza/presets/<device id>/<name>.json`); routing tools
+`set_sidechain`, `set_output_routes`. Plugin factory presets: CLAP preset-discovery + preset-load
+(VST3 program lists not yet). Descriptors carry `sidechain_channels` and `aux_outputs` (catalog
+cache v2: older caches are rescanned).
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.

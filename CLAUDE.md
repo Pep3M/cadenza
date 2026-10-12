@@ -17,14 +17,20 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-model` | project document, `Command` enum, undo/redo `Document`, persistence, AI summary | core |
 | `cadenza-theory` | notes, scales, chord symbols, roman numerals, voicings | core |
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
-| `cadenza-engine` | compiles a `Project` into a render graph; offline render, mix analysis, realtime playback (cpal) | core, model, dsp |
-| `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp |
+| `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature), stretch (`stretch` feature) | — |
+| `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
+| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export, mix analysis, realtime playback (cpal) + live MIDI monitoring | core, model, dsp, audio-io, midi-io |
+| `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play`, `mcp`, `scan-plugins`, `list-plugins`, `compose` | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose` | all |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output) | — |
 
 Future: `cadenza-ui`, audio editing (destructive + clip-based), sandbox on Windows/macOS.
+
+Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
+`cadenza-audio-io` and are forwarded by `cadenza-engine` and `cadenza-cli`; both are OFF by
+default (`MP3_SUPPORTED` tells whether a build can write MP3).
 
 AI agent rule: never depend on a single LLM vendor's API — new AI features go behind
 `LlmProvider`. Secrets come from the environment or an ignored `.env`; never log or commit them.
@@ -83,7 +89,9 @@ pub struct Device { id: DeviceId, kind: DeviceKind, name: String, bypass: bool,
 pub enum DeviceKind { Builtin { id: String }, Clap { plugin_id: String, path: PathBuf },
 	Vst3 { class_id: String, path: PathBuf } }
 pub struct Clip { id: ClipId, name: String, start: Tick, length: Tick, content: ClipContent }
-pub enum ClipContent { Midi { notes: Vec<Note> }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32 } }
+pub enum ClipContent { Midi { notes: Vec<Note> }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32,
+	fade_in: Option<ClipFade>, fade_out: Option<ClipFade> } }
+pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
 pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick }
 pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32 }> }
 pub struct Marker { tick: Tick, name: String }
@@ -97,7 +105,14 @@ RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTemp
 SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
-(instrument only), Batch { label, commands }.
+(instrument only), SetClipFades { clip, fade_in, fade_out } (replaces both; audio clips only),
+Batch { label, commands }.
+
+Clip fades are in **seconds**, not beats: like `offset_seconds` they shape the recording
+(de-click, natural decay) and must not stretch with tempo changes; AI tools accept beats too
+and convert at the clip edge. AddClip/SetClipFades reject a fade (or fade_in + fade_out)
+longer than the clip at the current tempo; later resizes/tempo changes are not rejected —
+the engine scales fades down proportionally to fit.
 
 Implemented extras: `ResetParam` (inverse of a first `SetParam`), `UpdateSend`, optional `index`
 on AddTrack/InsertDevice/AddSend, `UpdateClip` can move a clip to another track. Instruments are
@@ -153,7 +168,9 @@ pub struct RenderOptions { sample_rate: u32, block_size: usize, start: Tick, end
 	plugins: Option<Arc<PluginCatalog>>, hosting: PluginHosting }
 pub struct PluginHosting { mode: HostingMode /* Sandboxed | InProcess */, sandbox: SandboxOptions } // default: from_env()
 pub fn render_offline(project: &Project, opts: &RenderOptions) -> Result<StereoBuffer, EngineError>;
-pub fn render_to_wav(project: &Project, opts: &RenderOptions, path: &Path) -> Result<MixReport, EngineError>;
+pub fn render_to_wav(project: &Project, opts: &RenderOptions, path: &Path) -> Result<MixReport, EngineError>; // 32f, streamed
+pub fn render_to_file(project, opts, path, &ExportOptions) -> Result<MixReport, EngineError>; // WAV 16/24/32f, FLAC 16/24, MP3; TPDF dither
+pub fn export_options_for_path(path, bit_depth: Option<u32>, mp3_bitrate_kbps: Option<u16>) -> Result<ExportOptions, EngineError>; // by extension
 pub fn analyze_mix(project: &Project, opts: &RenderOptions) -> Result<MixReport, EngineError>;
 pub fn compile(project: &Project, sample_rate: u32, max_block: usize) -> Result<Graph, EngineError>;
 pub struct MixReport { sample_rate, duration_seconds, latency_samples, warnings: Vec<String>,
@@ -161,7 +178,9 @@ pub struct MixReport { sample_rate, duration_seconds, latency_samples, warnings:
 pub struct LevelStats { peak_db, true_peak_db, rms_db, lufs_integrated /* BS.1770-4 */, lufs_short_term_max,
 	crest_factor_db, clipped_samples, band_energy_db: BandEnergy, stereo_correlation } // silence = -144
 pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>, play/stop/seek -> Result, position(), is_playing(),
-	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>
+	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>,
+	// set_midi_input(Option<&MidiPort>), set_monitor_track(Option<TrackId>), dropped_midi_events()
+pub fn midi_input_ports() -> Result<Vec<MidiPort>, EngineError>; pub fn find_midi_input(index_or_name) -> Result<MidiPort, _>;
 pub fn compile_hosted(project, sample_rate, max_block, plugins, &PluginHosting) -> Result<Graph, EngineError>; // Graph::plugin_crashes()
 pub fn capture_state(&Device, plugins, &PluginHosting) -> Result<Option<String>, EngineError>; // fresh instance: state + params
 pub fn plugin_presets(&Device, plugins, &PluginHosting) -> Result<Vec<PresetInfo>, EngineError>;
@@ -190,6 +209,18 @@ MCP preset tools: `list_presets`/`load_preset`/`save_preset` (user presets in
 `set_sidechain`, `set_output_routes`. Plugin factory presets: CLAP preset-discovery + preset-load
 (VST3 program lists not yet). Descriptors carry `sidechain_channels` and `aux_outputs` (catalog
 cache v2: older caches are rescanned).
+Audio clips: files are decoded + resampled to the engine rate at compile time through
+`AudioCache::global()` (any format symphonia reads) and played with `render_clip` (realtime
+safe); overlapping clips on a track sum. An unreadable file is a `MixReport`/`Player::load`
+warning (clip silent), never a hard error.
+Live MIDI: the midir callback pushes into an rtrb queue whose consumer is handed to the audio
+thread (and back to be dropped); each callback drains it into a pre-allocated buffer and
+`Graph::push_live_event` feeds the monitored instrument at the next quantum (offset 0: midir
+and cpal share no clock). Monitoring sounds while the transport runs; switching the monitored
+track releases held notes.
+MCP file tools: `import_audio`, `get_audio_info`, `set_clip_fades`, `import_midi` (Batch via
+Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension. The
+embedded agent's `PathPolicy` confines all of them to the session folder with checked extensions.
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.

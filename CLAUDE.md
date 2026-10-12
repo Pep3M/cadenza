@@ -191,7 +191,9 @@ pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>,
 	// set_live_param(device, param_id, value) / set_live_send(send, db) -> Result<bool> (false: not in the graph, reload),
 	// set_automation(&lanes, &tempo) -> Result<bool> (false: tempo changed or a lane was removed, reload),
 	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>,
-	// set_midi_input(Option<&MidiPort>), set_monitor_track(Option<TrackId>), dropped_midi_events()
+	// set_midi_input(Option<&MidiPort>), set_monitor_track(Option<TrackId>), dropped_midi_events(),
+	// set_loop(Option<(Tick, Tick)>), set_audition(Option<AuditionScope { tracks }>),
+	// set_track_clips(track, &clips, &tempo) -> Result<bool> (false: reload)
 pub fn midi_input_ports() -> Result<Vec<MidiPort>, EngineError>; pub fn find_midi_input(index_or_name) -> Result<MidiPort, _>;
 pub fn compile_hosted(project, sample_rate, max_block, plugins, &PluginHosting) -> Result<Graph, EngineError>; // Graph::plugin_crashes()
 pub fn capture_state(&Device, plugins, &PluginHosting) -> Result<Option<String>, EngineError>; // fresh instance: state + params
@@ -248,6 +250,20 @@ callback swaps them in (`Graph::swap_automation`, matched by load id; sets for a
 queued wait, stale ones go back) and returns the old box through a garbage ring. Covered by
 the `no_alloc` test. Structural changes (tracks, devices, routing, clips, tempo, bypass,
 resetting a param to its default) still recompile.
+Loop / audition / rescheduling: `Graph::set_loop` wraps sample-accurately inside a quantum
+(collect up to the end, `MidiSchedule::release` note-offs for notes held at the end, seek +
+chase at the start, collect the rest; audio clips split the quantum; a quantum ending exactly
+on the end wraps at the next one; the output position wraps once the latency has passed;
+tails ring on; automation is evaluated per quantum on the timeline position). The loop is a
+`Cmd::Loop` kept by the callback across graph swaps; offline renders never loop.
+`set_audition`: an `Arc<Audition>` of atomics per graph (mask built off-thread from
+`Resolver::feeds`: scoped tracks + the buses they reach through outputs/sends/aux outputs);
+out-of-scope nodes still render (sidechain keys work) but are not mixed; auditioned tracks
+ignore other solos, mute still holds. `set_track_clips` builds a `ScheduleSwap` off-thread
+and sends it boxed through its own rtrb (garbage ring back); `Graph::swap_schedule` swaps
+schedule + event buffer and releases only the notes sounding before but not after.
+Event buffers are sized for both sides of a wrap (`compile::event_capacity`). All covered by
+the `no_alloc` test.
 Engine internals: devices run in fixed 32-sample steps (block-size independent, bit-identical);
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.
@@ -265,8 +281,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   functions such as `import_audio`, `import_midi`, `save_project`): validated + undoable by
   `Document`, marks dirty and prunes the selection. `state::live::diff(before, after)` decides
   how the player follows: volume/pan/send levels, device param values and automation lanes go
-  live (`set_live_*`, `set_automation`; sounding notes keep playing, also for undo/redo and
-  shared MCP tools), anything structural schedules a debounced (120 ms) reload. Gesture edits
+  live (`set_live_*`, `set_automation`, MIDI clip/note edits on instrument tracks via
+  `set_track_clips`; sounding notes keep playing, also for undo/redo and shared MCP tools),
+  anything structural schedules a debounced (120 ms) reload. Gesture edits
   (faders, knobs, send levels, clip moves, automation points) are previewed locally (and heard
   live) and committed as ONE command on release; value widgets only commit real user edits.
   Mixer/inspector controls show the automated value at the playhead. `state::edits` holds the
@@ -319,6 +336,19 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   Editing past the clip end grows the clip to the next bar in the same batch (notes before the
   start are clamped). Notes are auditioned through `AppState::preview_note_on/off`, released on
   mouse up, panel close and track change.
+- Transport modes (`state::transport`, view state, not in the project): FL-like PAT | SONG
+  switch (L). Song mode plays the arrangement, looping the arrange loop region when on
+  (Ctrl+L or the ⟲ button; drag the ruler's upper half or Ctrl+drag the ruler to set it, click
+  the region to toggle; drawn on ruler and lanes). Pattern mode loops the clip open in the
+  piano roll (at least a bar) and auditions only its track (`Player::set_audition`); no clip
+  open = song with a toast. `AppState::sync_transport` (every tick) sends loop/audition only
+  when they change; switching modes while playing restarts; audition only while playing.
+- Piano roll access: F7 / double-click an instrument track header / track menu open the
+  selected instrument track's clip (`piano::clip_for_track`: selected, under the playhead,
+  last opened (`PianoView::recent`)) or create an empty one-bar clip named after the track at
+  the first free bar from the playhead (`piano::new_clip`, one undo step). Adding an
+  instrument selects its track and hints at F7; the piano roll toolbar has a clip menu (the
+  track's clips) and "+" (new clip); the empty dock explains how to open one.
 - Drag & drop (`state::dnd`: `Payload` x `DropTarget` -> `DropAction`, executed by
   `AppState::drop_payload`; views only hit-test and show the hint next to the pointer):
   devices -> track/lane (instrument or insert), mixer insert slot, below the tracks (new

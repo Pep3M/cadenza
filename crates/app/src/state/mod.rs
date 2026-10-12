@@ -17,13 +17,16 @@ pub mod browser;
 pub mod dnd;
 pub mod editors;
 pub mod edits;
+pub mod export;
 pub mod files;
 pub mod layout;
 pub mod live;
 pub mod meters;
 pub mod notices;
 pub mod piano;
+pub mod project_io;
 pub mod rows;
+pub mod safety;
 pub mod samples;
 pub mod selection;
 pub mod timeline;
@@ -36,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TrackId};
 use cadenza_dsp::DeviceRole;
-use cadenza_engine::{MeterBank, MixReport, PlayerClock, RenderOptions};
+use cadenza_engine::{MeterBank, PlayerClock};
 use cadenza_mcp::{ChangeKey, McpError, Session, SharedSession};
 use cadenza_model::{ChannelPatch, Command, Document, Project, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, ScanReport};
@@ -106,6 +109,8 @@ pub struct ViewState {
 	pub instrument_editor: bool,
 	/// Pattern / Song mode and the arrange loop region.
 	pub transport: transport::TransportView,
+	/// The start screen (recent projects, new, open, demo) is shown.
+	pub start_screen: bool,
 }
 
 impl Default for ViewState {
@@ -126,6 +131,7 @@ impl Default for ViewState {
 			instrument: samples::InstrumentView::default(),
 			instrument_editor: false,
 			transport: transport::TransportView::default(),
+			start_screen: false,
 		}
 	}
 }
@@ -147,13 +153,14 @@ pub enum Pending {
 	New,
 	Open(Option<PathBuf>),
 	Quit,
+	/// Collect project files (after the Save As it needs).
+	Collect,
 }
 
 /// Background work in flight.
 #[derive(Default)]
 pub struct Jobs {
 	pub scan: Option<Job<Result<(PluginCatalog, ScanReport), String>>>,
-	pub export: Option<Job<Result<(PathBuf, MixReport), String>>>,
 	/// An audio editor operation rendering a processed copy.
 	pub process: Option<Job<Result<audio_edit::Rendered, String>>>,
 	pub dialog: Option<(FileAction, Job<Option<PathBuf>>)>,
@@ -218,6 +225,34 @@ impl DocView {
 	}
 }
 
+/// Autosave, session marker and recovery settings (see [`safety`]).
+pub struct SafetyState {
+	/// Off in headless states (tests opt in with [`AppState::enable_safety`]).
+	pub enabled: bool,
+	/// Autosave interval in minutes (0 = off).
+	pub minutes: u32,
+	/// Where unsaved projects autosave and the demo is written.
+	pub state_dir: PathBuf,
+	/// The marker this app wrote for the open project.
+	lock: Option<PathBuf>,
+	autosaver: safety::Autosaver,
+	/// An autosave failure was reported (only once per session).
+	warned: bool,
+}
+
+impl Default for SafetyState {
+	fn default() -> Self {
+		Self {
+			enabled: false,
+			minutes: safety::DEFAULT_AUTOSAVE_MINUTES,
+			state_dir: safety::state_dir(),
+			lock: None,
+			autosaver: safety::Autosaver::default(),
+			warned: false,
+		}
+	}
+}
+
 pub struct AppState {
 	/// The document, history, path and plugin catalog, shared with the AI agent. Lock it
 	/// only briefly ([`AppState::session`]); views read [`AppState::document`].
@@ -254,6 +289,20 @@ pub struct AppState {
 	ai_queue: Vec<Command>,
 	/// What to continue with once a "Save As" dialog finished.
 	after_save: Option<Pending>,
+	/// The export dialog and the running export.
+	pub export: export::ExportDialog,
+	/// File → Open Recent (most recent first; persisted in the preferences).
+	pub recent: Vec<PathBuf>,
+	pub safety: SafetyState,
+	/// Unsaved work offered for recovery.
+	pub recovery: Option<safety::Recovery>,
+	/// The "Locate missing files" dialog.
+	pub relink: Option<project_io::RelinkDialog>,
+	/// After "Save As" into a folder that lacks the project's files: offer to collect.
+	pub collect_prompt: bool,
+	/// An archive being opened, waiting for its destination folder.
+	pending_archive: Option<PathBuf>,
+	pub files_jobs: project_io::FileJobs,
 	browser_items: Option<Vec<BrowserItem>>,
 	audio: Option<AudioEngine>,
 	clock: Option<PlayerClock>,
@@ -326,6 +375,14 @@ impl AppState {
 			),
 			ai_queue: Vec::new(),
 			after_save: None,
+			export: export::ExportDialog::default(),
+			recent: Vec::new(),
+			safety: SafetyState::default(),
+			recovery: None,
+			relink: None,
+			collect_prompt: false,
+			pending_archive: None,
+			files_jobs: project_io::FileJobs::default(),
 			browser_items: None,
 			audio: None,
 			clock: None,
@@ -1499,6 +1556,7 @@ impl AppState {
 			}
 			Pending::Open(None) => self.file_dialog(FileAction::Open),
 			Pending::Quit => self.quit_confirmed = true,
+			Pending::Collect => self.collect_files(),
 		}
 	}
 
@@ -1512,30 +1570,6 @@ impl AppState {
 		} else {
 			self.after_save = Some(pending);
 			self.file_dialog(FileAction::SaveAs);
-		}
-	}
-
-	pub fn new_project(&mut self) {
-		self.stop();
-		self.load_document(Document::new(Project::new("Untitled")), None);
-		self.reset_view();
-		self.notices.info("New project");
-	}
-
-	pub fn open(&mut self, path: &Path) -> bool {
-		match Project::load_json(path) {
-			Ok(project) => {
-				self.stop();
-				self.load_document(Document::new(project), Some(path.to_path_buf()));
-				self.reset_view();
-				self.notices.info(format!("Opened {}", path.display()));
-				true
-			}
-			Err(e) => {
-				self.notices
-					.error(format!("Cannot open {}: {e}", path.display()));
-				false
-			}
 		}
 	}
 
@@ -1593,10 +1627,12 @@ impl AppState {
 			path: path.map(|p| p.display().to_string()),
 			capture_plugin_states: None,
 		};
+		let was = self.path().map(Path::to_path_buf);
 		let saved = self.edit_session(|s| cadenza_mcp::tools::project::save_project(s, args));
 		match saved {
 			Some(out) => {
 				self.dirty = false;
+				self.after_save(was);
 				for w in out.warnings {
 					self.notices.warn(w);
 				}
@@ -2235,6 +2271,9 @@ impl AppState {
 				.unwrap_or_default(),
 			bookmarks: v.bookmarks.clone(),
 			ai: self.ai.settings.clone(),
+			recent: self.recent.clone(),
+			autosave_minutes: self.safety.minutes,
+			export: self.export.settings.clone(),
 		}
 	}
 
@@ -2267,43 +2306,16 @@ impl AppState {
 		v.piano.scale = cadenza_theory::Scale::parse(&p.piano_scale).ok();
 		v.bookmarks = p.bookmarks;
 		self.ai.settings = p.ai.sanitized();
+		self.recent = p.recent;
+		self.recent.truncate(safety::RECENT_MAX);
+		self.safety.minutes = p.autosave_minutes.min(60);
+		self.export.settings = p.export;
+		if !export::FormatChoice::all().contains(&self.export.settings.format) {
+			self.export.settings.format = export::FormatChoice::Wav24;
+		}
 		if self.files.dir.is_none() {
 			self.files.dir = v.bookmarks.first().cloned();
 		}
-	}
-
-	/// Renders the song to `path` (format from the extension) on a worker thread.
-	pub fn start_export(&mut self, path: PathBuf) {
-		if self.jobs.export.is_some() {
-			self.notices.warn("An export is already running");
-			return;
-		}
-		let export = match cadenza_engine::export_options_for_path(&path, None, None) {
-			Ok(e) => e,
-			Err(e) => {
-				self.notices.error(e.to_string());
-				return;
-			}
-		};
-		let project = self.project().clone();
-		let (plugins, hosting) = {
-			let mut session = self.session();
-			(
-				session.plugins_for_project(),
-				session.plugin_hosting().clone(),
-			)
-		};
-		let opts = RenderOptions {
-			plugins,
-			hosting,
-			..RenderOptions::default()
-		};
-		self.notices.info(format!("Exporting {}…", path.display()));
-		self.jobs.export = Some(Job::spawn("export", self.waker.clone(), move || {
-			cadenza_engine::render_to_file(&project, &opts, &path, &export)
-				.map(|r| (path, r))
-				.map_err(|e| e.to_string())
-		}));
 	}
 
 	/// Rescans plugins in the background (the scanner loads each new plugin in a helper
@@ -2339,8 +2351,12 @@ impl AppState {
 			.map(str::to_owned)
 			.unwrap_or_else(|| self.project().name.clone());
 		let name = match action {
-			FileAction::Export => format!("{stem}.wav"),
+			FileAction::PackArchive => format!("{stem}.cadenza.zip"),
 			_ => format!("{stem}.cadenza.json"),
+		};
+		let dir = match action {
+			FileAction::ExportFolder => self.export.folder.clone().or(dir),
+			_ => dir,
 		};
 		self.jobs.dialog = Some((
 			action,
@@ -2366,7 +2382,10 @@ impl AppState {
 			}
 			FileAction::ImportAudio => self.import_audio(&path),
 			FileAction::ImportMidi => self.import_midi(&path),
-			FileAction::Export => self.start_export(path),
+			FileAction::ExportFolder
+			| FileAction::UnpackFolder
+			| FileAction::RelinkFolder
+			| FileAction::PackArchive => self.finish_file_action(action, path),
 		}
 	}
 
@@ -2427,6 +2446,8 @@ impl AppState {
 		let actions = self.editors.flush(&self.doc.project, now, false);
 		self.editor_actions(actions);
 		self.poll_jobs();
+		self.poll_file_jobs();
+		self.tick_autosave(now);
 		self.sync_transport();
 		self.peaks.poll();
 		let ids: Vec<TrackId> = self.project().tracks.iter().map(|t| t.id).collect();
@@ -2436,7 +2457,8 @@ impl AppState {
 			|| self.reload_since.is_some()
 			|| self.editors.busy()
 			|| self.jobs.scan.is_some()
-			|| self.jobs.export.is_some()
+			|| self.export.running.is_some()
+			|| self.files_jobs.busy()
 			|| self.jobs.process.is_some()
 			|| self.ai.busy()
 	}
@@ -2509,30 +2531,6 @@ impl AppState {
 		if let Some(r) = self.jobs.dialog.as_ref().and_then(|(_, j)| j.poll()) {
 			let (action, _) = self.jobs.dialog.take().expect("dialog job");
 			self.finish_dialog(action, r.flatten());
-		}
-		if let Some(r) = self.jobs.export.as_ref().and_then(Job::poll) {
-			let secs = self
-				.jobs
-				.export
-				.take()
-				.map_or(0.0, |j| j.started.elapsed().as_secs_f32());
-			match r {
-				Some(Ok((path, report))) => {
-					for w in report.warnings {
-						self.notices.warn(w);
-					}
-					self.notices.info(format!(
-						"Exported {} in {secs:.1} s — peak {:.1} dBFS, {:.1} LUFS",
-						path.display(),
-						report.master.true_peak_db,
-						report.master.lufs_integrated
-					));
-				}
-				Some(Err(e)) => self.notices.error(format!("Export failed: {e}")),
-				None => self
-					.notices
-					.error("Export failed: the render thread stopped"),
-			}
 		}
 		if let Some(r) = self.jobs.process.as_ref().and_then(Job::poll) {
 			self.jobs.process = None;

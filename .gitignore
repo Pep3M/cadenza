@@ -6,3 +6,5 @@ __pycache__/
 .env.*
 !.env.example
 /.claude/
+# Cadenza project caches and autosaves
+.cadenza/

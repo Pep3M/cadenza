@@ -14,6 +14,7 @@ pub mod inspector;
 pub mod instrument_editor;
 pub mod mixer;
 pub mod piano_roll;
+pub mod project_dialogs;
 pub mod transport;
 pub mod widgets;
 
@@ -68,8 +69,15 @@ impl CadenzaApp {
 			.and_then(|s| eframe::get_value::<crate::state::layout::Prefs>(s, PREFS_KEY))
 			.unwrap_or_default();
 		app.state.apply_prefs(prefs);
-		if let Some(path) = project {
-			app.state.open(&path);
+		app.state.enable_safety(crate::state::safety::state_dir());
+		match project {
+			Some(path) => {
+				app.state.open(&path);
+			}
+			None => {
+				app.state.view.start_screen = true;
+				app.state.check_untitled_recovery();
+			}
 		}
 		theme::apply(ctx);
 		app.themed = true;
@@ -140,10 +148,12 @@ impl CadenzaApp {
 				self.state.request(Pending::Quit);
 			} else {
 				self.state.stop();
+				self.state.shutdown();
 			}
 		}
 		if self.state.quit_confirmed {
 			self.state.stop();
+			self.state.shutdown();
 			ctx.send_viewport_cmd(ViewportCommand::Close);
 		}
 	}
@@ -351,6 +361,7 @@ impl CadenzaApp {
 		dnd::paint_hint(ui.ctx());
 		toasts(ui.ctx(), state);
 		unsaved_prompt(ui.ctx(), state);
+		project_dialogs::show(ui.ctx(), state);
 		help_overlay(ui.ctx(), state);
 		busy_overlay(ui.ctx(), state);
 	}
@@ -413,7 +424,7 @@ impl CadenzaApp {
 				s.request(Pending::New);
 			}
 			if pressed(cmd, Key::E) {
-				s.file_dialog(FileAction::Export);
+				s.open_export_dialog();
 			}
 			if pressed(cmd, Key::I) {
 				s.file_dialog(FileAction::ImportAudio);
@@ -541,6 +552,10 @@ impl eframe::App for CadenzaApp {
 
 	fn save(&mut self, storage: &mut dyn eframe::Storage) {
 		eframe::set_value(storage, PREFS_KEY, &self.state.prefs());
+	}
+
+	fn on_exit(&mut self) {
+		self.state.shutdown();
 	}
 }
 
@@ -726,11 +741,36 @@ fn menu_bar(ui: &mut Ui, state: &mut AppState) {
 		ui.label(RichText::new("CADENZA").strong().color(theme::ACCENT));
 		ui.add_space(6.0);
 		ui.menu_button("File", |ui| {
+			ui.set_min_width(250.0);
 			if shortcut_button(ui, "New", "Ctrl+N") {
 				state.request(Pending::New);
 			}
 			if shortcut_button(ui, "Open…", "Ctrl+O") {
 				state.request(Pending::Open(None));
+			}
+			ui.menu_button("Open Recent", |ui| {
+				ui.set_min_width(280.0);
+				if state.recent.is_empty() {
+					ui.label(RichText::new("No recent projects").color(theme::TEXT_FAINT));
+				}
+				for path in state.recent.clone() {
+					let label = cadenza_model::files::project_stem(&path);
+					let r = ui
+						.add_enabled(path.exists(), egui::Button::new(label))
+						.on_hover_text(path.display().to_string());
+					if r.clicked() {
+						state.request(Pending::Open(Some(path)));
+					}
+				}
+				if !state.recent.is_empty() {
+					ui.separator();
+					if ui.button("Clear list").clicked() {
+						state.recent.clear();
+					}
+				}
+			});
+			if shortcut_button(ui, "Start Screen", "") {
+				state.view.start_screen = true;
 			}
 			ui.separator();
 			if shortcut_button(ui, "Save", "Ctrl+S") {
@@ -746,9 +786,36 @@ fn menu_bar(ui: &mut Ui, state: &mut AppState) {
 			if shortcut_button(ui, "Import MIDI…", "") {
 				state.file_dialog(FileAction::ImportMidi);
 			}
-			if shortcut_button(ui, "Export Render…", "Ctrl+E") {
-				state.file_dialog(FileAction::Export);
+			if shortcut_button(ui, "Export…", "Ctrl+E") {
+				state.open_export_dialog();
 			}
+			ui.separator();
+			if shortcut_button(ui, "Collect Project Files…", "") {
+				state.collect_files();
+			}
+			if shortcut_button(ui, "Locate Missing Files…", "") {
+				state.open_relink();
+			}
+			let saved = state.path().is_some();
+			if ui
+				.add_enabled(saved, egui::Button::new("Export Project Archive…"))
+				.on_disabled_hover_text("Save the project first")
+				.clicked()
+			{
+				state.file_dialog(FileAction::PackArchive);
+			}
+			ui.menu_button("Autosave", |ui| {
+				for m in [0, 1, 2, 5, 10] {
+					let label = if m == 0 {
+						"Off".to_owned()
+					} else {
+						format!("Every {m} min")
+					};
+					if check_item(ui, state.safety.minutes == m, &label, "") {
+						state.safety.minutes = m;
+					}
+				}
+			});
 			ui.separator();
 			if shortcut_button(ui, "Quit", "") {
 				state.request(Pending::Quit);
@@ -1019,6 +1086,7 @@ fn unsaved_prompt(ctx: &egui::Context, state: &mut AppState) {
 		Pending::New => "creating a new project",
 		Pending::Open(_) => "opening another project",
 		Pending::Quit => "quitting",
+		Pending::Collect => "collecting its files",
 	};
 	egui::Modal::new(egui::Id::new("unsaved"))
 		.frame(
@@ -1042,7 +1110,7 @@ fn unsaved_prompt(ctx: &egui::Context, state: &mut AppState) {
 					state.save_then(pending.clone());
 				}
 				if ui.button("Don't save").clicked() {
-					state.dirty = false;
+					state.discard_changes();
 					state.proceed(pending.clone());
 				}
 				if ui.button("Cancel").clicked() {
@@ -1054,12 +1122,17 @@ fn unsaved_prompt(ctx: &egui::Context, state: &mut AppState) {
 
 /// Spinner while an export or plugin scan runs in the background.
 fn busy_overlay(ctx: &egui::Context, state: &AppState) {
+	let export = state
+		.export
+		.running
+		.as_ref()
+		.filter(|_| !state.export.open)
+		.map(|r| {
+			let p = r.progress();
+			format!("Exporting… {:.0}% — {}", p.fraction * 100.0, p.stage)
+		});
 	let jobs: Vec<String> = [
-		state
-			.jobs
-			.export
-			.as_ref()
-			.map(|j| format!("Rendering… {:.0} s", j.started.elapsed().as_secs_f32())),
+		export,
 		state.jobs.scan.as_ref().map(|j| {
 			format!(
 				"Scanning plugins… {:.0} s",
@@ -1069,6 +1142,7 @@ fn busy_overlay(ctx: &egui::Context, state: &AppState) {
 	]
 	.into_iter()
 	.flatten()
+	.chain(project_dialogs::busy_rows(state))
 	.collect();
 	if jobs.is_empty() {
 		return;

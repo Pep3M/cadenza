@@ -662,7 +662,7 @@ fn audio_editor_trims_fades_and_processes_through_commands() {
 	assert!((fade - 0.1).abs() < 0.02, "{fade}");
 	assert_eq!(h.state().state.undo_label(), Some("Set clip fades"));
 
-	// Reverse renders a processed copy next to the (unsaved: cache) project and swaps it.
+	// Reverse renders a processed copy into the project's Audio/ folder and swaps it.
 	h.state_mut().state.view.audio.selection = None;
 	h.get_by_label("Reverse").click();
 	for _ in 0..300 {
@@ -675,7 +675,11 @@ fn audio_editor_trims_fades_and_processes_through_commands() {
 	let swapped = region(&h).file;
 	assert_ne!(swapped, wav);
 	assert!(swapped.exists());
-	assert!(swapped.starts_with(dir.path().join("song audio")));
+	assert!(
+		swapped.starts_with(dir.path().join("Audio")),
+		"{}",
+		swapped.display()
+	);
 	assert_eq!(h.state().state.undo_label(), Some("Reverse"));
 	h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
 	h.run_steps(2);
@@ -1787,4 +1791,198 @@ fn render_piano_fl_screens() {
 	h.run_steps(1);
 	h.drop_at(at);
 	shot(&mut h, "piano_fl_snap_menu");
+}
+
+#[test]
+fn ctrl_e_opens_the_export_dialog_which_exports_and_reports() {
+	let tmp = tempfile::tempdir().unwrap();
+	let mut h = harness(app());
+	h.run_steps(2);
+	h.key_press_modifiers(Modifiers::COMMAND, Key::E);
+	h.run_steps(2);
+	assert!(h.state().state.export.open);
+	assert!(h.query_by_label("Whole song").is_some());
+	assert!(h.query_by_label("Normalize").is_some());
+	assert!(
+		h.query_by_label_contains("Writes first_light.wav")
+			.is_some()
+	);
+	{
+		let s = &mut h.state_mut().state;
+		s.export.folder = Some(tmp.path().to_path_buf());
+		s.export.settings.range = cadenza_app::state::export::RangeKind::Bars;
+		s.export.settings.from_bar = 1;
+		s.export.settings.to_bar = 1;
+		s.export.settings.stems = cadenza_app::state::export::StemMode::Buses;
+	}
+	h.run_steps(2);
+	h.get_by_label("Start export").click();
+	h.run_steps(1);
+	for _ in 0..1000 {
+		h.run_steps(1);
+		if h.state().state.export.running.is_none() {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	h.run_steps(2);
+	let result = h.state().state.export.result.clone().expect("finished");
+	let report = result.unwrap();
+	assert!(report.files.len() > 2, "mix + bus stems");
+	assert!(h.query_by_label_contains("✔ Exported").is_some());
+	assert!(h.query_by_label("Open folder").is_some());
+	h.get_by_label("Close").click();
+	h.run_steps(2);
+	assert!(!h.state().state.export.open);
+}
+
+#[test]
+fn the_start_screen_offers_new_open_demo_and_recent_projects() {
+	let tmp = tempfile::tempdir().unwrap();
+	let mut state = AppState::headless();
+	state.enable_safety(tmp.path().to_path_buf());
+	state.view.start_screen = true;
+	state.recent = vec![example()];
+	let mut h = harness(CadenzaApp::with_state(state));
+	h.run_steps(2);
+	assert!(h.query_by_label("New project").is_some());
+	assert!(h.query_by_label("Demo song").is_some());
+	assert!(
+		h.query_by_label_contains("first_light").is_some(),
+		"recent list"
+	);
+	h.get_by_label("Demo song").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert!(!s.view.start_screen);
+	assert_eq!(s.project().name, "First Light");
+	assert!(s.path().unwrap().starts_with(tmp.path().join("demo")));
+	assert_eq!(s.recent.first().map(|p| p.as_path()), s.path());
+
+	h.state_mut().state.view.start_screen = true;
+	h.run_steps(2);
+	h.get_by_label("New project").click();
+	h.run_steps(2);
+	assert!(!h.state().state.view.start_screen);
+	assert_eq!(h.state().state.project().tracks.len(), 0);
+}
+
+#[test]
+fn missing_files_open_the_locate_dialog() {
+	let tmp = tempfile::tempdir().unwrap();
+	let mut p = cadenza_model::Project::new("Lost");
+	let mut t = cadenza_model::Track::new("Vox", cadenza_model::TrackKind::Audio);
+	t.clips.push(cadenza_model::Clip::audio(
+		"take",
+		Tick::ZERO,
+		Tick(PPQ * 4),
+		tmp.path().join("gone").join("vox take.wav"),
+	));
+	p.tracks.push(t);
+	let file = tmp.path().join("Lost").join("Lost.cadenza.json");
+	p.save_json(&file).unwrap();
+	let mut state = AppState::headless();
+	assert!(state.open(&file));
+	let mut h = harness(CadenzaApp::with_state(state));
+	h.run_steps(2);
+	assert!(h.query_by_label("Locate missing files").is_some());
+	assert!(h.query_by_label("vox take.wav").is_some());
+	assert!(h.query_by_label("Search folder…").is_some());
+	h.get_by_label("Close").click();
+	h.run_steps(2);
+	assert!(h.state().state.relink.is_none());
+}
+
+/// Start screen, export dialog (settings, progress-free result), missing files and
+/// recovery prompts:
+/// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
+#[test]
+#[ignore]
+fn render_project_screens() {
+	use cadenza_app::state::export::{NormalizeChoice, StemMode};
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	let mut state = AppState::headless();
+	state.enable_safety(tmp.path().join("state"));
+	state.view.start_screen = true;
+	state.recent = vec![
+		example(),
+		PathBuf::from("/home/me/Music/Night Drive/Night Drive.cadenza.json"),
+	];
+	let mut h = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.wgpu()
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			CadenzaApp::with_state(state),
+		);
+	let shot = |h: &mut Harness<'_, CadenzaApp>, name: &str| {
+		h.run_steps(3);
+		h.render()
+			.unwrap()
+			.save(dir.join(format!("{name}.png")))
+			.unwrap();
+	};
+	shot(&mut h, "start_screen");
+
+	assert!(h.state_mut().state.open(&example()));
+	h.key_press_modifiers(Modifiers::COMMAND, Key::E);
+	h.run_steps(2);
+	{
+		let s = &mut h.state_mut().state;
+		s.export.folder = Some(tmp.path().join("Renders"));
+		s.export.settings.stems = StemMode::Buses;
+		s.export.settings.normalize = NormalizeChoice::Loudness;
+		s.export.settings.artist = "Cadenza".into();
+	}
+	shot(&mut h, "export_dialog");
+	{
+		let s = &mut h.state_mut().state;
+		s.export.settings.range = cadenza_app::state::export::RangeKind::Bars;
+		s.export.settings.from_bar = 1;
+		s.export.settings.to_bar = 2;
+		assert!(s.start_export());
+	}
+	h.run_steps(1);
+	shot(&mut h, "export_progress");
+	for _ in 0..2000 {
+		h.run_steps(1);
+		if h.state().state.export.running.is_none() {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	shot(&mut h, "export_done");
+	h.state_mut().state.export.open = false;
+
+	let mut p = cadenza_model::Project::new("Lost");
+	let mut t = cadenza_model::Track::new("Vox", cadenza_model::TrackKind::Audio);
+	for name in ["vox take 3.wav", "gtr DI.wav"] {
+		t.clips.push(cadenza_model::Clip::audio(
+			name,
+			Tick::ZERO,
+			Tick(PPQ * 4),
+			tmp.path().join("old drive").join(name),
+		));
+	}
+	p.tracks.push(t);
+	let file = tmp.path().join("Lost").join("Lost.cadenza.json");
+	p.save_json(&file).unwrap();
+	assert!(h.state_mut().state.open(&file));
+	shot(&mut h, "locate_missing_files");
+	h.state_mut().state.relink = None;
+	h.state_mut().state.recovery = Some(cadenza_app::state::safety::Recovery {
+		autosave: tmp.path().join("a.json"),
+		modified: std::time::SystemTime::now() - std::time::Duration::from_secs(300),
+		reason: cadenza_app::state::safety::RecoveryReason::Crashed,
+		project: Some(file),
+		cleanup: None,
+	});
+	shot(&mut h, "recovery_prompt");
 }

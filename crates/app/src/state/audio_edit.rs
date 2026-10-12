@@ -395,20 +395,12 @@ pub struct Rendered {
 	pub extra_seconds: f64,
 }
 
-/// Where processed copies of `source` go: a "<project> audio" folder next to the
-/// project, or the user cache when the project is not saved yet. Never overwrites.
+/// Where processed copies of `source` go: the project's `Audio/` folder, or the user
+/// cache when the project is not saved yet (File → Collect Project Files brings those in
+/// later). Never overwrites.
 pub fn processed_path(project_path: Option<&Path>, source: &Path, op: Process) -> PathBuf {
 	let dir = match project_path {
-		Some(p) => {
-			let stem = p
-				.file_name()
-				.and_then(|f| f.to_str())
-				.and_then(|f| f.split('.').next())
-				.unwrap_or("project");
-			p.parent()
-				.unwrap_or(Path::new("."))
-				.join(format!("{stem} audio"))
-		}
+		Some(p) => cadenza_model::ProjectLayout::new(p).audio_dir(),
 		None => cache_dir().join("processed"),
 	};
 	let stem = source
@@ -707,10 +699,7 @@ mod tests {
 
 		let project_file = dir.path().join("Song.cadenza.json");
 		let out = processed_path(Some(&project_file), &source, Process::Normalize);
-		assert_eq!(
-			out,
-			dir.path().join("Song audio").join("tone-normalized-1.wav")
-		);
+		assert_eq!(out, dir.path().join("Audio").join("tone-normalized-1.wav"));
 		let grown = render_processed(&source, &out, (0.25, 0.75), Process::Normalize).unwrap();
 		assert_eq!(grown, 0.0);
 		let done = cadenza_audio_io::decode_file(&out).unwrap();
@@ -720,7 +709,7 @@ mod tests {
 		assert!(peak(&ch[..1500]) < 0.26, "outside the selection untouched");
 		assert_eq!(
 			processed_path(Some(&project_file), &source, Process::Normalize),
-			dir.path().join("Song audio").join("tone-normalized-2.wav"),
+			dir.path().join("Audio").join("tone-normalized-2.wav"),
 			"never overwrites"
 		);
 

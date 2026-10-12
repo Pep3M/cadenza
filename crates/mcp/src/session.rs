@@ -93,6 +93,11 @@ impl Session {
 		self.clean = self.change_key();
 	}
 
+	/// Records that the current state is NOT what is on disk (a recovered autosave).
+	pub fn mark_unsaved(&mut self) {
+		self.clean = (u64::MAX, u64::MAX);
+	}
+
 	/// Whether nothing changed since the last save/open.
 	pub fn is_clean(&self) -> bool {
 		self.clean == self.change_key()

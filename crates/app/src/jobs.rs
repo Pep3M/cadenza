@@ -169,7 +169,14 @@ pub enum FileAction {
 	SaveAs,
 	ImportAudio,
 	ImportMidi,
-	Export,
+	/// The export dialog's destination folder.
+	ExportFolder,
+	/// Where to extract a project archive being opened.
+	UnpackFolder,
+	/// Folder searched for missing files.
+	RelinkFolder,
+	/// Project archive to write.
+	PackArchive,
 }
 
 impl FileAction {
@@ -179,7 +186,10 @@ impl FileAction {
 			Self::SaveAs => "Save project as",
 			Self::ImportAudio => "Import audio file",
 			Self::ImportMidi => "Import MIDI file",
-			Self::Export => "Export render",
+			Self::ExportFolder => "Export into folder",
+			Self::UnpackFolder => "Extract the project archive into",
+			Self::RelinkFolder => "Search for missing files in",
+			Self::PackArchive => "Export project archive",
 		}
 	}
 }
@@ -197,7 +207,12 @@ pub fn file_dialog(
 			dialog = dialog.set_directory(dir);
 		}
 		match action {
-			FileAction::Open => dialog.add_filter("Cadenza project", &["json"]).pick_file(),
+			FileAction::Open => dialog
+				.add_filter(
+					"Cadenza project or archive",
+					&["json", "zip", "cadenzapack"],
+				)
+				.pick_file(),
 			FileAction::SaveAs => dialog
 				.add_filter("Cadenza project", &["json"])
 				.set_file_name(suggested_name)
@@ -206,13 +221,13 @@ pub fn file_dialog(
 				.add_filter("Audio", crate::state::AUDIO_EXTENSIONS)
 				.pick_file(),
 			FileAction::ImportMidi => dialog.add_filter("MIDI", &["mid", "midi"]).pick_file(),
-			FileAction::Export => {
-				let exts: Vec<&str> = cadenza_engine::EXPORT_EXTENSIONS.to_vec();
-				dialog
-					.add_filter("Audio", &exts)
-					.set_file_name(suggested_name)
-					.save_file()
+			FileAction::ExportFolder | FileAction::UnpackFolder | FileAction::RelinkFolder => {
+				dialog.pick_folder()
 			}
+			FileAction::PackArchive => dialog
+				.add_filter("Cadenza project archive", &["zip", "cadenzapack"])
+				.set_file_name(suggested_name)
+				.save_file(),
 		}
 	})
 }

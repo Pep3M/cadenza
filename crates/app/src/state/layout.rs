@@ -283,7 +283,12 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Transport", "Home / End", "Playhead to song start / end"),
 	sc("File", "Ctrl+N / Ctrl+O", "New / open project"),
 	sc("File", "Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-	sc("File", "Ctrl+I / Ctrl+E", "Import audio / export render"),
+	sc("File", "Ctrl+I", "Import audio"),
+	sc(
+		"File",
+		"Ctrl+E",
+		"Export: mixdown, stems, range, format, loudness",
+	),
 	sc("Edit", "Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
 	sc("Edit", "Ctrl+D", "Duplicate selection"),
 	sc("Edit", "Del", "Delete selection"),
@@ -516,6 +521,12 @@ pub struct Prefs {
 	pub bookmarks: Vec<PathBuf>,
 	/// AI chat settings (no secrets: keys live in the OS keyring).
 	pub ai: super::ai::settings::AiSettings,
+	/// File → Open Recent, most recent first.
+	pub recent: Vec<PathBuf>,
+	/// Autosave interval in minutes (0 = off).
+	pub autosave_minutes: u32,
+	/// The export dialog's last settings.
+	pub export: super::export::ExportSettings,
 }
 
 impl Default for Prefs {
@@ -536,6 +547,9 @@ impl Default for Prefs {
 			piano_scale: String::new(),
 			bookmarks: super::files::default_bookmarks(),
 			ai: super::ai::settings::AiSettings::default(),
+			recent: Vec::new(),
+			autosave_minutes: super::safety::DEFAULT_AUTOSAVE_MINUTES,
+			export: super::export::ExportSettings::default(),
 		}
 	}
 }

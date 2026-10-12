@@ -1108,3 +1108,202 @@ fn audio_dropped_with_alt_below_the_tracks_becomes_a_sampler() {
 		dnd::DropAction::ImportAudio { .. }
 	));
 }
+
+/// Polls `done` with frame ticks until it holds (background jobs).
+fn wait_until(s: &mut AppState, done: impl Fn(&AppState) -> bool) {
+	let deadline = Instant::now() + Duration::from_secs(30);
+	while !done(s) {
+		assert!(Instant::now() < deadline, "timed out");
+		s.tick(Instant::now());
+		std::thread::sleep(Duration::from_millis(5));
+	}
+}
+
+fn saved_song(dir: &Path) -> (AppState, PathBuf) {
+	let (mut s, _) = state_with_song();
+	s.enable_safety(dir.join("state"));
+	let file = dir.join("Song").join("Song.cadenza.json");
+	assert!(s.save_as(file.clone()));
+	(s, file)
+}
+
+#[test]
+fn autosave_runs_off_thread_after_the_interval_and_a_crash_offers_recovery() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, file) = saved_song(tmp.path());
+	assert_eq!(
+		s.recent.first(),
+		Some(&file),
+		"saved projects become recent"
+	);
+	let lock = file.parent().unwrap().join(".cadenza/session.lock");
+	assert!(lock.exists(), "session marker");
+
+	let cmd = edits::add_track(
+		s.project(),
+		edits::new_track(s.project(), TrackKind::Bus),
+		None,
+	);
+	assert!(s.apply(cmd));
+	let t0 = Instant::now();
+	s.tick_autosave(t0);
+	assert!(s.files_jobs.autosave.is_none(), "not due yet");
+	s.tick_autosave(t0 + Duration::from_secs(119));
+	assert!(s.files_jobs.autosave.is_none());
+	s.tick_autosave(t0 + Duration::from_secs(121));
+	let written = s.wait_autosave().unwrap().unwrap();
+	assert!(written.starts_with(file.parent().unwrap().join(".cadenza/autosave")));
+	s.tick_autosave(t0 + Duration::from_secs(600));
+	assert!(s.files_jobs.autosave.is_none(), "nothing changed since");
+
+	// "Crash": the state goes away without closing the project.
+	drop(s);
+	let mut again = AppState::headless();
+	again.enable_safety(tmp.path().join("state"));
+	assert!(again.open(&file));
+	let r = again.recovery().cloned().expect("recovery offered");
+	assert_eq!(r.reason, safety::RecoveryReason::Crashed);
+	assert_eq!(again.project().tracks.len(), 1, "the saved version is open");
+	assert!(again.recover());
+	assert_eq!(
+		again.project().tracks.len(),
+		2,
+		"the autosaved edit is back"
+	);
+	assert_eq!(again.path(), Some(file.as_path()));
+	again.tick(Instant::now());
+	assert!(again.dirty, "recovered work is unsaved");
+	assert!(again.save());
+	assert!(safety::autosaves(&file.parent().unwrap().join(".cadenza/autosave")).is_empty());
+	again.shutdown();
+	assert!(!lock.exists(), "a normal close removes the marker");
+
+	// Nothing newer than the save: no prompt.
+	let mut third = AppState::headless();
+	third.enable_safety(tmp.path().join("state"));
+	assert!(third.open(&file));
+	assert!(third.recovery().is_none());
+}
+
+#[test]
+fn discarding_changes_drops_their_autosaves() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, file) = saved_song(tmp.path());
+	let cmd = edits::add_track(
+		s.project(),
+		edits::new_track(s.project(), TrackKind::Bus),
+		None,
+	);
+	assert!(s.apply(cmd));
+	let t0 = Instant::now();
+	s.tick_autosave(t0);
+	s.tick_autosave(t0 + Duration::from_secs(300));
+	s.wait_autosave().unwrap().unwrap();
+	let dir = file.parent().unwrap().join(".cadenza/autosave");
+	assert_eq!(safety::autosaves(&dir).len(), 1);
+	s.discard_changes();
+	assert!(safety::autosaves(&dir).is_empty());
+	assert!(!s.dirty);
+}
+
+#[test]
+fn export_dialog_job_reports_progress_and_cancels() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, file) = saved_song(tmp.path());
+	s.open_export_dialog();
+	assert!(s.export.open);
+	assert_eq!(
+		s.export.folder.as_deref(),
+		Some(file.parent().unwrap().join("Renders").as_path())
+	);
+	s.export.settings.stems = export::StemMode::Tracks;
+	s.export.settings.format = export::FormatChoice::Flac24;
+	assert!(s.start_export());
+	assert!(s.export.running.is_some());
+	wait_until(&mut s, |s| s.export.running.is_none());
+	let report = s.export.result.clone().unwrap().unwrap();
+	assert_eq!(report.files.len(), 2, "mix + one stem");
+	assert!(report.files.iter().all(|f| f.path.exists()));
+	assert!(report.files[0].path.ends_with("Renders/Song.flac"));
+
+	// Cancel: nothing is left behind.
+	let out = tmp.path().join("cancelled");
+	s.export.folder = Some(out.clone());
+	assert!(s.start_export());
+	s.export.running.as_ref().unwrap().cancel();
+	wait_until(&mut s, |s| s.export.running.is_none());
+	let err = s.export.result.clone().unwrap().unwrap_err();
+	assert!(err.contains("cancelled"), "{err}");
+	assert!(std::fs::read_dir(&out).map_or(0, |d| d.count()) == 0);
+
+	// Invalid settings never start a job.
+	s.export.settings.range = export::RangeKind::Loop;
+	assert!(!s.start_export());
+	assert!(
+		s.export
+			.result
+			.clone()
+			.unwrap()
+			.unwrap_err()
+			.contains("loop")
+	);
+}
+
+#[test]
+fn collect_and_relink_from_the_app_are_single_undo_steps() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, file) = saved_song(tmp.path());
+	let ext = tmp.path().join("ext").join("take.wav");
+	std::fs::create_dir_all(ext.parent().unwrap()).unwrap();
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(48_000, vec![vec![0.1; 4800]]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&ext,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Int16),
+	)
+	.unwrap();
+	s.import_audio(&ext);
+	assert_eq!(s.project().file_refs()[0].path, ext);
+
+	s.collect_files();
+	wait_until(&mut s, |s| s.files_jobs.collect.is_none());
+	let collected = file.parent().unwrap().join("Audio/take.wav");
+	assert_eq!(s.project().file_refs()[0].path, collected);
+	assert_eq!(
+		s.undo_label(),
+		Some(cadenza_mcp::tools::portable::COLLECT_LABEL)
+	);
+
+	// Missing after a move: the dialog lists it, a folder search relinks it.
+	s.undo();
+	std::fs::rename(tmp.path().join("ext"), tmp.path().join("moved")).unwrap();
+	s.open_relink();
+	assert_eq!(s.relink.as_ref().unwrap().missing.len(), 1);
+	s.search_missing(tmp.path().join("moved"));
+	wait_until(&mut s, |s| s.files_jobs.relink.is_none());
+	assert_eq!(
+		s.project().file_refs()[0].path,
+		tmp.path().join("moved/take.wav")
+	);
+	let dialog = s.relink.as_ref().unwrap();
+	assert!(dialog.missing.is_empty());
+	assert_eq!(dialog.last.as_ref().map(|l| l.1), Some(1));
+}
+
+#[test]
+fn save_as_elsewhere_offers_to_collect_outside_files() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, _) = saved_song(tmp.path());
+	assert!(!s.collect_prompt, "no external files");
+	let wav = tmp.path().join("loose.wav");
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(48_000, vec![vec![0.1; 480]]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Int16),
+	)
+	.unwrap();
+	s.import_audio(&wav);
+	assert!(s.save_as(tmp.path().join("Copy").join("Copy.cadenza.json")));
+	assert!(s.collect_prompt);
+}

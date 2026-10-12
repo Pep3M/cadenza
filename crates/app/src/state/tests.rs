@@ -915,3 +915,148 @@ mod ai_chat {
 		assert!(actions.iter().any(|(l, _)| l == "Mix the project"));
 	}
 }
+
+/// Factory samples rendered once into a temp folder for this test binary.
+pub(crate) fn factory_samples() -> std::path::PathBuf {
+	static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+	DIR.get_or_init(|| {
+		let dir = std::env::temp_dir().join(format!("cadenza-app-factory-{}", std::process::id()));
+		// SAFETY: set once (OnceLock) before the samples are first needed.
+		unsafe { std::env::set_var(cadenza_engine::factory::FACTORY_SAMPLES_ENV, &dir) };
+		cadenza_engine::factory::ensure_factory_samples().unwrap()
+	})
+	.clone()
+}
+
+fn drum_sampler_track(s: &mut AppState) -> DeviceRef {
+	factory_samples();
+	let items = s.browser_items().to_vec();
+	let drums = items.iter().find(|i| i.id == "drum_sampler").unwrap();
+	s.selection.select_master();
+	assert!(s.use_device(drums, None));
+	let t = s.project().tracks.last().unwrap();
+	DeviceRef {
+		track: Some(t.id),
+		device: t.instrument.as_ref().unwrap().id,
+	}
+}
+
+#[test]
+fn drum_pad_gestures_and_drops_are_single_undo_steps() {
+	let (mut s, _) = state_with_song();
+	let r = drum_sampler_track(&mut s);
+	let kit = s.device(r).unwrap().zones.clone();
+	assert!(
+		kit.len() >= 12,
+		"a new drum sampler starts with the Synth Kit"
+	);
+	assert!(s.open_instrument_editor(r));
+	assert!(s.view.instrument_editor && s.view.panels.visible(PanelKind::PianoRoll));
+
+	// A knob gesture on the snare pad: one undoable command.
+	let cmd = samples::edit_pad(s.project(), r, 38, |z| z.tune = -3.0);
+	assert!(s.apply_sample_edit(cmd));
+	assert_eq!(s.undo_label(), Some("Edit sample zones"));
+	let snare = &s.device(r).unwrap().zones;
+	assert!(
+		snare
+			.iter()
+			.filter(|z| z.key_low == 38)
+			.all(|z| z.tune == -3.0)
+	);
+	// Sending the pad to an extra output routes it in the same step.
+	let cmd = samples::edit_pad(s.project(), r, 38, |z| z.output = 4);
+	assert!(s.apply_sample_edit(cmd));
+	assert_eq!(s.undo_label(), Some("Edit drum pad"));
+	assert_eq!(s.device(r).unwrap().aux_outputs[0].port, 4);
+	s.undo();
+	assert!(s.device(r).unwrap().aux_outputs.is_empty());
+
+	// Dropping a file on the cowbell pad loads it there (the shared load_sample tool).
+	let clap = factory_samples().join("Clap.wav");
+	let target = DropTarget::Pad {
+		device: r,
+		note: 56,
+	};
+	let action = s.drop_action(&dnd::Payload::File(clap.clone()), target, false);
+	assert_eq!(
+		action.describe(s.project()),
+		"Load Clap.wav into pad Cowbell"
+	);
+	assert!(s.drop_payload(&dnd::Payload::File(clap.clone()), target, false));
+	let zones = &s.device(r).unwrap().zones;
+	let cowbell: Vec<_> = zones.iter().filter(|z| z.key_low == 56).collect();
+	assert_eq!(cowbell.len(), 1);
+	assert_eq!(cowbell[0].sample.path, clap);
+	assert_eq!(s.view.instrument.pad, 56);
+	s.undo();
+	assert!(!s.device(r).unwrap().zones.iter().any(|z| z.key_low == 56));
+	// MIDI files are not samples.
+	assert!(
+		!s.drop_action(&dnd::Payload::File("/x/beat.mid".into()), target, false)
+			.accepted()
+	);
+	// Removing the device closes the editor.
+	s.remove_device(r.track, r.device);
+	assert!(!s.view.instrument_editor && s.view.instrument.device.is_none());
+}
+
+#[test]
+fn audio_dropped_with_alt_below_the_tracks_becomes_a_sampler() {
+	let (mut s, _) = state_with_song();
+	let pad = factory_samples().join("Sine Pad C3.wav");
+	let payload = dnd::Payload::File(pad.clone());
+	let below = DropTarget::BelowSampler { at: Tick::ZERO };
+	assert_eq!(
+		s.drop_action(&payload, below, false).describe(s.project()),
+		"New sampler track with Sine Pad C3.wav"
+	);
+	assert!(s.drop_payload(&payload, below, false));
+	assert_eq!(s.undo_label(), Some("Add track 'Sine Pad C3'"));
+	let t = s.project().tracks.last().unwrap().clone();
+	let d = t.instrument.as_ref().unwrap();
+	assert_eq!(d.builtin_id(), Some("sampler"));
+	assert_eq!(d.zones.len(), 1);
+	assert_eq!(
+		(d.zones[0].key_low, d.zones[0].key_high, d.zones[0].root_key),
+		(0, 127, 48)
+	);
+	let r = DeviceRef {
+		track: Some(t.id),
+		device: d.id,
+	};
+	assert_eq!(s.view.instrument.device, Some(r));
+	assert!(s.view.instrument_editor);
+
+	// Zone gestures: markers, then replacing the zone's sample by a drop.
+	let cmd = samples::edit_zone(s.project(), r, 0, |z| {
+		samples::Marker::LoopEnd.set(z, 2.0, 3.0);
+		z.loop_mode = cadenza_model::LoopMode::Forward;
+	});
+	assert!(s.apply_sample_edit(cmd));
+	assert_eq!(s.device(r).unwrap().zones[0].loop_end, Some(2.0));
+	let kick = factory_samples().join("Kick.wav");
+	assert!(s.drop_payload(
+		&dnd::Payload::File(kick.clone()),
+		DropTarget::Zone {
+			device: r,
+			zone: Some(0)
+		},
+		false
+	));
+	let z = &s.device(r).unwrap().zones[0];
+	assert_eq!(z.sample.path, kick);
+	assert_eq!(
+		z.loop_mode,
+		cadenza_model::LoopMode::Forward,
+		"mapping kept"
+	);
+	// Opening a clip in the piano roll takes the dock back.
+	s.close_instrument_editor();
+	assert!(!s.view.instrument_editor);
+	// Plain drops below the tracks still import audio.
+	assert!(matches!(
+		s.drop_action(&payload, DropTarget::Below { at: Tick::ZERO }, false),
+		dnd::DropAction::ImportAudio { .. }
+	));
+}

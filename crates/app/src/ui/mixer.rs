@@ -208,6 +208,17 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		if wr.double_clicked() {
 			state.toggle_plugin_editor(d.id);
 		}
+	} else if let Some(d) = track.and_then(|t| t.instrument.as_ref()) {
+		let r = DeviceRef {
+			track: id,
+			device: d.id,
+		};
+		if state.is_sample_device(r) {
+			let wr = wr.on_hover_text("Double-click: pads / zones editor");
+			if wr.double_clicked() {
+				state.toggle_instrument_editor(r);
+			}
+		}
 	}
 
 	section_label(&p, inserts_label, "INSERTS");

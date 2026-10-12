@@ -88,6 +88,8 @@ pub struct ArrangeUi {
 	pub rows: Rows,
 	/// Automation lane gestures.
 	pub auto: super::automation::AutoUi,
+	/// Alt held this frame (an audio file dropped below the tracks becomes a sampler).
+	alt: bool,
 }
 
 /// Geometry shared by the painting helpers.
@@ -112,6 +114,7 @@ pub fn content_height(state: &AppState) -> f32 {
 
 impl ArrangeUi {
 	pub fn show(&mut self, ui: &mut Ui, state: &mut AppState) {
+		self.alt = ui.input(|i| i.modifiers.alt);
 		let full = ui.available_rect_before_wrap();
 		ui.allocate_rect(full, Sense::hover());
 		let x0 = full.left() + theme::HEADER_WIDTH;
@@ -554,7 +557,11 @@ impl ArrangeUi {
 				DropTarget::Track(track)
 			});
 		}
-		Some(DropTarget::Below { at })
+		Some(if self.alt {
+			DropTarget::BelowSampler { at }
+		} else {
+			DropTarget::Below { at }
+		})
 	}
 
 	/// Highlights the drop target of an in-app drag or an OS file hover, shows the hint
@@ -617,11 +624,19 @@ impl ArrangeUi {
 			Stroke::new(1.5, color),
 			StrokeKind::Inside,
 		);
-		if matches!(target, DropTarget::Below { .. }) && accepted {
+		if matches!(
+			target,
+			DropTarget::Below { .. } | DropTarget::BelowSampler { .. }
+		) && accepted
+		{
 			p.text(
 				pos2(layout.header.center().x, zone.top() + h * 0.5),
 				Align2::CENTER_CENTER,
-				"＋ new track",
+				if matches!(target, DropTarget::BelowSampler { .. }) {
+					"＋ new sampler track"
+				} else {
+					"＋ new track (Alt: sampler)"
+				},
 				theme::small(),
 				theme::ACCENT,
 			);
@@ -890,8 +905,15 @@ impl ArrangeUi {
 			}
 			// Double-click the instrument: its editor window (plugins) or the piano roll.
 			if ir.double_clicked() {
+				let sampler = track.instrument.as_ref().map(|d| DeviceRef {
+					track: Some(track.id),
+					device: d.id,
+				});
 				match &track.instrument {
 					Some(d) if state.is_plugin(d.id) => state.toggle_plugin_editor(d.id),
+					Some(_) if sampler.is_some_and(|r| state.is_sample_device(r)) => {
+						state.toggle_instrument_editor(sampler.expect("checked"));
+					}
 					_ if track.kind == TrackKind::Instrument => {
 						state.open_track_in_piano_roll(track.id);
 					}

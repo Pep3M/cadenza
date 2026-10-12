@@ -1183,3 +1183,188 @@ fn render_screens() {
 		.save(dir.join("instrument_f7.png"))
 		.unwrap();
 }
+
+/// Factory samples rendered once into a temp folder for this test binary.
+fn factory_samples() -> PathBuf {
+	static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+	DIR.get_or_init(|| {
+		let dir = std::env::temp_dir().join(format!("cadenza-ui-factory-{}", std::process::id()));
+		// SAFETY: set once (OnceLock) before the samples are first needed.
+		unsafe { std::env::set_var(cadenza_engine::factory::FACTORY_SAMPLES_ENV, &dir) };
+		cadenza_engine::factory::ensure_factory_samples().unwrap()
+	})
+	.clone()
+}
+
+/// An app with a drum sampler track and a sampler track, the drum editor open.
+fn sampler_app() -> (CadenzaApp, DeviceRef, DeviceRef) {
+	factory_samples();
+	let mut state = AppState::headless();
+	let items = state.browser_items().to_vec();
+	let mut refs = Vec::new();
+	for id in ["drum_sampler", "sampler"] {
+		let item = items.iter().find(|i| i.id == id).unwrap();
+		state.selection.select_master();
+		assert!(state.use_device(item, None));
+		let t = state.project().tracks.last().unwrap();
+		refs.push(DeviceRef {
+			track: Some(t.id),
+			device: t.instrument.as_ref().unwrap().id,
+		});
+	}
+	state.view.panels.set(PanelKind::Mixer, false);
+	assert!(state.open_instrument_editor(refs[0]));
+	(CadenzaApp::with_state(state), refs[0], refs[1])
+}
+
+fn wait_for_peaks(h: &mut Harness<'_, CadenzaApp>, path: &std::path::Path) {
+	for _ in 0..400 {
+		h.run_steps(1);
+		if matches!(
+			h.state_mut().state.peaks.get(path),
+			cadenza_app::jobs::Peaks::Ready(_)
+		) {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	h.run_steps(2);
+}
+
+#[test]
+fn drum_sampler_editor_selects_pads_and_knobs_commit_once() {
+	let (a, drums, _) = sampler_app();
+	let mut h = harness(a);
+	h.run_steps(3);
+	let grid = h.state().pad_grid().expect("pad grid drawn");
+	// Pad 1 (kick) sits bottom-left, pad 2 (snare) to its right.
+	let snare = pos2(grid.left() + 62.0 + 6.0 + 30.0, grid.bottom() - 30.0);
+	h.hover_at(snare);
+	h.drag_at(snare);
+	h.run_steps(1);
+	h.drop_at(snare);
+	h.run_steps(2);
+	assert_eq!(h.state().state.view.instrument.pad, 38);
+	assert!(
+		h.state()
+			.state
+			.undo_label()
+			.unwrap()
+			.starts_with("Add track")
+	);
+	// The Gain knob of the selected pad: one drag = one undo step.
+	let wave = h.state().instrument_wave().expect("pad waveform drawn");
+	let knob = pos2(wave.left() + 23.0, wave.bottom() + 6.0 + 17.0);
+	h.drag_at(knob);
+	for i in 1..=6 {
+		h.hover_at(knob - vec2(0.0, i as f32 * 8.0));
+		h.run_steps(1);
+	}
+	h.drop_at(knob - vec2(0.0, 48.0));
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert_eq!(s.undo_label(), Some("Edit sample zones"));
+	let zones = &s.device(drums).unwrap().zones;
+	let gain = zones.iter().find(|z| z.key_low == 38).unwrap().gain_db;
+	assert!(gain > 0.0, "dragged up: {gain}");
+	assert!(
+		zones
+			.iter()
+			.filter(|z| z.key_low != 38)
+			.all(|z| z.gain_db <= 0.0)
+	);
+}
+
+#[test]
+fn sampler_editor_shows_the_zone_map_and_inspector_edit_opens_it() {
+	let (a, _, sampler) = sampler_app();
+	let mut h = harness(a);
+	h.state_mut().state.selection.select_device(sampler);
+	h.run_steps(3);
+	h.get_by_label("Edit zones").click();
+	h.run_steps(3);
+	let s = &h.state().state;
+	assert_eq!(s.view.instrument.device, Some(sampler));
+	assert!(s.view.instrument_editor);
+	assert!(h.query_by_label("Presets").is_some());
+	// Back to the piano roll from the toolbar.
+	h.get_by_label("Piano roll").click();
+	h.run_steps(2);
+	assert!(!h.state().state.view.instrument_editor);
+}
+
+/// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
+#[test]
+#[ignore]
+fn render_sampler_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let (a, drums, sampler) = sampler_app();
+	let mut h = Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.wgpu()
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			a,
+		);
+	let shot = |h: &mut Harness<'_, CadenzaApp>, name: &str| {
+		h.run_steps(3);
+		h.render()
+			.unwrap()
+			.save(dir.join(format!("{name}.png")))
+			.unwrap();
+	};
+	{
+		let s = &mut h.state_mut().state;
+		s.view.instrument.pad = 46;
+		let cmd = cadenza_app::state::samples::edit_pad(s.project(), drums, 46, |z| {
+			z.decay_ms = Some(600.0);
+			z.output = 2;
+		});
+		s.apply_sample_edit(cmd);
+		s.selection.select_device(drums);
+	}
+	wait_for_peaks(&mut h, &factory_samples().join("Open Hat.wav"));
+	shot(&mut h, "drum_sampler_editor");
+	// Dragging a file from the browser over the cowbell pad.
+	let grid = h.state().pad_grid().unwrap();
+	egui::DragAndDrop::set_payload(
+		&h.ctx,
+		cadenza_app::state::dnd::Payload::File(factory_samples().join("Rim.wav")),
+	);
+	h.hover_at(pos2(grid.right() - 30.0, grid.top() + 30.0));
+	shot(&mut h, "drum_sampler_drop");
+	egui::DragAndDrop::clear_payload(&h.ctx);
+	h.remove_cursor();
+
+	{
+		let s = &mut h.state_mut().state;
+		s.open_instrument_editor(sampler);
+		s.view.instrument.zone = 1;
+		let cmd = cadenza_app::state::samples::edit_zone(s.project(), sampler, 1, |z| {
+			z.loop_mode = cadenza_model::LoopMode::PingPong;
+		});
+		s.apply_sample_edit(cmd);
+	}
+	wait_for_peaks(&mut h, &factory_samples().join("Sine Pad C3.wav"));
+	shot(&mut h, "sampler_editor");
+	// Alt-drag of an audio file below the tracks: a new sampler track.
+	{
+		let s = &mut h.state_mut().state;
+		s.close_piano_roll();
+	}
+	h.run_steps(2);
+	egui::DragAndDrop::set_payload(
+		&h.ctx,
+		cadenza_app::state::dnd::Payload::File(factory_samples().join("Sine Pad C4.wav")),
+	);
+	h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+	h.hover_at(pos2(900.0, 600.0));
+	shot(&mut h, "alt_drop_new_sampler");
+	egui::DragAndDrop::clear_payload(&h.ctx);
+}

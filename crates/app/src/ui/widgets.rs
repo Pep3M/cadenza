@@ -488,3 +488,173 @@ mod tests {
 		assert_eq!(db_to_meter(6.0), 1.0);
 	}
 }
+
+/// How a [`knob`] maps its travel to values and shows them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KnobSpec {
+	pub min: f32,
+	pub max: f32,
+	/// Double-click value.
+	pub default: f32,
+	/// Times (ms, Hz) feel natural on a logarithmic travel.
+	pub log: bool,
+	/// Whole numbers only (choices, groups, notes).
+	pub integer: bool,
+}
+
+impl KnobSpec {
+	pub fn new(min: f32, max: f32, default: f32) -> Self {
+		Self {
+			min,
+			max,
+			default,
+			log: false,
+			integer: false,
+		}
+	}
+
+	pub fn log(mut self) -> Self {
+		self.log = self.min > 0.0;
+		self
+	}
+
+	pub fn integer(mut self) -> Self {
+		self.integer = true;
+		self
+	}
+
+	/// Travel position 0..1 of `v`.
+	pub fn to_pos(&self, v: f32) -> f32 {
+		let v = v.clamp(self.min, self.max);
+		if self.log {
+			(v / self.min).ln() / (self.max / self.min).ln()
+		} else {
+			(v - self.min) / (self.max - self.min).max(f32::EPSILON)
+		}
+	}
+
+	/// Value at travel position `pos` (clamped, rounded for integer knobs).
+	pub fn from_pos(&self, pos: f32) -> f32 {
+		let p = pos.clamp(0.0, 1.0);
+		let v = if self.log {
+			self.min * (self.max / self.min).powf(p)
+		} else {
+			self.min + p * (self.max - self.min)
+		};
+		if self.integer { v.round() } else { v }
+	}
+}
+
+/// FL-style rotary knob with its label under it and the value in a tooltip / while
+/// dragging. Vertical drag (Shift: fine), double-click: default. One commit per drag.
+pub fn knob(
+	ui: &mut Ui,
+	id: Id,
+	label: &str,
+	value: f32,
+	spec: KnobSpec,
+	format: impl Fn(f32) -> String,
+) -> (Gesture, Response) {
+	let size = vec2(46.0, 50.0);
+	let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+	let response = response.on_hover_cursor(CursorIcon::ResizeVertical);
+	let fine = if ui.input(|i| i.modifiers.shift) {
+		0.2
+	} else {
+		1.0
+	};
+	let delta = -response.drag_delta().y / 140.0 * fine;
+	let gesture = match drag_value(&response, id, spec.to_pos(value), delta) {
+		_ if response.double_clicked() => Gesture::Commit(spec.default),
+		Gesture::Preview(p) => Gesture::Preview(spec.from_pos(p)),
+		Gesture::Commit(p) => Gesture::Commit(spec.from_pos(p)),
+		Gesture::Idle => Gesture::Idle,
+	};
+	let shown = match gesture {
+		Gesture::Preview(v) | Gesture::Commit(v) => v,
+		Gesture::Idle => value,
+	};
+	let text = format(shown);
+	let response = response.on_hover_text(format!("{label}: {text}"));
+	if ui.is_rect_visible(rect) {
+		let p = ui.painter();
+		let center = pos2(rect.center().x, rect.top() + 17.0);
+		let radius = 14.0;
+		let active = response.dragged() || response.hovered();
+		p.circle_filled(
+			center,
+			radius,
+			if active {
+				theme::BG_HOVER
+			} else {
+				theme::BG_WIDGET
+			},
+		);
+		p.circle_stroke(center, radius, Stroke::new(1.0, theme::BORDER_STRONG));
+		// 270° travel from bottom-left to bottom-right; the arc shows the value.
+		let start = std::f32::consts::PI * 0.75;
+		let sweep = std::f32::consts::PI * 1.5;
+		let pos = spec.to_pos(shown);
+		let arc = |from: f32, to: f32, color: Color32| {
+			let steps = 24;
+			let pts: Vec<Pos2> = (0..=steps)
+				.map(|i| {
+					let a = start + sweep * (from + (to - from) * i as f32 / steps as f32);
+					center + vec2(a.cos(), a.sin()) * (radius + 3.0)
+				})
+				.collect();
+			p.add(egui::Shape::line(pts, Stroke::new(2.0, color)));
+		};
+		arc(0.0, 1.0, theme::METER_BG);
+		// Bipolar knobs (pan, tune) fill from the center.
+		let origin = if spec.min < 0.0 && spec.max > 0.0 {
+			spec.to_pos(0.0)
+		} else {
+			0.0
+		};
+		arc(origin.min(pos), origin.max(pos), theme::ACCENT);
+		let a = start + sweep * pos;
+		p.line_segment(
+			[
+				center + vec2(a.cos(), a.sin()) * 4.0,
+				center + vec2(a.cos(), a.sin()) * (radius - 2.0),
+			],
+			Stroke::new(2.0, if active { theme::ACCENT } else { theme::TEXT }),
+		);
+		let caption = if response.dragged() {
+			text.as_str()
+		} else {
+			label
+		};
+		p.text(
+			pos2(rect.center().x, rect.bottom() - 6.0),
+			Align2::CENTER_CENTER,
+			caption,
+			egui::FontId::proportional(10.0),
+			if response.dragged() {
+				theme::TEXT
+			} else {
+				theme::TEXT_DIM
+			},
+		);
+	}
+	(gesture, response)
+}
+
+#[cfg(test)]
+mod knob_tests {
+	use super::KnobSpec;
+
+	#[test]
+	fn knob_travel_round_trips() {
+		let lin = KnobSpec::new(-1.0, 1.0, 0.0);
+		assert!((lin.to_pos(0.0) - 0.5).abs() < 1e-6);
+		assert!((lin.from_pos(0.75) - 0.5).abs() < 1e-6);
+		let log = KnobSpec::new(1.0, 10_000.0, 100.0).log();
+		assert!((log.to_pos(100.0) - 0.5).abs() < 1e-4);
+		assert!((log.from_pos(0.25) - 10.0).abs() < 1e-3);
+		let int = KnobSpec::new(0.0, 16.0, 0.0).integer();
+		assert_eq!(int.from_pos(0.49), 8.0);
+		assert_eq!(int.from_pos(2.0), 16.0);
+	}
+}

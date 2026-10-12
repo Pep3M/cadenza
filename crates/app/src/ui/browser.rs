@@ -385,7 +385,8 @@ fn file_row(ui: &mut Ui, state: &mut AppState, e: &files::FileEntry) {
 	let response = ui
 		.interact(response.rect, id.with("click"), Sense::click())
 		.on_hover_text(format!(
-			"{}\n\nDrag onto the arrange view (a track or below the tracks), or double-click to {}.",
+			"{}\n\nDrag onto the arrange view (a track or below the tracks; Alt below the tracks: \
+			 new sampler), a sampler pad or zone, or double-click to {}.",
 			e.path.display(),
 			match e.kind {
 				FileKind::Project => "open it",
@@ -395,6 +396,44 @@ fn file_row(ui: &mut Ui, state: &mut AppState, e: &files::FileEntry) {
 	if response.hovered() {
 		ui.painter()
 			.rect_filled(response.rect, 2.0, theme::BG_HOVER.gamma_multiply(0.5));
+	}
+	if e.kind == FileKind::Audio {
+		response.context_menu(|ui| {
+			if ui.button("Import at the playhead").clicked() {
+				state.import_audio(&e.path);
+				ui.close();
+			}
+			if ui.button("Load into new sampler").clicked() {
+				state.new_sampler_track(&e.path);
+				ui.close();
+			}
+			let editor = state
+				.view
+				.instrument
+				.device
+				.filter(|r| state.is_sample_device(*r));
+			if let Some(r) = editor {
+				let drums = state.device(r).and_then(crate::state::samples::kind)
+					== Some(crate::state::samples::SampleKind::Drums);
+				let label = if drums {
+					format!(
+						"Load into pad {}",
+						crate::state::samples::pad_label(state.view.instrument.pad)
+					)
+				} else {
+					"Map across the open sampler".to_owned()
+				};
+				if ui.button(label).clicked() {
+					let slot = if drums {
+						crate::state::samples::SampleSlot::Pad(state.view.instrument.pad)
+					} else {
+						crate::state::samples::SampleSlot::Keyboard
+					};
+					state.load_sample(r, &e.path, slot);
+					ui.close();
+				}
+			}
+		});
 	}
 	if response.double_clicked() {
 		match e.kind {

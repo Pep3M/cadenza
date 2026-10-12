@@ -54,6 +54,16 @@ pub enum DropTarget {
 	Lane { track: TrackId, at: Tick },
 	/// The empty area below the last track, at a song position.
 	Below { at: Tick },
+	/// The same area with Alt held: audio files become a new sampler track.
+	BelowSampler { at: Tick },
+	/// A pad of a drum_sampler's editor (its note).
+	Pad { device: DeviceRef, note: u8 },
+	/// A sampler editor's zone map: a zone (replace its sample) or the keyboard
+	/// (`None`: map the file across it).
+	Zone {
+		device: DeviceRef,
+		zone: Option<usize>,
+	},
 	/// A mixer strip (`None` = master).
 	Strip(Option<TrackId>),
 	/// Between two inserts of a mixer strip: `slot` 0..=len, before the insert there.
@@ -69,14 +79,18 @@ impl DropTarget {
 		match *self {
 			DropTarget::Track(t) | DropTarget::Lane { track: t, .. } => Some(t),
 			DropTarget::Strip(t) | DropTarget::InsertSlot { track: t, .. } => t,
-			DropTarget::Device(d) => d.track,
-			DropTarget::Below { .. } | DropTarget::Window => None,
+			DropTarget::Device(d)
+			| DropTarget::Pad { device: d, .. }
+			| DropTarget::Zone { device: d, .. } => d.track,
+			DropTarget::Below { .. } | DropTarget::BelowSampler { .. } | DropTarget::Window => None,
 		}
 	}
 
 	pub fn at(&self) -> Option<Tick> {
 		match *self {
-			DropTarget::Lane { at, .. } | DropTarget::Below { at } => Some(at),
+			DropTarget::Lane { at, .. }
+			| DropTarget::Below { at }
+			| DropTarget::BelowSampler { at } => Some(at),
 			_ => None,
 		}
 	}
@@ -130,6 +144,16 @@ pub enum DropAction {
 		at: Option<Tick>,
 	},
 	OpenProject(PathBuf),
+	/// An audio file into a sampler / drum_sampler.
+	LoadSample {
+		device: DeviceRef,
+		path: PathBuf,
+		slot: super::samples::SampleSlot,
+	},
+	/// A new instrument track with a sampler playing the file across the keyboard.
+	NewSampler {
+		path: PathBuf,
+	},
 	/// Not possible here; the text says why (shown as the drop hint).
 	Reject(String),
 }
@@ -196,6 +220,24 @@ impl DropAction {
 				"Open {}",
 				p.file_name().unwrap_or_default().to_string_lossy()
 			),
+			DropAction::LoadSample { path, slot, .. } => {
+				let name = path.file_name().unwrap_or_default().to_string_lossy();
+				match slot {
+					super::samples::SampleSlot::Pad(n) => {
+						format!("Load {name} into pad {}", super::samples::pad_label(*n))
+					}
+					super::samples::SampleSlot::Zone(i) => {
+						format!("Replace zone {} with {name}", i + 1)
+					}
+					super::samples::SampleSlot::Keyboard => {
+						format!("Map {name} across the keyboard")
+					}
+				}
+			}
+			DropAction::NewSampler { path } => format!(
+				"New sampler track with {}",
+				path.file_name().unwrap_or_default().to_string_lossy()
+			),
 			DropAction::Reject(why) => why.clone(),
 		}
 	}
@@ -246,7 +288,7 @@ fn resolve_device(project: &Project, item: &BrowserItem, target: DropTarget) -> 
 	};
 	match item.role {
 		DeviceRole::Instrument => match target {
-			DropTarget::Below { .. } => new_track(None),
+			DropTarget::Below { .. } | DropTarget::BelowSampler { .. } => new_track(None),
 			DropTarget::Track(t)
 			| DropTarget::Lane { track: t, .. }
 			| DropTarget::Strip(Some(t))
@@ -265,7 +307,7 @@ fn resolve_device(project: &Project, item: &BrowserItem, target: DropTarget) -> 
 			),
 		},
 		DeviceRole::Effect => match target {
-			DropTarget::Below { .. } => new_track(None),
+			DropTarget::Below { .. } | DropTarget::BelowSampler { .. } => new_track(None),
 			DropTarget::InsertSlot { track, slot } => DropAction::InsertEffect {
 				track,
 				item: item.clone(),
@@ -283,7 +325,7 @@ fn resolve_device(project: &Project, item: &BrowserItem, target: DropTarget) -> 
 					index: None,
 				}
 			}
-			DropTarget::Window => {
+			DropTarget::Window | DropTarget::Pad { .. } | DropTarget::Zone { .. } => {
 				DropAction::Reject("Drop effects on a track or a mixer strip".into())
 			}
 		},
@@ -349,6 +391,47 @@ fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -
 	};
 	let path = path.to_path_buf();
 	let track_kind = target.track().and_then(|t| kind_of(project, t));
+	let sample_target = match target {
+		DropTarget::Pad { device, note } => Some((device, super::samples::SampleSlot::Pad(note))),
+		DropTarget::Zone { device, zone } => Some((
+			device,
+			zone.map_or(
+				super::samples::SampleSlot::Keyboard,
+				super::samples::SampleSlot::Zone,
+			),
+		)),
+		_ => None,
+	};
+	if let Some((device, slot)) = sample_target {
+		return match kind {
+			FileKind::Audio => DropAction::LoadSample { device, path, slot },
+			_ => DropAction::Reject("Drop audio files on pads and zones".into()),
+		};
+	}
+	if let (FileKind::Audio, DropTarget::BelowSampler { .. }) = (kind, target) {
+		return DropAction::NewSampler { path };
+	}
+	if let (FileKind::Audio, DropTarget::Device(r)) = (kind, target) {
+		let d = match r.track {
+			Some(t) => project.track(t).and_then(|t| t.device(r.device)),
+			None => None,
+		};
+		match d.and_then(super::samples::kind) {
+			Some(super::samples::SampleKind::Sampler) => {
+				return DropAction::LoadSample {
+					device: r,
+					path,
+					slot: super::samples::SampleSlot::Keyboard,
+				};
+			}
+			Some(super::samples::SampleKind::Drums) => {
+				return DropAction::Reject(
+					"Drop samples on a pad of the drum sampler editor".into(),
+				);
+			}
+			None => {}
+		}
+	}
 	match kind {
 		FileKind::Project => DropAction::OpenProject(path),
 		FileKind::Audio => DropAction::ImportAudio {

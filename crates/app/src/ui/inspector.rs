@@ -131,6 +131,14 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 						});
 					}
 					editor_button(ui, state, d.id);
+					sampler_button(
+						ui,
+						state,
+						DeviceRef {
+							track: Some(id),
+							device: d.id,
+						},
+					);
 				}
 				None => {
 					ui.label(
@@ -441,7 +449,20 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 			state.remove_device(r.track, d.id);
 		}
 		editor_button(ui, state, d.id);
+		sampler_button(ui, state, r);
 	});
+	if let Some(kind) = crate::state::samples::kind(&d) {
+		ui.add_space(4.0);
+		let what = match kind {
+			crate::state::samples::SampleKind::Drums => "pads",
+			crate::state::samples::SampleKind::Sampler => "zones",
+		};
+		ui.label(
+			RichText::new(format!("{} {what} loaded", d.zones.len()))
+				.font(theme::small())
+				.color(theme::TEXT_DIM),
+		);
+	}
 	ui.add_space(6.0);
 	if params.is_empty() {
 		ui.label(RichText::new("No editable parameters").color(theme::TEXT_FAINT));
@@ -471,7 +492,9 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 			)
 			.on_hover_text(&name);
 			let current = state.param_value(r.track, d.id, &pid).unwrap_or(default);
-			ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
+			// Room for the value box, which grows with the unit ("0.0 semitones").
+			let value_w = 52.0 + 6.0 * unit.chars().count() as f32;
+			ui.spacing_mut().slider_width = (ui.available_width() - value_w - 8.0).max(40.0);
 			let (g, resp) =
 				widgets::edit_value(ui, Id::new(("param", d.id, &pid)), current, |ui, v| {
 					let mut s =
@@ -517,6 +540,27 @@ fn editor_button(ui: &mut Ui, state: &mut AppState, device: cadenza_core::Device
 		.clicked()
 	{
 		state.toggle_plugin_editor(device);
+	}
+}
+
+/// "Edit" for the built-in samplers: their pad / zone editor in the bottom dock.
+fn sampler_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
+	let Some(kind) = state.device(r).and_then(crate::state::samples::kind) else {
+		return;
+	};
+	let label = match kind {
+		crate::state::samples::SampleKind::Drums => "Edit pads",
+		crate::state::samples::SampleKind::Sampler => "Edit zones",
+	};
+	if ui
+		.small_button(label)
+		.on_hover_text(
+			"Pads / zones, waveform and knobs in the bottom editor dock (also: double-click \
+			 the instrument in its track header or the mixer)",
+		)
+		.clicked()
+	{
+		state.toggle_instrument_editor(r);
 	}
 }
 

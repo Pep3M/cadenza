@@ -24,6 +24,7 @@ pub mod meters;
 pub mod notices;
 pub mod piano;
 pub mod rows;
+pub mod samples;
 pub mod selection;
 pub mod timeline;
 pub mod transport;
@@ -99,6 +100,10 @@ pub struct ViewState {
 	pub audio: audio_edit::AudioEditorView,
 	/// The editor dock shows the audio editor instead of the piano roll.
 	pub audio_editor: bool,
+	/// The sampler / drum sampler editor (shares the bottom editor dock).
+	pub instrument: samples::InstrumentView,
+	/// The editor dock shows the instrument editor (over the piano roll / audio editor).
+	pub instrument_editor: bool,
 	/// Pattern / Song mode and the arrange loop region.
 	pub transport: transport::TransportView,
 }
@@ -118,6 +123,8 @@ impl Default for ViewState {
 			automation: automation::AutomationView::default(),
 			audio: audio_edit::AudioEditorView::default(),
 			audio_editor: false,
+			instrument: samples::InstrumentView::default(),
+			instrument_editor: false,
 			transport: transport::TransportView::default(),
 		}
 	}
@@ -597,6 +604,10 @@ impl AppState {
 		self.view.piano.prune(&self.doc.project);
 		self.view.automation.prune(&self.doc.project);
 		self.view.audio.prune(&self.doc.project);
+		self.view.instrument.prune(&self.doc.project);
+		if self.view.instrument.device.is_none() {
+			self.view.instrument_editor = false;
+		}
 		let project = &self.doc.project;
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
@@ -1085,19 +1096,42 @@ impl AppState {
 		));
 	}
 
-	/// Loads a built-in factory preset into a device (one undo step).
+	/// Loads a built-in factory preset into a device (one undo step); sampler presets
+	/// bring their (factory) samples.
 	pub fn load_factory_preset(&mut self, device: DeviceRef, preset: &cadenza_dsp::FactoryPreset) {
 		let params = preset
 			.params
 			.iter()
 			.map(|(k, v)| ((*k).to_owned(), *v))
 			.collect();
-		self.apply(Command::SetDeviceState {
+		let set = Command::SetDeviceState {
 			track: device.track,
 			device: device.device,
 			state: None,
 			params: Some(params),
-		});
+		};
+		let cmd = if preset.zones.is_empty() {
+			set
+		} else {
+			match cadenza_engine::factory::preset_zones(preset) {
+				Ok(zones) => Command::Batch {
+					label: format!("Load preset '{}'", preset.name),
+					commands: vec![
+						set,
+						Command::SetSampleZones {
+							track: device.track,
+							device: device.device,
+							zones,
+						},
+					],
+				},
+				Err(e) => {
+					self.notices.error(e.to_string());
+					return;
+				}
+			}
+		};
+		self.apply(cmd);
 	}
 
 	/// The device at `r`, if it still exists (instrument or insert).
@@ -1729,6 +1763,8 @@ impl AppState {
 				self.request(Pending::Open(Some(path)));
 				true
 			}
+			DropAction::LoadSample { device, path, slot } => self.load_sample(device, &path, slot),
+			DropAction::NewSampler { path } => self.new_sampler_track(&path),
 			DropAction::Reject(why) => {
 				self.notices.info(why);
 				false
@@ -1834,6 +1870,10 @@ impl AppState {
 			.iter()
 			.map(|(k, v)| ((*k).to_owned(), *v))
 			.collect();
+		match cadenza_engine::factory::preset_zones(preset) {
+			Ok(zones) => d.zones = zones,
+			Err(e) => self.notices.error(e.to_string()),
+		}
 		let r = DeviceRef {
 			track: Some(track),
 			device: d.id,
@@ -1875,6 +1915,7 @@ impl AppState {
 		self.view.piano.clip = Some(clip);
 		self.view.piano.recent.insert(track, clip);
 		self.view.audio_editor = false;
+		self.view.instrument_editor = false;
 		self.selection.click_clip(track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
@@ -1963,6 +2004,7 @@ impl AppState {
 		}
 		self.view.audio.clip = Some(clip);
 		self.view.audio_editor = true;
+		self.view.instrument_editor = false;
 		self.selection.click_clip(r.track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
@@ -2010,6 +2052,98 @@ impl AppState {
 				extra_seconds: extra,
 			})
 		}));
+	}
+
+	// --- Sampler / drum sampler editor ---------------------------------------------
+
+	/// Whether `device` is a built-in sampler or drum sampler (it has the instrument editor).
+	pub fn is_sample_device(&self, r: DeviceRef) -> bool {
+		self.device(r).and_then(samples::kind).is_some()
+	}
+
+	/// Shows `r`'s sampler editor in the bottom editor dock.
+	pub fn open_instrument_editor(&mut self, r: DeviceRef) -> bool {
+		if !self.is_sample_device(r) {
+			return false;
+		}
+		self.release_previews();
+		if self.view.instrument.device != Some(r) {
+			self.view.instrument.zone = 0;
+		}
+		self.view.instrument.device = Some(r);
+		self.view.instrument_editor = true;
+		self.selection.select_device(r);
+		self.view.panels.open_piano_roll();
+		true
+	}
+
+	/// Toggles the sampler editor of `r` (inspector button, double-clicks).
+	pub fn toggle_instrument_editor(&mut self, r: DeviceRef) {
+		let shown = self.view.instrument_editor
+			&& self.view.instrument.device == Some(r)
+			&& self.view.panels.visible(PanelKind::PianoRoll);
+		if shown {
+			self.close_piano_roll();
+		} else {
+			self.open_instrument_editor(r);
+		}
+	}
+
+	/// Leaves the instrument editor for the piano roll / audio editor in the dock.
+	pub fn close_instrument_editor(&mut self) {
+		self.release_previews();
+		self.view.instrument_editor = false;
+	}
+
+	/// Loads `path` into a pad, zone or the whole keyboard of a sample device (the shared
+	/// `load_sample` tool: root from the name or pitch, pad settings kept; one undo step).
+	pub fn load_sample(&mut self, r: DeviceRef, path: &Path, slot: samples::SampleSlot) -> bool {
+		let Some(track) = r.track else {
+			return false;
+		};
+		let args = samples::load_args(track, r, path, slot);
+		let ok = self
+			.edit_session(|s| cadenza_mcp::tools::samples::load_sample(s, args))
+			.is_some();
+		if ok {
+			match slot {
+				samples::SampleSlot::Pad(n) => self.view.instrument.pad = n,
+				samples::SampleSlot::Zone(i) => self.view.instrument.zone = i,
+				samples::SampleSlot::Keyboard => self.view.instrument.zone = 0,
+			}
+			self.open_instrument_editor(r);
+		}
+		ok
+	}
+
+	/// A new instrument track (below the others) with a sampler playing `path` across the
+	/// keyboard at its root key; one undo step. Opens the sampler editor.
+	pub fn new_sampler_track(&mut self, path: &Path) -> bool {
+		let zone = match cadenza_engine::auto_zone(path) {
+			Ok(z) => z,
+			Err(e) => {
+				self.notices.error(e.to_string());
+				return false;
+			}
+		};
+		let name = zone.sample.stem();
+		let device = cadenza_model::Device::builtin("sampler", "Sampler").with_zones(vec![zone]);
+		let r_device = device.id;
+		let track = cadenza_model::Track::new(name, TrackKind::Instrument).with_instrument(device);
+		let track_id = track.id;
+		if !self.apply(Command::AddTrack { track, index: None }) {
+			return false;
+		}
+		self.selection.select_track(track_id);
+		self.open_instrument_editor(DeviceRef {
+			track: Some(track_id),
+			device: r_device,
+		})
+	}
+
+	/// Applies a zone/pad edit built by [`samples`] (one command per gesture).
+	pub fn apply_sample_edit(&mut self, cmd: Option<Command>) -> bool {
+		cmd.is_some_and(|c| self.apply(c))
 	}
 
 	pub fn close_piano_roll(&mut self) {

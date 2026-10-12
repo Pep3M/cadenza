@@ -11,6 +11,7 @@ pub mod browser;
 pub mod chat;
 pub mod dnd;
 pub mod inspector;
+pub mod instrument_editor;
 pub mod mixer;
 pub mod piano_roll;
 pub mod transport;
@@ -42,6 +43,7 @@ pub struct CadenzaApp {
 	browser: browser::BrowserUi,
 	piano: piano_roll::PianoUi,
 	audio_editor: audio_editor::AudioEditorUi,
+	instrument: instrument_editor::InstrumentEditorUi,
 	chat: chat::ChatUi,
 	title: String,
 	themed: bool,
@@ -82,6 +84,7 @@ impl CadenzaApp {
 			browser: browser::BrowserUi::default(),
 			piano: piano_roll::PianoUi::default(),
 			audio_editor: audio_editor::AudioEditorUi::default(),
+			instrument: instrument_editor::InstrumentEditorUi::default(),
 			chat: chat::ChatUi::default(),
 			title: String::new(),
 			themed: false,
@@ -102,6 +105,16 @@ impl CadenzaApp {
 	/// Waveform area of the audio editor in the last frame (headless tests).
 	pub fn audio_wave(&self) -> Option<Rect> {
 		self.audio_editor.wave_rect
+	}
+
+	/// Waveform of the instrument editor in the last frame (headless tests).
+	pub fn instrument_wave(&self) -> Option<Rect> {
+		self.instrument.wave_rect
+	}
+
+	/// Pad grid of the drum sampler editor in the last frame (headless tests).
+	pub fn pad_grid(&self) -> Option<Rect> {
+		self.instrument.pad_rect
 	}
 
 	/// Note grid of the piano roll in the last frame (headless tests).
@@ -198,6 +211,7 @@ impl CadenzaApp {
 		if docked(PanelKind::PianoRoll) {
 			let piano = &mut self.piano;
 			let audio = &mut self.audio_editor;
+			let instrument = &mut self.instrument;
 			let r = Panel::bottom("piano-roll")
 				.resizable(true)
 				.default_size(360.0)
@@ -207,7 +221,9 @@ impl CadenzaApp {
 					if locked {
 						ui.disable();
 					}
-					if state.view.audio_editor {
+					if state.view.instrument_editor {
+						instrument.show(ui, state)
+					} else if state.view.audio_editor {
 						audio.show(ui, state)
 					} else {
 						piano.show(ui, state)
@@ -273,6 +289,7 @@ impl CadenzaApp {
 		let arrange = &mut self.arrange;
 		let piano = &mut self.piano;
 		let audio = &mut self.audio_editor;
+		let instrument = &mut self.instrument;
 		let browser = &mut self.browser;
 		let chat = &mut self.chat;
 		let central = egui::CentralPanel::no_frame().show(ui, |ui| {
@@ -281,6 +298,9 @@ impl CadenzaApp {
 			}
 			match center {
 				Some(PanelKind::Arrange) => arrange.show(ui, state),
+				Some(PanelKind::PianoRoll) if state.view.instrument_editor => {
+					instrument.show(ui, state)
+				}
 				Some(PanelKind::PianoRoll) if state.view.audio_editor => audio.show(ui, state),
 				Some(PanelKind::PianoRoll) => piano.show(ui, state),
 				Some(PanelKind::Mixer) => {
@@ -322,6 +342,7 @@ impl CadenzaApp {
 		let piano_visible = state.view.panels.visible(PanelKind::PianoRoll);
 		if self.piano_was_visible && !piano_visible {
 			self.piano.release(state);
+			self.instrument.release(state);
 		}
 		self.piano_was_visible = piano_visible;
 
@@ -347,10 +368,18 @@ impl CadenzaApp {
 		if dropped.is_empty() {
 			return;
 		}
-		let target = ctx
-			.pointer_latest_pos()
+		let pointer = ctx.pointer_latest_pos();
+		let editor_target = pointer
+			.and_then(|p| self.instrument.target_at(p))
+			.filter(|_| {
+				self.state.view.instrument_editor
+					&& self.state.view.panels.visible(PanelKind::PianoRoll)
+			});
+		let arrange_target = pointer
 			.and_then(|p| self.arrange.target_at(&self.state, p))
-			.filter(|_| self.state.view.panels.visible(PanelKind::Arrange))
+			.filter(|_| self.state.view.panels.visible(PanelKind::Arrange));
+		let target = editor_target
+			.or(arrange_target)
 			.unwrap_or(DropTarget::Window);
 		for path in dropped {
 			self.state.drop_payload(&Payload::File(path), target, false);
@@ -426,7 +455,7 @@ impl CadenzaApp {
 		}
 		let piano_focused = self.state.view.panels.focus == Some(PanelKind::PianoRoll)
 			&& self.state.view.panels.visible(PanelKind::PianoRoll);
-		if piano_focused {
+		if piano_focused && !self.state.view.instrument_editor {
 			if self.state.view.audio_editor {
 				self.audio_editor.shortcuts(ctx, &mut self.state);
 			} else {

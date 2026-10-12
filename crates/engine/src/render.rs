@@ -87,6 +87,16 @@ impl StereoBuffer {
 
 /// Compiles and positions a graph; returns it with the number of samples to render.
 fn prepare(project: &Project, opts: &RenderOptions) -> Result<(Graph, usize), EngineError> {
+	prepare_range(project, opts, opts.end.is_none())
+}
+
+/// [`prepare`] from `opts.start` to `opts.end` (`None` = song end), plus the longest device
+/// tail when `tail`.
+pub(crate) fn prepare_range(
+	project: &Project,
+	opts: &RenderOptions,
+	tail: bool,
+) -> Result<(Graph, usize), EngineError> {
 	if opts.start.0 < 0 {
 		return Err(EngineError::InvalidOptions(format!(
 			"start tick {} is negative; use 0 or later",
@@ -111,10 +121,12 @@ fn prepare(project: &Project, opts: &RenderOptions) -> Result<(Graph, usize), En
 			)));
 		}
 		Some(end) => project.tempo.tick_to_sample(end, sr) as i64,
-		None => {
-			let song_end = project.tempo.tick_to_sample(project.end_tick(), sr) as i64;
-			song_end.max(start) + (graph.tail_seconds() as f64 * sr).ceil() as i64
-		}
+		None => (project.tempo.tick_to_sample(project.end_tick(), sr) as i64).max(start),
+	};
+	let end = if tail {
+		end + (graph.tail_seconds() as f64 * sr).ceil() as i64
+	} else {
+		end
 	};
 	graph.seek_sample(start);
 	graph.play();
@@ -142,12 +154,27 @@ pub fn render_offline(
 	})
 }
 
+/// Called after every rendered quantum with the graph, the engine position the quantum
+/// started at, and the engine samples rendered so far / in total; an error aborts the render.
+pub(crate) type QuantumHook<'a> =
+	&'a mut dyn FnMut(&Graph, i64, usize, usize) -> Result<(), EngineError>;
+
 /// Renders quantum by quantum, measuring the master and every track's post-fader output,
 /// and hands each master chunk to `sink`.
 fn render_analyzed(
+	graph: Graph,
+	len: usize,
+	sink: impl FnMut(&[f32], &[f32]) -> Result<(), EngineError>,
+) -> Result<MixReport, EngineError> {
+	render_analyzed_with(graph, len, sink, &mut |_, _, _, _| Ok(()))
+}
+
+/// [`render_analyzed`] calling `hook` after each quantum (stems taps, progress, cancel).
+pub(crate) fn render_analyzed_with(
 	mut graph: Graph,
 	len: usize,
 	mut sink: impl FnMut(&[f32], &[f32]) -> Result<(), EngineError>,
+	hook: QuantumHook<'_>,
 ) -> Result<MixReport, EngineError> {
 	let sr = graph.sample_rate();
 	let start = graph.position_sample();
@@ -180,6 +207,7 @@ fn render_analyzed(
 			}
 		}
 		rendered += QUANTUM;
+		hook(&graph, pos, rendered.min(total), total)?;
 	}
 	let mut track_levels: Vec<(usize, TrackLevel)> = graph
 		.nodes

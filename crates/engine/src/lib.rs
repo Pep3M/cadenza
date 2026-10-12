@@ -12,6 +12,7 @@ mod automation;
 mod compile;
 mod devices;
 mod error;
+pub mod export;
 pub mod factory;
 mod graph;
 pub mod hosting;
@@ -24,6 +25,7 @@ mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
 pub use automation::AutomationBindings;
+pub use cadenza_audio_io::Metadata;
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 pub use cadenza_midi_io::PortInfo as MidiPort;
 pub use cadenza_plugin_host::PluginCatalog;
@@ -32,6 +34,10 @@ pub use cadenza_plugin_host::{EDITORS_SUPPORTED, EditorEvent};
 pub use compile::{compile, compile_hosted, compile_with};
 pub use devices::{capture_state, plugin_presets, preset_state};
 pub use error::EngineError;
+pub use export::{
+	ExportProgress, ExportReport, ExportSpec, ExportedFile, Normalize, StemSet, export_project,
+	format_extension, normalize_gain, stem_tracks,
+};
 pub use graph::{Graph, ScheduleSwap};
 pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting, PluginXruns};
 pub use meter::{MeterBank, MeterReading};

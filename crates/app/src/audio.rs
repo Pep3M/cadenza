@@ -15,9 +15,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use cadenza_core::{Tick, TrackId};
+use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_engine::{MeterBank, Player, PlayerClock, PluginCrash, PluginHosting};
-use cadenza_model::Project;
+use cadenza_model::{AutomationLane, Project};
 use cadenza_plugin_host::PluginCatalog;
 
 /// How often the player thread polls sandboxed plugins for crashes.
@@ -38,6 +38,15 @@ enum Request {
 	Seek(Tick),
 	Volume(Option<TrackId>, f32),
 	Pan(Option<TrackId>, f32),
+	/// Live device parameter (device, param id, plain value).
+	Param(DeviceId, String, f32),
+	/// Live send level (dB).
+	Send(DeviceId, f32),
+	/// New automation lanes for the running graph.
+	Automation {
+		lanes: Vec<AutomationLane>,
+		tempo: TempoMap,
+	},
 	/// Note preview: `Some(velocity)` = note on, `None` = note off.
 	Preview(TrackId, u8, Option<f32>),
 	Shutdown,
@@ -60,6 +69,9 @@ pub enum AudioEvent {
 		error: String,
 	},
 	PluginCrashes(Vec<PluginCrash>),
+	/// A live change could not reach the running graph (e.g. an automation lane was
+	/// removed): the project must be reloaded.
+	ReloadNeeded,
 	Error(String),
 }
 
@@ -116,6 +128,19 @@ impl AudioEngine {
 
 	pub fn live_pan(&self, track: Option<TrackId>, pan: f32) {
 		self.send(Request::Pan(track, pan));
+	}
+
+	pub fn live_param(&self, device: DeviceId, param: &str, value: f32) {
+		self.send(Request::Param(device, param.to_owned(), value));
+	}
+
+	pub fn live_send(&self, send: DeviceId, db: f32) {
+		self.send(Request::Send(send, db));
+	}
+
+	/// Swaps the running graph's automation for `lanes` (reloads when it cannot).
+	pub fn automation(&self, lanes: Vec<AutomationLane>, tempo: TempoMap) {
+		self.send(Request::Automation { lanes, tempo });
 	}
 
 	/// Plays `pitch` through `track`'s instrument, also while stopped.
@@ -188,9 +213,18 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 		let last_load = batch
 			.iter()
 			.rposition(|r| matches!(r, Request::Load { .. }));
+		let last_automation = batch
+			.iter()
+			.rposition(|r| matches!(r, Request::Automation { .. }));
 		for (i, request) in batch.into_iter().enumerate() {
 			let result = match request {
 				Request::Load { .. } if Some(i) != last_load => Ok(()),
+				// A later load (or automation set) already carries these lanes.
+				Request::Automation { .. }
+					if Some(i) != last_automation || last_load.is_some_and(|l| l > i) =>
+				{
+					Ok(())
+				}
 				Request::Load {
 					project,
 					plugins,
@@ -217,6 +251,19 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 				Request::Seek(tick) => player.seek(tick),
 				Request::Volume(track, db) => player.set_live_volume(track, db),
 				Request::Pan(track, pan) => player.set_live_pan(track, pan),
+				Request::Param(device, param, value) => {
+					player.set_live_param(device, &param, value).map(|_| ())
+				}
+				Request::Send(send, db) => player.set_live_send(send, db).map(|_| ()),
+				Request::Automation { lanes, tempo } => match player.set_automation(&lanes, &tempo)
+				{
+					Ok(true) => Ok(()),
+					Ok(false) => {
+						emit(AudioEvent::ReloadNeeded);
+						Ok(())
+					}
+					Err(e) => Err(e),
+				},
 				Request::Preview(track, pitch, Some(velocity)) => {
 					player.preview_note_on(track, pitch, velocity)
 				}

@@ -5,7 +5,7 @@
 
 use cadenza_core::TrackId;
 use cadenza_dsp::DeviceRole;
-use cadenza_model::{Channel, ChannelPatch, Command, Output, Send, SendPatch, Track, TrackKind};
+use cadenza_model::{Channel, ChannelPatch, Command, Output, Send, Track, TrackKind};
 use egui::{
 	Align, Align2, CornerRadius, FontId, Id, Layout, Rect, RichText, Sense, Stroke, StrokeKind, Ui,
 	pos2, vec2,
@@ -645,7 +645,8 @@ fn send_row(ui: &mut Ui, state: &mut AppState, track: TrackId, s: &Send, w: f32)
 				ui.close();
 			}
 		});
-		let (gesture, _) = widgets::edit_value(ui, Id::new(("send", s.id)), s.level_db, |ui, v| {
+		let level = state.send_level(track, s.id);
+		let (gesture, _) = widgets::edit_value(ui, Id::new(("send", s.id)), level, |ui, v| {
 			ui.add_sized(
 				[44.0, 16.0],
 				egui::DragValue::new(v)
@@ -655,17 +656,10 @@ fn send_row(ui: &mut Ui, state: &mut AppState, track: TrackId, s: &Send, w: f32)
 					.max_decimals(1),
 			)
 		});
-		if let Gesture::Commit(level) = gesture
-			&& level != s.level_db
-		{
-			state.apply(Command::UpdateSend {
-				track,
-				send: s.id,
-				patch: SendPatch {
-					level_db: Some(level),
-					pre_fader: None,
-				},
-			});
+		match gesture {
+			Gesture::Preview(db) => state.preview_send(s.id, db),
+			Gesture::Commit(db) => state.commit_send(track, s.id, db),
+			Gesture::Idle => {}
 		}
 	});
 }

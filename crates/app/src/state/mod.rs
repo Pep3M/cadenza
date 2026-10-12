@@ -13,6 +13,7 @@ pub mod dnd;
 pub mod edits;
 pub mod files;
 pub mod layout;
+pub mod live;
 pub mod meters;
 pub mod notices;
 pub mod piano;
@@ -24,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cadenza_core::{ClipId, DeviceId, Tick, TrackId};
+use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TrackId};
 use cadenza_dsp::DeviceRole;
 use cadenza_engine::{MeterBank, MixReport, PlayerClock, RenderOptions};
 use cadenza_mcp::{McpError, Session};
@@ -44,6 +45,21 @@ use selection::{DeviceRef, Selection};
 use timeline::Timeline;
 
 pub use cadenza_mcp::tools::audio::AUDIO_EXTENSIONS;
+
+/// Address of a channel's volume (`None` = master).
+pub fn volume_address(track: Option<TrackId>) -> ParamAddress {
+	ParamAddress {
+		track,
+		target: ParamTarget::Volume,
+	}
+}
+
+pub fn pan_address(track: Option<TrackId>) -> ParamAddress {
+	ParamAddress {
+		track,
+		target: ParamTarget::Pan,
+	}
+}
 
 /// Edits within this window are compiled into the player once.
 pub const RELOAD_DEBOUNCE: Duration = Duration::from_millis(120);
@@ -113,11 +129,14 @@ pub struct Jobs {
 	pub dialog: Option<(FileAction, Job<Option<PathBuf>>)>,
 }
 
-/// Fader values being dragged: heard live and drawn, committed as one command on release.
+/// Values being dragged (faders, knobs, send levels): heard live and drawn, committed
+/// as one command on release.
 #[derive(Debug, Default, Clone)]
 pub struct Previews {
 	pub volume: HashMap<Option<TrackId>, f32>,
 	pub pan: HashMap<Option<TrackId>, f32>,
+	pub sends: HashMap<DeviceId, f32>,
+	pub params: HashMap<(DeviceId, String), f32>,
 }
 
 pub struct AppState {
@@ -233,13 +252,14 @@ impl AppState {
 
 	/// Executes one edit. Returns false (with an error notice) if the model rejected it.
 	pub fn apply(&mut self, cmd: Command) -> bool {
-		self.apply_inner(cmd, true)
+		self.apply_inner(cmd)
 	}
 
-	fn apply_inner(&mut self, cmd: Command, reload: bool) -> bool {
+	fn apply_inner(&mut self, cmd: Command) -> bool {
+		let before = self.project().clone();
 		match self.session.document_mut().execute(cmd) {
 			Ok(()) => {
-				self.after_edit(reload);
+				self.after_edit(Some(&before));
 				true
 			}
 			Err(e) => {
@@ -255,10 +275,11 @@ impl AppState {
 		&mut self,
 		f: impl FnOnce(&mut Session) -> Result<T, McpError>,
 	) -> Option<T> {
-		let before = self.document().history_labels().len();
+		let steps = self.document().history_labels().len();
+		let before = self.project().clone();
 		let result = f(&mut self.session);
-		if self.document().history_labels().len() != before {
-			self.after_edit(true);
+		if self.document().history_labels().len() != steps {
+			self.after_edit(Some(&before));
 		}
 		match result {
 			Ok(v) => Some(v),
@@ -269,33 +290,70 @@ impl AppState {
 		}
 	}
 
-	fn after_edit(&mut self, reload: bool) {
+	/// Bookkeeping after the project changed from `before`: values the player can take
+	/// live (mix, parameters, automation) are sent to it, anything structural schedules a
+	/// reload (which cuts sounding notes).
+	fn after_edit(&mut self, before: Option<&Project>) {
 		self.dirty = true;
 		self.selection.prune(self.session.document().project());
 		self.view.piano.prune(self.session.document().project());
 		let project = self.session.document().project();
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
-		if reload || self.loaded_generation < self.generation {
+		match before.and_then(|b| live::diff(b, self.project())) {
+			Some(changes) => self.send_live(&changes),
+			None => self.schedule_reload(),
+		}
+		// A load in flight may predate this edit.
+		if self.loaded_generation < self.generation {
 			self.schedule_reload();
 		}
 	}
 
+	fn send_live(&self, changes: &live::LiveChanges) {
+		let Some(a) = &self.audio else { return };
+		for &(track, db) in &changes.volumes {
+			a.live_volume(track, db);
+		}
+		for &(track, pan) in &changes.pans {
+			a.live_pan(track, pan);
+		}
+		for &(send, db) in &changes.sends {
+			a.live_send(send, db);
+		}
+		for (device, param, value) in &changes.params {
+			a.live_param(*device, param, *value);
+		}
+		if changes.automation {
+			let p = self.project();
+			a.automation(p.automation.clone(), p.tempo.clone());
+		}
+	}
+
+	/// Sends the given lanes (a gesture preview, not in the project yet) to the player.
+	pub fn preview_automation(&self, lanes: Vec<cadenza_model::AutomationLane>) {
+		if let Some(a) = &self.audio {
+			a.automation(lanes, self.project().tempo.clone());
+		}
+	}
+
 	pub fn undo(&mut self) {
+		let before = self.project().clone();
 		match self.session.document_mut().undo() {
 			Ok(label) => {
 				self.notices.info(format!("Undo: {label}"));
-				self.after_edit(true);
+				self.after_edit(Some(&before));
 			}
 			Err(e) => self.notices.info(e.to_string()),
 		}
 	}
 
 	pub fn redo(&mut self) {
+		let before = self.project().clone();
 		match self.session.document_mut().redo() {
 			Ok(label) => {
 				self.notices.info(format!("Redo: {label}"));
-				self.after_edit(true);
+				self.after_edit(Some(&before));
 			}
 			Err(e) => self.notices.info(e.to_string()),
 		}
@@ -324,26 +382,20 @@ impl AppState {
 		}
 	}
 
-	/// Ends a fader gesture with one undoable command. The player already plays the
-	/// value, so no recompilation (which would cut sounding notes) is needed.
+	/// Ends a fader gesture with one undoable command. Like every mix/parameter edit it
+	/// reaches the player live (see [`live`]): no recompilation cutting sounding notes.
 	pub fn commit_volume(&mut self, track: Option<TrackId>, db: f32) {
 		self.previews.volume.remove(&track);
 		if self.project().channel(track).map(|c| c.volume_db) == Some(db) {
 			return;
 		}
-		if let Some(a) = &self.audio {
-			a.live_volume(track, db);
-		}
-		self.apply_inner(
-			Command::SetChannel {
-				track,
-				patch: ChannelPatch {
-					volume_db: Some(db),
-					..ChannelPatch::default()
-				},
+		self.apply(Command::SetChannel {
+			track,
+			patch: ChannelPatch {
+				volume_db: Some(db),
+				..ChannelPatch::default()
 			},
-			false,
-		);
+		});
 	}
 
 	pub fn commit_pan(&mut self, track: Option<TrackId>, pan: f32) {
@@ -351,27 +403,23 @@ impl AppState {
 		if self.project().channel(track).map(|c| c.pan) == Some(pan) {
 			return;
 		}
-		if let Some(a) = &self.audio {
-			a.live_pan(track, pan);
-		}
-		self.apply_inner(
-			Command::SetChannel {
-				track,
-				patch: ChannelPatch {
-					pan: Some(pan),
-					..ChannelPatch::default()
-				},
+		self.apply(Command::SetChannel {
+			track,
+			patch: ChannelPatch {
+				pan: Some(pan),
+				..ChannelPatch::default()
 			},
-			false,
-		);
+		});
 	}
 
-	/// Volume shown for a strip (the dragged value while a gesture is running).
+	/// Volume shown for a strip: the dragged value while a gesture is running, else the
+	/// automated value at the playhead, else the channel's value.
 	pub fn volume_db(&self, track: Option<TrackId>) -> f32 {
 		self.previews
 			.volume
 			.get(&track)
 			.copied()
+			.or_else(|| self.automated(&volume_address(track)))
 			.or_else(|| self.project().channel(track).map(|c| c.volume_db))
 			.unwrap_or(0.0)
 	}
@@ -381,8 +429,118 @@ impl AppState {
 			.pan
 			.get(&track)
 			.copied()
+			.or_else(|| self.automated(&pan_address(track)))
 			.or_else(|| self.project().channel(track).map(|c| c.pan))
 			.unwrap_or(0.0)
+	}
+
+	/// Value of the automation lane for `address` at the playhead, if it has one.
+	pub fn automated(&self, address: &ParamAddress) -> Option<f32> {
+		let p = self.project();
+		p.automation_lane(address)?
+			.value_at(self.position(), &p.tempo)
+	}
+
+	/// Whether `address` has an automation lane (the control follows it).
+	pub fn is_automated(&self, address: &ParamAddress) -> bool {
+		self.project()
+			.automation_lane(address)
+			.is_some_and(|l| !l.points.is_empty())
+	}
+
+	/// Shown level of a send (preview, automation, model).
+	pub fn send_level(&self, track: TrackId, send: DeviceId) -> f32 {
+		self.previews
+			.sends
+			.get(&send)
+			.copied()
+			.or_else(|| self.automated(&ParamAddress::send(track, send)))
+			.or_else(|| {
+				self.project()
+					.track(track)?
+					.channel
+					.sends
+					.iter()
+					.find(|s| s.id == send)
+					.map(|s| s.level_db)
+			})
+			.unwrap_or(0.0)
+	}
+
+	/// Shown value of a device parameter (preview, automation, explicit value), or
+	/// `None` when it uses the device default.
+	pub fn param_value(
+		&self,
+		track: Option<TrackId>,
+		device: DeviceId,
+		param: &str,
+	) -> Option<f32> {
+		if let Some(v) = self.previews.params.get(&(device, param.to_owned())) {
+			return Some(*v);
+		}
+		self.automated(&ParamAddress::device(track, device, param))
+			.or_else(|| {
+				self.project()
+					.device(track, device)?
+					.params
+					.get(param)
+					.copied()
+			})
+	}
+
+	/// A send level being dragged: heard live, committed with [`AppState::commit_send`].
+	pub fn preview_send(&mut self, send: DeviceId, db: f32) {
+		self.previews.sends.insert(send, db);
+		if let Some(a) = &self.audio {
+			a.live_send(send, db);
+		}
+	}
+
+	pub fn commit_send(&mut self, track: TrackId, send: DeviceId, db: f32) {
+		self.previews.sends.remove(&send);
+		self.set_param(ParamAddress::send(track, send), db);
+	}
+
+	/// A device parameter being dragged: heard live (built-ins and plugins, sandboxed
+	/// too), committed with [`AppState::commit_param`].
+	pub fn preview_param(&mut self, device: DeviceId, param: &str, value: f32) {
+		self.previews
+			.params
+			.insert((device, param.to_owned()), value);
+		if let Some(a) = &self.audio {
+			a.live_param(device, param, value);
+		}
+	}
+
+	pub fn commit_param(
+		&mut self,
+		track: Option<TrackId>,
+		device: DeviceId,
+		param: &str,
+		value: f32,
+	) {
+		self.previews.params.remove(&(device, param.to_owned()));
+		self.set_param(ParamAddress::device(track, device, param), value);
+	}
+
+	/// One `SetParam` unless the value is already set.
+	fn set_param(&mut self, address: ParamAddress, value: f32) {
+		let p = self.project();
+		let current = match &address.target {
+			ParamTarget::Volume => p.channel(address.track).map(|c| c.volume_db),
+			ParamTarget::Pan => p.channel(address.track).map(|c| c.pan),
+			ParamTarget::Send { send } => address
+				.track
+				.and_then(|t| p.track(t))
+				.and_then(|t| t.channel.sends.iter().find(|s| s.id == *send))
+				.map(|s| s.level_db),
+			ParamTarget::Device { device, param } => p
+				.device(address.track, *device)
+				.and_then(|d| d.params.get(param).copied()),
+		};
+		if current != Some(value) {
+			self.apply(Command::SetParam { address, value });
+		}
 	}
 
 	// --- Devices -------------------------------------------------------------------
@@ -1253,6 +1411,7 @@ impl AppState {
 					self.loaded_generation = self.loaded_generation.max(generation);
 					self.notices.error(format!("Playback engine: {error}"));
 				}
+				AudioEvent::ReloadNeeded => self.schedule_reload(),
 				AudioEvent::PluginCrashes(crashes) => {
 					for c in crashes {
 						self.notices.error(c.message);

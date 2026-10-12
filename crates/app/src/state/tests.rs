@@ -90,6 +90,45 @@ fn fader_gestures_are_one_undo_step() {
 }
 
 #[test]
+fn param_and_send_edits_reach_the_player_live_without_reloading() {
+	let (mut s, keys) = state_with_song();
+	let synth = s.project().tracks[0].instrument.as_ref().unwrap().id;
+	s.tick(Instant::now() + RELOAD_DEBOUNCE);
+	assert!(!s.reload_pending());
+	for v in [500.0, 700.0, 900.0] {
+		s.preview_param(synth, "filter_cutoff", v);
+		assert_eq!(s.param_value(Some(keys), synth, "filter_cutoff"), Some(v));
+	}
+	assert!(s.document().history_labels().is_empty());
+	s.commit_param(Some(keys), synth, "filter_cutoff", 900.0);
+	assert_eq!(s.document().history_labels().len(), 1);
+	assert!(!s.reload_pending(), "a knob edit never reloads the player");
+	s.commit_volume(Some(keys), -6.0);
+	s.undo();
+	assert!(!s.reload_pending(), "undoing a mix value is live too");
+	// Volume automation drives the displayed value at the playhead.
+	assert!(s.apply(Command::SetAutomation {
+		address: volume_address(Some(keys)),
+		points: vec![
+			cadenza_model::AutomationPoint::new(Tick::ZERO, -20.0),
+			cadenza_model::AutomationPoint::new(Tick(PPQ * 4), 0.0),
+		],
+	}));
+	assert!(!s.reload_pending(), "new automation is swapped in live");
+	s.seek(Tick(PPQ * 2));
+	assert!((s.volume_db(Some(keys)) + 10.0).abs() < 1e-4);
+	// Structural edits still reload.
+	assert!(s.apply(Command::SetChannel {
+		track: Some(keys),
+		patch: ChannelPatch {
+			mute: Some(true),
+			..Default::default()
+		},
+	}));
+	assert!(s.reload_pending());
+}
+
+#[test]
 fn browser_devices_target_the_selection() {
 	let (mut s, keys) = state_with_song();
 	let items = s.browser_items().to_vec();

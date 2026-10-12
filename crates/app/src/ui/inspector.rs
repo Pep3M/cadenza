@@ -460,7 +460,7 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 				.truncate(),
 			)
 			.on_hover_text(&name);
-			let current = d.params.get(&pid).copied().unwrap_or(default);
+			let current = state.param_value(r.track, d.id, &pid).unwrap_or(default);
 			ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
 			let (g, resp) =
 				widgets::edit_value(ui, Id::new(("param", d.id, &pid)), current, |ui, v| {
@@ -475,13 +475,12 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 				state.apply(Command::ResetParam {
 					address: ParamAddress::device(r.track, d.id, pid.clone()),
 				});
-			} else if let Gesture::Commit(v) = g
-				&& v != current
-			{
-				state.apply(Command::SetParam {
-					address: ParamAddress::device(r.track, d.id, pid.clone()),
-					value: v,
-				});
+			} else {
+				match g {
+					Gesture::Preview(v) => state.preview_param(d.id, &pid, v),
+					Gesture::Commit(v) => state.commit_param(r.track, d.id, &pid, v),
+					Gesture::Idle => {}
+				}
 			}
 		});
 	}

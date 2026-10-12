@@ -19,7 +19,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
-| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis, realtime playback (cpal) + live MIDI monitoring | core, model, dsp, audio-io, midi-io |
+| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis, realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
@@ -42,7 +42,8 @@ Agent modes (`cadenza-agent`): `Agent::run(brief)` composes a whole song into a 
 (`cadenza compose`). `SessionAgent::run_request(request, &AppContext, observer, &CancelToken)`
 works on a `SharedSession` (app chat, `cadenza chat`): `SESSION_SYSTEM_PROMPT` (incremental
 edits, no save/render unless asked), request message = request + app context (selection,
-playhead, loop, open clip, files root) + `get_project` summary only when the project changed
+playhead, loop, open clip, files root, armed tracks/metronome/count-in — recording itself stays with the
+user: no recording tools) + `get_project` summary only when the project changed
 since the model last saw it; append-only history across requests (prompt caches stay warm),
 condensed into a hand-off note past `compact_at_input_tokens` (default 60k); each request is
 one undo group; `new_project`/`open_project`/playback tools hidden; `PathPolicy` root = project
@@ -93,7 +94,8 @@ pub struct Project {
 }
 pub enum TrackKind { Instrument, Audio, Bus }
 pub struct Track { id: TrackId, name, kind, color: Option<String /* #RRGGBB */>,
-	instrument: Option<Device>, clips: Vec<Clip>, channel: Channel }
+	instrument: Option<Device>, clips: Vec<Clip>, channel: Channel,
+	input: Option<TrackInput { channel: u16 /* 0-based */, stereo: bool /* channel+1 */, monitor: MonitorMode /* off|auto (default)|on */ }> /* audio tracks */ }
 pub struct Channel { volume_db: f32, pan: f32 /* -1..1 */, mute: bool, solo: bool,
 	inserts: Vec<Device>, sends: Vec<Send>, output: Output }
 pub enum Output { Master, Bus(TrackId) }
@@ -112,7 +114,8 @@ pub struct SampleZone { sample: SampleRef { path: PathBuf /* absolute in memory 
 // New fields are optional in JSON (missing = None/empty), so format_version stays 1.
 pub enum DeviceKind { Builtin { id: String }, Clap { plugin_id: String, path: PathBuf },
 	Vst3 { class_id: String, path: PathBuf } }
-pub struct Clip { id: ClipId, name: String, start: Tick, length: Tick, content: ClipContent }
+pub struct Clip { id: ClipId, name: String, start: Tick, length: Tick, content: ClipContent,
+	take: Option<Take { group: TakeGroupId, lane: u32 /* 0 = first take */, active: bool }> }
 pub enum ClipContent { Midi { notes: Vec<Note> }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32,
 	fade_in: Option<ClipFade>, fade_out: Option<ClipFade> } }
 pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
@@ -123,7 +126,7 @@ pub struct Marker { tick: Tick, name: String }
 ```
 
 `Command` is a serde-tagged enum (`#[serde(tag = "op", rename_all = "snake_case")]`):
-AddTrack, RemoveTrack, MoveTrack { track, index } (display order only), UpdateTrack (name/color
+AddTrack, RemoveTrack, MoveTrack { track, index } (display order only), UpdateTrack (name/color/input
 patch), SetChannel (volume/pan/mute/solo/output patch, `track: Option<TrackId>` = None means
 master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
@@ -159,6 +162,17 @@ removed with `SetInstrument { device: null }`. Removing a track drops its lanes 
 target it and re-routes its dependants to Master (undo restores all). MIDI clips only on
 Instrument tracks, audio clips only on Audio tracks. Device param ranges are NOT validated
 here (model doesn't know devices) — callers with registry access (mcp) must validate.
+
+Takes (phase 16, `model::takes`): clips sharing a `Take::group` are alternative takes of one
+stretch of a track (loop recording passes, a recording over existing clips); only the active
+take plays (`Clip::plays()`; the engine skips the others, `edits::overlaps`/rubber bands ignore
+them). `UpdateClip { take }` (double option) changes membership; pure builders return ordinary
+commands: `select_take(clip)` (Batch "Select take"), `split_clip(.., right_id, right_take)` (shared
+with the app's S split), `split_group(group, at, new_group)` (split comping: each part keeps every
+take), `comp_range(clip, from, to)` (swipe: splits at both ends + selects, Batch "Comp take", built
+on a scratch `Document`), `flatten_group` (keep what plays). `Track::input` is edited with
+`UpdateTrack { input }` (Audio tracks only, channels 0..=63). Both fields are optional in JSON
+(format_version stays 1); summaries show `input` and `take`.
 
 Project files (phase 14, `model::files`): a portable project is a folder
 `<Name>/<Name>.cadenza.json` + `Audio/` (recordings, imports, processed copies) + `Samples/`
@@ -429,6 +443,62 @@ Engine internals: devices run in fixed 32-sample steps (block-size independent, 
 PDC aligns every summing point and offline renders trim leading latency; realtime graphs are
 swapped via rtrb and returned to be dropped off the audio thread.
 
+Recording (phase 16; `engine::input`, `engine::metronome`, `engine::record`):
+- Devices: `Player::open(&AudioConfig { output, input_enabled, input, sample_rate, buffer_frames })`
+  (`new()` = defaults), `audio_devices()` (names, channels, common rates), `set_audio_input(Option<
+  Option<&str>>)` (a failing input never fails the player: `input_error()`), `input_info()` (device,
+  channels, rate, `InputMode`), `input_stats()` (per-channel peaks, overflow/underrun/trim counters),
+  `output_latency()`, `set_test_tone(bool)` (440 Hz, -20 dBFS; settings dialog only).
+- Input path: the cpal input callback converts to f32 and pushes interleaved frames into an rtrb
+  ring (0.5 s) plus one capture stamp per callback; the output callback reads one input frame per
+  output frame (`InputReader`, never blocks: an empty ring pads silence = underrun, a full one drops =
+  overflow, both counted as dropouts). Same device and rate = `InputMode::Exact` (shared clock: 1:1
+  copy after priming one block + margin; a runaway backlog is trimmed). Separate devices or other
+  rates = `Adaptive` (linear-interpolation resampler, ratio corrected by a slow controller on the
+  ring fill, at most ±0.5 %). The block's frames go to the graph through an `InputFifo` (one quantum
+  of cushion, trimmed when nothing consumes it) for monitoring.
+- Monitoring: audio tracks with an input hear it instead of their clips, through their inserts,
+  fader, sends: `On` always, `Auto` while armed and stopped / recording / counting in, `Off`
+  never. A stopped graph renders (like note preview) while any track monitors. Arm states:
+  `set_armed(track, bool)`/`disarm_all` (kept across loads; `Cmd::Arm`).
+- Metronome: `set_metronome(MetronomeSettings { on_play, on_record, level_db })`; synthesized
+  clicks (accent on the bar, time-signature beat unit) scheduled per quantum from the tempo
+  segments (floor of the exact beat sample, so none is lost between quanta) and delayed by the
+  graph latency like the output; offline renders never click (untouched while silent).
+- Recording: `start_recording(&RecordSetup { folder, start (punch-in), punch_out, count_in_bars,
+  tracks: [RecordTrack { track, name, input: Some(TrackInput) = audio | None = MIDI }],
+  buffer_seconds (4) })` -> `Arc<RecordingMonitor>`; plays from the current playhead after a
+  frozen-transport count-in (`Graph::start_count_in`: clicks only, monitoring live, then a clean
+  start). After each block `Graph::segments()` says which timeline samples the output played
+  (split at loop wraps, none during count-in); the `RecordTap` (boxed through an rtrb, back through
+  a garbage ring) pushes the recorded input channels of those frames, filtered to [start,
+  punch_out + 1 s), into a pre-allocated sample ring + `RecEvent::Audio { tag, frames }`, MIDI
+  input as `RecEvent::Midi { tag }` (the block's first heard sample; midir and cpal share no
+  clock), playhead jumps as `Wrap`. A full ring skips the block and counts it. The
+  `cadenza-record-writer` thread drains into one 32-bit float WAV per audio track (`<track> rec
+  <UTC stamp>.wav`, unique), fills dropout gaps with silence (positions kept), splits loop passes
+  (`RecordedPass { tag, file_start, frames, wrapped_at }`), publishes peaks per 256 frames + MIDI
+  for live drawing. `request_stop_recording()` + `finish_recording(timeout)` (or `stop_recording()`)
+  -> `Recording { passes, audio files, midi items, latency, midi_latency, dropouts, warnings }`.
+- Latency compensation: a frame heard-tagged `t` was captured `L` frames earlier, `L` = measured
+  capture -> playback delay (cpal capture/playback timestamps; without them the average ring
+  backlog) + `set_latency_offset(frames)` (user, from the settings in ms). `record_commands(
+  project, &Recording, &RecordOptions { merge, overdub, midi_takes, quantize, pattern_clip })`
+  builds ONE Batch "Record": each pass = a clip at its tag reading the file from `file_start + L`
+  (length to its loop end / punch-out / end - L, so a pass reads into the next one in the same
+  file: seamless takes). Several passes, or a recording over existing clips (cut at the range,
+  inside parts become the first inactive takes), form a take group, the last pass active. MIDI
+  (`Recorder::push_at` at tag - output latency, `release_all` at wraps, quantize): merge into the
+  pattern clip / the clip under the start (overdub keeps notes, replace removes the recorded
+  range; grows the clip to the bar), or a new bar-aligned clip; loop + `midi_takes` = a take per
+  pass.
+- `Player::virtual_device(rate, input_channels) -> (Player, VirtualDevice)`: the same callback
+  driven by hand (`process(output, input)`: a duplex card with no latency) — the recording
+  tests (`tests/recording.rs`: loopback placement exact to the sample with and without a
+  latency offset, punch, loop takes from one file, writer-ring overflow, MIDI pattern overdub,
+  metronome + count-in, monitor modes) and `no_alloc` (recording + monitoring + metronome +
+  loop + MIDI) use it; `set_midi_queue` feeds MIDI without a port.
+
 ### cadenza-app
 
 Desktop app (`cadenza-app [project]`, or `cadenza gui [project]`, which execs the binary next to
@@ -582,8 +652,10 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
   including automation lanes, the audio editor, an empty project, (`render_sampler_screens`)
-  the sampler editors and (`render_project_screens`) the start screen, export dialog/progress/
-  result, Locate missing files and the recovery prompt.
+  the sampler editors, (`render_project_screens`) the start screen, export dialog/progress/
+  result, Locate missing files and the recovery prompt, and (`render_recording_screens`) armed
+  tracks with take lanes, a recording in progress (fed by the engine's virtual device) and the
+  audio settings dialog.
 - Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
   30 ms): Edit button in the inspector (device and track instrument), double-click a plugin
   insert / instrument in the mixer or the instrument name in a track header. Window title
@@ -593,6 +665,31 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   when it differs. States the running instance holds are live in `live::diff` (no reload);
   every reload clears that. Editors opened before the device is loaded wait for the reload.
   The generic editor (inspector sliders) has a filter and "show all" for large plugins.
+- Recording (phase 16; `state::record` logic + `ui::record` views, `ui::transport`): arm states
+  are session state (`RecordState.armed`, mirrored to the player, kept across device reopen);
+  ● on track headers and mixer strips (arming an audio track without an input gives it In 1,
+  one undo step; armed instrument tracks get the live MIDI). Audio headers: input selector (mono
+  / stereo pairs of the open input, or none), monitor toggle off/auto/on, input level meter.
+  Transport: red record button (Ctrl+R start/stop; R = record mode, Play records the armed
+  tracks, nothing armed = plays), metronome toggle (click while playing; right-click: while
+  recording, level), count-in 0/1/2/4 bars, PUNCH (record only inside the loop region; with the
+  loop on: loop recording, a take per pass), "MIDI rec" menu (merge / overdub / takes per pass /
+  input quantize); position display turns red while recording. `record_plan()` picks start,
+  punch-out and pre-roll (pattern mode: the pattern loop, MIDI into the pattern clip, its track
+  armed if nothing is). The recording is drawn live over its lanes (waveform from the writer's
+  peaks, MIDI notes) and the finished one lands as one undo step "Record" (`finish_recording`);
+  MIDI loop passes are merged into the player's copy of the track as they complete (FL overdub:
+  heard on the next pass) without touching the document. Takes: T on the header expands take
+  lanes (`view.takes`, `RowKind::Take`); click a take = play it for its region, drag = swipe-comp
+  that range (snapped), double-click a lane header = play that take everywhere, menu: flatten /
+  delete take; the main lane shows only what plays, with a take-count badge; S on a take splits
+  its whole group. Audio settings (File menu): output/input device, sample rate, buffer size,
+  input on/off, MIDI input, latency offset (ms), status (rates, clock mode, latencies), test tone
+  (off by default, switched off on close); persisted in `Prefs.audio` (+ `Prefs.record` for
+  metronome/count-in/punch/MIDI options); new devices reopen the player on its thread
+  (`AudioEngine::configure`, device lists probed there). The AI context carries the armed
+  tracks/metronome/count-in (`recording_context`). Recordings go to the project's `Audio/`, or
+  `$XDG_STATE_HOME/cadenza/recordings/untitled-<pid>/` before the first save.
 - AI producer chat (phase 12; `state::ai` logic, `ui::chat` view): F10 / View / AI menu / F1.
   Docked right (`PanelKind::Chat`). `ai::worker` is a thread with its own tokio runtime that
   owns the `SessionAgent` (conversation kept across requests) and everything that may block

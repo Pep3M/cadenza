@@ -17,7 +17,8 @@ fn state_with_song() -> (AppState, TrackId) {
 	);
 	let id = keys.id;
 	p.tracks.push(keys);
-	s.session.reset(Document::new(p), None);
+	s.load_document(Document::new(p), None);
+	s.dirty = false;
 	(s, id)
 }
 
@@ -257,8 +258,7 @@ fn imports_use_the_shared_tools() {
 	let mid = dir.path().join("riff.mid");
 	std::fs::write(
 		&mid,
-		cadenza_midi_io::export_project(&state_with_song().0.session.document().project().clone())
-			.unwrap(),
+		cadenza_midi_io::export_project(&state_with_song().0.project().clone()).unwrap(),
 	)
 	.unwrap();
 	let before = s.project().tracks.len();
@@ -672,4 +672,44 @@ fn plugin_editor_gestures_are_undoable_and_live_states_need_no_reload() {
 		state: "U1RBVEU=".into(),
 	}]);
 	assert_eq!(s.document().history_labels().len(), steps);
+}
+
+#[test]
+fn edits_by_another_owner_of_the_session_go_through_the_same_bookkeeping() {
+	let (mut s, keys) = state_with_song();
+	let now = Instant::now();
+	s.tick(now + RELOAD_DEBOUNCE);
+	s.selection.select_track(keys);
+	let shared = s.session.clone();
+
+	// The lock is held elsewhere (an agent tool running): the frame does not wait.
+	{
+		let mut session = shared.lock().unwrap();
+		session
+			.document_mut()
+			.execute(Command::RemoveTrack { track: keys })
+			.unwrap();
+		s.tick(now + RELOAD_DEBOUNCE * 2);
+		assert_eq!(s.project().tracks.len(), 1, "snapshot not refreshed yet");
+	}
+	s.tick(now + RELOAD_DEBOUNCE * 3);
+	assert!(s.project().tracks.is_empty());
+	assert!(s.dirty);
+	assert_eq!(s.selection.track, None, "pruned");
+	assert_eq!(s.undo_label(), Some(s.document().history_labels()[0]));
+
+	// A save by the other owner clears the dirty flag and updates the path.
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("x.cadenza.json");
+	cadenza_mcp::tools::project::save_project(
+		&mut shared.lock().unwrap(),
+		cadenza_mcp::tools::project::SaveProjectArgs {
+			path: Some(path.display().to_string()),
+			capture_plugin_states: None,
+		},
+	)
+	.unwrap();
+	s.tick(now + RELOAD_DEBOUNCE * 4);
+	assert!(!s.dirty);
+	assert_eq!(s.path(), Some(path.as_path()));
 }

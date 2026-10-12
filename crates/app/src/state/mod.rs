@@ -1,12 +1,14 @@
 //! Application state and logic, independent of any window so it can be unit-tested.
 //!
-//! [`AppState`] owns the editing [`Session`] (the same type the MCP server and the AI
-//! agent work on: document + undo history, file path, plugin catalog, hosting). Every
-//! edit, whatever its origin, goes through [`AppState::apply`] (or
-//! [`AppState::edit_session`] for the shared MCP tool functions such as audio/MIDI
-//! import): the command is validated and recorded by the `Document`, the project is
-//! marked dirty, the selection is pruned and a debounced player reload is scheduled.
-//! Views only read state and call these methods.
+//! [`AppState`] holds the editing [`Session`] (the same type the MCP server and the AI
+//! agent work on: document + undo history, file path, plugin catalog, hosting) as a
+//! [`SharedSession`]: the in-app AI producer edits the very same document from its own
+//! thread. Views read a snapshot ([`DocView`]: project + history labels) refreshed
+//! whenever the session's change key moves, so drawing never takes the lock. Every edit,
+//! whatever its origin — [`AppState::apply`], [`AppState::edit_session`] for the shared
+//! MCP tool functions such as audio/MIDI import, or the agent's tools — ends in
+//! [`AppState::sync_session`]: the project is marked dirty, the selection is pruned and the
+//! player follows live or through a debounced reload.
 
 pub mod audio_edit;
 pub mod automation;
@@ -33,7 +35,7 @@ use std::time::{Duration, Instant};
 use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TrackId};
 use cadenza_dsp::DeviceRole;
 use cadenza_engine::{MeterBank, MixReport, PlayerClock, RenderOptions};
-use cadenza_mcp::{McpError, Session};
+use cadenza_mcp::{ChangeKey, McpError, Session, SharedSession};
 use cadenza_model::{ChannelPatch, Command, Document, Project, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, ScanReport};
 
@@ -159,8 +161,63 @@ pub struct Previews {
 	pub params: HashMap<(DeviceId, String), f32>,
 }
 
+/// What the views read of the document: the project and the history labels, copied
+/// from the shared session after each change (so drawing never waits for its lock).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocView {
+	project: Project,
+	undo: Vec<String>,
+	redo: Vec<String>,
+}
+
+impl DocView {
+	fn of(document: &Document) -> Self {
+		Self {
+			project: document.project().clone(),
+			undo: document
+				.history_labels()
+				.into_iter()
+				.map(str::to_owned)
+				.collect(),
+			redo: document
+				.redo_labels()
+				.into_iter()
+				.map(str::to_owned)
+				.collect(),
+		}
+	}
+
+	pub fn project(&self) -> &Project {
+		&self.project
+	}
+
+	/// Labels of undoable steps, oldest first.
+	pub fn history_labels(&self) -> Vec<&str> {
+		self.undo.iter().map(String::as_str).collect()
+	}
+
+	/// Labels of redoable steps, next redo first.
+	pub fn redo_labels(&self) -> Vec<&str> {
+		self.redo.iter().map(String::as_str).collect()
+	}
+
+	pub fn can_undo(&self) -> bool {
+		!self.undo.is_empty()
+	}
+
+	pub fn can_redo(&self) -> bool {
+		!self.redo.is_empty()
+	}
+}
+
 pub struct AppState {
-	pub session: Session,
+	/// The document, history, path and plugin catalog, shared with the AI agent. Lock it
+	/// only briefly ([`AppState::session`]); views read [`AppState::document`].
+	pub session: SharedSession,
+	/// Snapshot of the session's document as of `session_key`.
+	doc: DocView,
+	path: Option<PathBuf>,
+	session_key: ChangeKey,
 	pub dirty: bool,
 	pub selection: Selection,
 	pub view: ViewState,
@@ -220,8 +277,13 @@ impl AppState {
 	fn headless_with(waker: Option<Waker>) -> Self {
 		let mut session = Session::new();
 		session.reset(Document::new(Project::new("Untitled")), None);
+		let doc = DocView::of(session.document());
+		let session_key = session.change_key();
 		Self {
-			session,
+			session: session.into_shared(),
+			doc,
+			path: None,
+			session_key,
 			dirty: false,
 			selection: Selection::default(),
 			view: ViewState::default(),
@@ -255,15 +317,77 @@ impl AppState {
 	}
 
 	pub fn project(&self) -> &Project {
-		self.session.document().project()
+		&self.doc.project
 	}
 
-	pub fn document(&self) -> &Document {
-		self.session.document()
+	/// The document as of the last sync (project + history labels).
+	pub fn document(&self) -> &DocView {
+		&self.doc
 	}
 
 	pub fn path(&self) -> Option<&Path> {
-		self.session.path()
+		self.path.as_deref()
+	}
+
+	/// Locks the shared session. Keep the guard for a short, bounded piece of work: the AI
+	/// agent's tools wait for it.
+	pub fn session(&self) -> std::sync::MutexGuard<'_, Session> {
+		self.session
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	/// Brings the snapshot up to date with the shared session and runs the edit
+	/// bookkeeping (dirty flag, selection pruning, live player updates or a reload) when
+	/// something changed — whoever changed it. `wait` = false never blocks (per-frame
+	/// polling while the agent may hold the lock). Returns whether it changed.
+	pub fn sync_session(&mut self, wait: bool) -> bool {
+		let (view, path, key, clean, epoch_changed) = {
+			let guard = if wait {
+				self.session
+					.lock()
+					.unwrap_or_else(|poisoned| poisoned.into_inner())
+			} else {
+				match self.session.try_lock() {
+					Ok(g) => g,
+					Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+					Err(std::sync::TryLockError::WouldBlock) => return false,
+				}
+			};
+			let key = guard.change_key();
+			if key == self.session_key {
+				// Saving changes the path and the clean state, not the document.
+				if self.path.as_deref() != guard.path() {
+					self.path = guard.path().map(Path::to_path_buf);
+				}
+				if guard.is_clean() {
+					self.dirty = false;
+				}
+				return false;
+			}
+			(
+				DocView::of(guard.document()),
+				guard.path().map(Path::to_path_buf),
+				key,
+				guard.is_clean(),
+				key.0 != self.session_key.0,
+			)
+		};
+		let before = std::mem::replace(&mut self.doc, view);
+		self.session_key = key;
+		self.path = path;
+		// A different document (new/open) has nothing to diff against: reload.
+		self.after_edit((!epoch_changed).then_some(&before.project));
+		if clean {
+			self.dirty = false;
+		}
+		true
+	}
+
+	/// Replaces the document (new/open project, tests).
+	pub fn load_document(&mut self, document: Document, path: Option<PathBuf>) {
+		self.session().reset(document, path);
+		self.sync_session(true);
 	}
 
 	/// Window title: project name, file and unsaved marker.
@@ -288,10 +412,10 @@ impl AppState {
 	}
 
 	fn apply_inner(&mut self, cmd: Command) -> bool {
-		let before = self.project().clone();
-		match self.session.document_mut().execute(cmd) {
+		let result = self.session().document_mut().execute(cmd);
+		match result {
 			Ok(()) => {
-				self.after_edit(Some(&before));
+				self.sync_session(true);
 				true
 			}
 			Err(e) => {
@@ -307,12 +431,8 @@ impl AppState {
 		&mut self,
 		f: impl FnOnce(&mut Session) -> Result<T, McpError>,
 	) -> Option<T> {
-		let steps = self.document().history_labels().len();
-		let before = self.project().clone();
-		let result = f(&mut self.session);
-		if self.document().history_labels().len() != steps {
-			self.after_edit(Some(&before));
-		}
+		let result = f(&mut self.session());
+		self.sync_session(true);
 		match result {
 			Ok(v) => Some(v),
 			Err(e) => {
@@ -327,13 +447,11 @@ impl AppState {
 	/// reload (which cuts sounding notes).
 	fn after_edit(&mut self, before: Option<&Project>) {
 		self.dirty = true;
-		self.selection.prune(self.session.document().project());
-		self.view.piano.prune(self.session.document().project());
-		self.view
-			.automation
-			.prune(self.session.document().project());
-		self.view.audio.prune(self.session.document().project());
-		let project = self.session.document().project();
+		self.selection.prune(&self.doc.project);
+		self.view.piano.prune(&self.doc.project);
+		self.view.automation.prune(&self.doc.project);
+		self.view.audio.prune(&self.doc.project);
+		let project = &self.doc.project;
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
 		self.editors.prune(project);
@@ -417,7 +535,7 @@ impl AppState {
 
 	/// The plugin catalog (loaded on first use).
 	pub fn catalog(&mut self) -> Arc<PluginCatalog> {
-		self.session.plugins()
+		self.session().plugins()
 	}
 
 	/// What the lane `address` controls (range, unit, name).
@@ -529,22 +647,22 @@ impl AppState {
 	}
 
 	pub fn undo(&mut self) {
-		let before = self.project().clone();
-		match self.session.document_mut().undo() {
+		let result = self.session().document_mut().undo();
+		match result {
 			Ok(label) => {
 				self.notices.info(format!("Undo: {label}"));
-				self.after_edit(Some(&before));
+				self.sync_session(true);
 			}
 			Err(e) => self.notices.info(e.to_string()),
 		}
 	}
 
 	pub fn redo(&mut self) {
-		let before = self.project().clone();
-		match self.session.document_mut().redo() {
+		let result = self.session().document_mut().redo();
+		match result {
 			Ok(label) => {
 				self.notices.info(format!("Redo: {label}"));
-				self.after_edit(Some(&before));
+				self.sync_session(true);
 			}
 			Err(e) => self.notices.info(e.to_string()),
 		}
@@ -742,7 +860,7 @@ impl AppState {
 	/// Every device the browser offers (built-ins and the cached plugin catalog).
 	pub fn browser_items(&mut self) -> &[BrowserItem] {
 		if self.browser_items.is_none() {
-			let catalog = self.session.plugins();
+			let catalog = self.session().plugins();
 			self.browser_items = Some(browser::items(Some(&catalog)));
 		}
 		self.browser_items.as_deref().unwrap_or_default()
@@ -931,9 +1049,7 @@ impl AppState {
 
 	/// What the user did in plugin editors (from the player): gestures become commands.
 	pub fn editor_updates(&mut self, updates: Vec<cadenza_engine::EditorUpdate>, now: Instant) {
-		let actions = self
-			.editors
-			.handle(self.session.document().project(), updates, now);
+		let actions = self.editors.handle(&self.doc.project, updates, now);
 		self.editor_actions(actions);
 	}
 
@@ -951,9 +1067,7 @@ impl AppState {
 
 	/// Stores live plugin states (no reload: the instances already hold them).
 	pub fn store_editor_states(&mut self, states: Vec<cadenza_engine::EditorState>) {
-		let commands = self
-			.editors
-			.store_states(self.session.document().project(), states);
+		let commands = self.editors.store_states(&self.doc.project, states);
 		for cmd in commands {
 			self.apply(cmd);
 		}
@@ -1195,8 +1309,7 @@ impl AppState {
 
 	pub fn new_project(&mut self) {
 		self.stop();
-		self.session
-			.reset(Document::new(Project::new("Untitled")), None);
+		self.load_document(Document::new(Project::new("Untitled")), None);
 		self.reset_view();
 		self.notices.info("New project");
 	}
@@ -1205,8 +1318,7 @@ impl AppState {
 		match Project::load_json(path) {
 			Ok(project) => {
 				self.stop();
-				self.session
-					.reset(Document::new(project), Some(path.to_path_buf()));
+				self.load_document(Document::new(project), Some(path.to_path_buf()));
 				self.reset_view();
 				self.notices.info(format!("Opened {}", path.display()));
 				true
@@ -1289,9 +1401,7 @@ impl AppState {
 	/// Stores what plugin editors changed and the project does not have yet (pending
 	/// one-off values, live states of open editors). Blocks briefly: used before saving.
 	fn capture_editors_now(&mut self) {
-		let actions = self
-			.editors
-			.flush(self.session.document().project(), Instant::now(), true);
+		let actions = self.editors.flush(&self.doc.project, Instant::now(), true);
 		let mut devices = actions.capture.clone();
 		self.editor_actions(editors::Actions {
 			capture: Vec::new(),
@@ -1470,7 +1580,7 @@ impl AppState {
 	}
 
 	fn build_device(&mut self, item: &BrowserItem) -> Option<cadenza_model::Device> {
-		let catalog = (item.source == browser::Source::Plugin).then(|| self.session.plugins());
+		let catalog = (item.source == browser::Source::Plugin).then(|| self.session().plugins());
 		let spec = cadenza_mcp::convert::DeviceSpec {
 			device: item.id.clone(),
 			params: Default::default(),
@@ -1863,9 +1973,16 @@ impl AppState {
 			}
 		};
 		let project = self.project().clone();
+		let (plugins, hosting) = {
+			let mut session = self.session();
+			(
+				session.plugins_for_project(),
+				session.plugin_hosting().clone(),
+			)
+		};
 		let opts = RenderOptions {
-			plugins: self.session.plugins_for_project(),
-			hosting: self.session.plugin_hosting().clone(),
+			plugins,
+			hosting,
 			..RenderOptions::default()
 		};
 		self.notices.info(format!("Exporting {}…", path.display()));
@@ -1882,7 +1999,7 @@ impl AppState {
 		if self.jobs.scan.is_some() {
 			return;
 		}
-		let cache = self.session.plugin_cache_path().to_path_buf();
+		let cache = self.session().plugin_cache_path().to_path_buf();
 		self.notices.info("Scanning plugins…");
 		self.jobs.scan = Some(Job::spawn("scan", self.waker.clone(), move || {
 			let scanner = cadenza_plugin_host::scanner_path().map_err(|e| e.to_string())?;
@@ -1964,13 +2081,17 @@ impl AppState {
 			return;
 		}
 		self.editors.reloaded();
-		let plugins = self.session.plugins_for_project();
-		audio.load(
-			self.session.document().project().clone(),
-			plugins,
-			self.session.plugin_hosting().clone(),
-			self.generation,
-		);
+		let (plugins, hosting) = {
+			let mut session = self
+				.session
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			(
+				session.plugins_for_project(),
+				session.plugin_hosting().clone(),
+			)
+		};
+		audio.load(self.doc.project.clone(), plugins, hosting, self.generation);
 	}
 
 	/// Per-frame housekeeping: player events, debounced reloads, background jobs and
@@ -1981,15 +2102,15 @@ impl AppState {
 			.map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32())
 			.min(0.25);
 		self.last_tick = Some(now);
+		// Edits made by other owners of the session (the AI agent).
+		self.sync_session(false);
 		self.poll_audio();
 		if let Some(since) = self.reload_since
 			&& now.saturating_duration_since(since) >= RELOAD_DEBOUNCE
 		{
 			self.send_reload();
 		}
-		let actions = self
-			.editors
-			.flush(self.session.document().project(), now, false);
+		let actions = self.editors.flush(&self.doc.project, now, false);
 		self.editor_actions(actions);
 		self.poll_jobs();
 		self.sync_transport();
@@ -2125,7 +2246,7 @@ impl AppState {
 			self.jobs.scan = None;
 			match r {
 				Some(Ok((catalog, report))) => {
-					self.session.set_plugins(Arc::new(catalog));
+					self.session().set_plugins(Arc::new(catalog));
 					self.browser_items = None;
 					self.notices.info(format!(
 						"Plugin scan: {} files, {} added, {} updated, {} removed, {} blocked",

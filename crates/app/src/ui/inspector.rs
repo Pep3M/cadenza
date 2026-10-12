@@ -393,7 +393,7 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 			} else {
 				"VST3"
 			};
-			let catalog = state.session.plugins();
+			let catalog = state.catalog();
 			let params = catalog
 				.find_at(plugin_id, path)
 				.map(|desc| {

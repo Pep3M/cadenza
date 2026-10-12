@@ -1172,7 +1172,10 @@ fn json_round_trip() {
 	std::fs::create_dir_all(&dir).unwrap();
 	let path = dir.join("song.cadenza.json");
 	fx.project.save_json(&path).unwrap();
-	assert_eq!(Project::load_json(&path).unwrap(), fx.project);
+	// Relative file references resolve against the project's folder on load.
+	let mut expected = fx.project.clone();
+	expected.map_file_paths(|p| crate::files::absolutize(p, &dir));
+	assert_eq!(Project::load_json(&path).unwrap(), expected);
 	std::fs::remove_dir_all(&dir).unwrap();
 
 	assert!(matches!(

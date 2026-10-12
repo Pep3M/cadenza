@@ -7,6 +7,7 @@ mod apply;
 pub mod command;
 pub mod document;
 pub mod error;
+pub mod files;
 mod persist;
 pub mod project;
 pub mod sample;
@@ -18,6 +19,8 @@ pub use command::{
 };
 pub use document::Document;
 pub use error::ModelError;
+pub use files::{FileRef, FileUse, ProjectLayout};
+pub use persist::{backup_path, write_atomic};
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
 	FORMAT_VERSION, FadeCurve, Marker, Note, Output, OutputRoute, PointShape, Project, Send,

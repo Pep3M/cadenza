@@ -22,12 +22,12 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export, mix analysis, realtime playback (cpal) + live MIDI monitoring | core, model, dsp, audio-io, midi-io |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
-| `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter first), budget cap, JSONL transcript | mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `gui` (starts `cadenza-app`) | all |
-| `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector; `AppState` over the MCP `Session` | core, model, theory, dsp, engine, mcp, plugin-host, audio-io, midi-io |
+| `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
+| `cadenza-cli` | `cadenza` binary: `render`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `gui` (starts `cadenza-app`) | all |
+| `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView`) | — |
 
-Future: AI chat panel in the app (12), time signature changes, automatic crossfades,
+Future: time signature changes, automatic crossfades,
 sandbox and plugin editors on Windows/macOS, native Wayland plugin GUIs.
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
@@ -35,7 +35,23 @@ Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live
 default (`MP3_SUPPORTED` tells whether a build can write MP3).
 
 AI agent rule: never depend on a single LLM vendor's API — new AI features go behind
-`LlmProvider`. Secrets come from the environment or an ignored `.env`; never log or commit them.
+`LlmProvider`. Secrets come from the environment, an ignored `.env` or the OS keyring (app);
+never log or commit them.
+
+Agent modes (`cadenza-agent`): `Agent::run(brief)` composes a whole song into a folder
+(`cadenza compose`). `SessionAgent::run_request(request, &AppContext, observer, &CancelToken)`
+works on a `SharedSession` (app chat, `cadenza chat`): `SESSION_SYSTEM_PROMPT` (incremental
+edits, no save/render unless asked), request message = request + app context (selection,
+playhead, loop, open clip, files root) + `get_project` summary only when the project changed
+since the model last saw it; append-only history across requests (prompt caches stay warm),
+condensed into a hand-off note past `compact_at_input_tokens` (default 60k); each request is
+one undo group; `new_project`/`open_project`/playback tools hidden; `PathPolicy` root = project
+folder; per-request budget + session total; failures end the request with
+`actionable_error` text and keep the conversation usable. Providers: `ProviderConfig::
+OpenRouter` and `OpenAiCompatible` share the Chat Completions code (`openrouter.rs`,
+`ApiFlavor`); OpenRouter-only fields: `usage.include`, `provider.require_parameters`,
+`reasoning.effort`, `cache_control`; the generic flavor sends `stream_options.include_usage`
+and `reasoning_effort`, key optional. Streams emit `TextDelta`/`ThinkingDelta` events.
 
 ## Non-negotiable rules
 
@@ -131,7 +147,11 @@ here (model doesn't know devices) — callers with registry access (mcp) must va
 
 `Document { project, undo stack, redo stack }`: `execute(Command) -> Result<(), ModelError>`
 (applies atomically, records the inverse), `undo()`, `redo()`, `can_undo/can_redo`,
-`history_labels()`. `Project::save_json(path)`, `Project::load_json(path)`,
+`history_labels()`, `revision()` (bumped by every change: cheap change detection for
+co-owners). Undo groups: `begin_group(label)`/`end_group()` fold every step executed in between
+into ONE `Batch` undo entry (nested groups count depth, outer label wins; empty group = no
+step); inside a group undo/redo cannot reach steps outside it and the group's undone scratch
+steps are dropped at the end; `abort_group()` reverts the group. `Project::save_json(path)`, `Project::load_json(path)`,
 `Project::summary() -> ProjectSummary` (compact, AI-oriented view: tracks, devices, clips with
 note counts, ranges in beats). Validation: pitch 0..=127, velocity 0..=1, positive lengths,
 existing ids, bus outputs must target Bus tracks with no cycles, instruments only on Instrument tracks.
@@ -254,6 +274,11 @@ thread (and back to be dropped); each callback drains it into a pre-allocated bu
 `Graph::push_live_event` feeds the monitored instrument at the next quantum (offset 0: midir
 and cpal share no clock). Monitoring sounds while the transport runs; switching the monitored
 track releases held notes.
+Shared session: `cadenza_mcp::SharedSession = Arc<Mutex<Session>>`;
+`CadenzaServer::with_shared_session` lets the app and the agent edit the same document (each tool
+locks it per call; render/analyze work on a copy). `Session::change_key()` = (epoch bumped by
+`reset`, document revision); `is_clean/mark_clean` track the state last saved/opened
+(`save_project` marks clean).
 MCP file tools: `import_audio`, `get_audio_info`, `set_clip_fades`, `import_midi` (Batch via
 Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension. The
 embedded agent's `PathPolicy` confines all of them to the session folder with checked extensions.
@@ -296,12 +321,17 @@ Desktop app (`cadenza-app [project]`, or `cadenza gui [project]`, which execs th
 the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with the wgpu renderer
 (the crate sets `rust-version = 1.95`); native file dialogs through `rfd` (xdg-desktop-portal).
 
-- `state::AppState` (no egui; unit-tested) owns the `cadenza_mcp::Session` — the same document +
-  undo history + path + plugin catalog + hosting the MCP tools and the AI agent use — plus
-  selection (ids only, pruned after edits), view (zoom/scroll/panels), notices, meters, jobs.
+- `state::AppState` (no egui; unit-tested) holds the `cadenza_mcp::Session` as a
+  `SharedSession` — the same document + undo history + path + plugin catalog + hosting the MCP
+  tools and the in-app AI agent use — plus selection (ids only, pruned after edits), view
+  (zoom/scroll/panels), notices, meters, jobs. Views read a snapshot (`DocView`: project +
+  history labels; `state.document()`), never the lock; `state.session()` locks briefly.
 - **Every edit is a `Command` through `AppState::apply`** (or `edit_session` to reuse MCP tool
   functions such as `import_audio`, `import_midi`, `save_project`): validated + undoable by
-  `Document`, marks dirty and prunes the selection. `state::live::diff(before, after)` decides
+  `Document`, marks dirty and prunes the selection. All paths (and the agent's tool edits,
+  picked up each frame by `sync_session(false)` with `try_lock`, so the UI never waits) end in
+  `sync_session`, which refreshes the snapshot when the change key moved and runs that
+  bookkeeping; saves by any owner clear the dirty flag. `state::live::diff(before, after)` decides
   how the player follows: volume/pan/send levels, device param values and automation lanes go
   live (`set_live_*`, `set_automation`, MIDI clip/note edits on instrument tracks via
   `set_track_clips`; sounding notes keep playing, also for undo/redo and shared MCP tools),
@@ -392,6 +422,27 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   when it differs. States the running instance holds are live in `live::diff` (no reload);
   every reload clears that. Editors opened before the device is loaded wait for the reload.
   The generic editor (inspector sliders) has a filter and "show all" for large plugins.
-- Phase 12 (AI panel): the agent's tools must act on the app's `Session` (today `CadenzaServer`
-  owns its own behind a `Mutex`; share it, e.g. `Arc<Mutex<Session>>`) and AI edits must go
-  through the same bookkeeping as `edit_session` (dirty, selection prune, debounced reload).
+- AI producer chat (phase 12; `state::ai` logic, `ui::chat` view): F10 / View / AI menu / F1.
+  Docked right (`PanelKind::Chat`). `ai::worker` is a thread with its own tokio runtime that
+  owns the `SessionAgent` (conversation kept across requests) and everything that may block
+  (model calls, keyring); the UI sends commands and polls events (`AiChat::poll`) each frame.
+  Chat rows: user bubbles, streamed markdown replies (`ai::markdown`: headings, lists, code,
+  bold/italic/code spans), collapsed thinking, compact tool rows (✔/✖, expandable args +
+  result), notices, actionable errors (missing/rejected key opens the settings), a footer per
+  request (status, cost, session total, undo label); quick-action chips from the selection;
+  Enter sends, Shift+Enter new line; ☰ menu: new conversation, settings, transcript path.
+  **Edit lock decision**: while a request runs, `apply`/`edit_session`/undo/redo/new/open
+  are refused with a notice and the edit panels draw disabled (transport stays live);
+  plugin-editor values and finished background edits go through `apply_or_queue` and are
+  applied after the request. Each request is one undo step "AI: <request>" (document undo
+  group opened/closed by the agent however the request ends); Stop (`CancelToken`) ends at
+  the next tool boundary or aborts the model call, keeping the edits as that one step.
+  Settings (`ai::settings::AiSettings`, persisted in `Prefs.ai`, no secrets): provider
+  OpenRouter | OpenAI-compatible (base URL), model (presets + free text), reasoning effort,
+  budget per request, optional price for estimates, allow plugins. Keys (`ai::secrets`):
+  env var (`OPENROUTER_API_KEY` / `OPENAI_API_KEY`) > nearest `.env` > stored key; stored keys
+  go to the OS keyring (`keyring` 4, Secret Service via zbus) or, when no secret store runs,
+  `$XDG_CONFIG_HOME/cadenza/credentials.json` (0600); never shown in clear (password field).
+  Transcript + files root for unsaved projects: `$XDG_STATE_HOME/cadenza/sessions/chat-<t>-<pid>/`;
+  saved projects use their folder. Headless states use an in-memory key store; tests use
+  `cadenza_agent::scripted::ScriptedProvider` (no network).

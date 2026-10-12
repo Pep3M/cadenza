@@ -31,6 +31,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"save_project",
 	"get_audio_info",
 	"export_midi",
+	"list_factory_samples",
 ];
 
 /// Formats the `render` tool may write.
@@ -129,6 +130,27 @@ impl PathPolicy {
 			return Err(outside());
 		}
 		Ok(path)
+	}
+}
+
+impl PathPolicy {
+	/// A sample for `load_sample`: an audio file in the session folder, or one of the
+	/// factory samples (read-only library).
+	pub fn resolve_sample(&self, raw: &str) -> Result<PathBuf, String> {
+		self.resolve_sample_in(raw, &cadenza_mcp::tools::samples::factory_folder())
+	}
+
+	fn resolve_sample_in(&self, raw: &str, factory: &Path) -> Result<PathBuf, String> {
+		let extensions = cadenza_mcp::tools::audio::AUDIO_EXTENSIONS;
+		let candidate = Path::new(raw.trim());
+		if candidate.is_absolute()
+			&& let (Ok(real), Ok(factory)) = (candidate.canonicalize(), factory.canonicalize())
+			&& real.starts_with(&factory)
+		{
+			return Ok(real);
+		}
+		self.resolve_any(raw, extensions)
+			.map_err(|e| format!("{e}; factory samples (list_factory_samples) are allowed too"))
 	}
 }
 
@@ -344,6 +366,15 @@ impl ToolBridge {
 					None => return Err("missing 'path'".into()),
 				}
 			}
+			// Samples come from the session folder or the factory sample library.
+			"load_sample" => {
+				let raw = obj
+					.get("path")
+					.and_then(Value::as_str)
+					.ok_or("missing 'path'")?;
+				let path = self.policy.resolve_sample(raw)?;
+				obj.insert("path".into(), path_value(&path));
+			}
 			"scan_plugins" => {
 				let custom = obj
 					.get("paths")
@@ -373,6 +404,10 @@ fn describe(name: &str, description: String) -> String {
 		| "export_midi" | "get_audio_info" => format!(
 			"{description} Paths are file names relative to the session folder; locations \
 			 outside it are rejected."
+		),
+		"load_sample" => format!(
+			"{description} Paths are file names relative to the session folder, or factory \
+			 sample paths from list_factory_samples; other locations are rejected."
 		),
 		_ => description,
 	}
@@ -507,6 +542,34 @@ mod tests {
 			PathPolicy::new(dir.path(), "song.cadenza.json", "song.wav").unwrap(),
 			dir,
 		)
+	}
+
+	#[test]
+	fn samples_load_from_the_session_folder_or_the_factory_library() {
+		let (policy, dir) = policy();
+		let factory = tempfile::tempdir().unwrap();
+		let kick = factory.path().join("Kick.wav");
+		std::fs::write(&kick, b"x").unwrap();
+		let ok = policy
+			.resolve_sample_in(kick.to_str().unwrap(), factory.path())
+			.unwrap();
+		assert_eq!(ok, kick.canonicalize().unwrap());
+		let root = dir.path().canonicalize().unwrap();
+		assert_eq!(
+			policy
+				.resolve_sample_in("drums/snare.wav", factory.path())
+				.unwrap(),
+			root.join("drums/snare.wav")
+		);
+		let err = policy
+			.resolve_sample_in("/etc/passwd.wav", factory.path())
+			.unwrap_err();
+		assert!(err.contains("factory samples"), "{err}");
+		assert!(
+			policy
+				.resolve_sample_in("notes.txt", factory.path())
+				.is_err()
+		);
 	}
 
 	#[test]

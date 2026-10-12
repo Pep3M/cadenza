@@ -445,20 +445,43 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   follow playhead Off/Page/Continuous, edge auto-scroll while dragging. Ruler/markers pinned,
   headers scroll with lanes. Clips: Ctrl+drag copies, Alt disables snap, double-click a MIDI
   clip opens the piano roll.
-- Piano roll (`state::piano` pure builders + `ui::piano_roll`): absolute song time axis with
-  the clip span marked and outside shaded, keyboard (click/drag auditions), draw/select tools
-  (P/E), move/resize/rubber band, right-click/Del delete, arrows transpose/nudge, Q quantize
-  (absolute grid), Ctrl+A/C/V/D, velocity lane (paint, or relative on a multi-selection),
-  ghost notes (this track / all), scale highlighting (cadenza-theory). One command per gesture.
-  Editing past the clip end grows the clip to the next bar in the same batch (notes before the
-  start are clamped). Notes are auditioned through `AppState::preview_note_on/off`, released on
-  mouse up, panel close and track change.
+- Piano roll (`state::piano` pure builders + `ui::piano_roll`), FL Studio parity (phase 13b):
+  absolute song time axis with the clip span marked and outside shaded, keyboard (click
+  plays, drag glides), tools Draw (P) / Paint (B) / Select (E) / Slice (C). Draw does nearly
+  everything: click on empty grid adds a note with the last length/velocity and keeps
+  dragging it (pitch + snapped time, auditioned on press and pitch change); drag a note =
+  move it (or the selection), its right/left edge = resize end/start; Shift+drag duplicates;
+  Ctrl+drag rubber band, Ctrl+click toggles; Alt = no snap; right-click deletes the note,
+  holding the right button deletes every note swept over (`sweep_hits`, one `RemoveNotes`);
+  double-click = properties popover (pitch, velocity, start, length; `set_note`). Paint drags
+  notes at every `paint_cell` (spacing = last length rounded to the snap); Slice splits
+  notes at the snapped line (`slice_notes`). Snap is the piano roll's own `PianoSnap`
+  ("magnet": Main follows the arrange snap; default Step = 1/16; persisted in `Prefs`).
+  Keys (focused panel, consumed before global keys): Ctrl+B `clone_notes` (selection span
+  widened to the snap grid, whole bars when >= a bar; copies selected so repeats append),
+  Ctrl+C/X/V (`NoteClipboard`: pastes in place, or at the playhead when it was moved since
+  the copy and the transport is stopped), Ctrl+A / Ctrl+D or Esc (deselect), Del, Ctrl+Q / Q
+  quantize, Ctrl+U glue (selected same-pitch notes), Ctrl+L quick legato (so the global
+  loop toggle is Ctrl+L from other panels), Up/Down semitone, Shift or Ctrl+Up/Down octave,
+  Left/Right snap step, Shift+Left/Right bar — arrows/legato apply to all notes when nothing
+  is selected (`targets`). Velocity lane: drag paints (relative on a multi-selection),
+  Alt/right-drag draws a line (`velocity_line`). Selected notes are warm red
+  (`theme::NOTE_SELECTED`), brightness by velocity, names when zoom allows, dim ghost notes;
+  off-screen notes are culled (2000 notes cost ~1 ms/frame). Opening a clip centers on its
+  pitch range (C4 when empty). One command per gesture; editing past the clip end grows the
+  clip to the next bar in the same batch (notes before the start are clamped). Notes are
+  auditioned through `AppState::preview_note_on/off`, released on mouse up, panel close and
+  track change.
 - Transport modes (`state::transport`, view state, not in the project): FL-like PAT | SONG
   switch (L). Song mode plays the arrangement, looping the arrange loop region when on
   (Ctrl+L or the ⟲ button; drag the ruler's upper half or Ctrl+drag the ruler to set it, click
   the region to toggle; drawn on ruler and lanes). Pattern mode loops the clip open in the
-  piano roll (at least a bar) and auditions only its track (`Player::set_audition`); no clip
-  open = song with a toast. `AppState::sync_transport` (every tick) sends loop/audition only
+  piano roll and auditions only its track (`Player::set_audition`); pattern length (FL):
+  notes rounded up to the next bar (min one bar) or the clip length if longer
+  (`transport::pattern_range`), so notes drawn past the end grow the loop live (no
+  restart). Play starts at the pattern start unless the playhead was placed inside it since
+  the last stop (`AppState::seek` cues, internal `locate` does not); Stop rewinds to the
+  pattern start. No clip open = song with a toast. `AppState::sync_transport` (every tick) sends loop/audition only
   when they change; switching modes while playing restarts; audition only while playing.
 - Piano roll access: F7 / double-click an instrument track header / track menu open the
   selected instrument track's clip (`piano::clip_for_track`: selected, under the playhead,

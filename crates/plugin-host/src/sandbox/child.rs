@@ -7,10 +7,15 @@
 //! blocks; the plugin's own main thread (`cadenza-plugin-main`, as in any
 //! host process) owns the instance and runs its editor and event loop. The
 //! host never overlaps a processor control request with an audio request
-//! (both need `&mut` on its side), so the mutex around the processor is never
-//! contended; editor requests may arrive while audio runs and therefore never
-//! touch that mutex (they go through the instance's editor handle). Losing
-//! the host (stdin EOF, or `PR_SET_PDEATHSIG` on Linux) ends the process
+//! (both need `&mut` on its side, and it waits for a late audio request to
+//! finish before any control request), so the mutex around the processor is
+//! never contended; editor requests may arrive while audio runs and therefore
+//! never touch that mutex (they go through the instance's editor handle:
+//! window work, state reads and timers run on the plugin main thread, edits
+//! reach the host through a wait-free ring, and parameter flushes happen on
+//! the audio thread in `process`/`idle`). The audio thread is promoted to
+//! realtime scheduling before it serves anything (see `rt.rs`). Losing the
+//! host (stdin EOF, or `PR_SET_PDEATHSIG` on Linux) ends the process
 //! immediately.
 
 use std::ffi::OsString;
@@ -26,25 +31,28 @@ use cadenza_dsp::{MidiEvent, Processor};
 use super::protocol::WirePreset;
 use super::protocol::{Envelope, Reply, Request, read_frame, write_frame};
 use super::shm::{
-	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_IDLE, CMD_PROCESS, CMD_RESET, Layout,
-	Region, W_ACK_SEQ, W_REQ_SEQ,
+	Block, CH_AUX, CH_LEFT, CH_RIGHT, CH_SIDECHAIN, CMD_IDLE, CMD_PROCESS, FLAG_RESET, Layout,
+	Region, W_ACK_SEQ, W_REQ_SEQ, with_offset,
 };
-use super::sync;
+use super::{rt, sync};
 use crate::{PluginEditor, ProcessMode};
 
 struct Args {
 	shm: String,
 	parent: u32,
 	core_dumps: bool,
+	/// `SCHED_FIFO` priority for the audio thread in realtime mode (0: none).
+	rt_priority: u32,
 }
 
 fn parse_args(mut args: impl Iterator<Item = OsString>) -> Option<Args> {
-	let (mut shm, mut parent, mut core_dumps) = (None, None, true);
+	let (mut shm, mut parent, mut core_dumps, mut rt_priority) = (None, None, true, 0);
 	while let Some(a) = args.next() {
 		match a.to_str()? {
 			"--shm" => shm = args.next()?.into_string().ok(),
 			"--parent" => parent = args.next()?.to_str()?.parse().ok(),
 			"--no-core-dumps" => core_dumps = false,
+			"--rt-priority" => rt_priority = args.next()?.to_str()?.parse().ok()?,
 			_ => return None,
 		}
 	}
@@ -52,6 +60,7 @@ fn parse_args(mut args: impl Iterator<Item = OsString>) -> Option<Args> {
 		shm: shm?,
 		parent: parent?,
 		core_dumps,
+		rt_priority,
 	})
 }
 
@@ -104,7 +113,8 @@ fn harden(args: &Args) -> Result<std::fs::File, String> {
 pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 	let Some(args) = parse_args(args) else {
 		eprintln!(
-			"usage: cadenza-plugin-sandbox --shm <name> --parent <pid> [--no-core-dumps]\n\
+			"usage: cadenza-plugin-sandbox --shm <name> --parent <pid> [--no-core-dumps] \
+			 [--rt-priority <1-99>]\n\
 			 (started by cadenza-plugin-host; not meant to be run by hand)"
 		);
 		return ExitCode::from(2);
@@ -144,6 +154,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 	};
 	let reply =
 		|out: &mut std::fs::File, id: u64, body: &Reply| write_frame(out, &Envelope { id, body });
+	let realtime;
 	let (processor, editor) = match init {
 		Request::Init {
 			descriptor,
@@ -152,6 +163,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 			offline,
 			state,
 		} => {
+			realtime = !offline;
 			let mode = if offline {
 				ProcessMode::Offline
 			} else {
@@ -192,16 +204,31 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 		_ => exit_now(1),
 	};
 	let processor = Arc::new(Mutex::new(processor));
+	let (promoted_tx, promoted) = std::sync::mpsc::channel();
 	{
 		let (processor, region) = (processor.clone(), region.clone());
+		let priority = if realtime { args.rt_priority } else { 0 };
 		let spawned = std::thread::Builder::new()
 			.name("cadenza-sandbox-audio".into())
-			.spawn(move || audio_loop(&region, layout, &processor));
+			.spawn(move || {
+				// Before the first request: promotion may take a few ms.
+				let _ = promoted_tx.send(rt::promote_current_thread(priority));
+				audio_loop(&region, layout, &processor)
+			});
 		if spawned.is_err() {
 			exit_now(1);
 		}
 	}
-	let ready = reply_ok(&mut lock(&processor));
+	let scheduling = promoted
+		.recv_timeout(Duration::from_secs(5))
+		.map_or_else(|_| "unknown".to_string(), |s| s.to_string());
+	if std::env::var_os("CADENZA_PLUGIN_LOG").is_some() {
+		eprintln!("cadenza-plugin-sandbox: audio thread: {scheduling}");
+	}
+	let ready = Reply {
+		scheduling: Some(scheduling),
+		..reply_ok(&mut lock(&processor))
+	};
 	if reply(&mut out, init_id, &ready).is_err() {
 		exit_now(1);
 	}
@@ -343,16 +370,23 @@ fn handle(processor: &Mutex<Box<dyn Processor>>, request: Request) -> Reply {
 	}
 }
 
+/// Serves audio requests: one `Processor::process` call per sub-block, with
+/// that sub-block's parameter changes applied first and its events shifted to
+/// its own start. Allocation-free after setup.
 fn audio_loop(region: &Region, layout: Layout, processor: &Mutex<Box<dyn Processor>>) {
 	let Some(block) = Block::new(region.words(), layout) else {
 		exit_now(1);
 	};
-	let mut left = vec![0.0f32; layout.capacity];
-	let mut right = vec![0.0f32; layout.capacity];
-	let mut key_left = vec![0.0f32; layout.capacity];
-	let mut key_right = vec![0.0f32; layout.capacity];
-	let zeros = vec![0.0f32; layout.capacity];
+	let buffer = || {
+		let mut b = vec![0.0f32; layout.capacity];
+		rt::prefault(&mut b);
+		b
+	};
+	let (mut left, mut right) = (buffer(), buffer());
+	let (mut key_left, mut key_right) = (buffer(), buffer());
+	let zeros = buffer();
 	let mut events: Vec<MidiEvent> = Vec::with_capacity(layout.event_capacity);
+	let mut sub_events: Vec<MidiEvent> = Vec::with_capacity(layout.event_capacity);
 	let req = block.word(W_REQ_SEQ);
 	let ack = block.word(W_ACK_SEQ);
 	// Start from the last acknowledged request (not the current request
@@ -367,38 +401,60 @@ fn audio_loop(region: &Region, layout: Layout, processor: &Mutex<Box<dyn Process
 		last = seq;
 		{
 			let mut p = lock(processor);
-			block.for_each_param(|i, v| p.set_param(i, v));
+			if block.flags() & FLAG_RESET != 0 {
+				p.reset();
+			}
+			let mut param = 0;
 			match block.cmd() {
 				CMD_PROCESS => {
-					let n = block.frames();
 					block.read_events(&mut events);
-					block.read_audio(CH_LEFT, &mut left[..n]);
-					block.read_audio(CH_RIGHT, &mut right[..n]);
-					if block.sidechain() {
-						block.read_audio(CH_SIDECHAIN, &mut key_left[..n]);
-						block.read_audio(CH_SIDECHAIN + 1, &mut key_right[..n]);
-						p.set_sidechain(&key_left[..n], &key_right[..n]);
-					}
-					let transport = block.transport();
-					p.process(&mut left[..n], &mut right[..n], &events, &transport);
-					block.write_audio(CH_LEFT, &left[..n]);
-					block.write_audio(CH_RIGHT, &right[..n]);
-					for k in 0..layout.aux_outputs {
-						let (l, r) = p.aux_output(k).unwrap_or((&zeros[..n], &zeros[..n]));
-						let (l, r) = (&l[..l.len().min(n)], &r[..r.len().min(n)]);
-						block.write_audio(CH_AUX + 2 * k, l);
-						block.write_audio(CH_AUX + 2 * k + 1, r);
-						if l.len() < n {
-							block.write_audio_at(CH_AUX + 2 * k, l.len(), &zeros[l.len()..n]);
+					let mut event = 0;
+					let mut start = 0;
+					for b in 0..block.blocks() {
+						let sub = block.sub_block(b);
+						let n = (sub.frames as usize).min(layout.capacity - start);
+						let params_end = sub.params_end as usize;
+						block.for_each_param(param, params_end, |i, v| p.set_param(i, v));
+						param = param.max(params_end.min(block.param_count()));
+						let events_end = (sub.events_end as usize).clamp(event, events.len());
+						sub_events.clear();
+						sub_events.extend(
+							events[event..events_end]
+								.iter()
+								.map(|&e| with_offset(e, e.offset().saturating_sub(start as u32))),
+						);
+						event = events_end;
+						if n == 0 {
+							continue;
 						}
-						if r.len() < n {
-							block.write_audio_at(CH_AUX + 2 * k + 1, r.len(), &zeros[r.len()..n]);
+						block.read_audio_at(CH_LEFT, start, &mut left[..n]);
+						block.read_audio_at(CH_RIGHT, start, &mut right[..n]);
+						if sub.keyed {
+							block.read_audio_at(CH_SIDECHAIN, start, &mut key_left[..n]);
+							block.read_audio_at(CH_SIDECHAIN + 1, start, &mut key_right[..n]);
+							p.set_sidechain(&key_left[..n], &key_right[..n]);
 						}
+						p.process(&mut left[..n], &mut right[..n], &sub_events, &sub.transport);
+						block.write_audio_at(CH_LEFT, start, &left[..n]);
+						block.write_audio_at(CH_RIGHT, start, &right[..n]);
+						for k in 0..layout.aux_outputs {
+							let (l, r) = p.aux_output(k).unwrap_or((&zeros[..n], &zeros[..n]));
+							let (l, r) = (&l[..l.len().min(n)], &r[..r.len().min(n)]);
+							let (cl, cr) = (CH_AUX + 2 * k, CH_AUX + 2 * k + 1);
+							block.write_audio_at(cl, start, l);
+							block.write_audio_at(cr, start, r);
+							block.write_audio_at(cl, start + l.len(), &zeros[l.len()..n]);
+							block.write_audio_at(cr, start + r.len(), &zeros[r.len()..n]);
+						}
+						start += n;
 					}
+					block.for_each_param(param, usize::MAX, |i, v| p.set_param(i, v));
 				}
-				CMD_RESET => p.reset(),
-				CMD_IDLE => p.idle(),
-				_ => {}
+				CMD_IDLE => {
+					block.for_each_param(0, usize::MAX, |i, v| p.set_param(i, v));
+					p.idle();
+				}
+				_ => block.for_each_param(0, usize::MAX, |i, v| p.set_param(i, v)),
 			}
 		}
 		ack.store(seq, Ordering::Release);

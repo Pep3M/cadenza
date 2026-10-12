@@ -115,6 +115,170 @@ fn sandboxed_output_matches_in_process_bit_for_bit() {
 	}
 }
 
+/// Engine-like use: blocks of `sizes` (cycled) with notes, automation and
+/// transport, returning the left channel.
+fn quanta(p: &mut dyn Processor, sizes: &[usize], blocks: usize) -> Vec<f32> {
+	let mut out = Vec::new();
+	let mut seed = 11u32;
+	let mut frames = 0;
+	for b in 0..blocks {
+		let n = sizes[b % sizes.len()];
+		let mut l = vec![0.0f32; n];
+		let mut r = vec![0.0f32; n];
+		for (x, y) in l.iter_mut().zip(r.iter_mut()) {
+			seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+			*x = (seed >> 9) as f32 / (1u32 << 23) as f32 - 0.5;
+			*y = *x;
+		}
+		let last = n as u32 - 1;
+		let on = [MidiEvent::NoteOn {
+			offset: 5.min(last),
+			pitch: 64,
+			velocity: 0.9,
+		}];
+		let off = [MidiEvent::NoteOff {
+			offset: last,
+			pitch: 64,
+		}];
+		let events: &[MidiEvent] = match b % 9 {
+			1 => &on,
+			6 => &off,
+			_ => &[],
+		};
+		if b % 3 == 0 {
+			p.set_param(0, -((b % 13) as f32));
+		}
+		let beat = frames as f64 / f64::from(SR) * 2.0;
+		p.process(&mut l, &mut r, events, &transport(beat));
+		out.extend_from_slice(&l);
+		frames += n;
+	}
+	out
+}
+
+#[test]
+fn batched_blocks_match_in_process_output_delayed_by_the_reported_latency() {
+	// (max_block, chunk, block sizes, added latency): the engine's quanta, and
+	// irregular blocks up to max_block.
+	let cases: [(usize, usize, &[usize], usize); 2] = [
+		(32, 128, &[32], 96),
+		(64, 256, &[1, 7, 64, 32, 50, 13, 64], 192),
+	];
+	for (max_block, chunk, sizes, added) in cases {
+		for id in [GAIN_ID, SINE_ID] {
+			let mut local = instantiate(descriptor(id), SR, max_block, None).unwrap();
+			let opts = SandboxOptions {
+				realtime_chunk: chunk,
+				..sandbox_options()
+			};
+			let mut remote = instantiate_sandboxed(
+				descriptor(id),
+				SR,
+				max_block,
+				None,
+				ProcessMode::Realtime,
+				opts,
+			)
+			.unwrap();
+			let extra = (remote.latency() - local.latency()) as usize;
+			assert_eq!(extra, added, "{id}: batching adds chunk - max_block");
+			let a = quanta(local.as_mut(), sizes, 400);
+			let b = quanta(&mut remote, sizes, 400);
+			assert!(a.iter().any(|&x| x != 0.0), "{id} produced silence");
+			assert!(b[..extra].iter().all(|&x| x == 0.0));
+			assert_eq!(
+				&a[..a.len() - extra],
+				&b[extra..],
+				"{id}/{max_block}: not the same audio"
+			);
+			assert_eq!(remote.monitor().stats(), Default::default());
+
+			// A reset empties the pipeline: same output again after it.
+			local.reset();
+			remote.reset();
+			let a = quanta(local.as_mut(), sizes, 100);
+			let b = quanta(&mut remote, sizes, 100);
+			assert_eq!(&a[..a.len() - extra], &b[extra..], "{id} after reset");
+			assert!(remote.crashed().is_none());
+		}
+	}
+}
+
+#[test]
+fn isolated_late_blocks_drop_audio_but_a_sustained_stall_is_a_hang() {
+	const Q: usize = 32;
+	let desc = crash_descriptor();
+	let (hang, every) = (crash_param("hang_ms"), crash_param("stall_every"));
+	let opts = SandboxOptions {
+		hang_timeout: Duration::from_millis(500),
+		..sandbox_options()
+	};
+	let mut p = instantiate_sandboxed(desc, SR, Q, None, ProcessMode::Realtime, opts).unwrap();
+	let monitor = p.monitor();
+	let latency = p.latency() as usize;
+	assert_eq!(latency, 96);
+	// Every 400th plugin call sleeps 20 ms: ten times the deadline, far less
+	// than the hang timeout.
+	p.set_param(hang, 20.0);
+	p.set_param(every, 400.0);
+	let mut input = Vec::new();
+	let mut output = Vec::new();
+	let started = Instant::now();
+	let mut i = 0u32;
+	while started.elapsed() < Duration::from_millis(1500) {
+		let mut l = [0.0f32; Q];
+		for x in &mut l {
+			i += 1;
+			*x = (i % 1000) as f32 / 1000.0 + 0.001;
+		}
+		let mut r = l;
+		input.extend_from_slice(&l);
+		let t = transport(0.0);
+		p.process(&mut l, &mut r, &[], &t);
+		output.extend_from_slice(&l);
+		std::thread::sleep(Duration::from_micros(200));
+	}
+	assert!(p.crashed().is_none(), "isolated stalls are not a hang");
+	let stats = monitor.stats();
+	assert!(stats.late_blocks >= 3, "{stats:?}");
+	assert!(stats.longest_stall_ms < 100, "{stats:?}");
+	// Every frame is either processed (gain 0.5) or the dry input, in its
+	// place: a late answer never leaks into a later block.
+	let (mut processed, mut dry) = (0, 0);
+	for (t, &y) in output.iter().enumerate().skip(latency) {
+		let x = input[t - latency];
+		if y == x * 0.5 {
+			processed += 1;
+		} else if y == x {
+			dry += 1;
+		} else {
+			panic!("frame {t}: {y} is neither {x} nor {}", x * 0.5);
+		}
+	}
+	// The last dropped frames may still wait in the latency FIFO.
+	let dropped = stats.dropped_frames as usize;
+	assert!(
+		(dropped.saturating_sub(latency)..=dropped).contains(&dry),
+		"{dry} dry frames, {stats:?}"
+	);
+	assert!(processed > 3 * dry, "processed {processed}, dry {dry}");
+
+	// Every call stalling: no on-time answer any more, hung after 500 ms.
+	p.set_param(every, 1.0);
+	let started = Instant::now();
+	while !monitor.is_crashed() {
+		assert!(started.elapsed() < Duration::from_secs(5), "never hung");
+		let (_, took) = process_ones(&mut p, Q);
+		assert!(took < Duration::from_millis(30), "blocked {took:?}");
+		std::thread::sleep(Duration::from_millis(1));
+	}
+	assert!(started.elapsed() >= Duration::from_millis(450));
+	assert!(matches!(
+		p.crashed().unwrap().reason,
+		CrashReason::TimedOut { .. }
+	));
+}
+
 #[test]
 fn blocks_larger_than_the_shared_buffer_are_chunked() {
 	// prepare() above the initial 4096-frame capacity: processed in chunks,
@@ -293,23 +457,45 @@ fn a_crashing_plugin_is_isolated_bypassed_and_restartable() {
 }
 
 #[test]
-fn a_hanging_plugin_times_out_in_realtime_but_not_offline() {
+fn a_hanging_plugin_is_late_first_and_hung_after_a_sustained_stall() {
 	let desc = crash_descriptor();
 	let hang = crash_param("hang_ms");
 
-	let mut p = instantiate_sandboxed(desc, SR, 64, None, ProcessMode::Realtime, sandbox_options())
-		.unwrap();
+	let opts = SandboxOptions {
+		hang_timeout: Duration::from_millis(300),
+		realtime_chunk: 0,
+		..sandbox_options()
+	};
+	let mut p = instantiate_sandboxed(desc, SR, 64, None, ProcessMode::Realtime, opts).unwrap();
+	let monitor = p.monitor();
 	process_ones(&mut p, 64); // warm-up block
-	p.set_param(hang, 300.0);
+	p.set_param(hang, 1000.0);
 	let (out, took) = process_ones(&mut p, 64);
-	assert!(out.iter().all(|&x| x == 1.0), "bypassed after the timeout");
+	assert!(out.iter().all(|&x| x == 1.0), "a late block passes through");
 	assert!(
 		took < Duration::from_millis(50),
 		"audio thread blocked {took:?}"
 	);
+	assert!(p.crashed().is_none(), "one late block is not a hang");
+	assert_eq!(monitor.stats().late_blocks, 1);
+	// The child is still busy: later blocks are skipped without waiting.
+	let (out, took) = process_ones(&mut p, 64);
+	assert!(out.iter().all(|&x| x == 1.0));
+	assert!(took < Duration::from_millis(1), "skipping took {took:?}");
+	assert_eq!(monitor.stats().late_blocks, 1, "skipped, not late");
+	assert_eq!(monitor.stats().dropped_frames, 128);
+
+	let started = Instant::now();
+	while !monitor.is_crashed() {
+		assert!(started.elapsed() < Duration::from_secs(5), "never hung");
+		let (out, took) = process_ones(&mut p, 64);
+		assert!(out.iter().all(|&x| x == 1.0));
+		assert!(took < Duration::from_millis(50), "blocked {took:?}");
+		std::thread::sleep(Duration::from_millis(2));
+	}
 	let info = p.crashed().expect("hang reported");
 	assert!(
-		matches!(info.reason, CrashReason::TimedOut { millis } if millis <= 3),
+		matches!(info.reason, CrashReason::TimedOut { millis } if (300..1000).contains(&millis)),
 		"{info:?}"
 	);
 	assert!(info.message.contains("hung"), "{}", info.message);
@@ -420,63 +606,80 @@ fn missing_or_broken_sandbox_executables_fail_cleanly() {
 	assert!(sandbox_exe().is_file());
 }
 
-/// Per-block round-trip overhead of sandboxing (gain plugin, realtime mode).
-/// `cargo test -p cadenza-plugin-host --release --test sandbox -- --ignored --nocapture`
+/// Round-trip overhead of sandboxing (gain plugin, realtime mode), per 512
+/// frames (one audio callback) processed in blocks of `block` frames, with
+/// and without batching blocks into chunks of `chunk` frames per round trip.
+/// "cold" sleeps 1 ms between callbacks, so the child is back asleep on its
+/// futex as at the start of every real callback.
+/// `cargo test -p cadenza-plugin-host --release --test sandbox -- --ignored --nocapture bench`
 #[test]
 #[ignore = "benchmark"]
 fn bench_round_trip_overhead() {
+	const CALLBACK: usize = 512;
 	let desc = descriptor(GAIN_ID);
 	println!(
-		"| frames | in-process µs/block | sandboxed µs/block | overhead µs | p99 sandboxed µs | cold sandboxed µs |"
+		"| block | chunk | added latency | in-process µs/512 | sandboxed µs/512 | overhead µs | p99 sandboxed µs | cold sandboxed µs |"
 	);
-	for frames in [32usize, 64, 256, 512] {
+	println!("|---|---|---|---|---|---|---|---|");
+	for (block, chunk) in [
+		(32usize, 0usize),
+		(32, 128),
+		(32, 256),
+		(64, 0),
+		(256, 0),
+		(512, 0),
+	] {
 		let mut local =
-			instantiate_with_mode(desc, SR, frames, None, ProcessMode::Realtime).unwrap();
+			instantiate_with_mode(desc, SR, block, None, ProcessMode::Realtime).unwrap();
 		let mut remote = instantiate_sandboxed(
 			desc,
 			SR,
-			frames,
+			block,
 			None,
 			ProcessMode::Realtime,
 			SandboxOptions {
 				realtime_timeout: Duration::from_millis(50),
+				realtime_chunk: chunk,
 				..sandbox_options()
 			},
 		)
 		.unwrap();
-		let mut l = vec![0.1f32; frames];
-		let mut r = vec![0.1f32; frames];
+		let added = remote.latency() - local.latency();
+		let mut l = vec![0.1f32; block];
+		let mut r = vec![0.1f32; block];
 		let t = transport(0.0);
-		let blocks = 20_000;
+		let mut callback = |p: &mut dyn Processor| {
+			let s = Instant::now();
+			for _ in 0..CALLBACK / block {
+				p.process(&mut l, &mut r, &[], &t);
+			}
+			s.elapsed().as_secs_f64() * 1e6
+		};
+		// Cold first: the hot loop below never lets the child block, so a
+		// realtime-promoted child is demoted during it (RLIMIT_RTTIME).
+		let cold: Vec<f64> = (0..300)
+			.map(|_| {
+				std::thread::sleep(Duration::from_millis(1));
+				callback(&mut remote)
+			})
+			.collect();
+		let cold_mean = cold.iter().sum::<f64>() / cold.len() as f64;
+		let callbacks = 4_000;
 		let mut measure = |p: &mut dyn Processor| {
-			for _ in 0..500 {
-				p.process(&mut l, &mut r, &[], &t);
+			for _ in 0..100 {
+				callback(p);
 			}
-			let mut times = Vec::with_capacity(blocks);
-			for _ in 0..blocks {
-				let s = Instant::now();
-				p.process(&mut l, &mut r, &[], &t);
-				times.push(s.elapsed().as_secs_f64() * 1e6);
-			}
-			let mean = times.iter().sum::<f64>() / blocks as f64;
+			let mut times: Vec<f64> = (0..callbacks).map(|_| callback(p)).collect();
+			let mean = times.iter().sum::<f64>() / callbacks as f64;
 			times.sort_by(f64::total_cmp);
-			(mean, times[blocks * 99 / 100])
+			(mean, times[callbacks * 99 / 100])
 		};
 		let (a, _) = measure(local.as_mut());
 		let (b, p99) = measure(&mut remote);
-		// Cold: the child went back to sleep on its futex (1 ms idle), as
-		// for the first block of every audio callback.
-		let mut cold = Vec::with_capacity(500);
-		for _ in 0..500 {
-			std::thread::sleep(Duration::from_millis(1));
-			let s = Instant::now();
-			remote.process(&mut l, &mut r, &[], &t);
-			cold.push(s.elapsed().as_secs_f64() * 1e6);
-		}
-		let cold_mean = cold.iter().sum::<f64>() / cold.len() as f64;
-		assert!(remote.crashed().is_none());
+		assert!(remote.crashed().is_none(), "{:?}", remote.crashed());
+		assert_eq!(remote.monitor().stats().late_blocks, 0);
 		println!(
-			"| {frames:>6} | {a:>19.2} | {b:>18.2} | {:>11.2} | {p99:>16.2} | {cold_mean:>17.2} |",
+			"| {block} | {chunk} | {added} | {a:.2} | {b:.2} | {:.2} | {p99:.2} | {cold_mean:.2} |",
 			b - a
 		);
 	}

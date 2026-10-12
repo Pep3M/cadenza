@@ -125,7 +125,35 @@ fn sandboxed_audio_path_never_allocates() {
 		);
 	}
 
-	// Crash and hang detection on the audio thread are allocation-free too.
+	// Batched quanta (staging, sub-blocks, latency FIFO) as the engine runs them.
+	for desc in [descriptor(GAIN_ID), descriptor(SINE_ID)] {
+		let quantum = 32;
+		let mut device = instantiate_sandboxed(
+			desc,
+			48_000.0,
+			quantum,
+			None,
+			ProcessMode::Realtime,
+			sandbox_options(),
+		)
+		.unwrap();
+		assert!(device.latency() >= 96, "batched by default");
+		let ((), n) = counted(|| {
+			for q in 0..200 {
+				let ev: &[MidiEvent] = if q % 5 == 0 { &events[..40] } else { &[] };
+				device.set_param(0, (q % 7) as f32 - 6.0);
+				device.process(&mut left[..quantum], &mut right[..quantum], ev, &transport);
+				if q == 101 {
+					device.reset();
+				}
+			}
+		});
+		assert!(device.crashed().is_none());
+		assert_eq!(n, 0, "{}: batched path allocated {n} times", desc.id);
+	}
+
+	// Crash, late-block and hang handling on the audio thread are
+	// allocation-free too.
 	let crash = crash_descriptor();
 	for (param, value) in [("crash_now", 1.0), ("hang_ms", 200.0)] {
 		let index = crash.params.iter().position(|p| p.name == param).unwrap();
@@ -135,18 +163,26 @@ fn sandboxed_audio_path_never_allocates() {
 			max_block,
 			None,
 			ProcessMode::Realtime,
-			sandbox_options(),
+			cadenza_plugin_host::SandboxOptions {
+				hang_timeout: std::time::Duration::from_millis(50),
+				..sandbox_options()
+			},
 		)
 		.unwrap();
 		device.process(&mut left, &mut right, &[], &transport);
+		let monitor = device.monitor();
 		let ((), n) = counted(|| {
 			device.set_param(index, value);
-			for _ in 0..3 {
+			for _ in 0..200 {
 				device.process(&mut left, &mut right, &[], &transport);
+				if monitor.is_crashed() {
+					break;
+				}
+				std::thread::sleep(std::time::Duration::from_millis(2));
 			}
 			device.reset();
 		});
-		assert!(device.monitor().is_crashed(), "{param}");
+		assert!(monitor.is_crashed(), "{param}");
 		assert_eq!(n, 0, "{param}: failure path allocated {n} times");
 	}
 }

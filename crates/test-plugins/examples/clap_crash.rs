@@ -6,7 +6,9 @@
 //! - 0 `crash_now` (0..1): above 0.5, `process` aborts the whole process;
 //! - 1 `hang_ms` (0..5000): `process` sleeps this long every block;
 //! - 2 `gain` (0..1, default 0.5): linear output gain, so processed audio is
-//!   distinguishable from a host-side pass-through bypass.
+//!   distinguishable from a host-side pass-through bypass;
+//! - 3 `stall_every` (0..100000): when above 0, the `hang_ms` sleep happens
+//!   only on every `stall_every`-th `process` call (occasional stalls).
 //!
 //! The state extension stores `gain` only.
 
@@ -32,6 +34,7 @@ use clack_plugin::utils::Cookie;
 const CRASH: u32 = 0;
 const HANG: u32 = 1;
 const GAIN: u32 = 2;
+const STALL_EVERY: u32 = 3;
 
 struct Spec {
 	name: &'static str,
@@ -40,7 +43,7 @@ struct Spec {
 	default: f32,
 }
 
-const SPECS: [Spec; 3] = [
+const SPECS: [Spec; 4] = [
 	Spec {
 		name: "crash_now",
 		min: 0.0,
@@ -59,10 +62,16 @@ const SPECS: [Spec; 3] = [
 		max: 1.0,
 		default: 0.5,
 	},
+	Spec {
+		name: "stall_every",
+		min: 0.0,
+		max: 100_000.0,
+		default: 0.0,
+	},
 ];
 
 pub struct Shared {
-	values: [AtomicU32; 3],
+	values: [AtomicU32; 4],
 }
 
 impl PluginShared<'_> for Shared {}
@@ -222,6 +231,7 @@ impl DefaultPluginFactory for CrashPlugin {
 
 pub struct Processor<'a> {
 	shared: &'a Shared,
+	calls: u64,
 }
 
 impl<'a> PluginAudioProcessor<'a, Shared, MainThread<'a>> for Processor<'a> {
@@ -231,7 +241,7 @@ impl<'a> PluginAudioProcessor<'a, Shared, MainThread<'a>> for Processor<'a> {
 		shared: &'a Shared,
 		_audio_config: PluginAudioConfiguration,
 	) -> Result<Self, PluginError> {
-		Ok(Self { shared })
+		Ok(Self { shared, calls: 0 })
 	}
 
 	fn process(
@@ -245,7 +255,9 @@ impl<'a> PluginAudioProcessor<'a, Shared, MainThread<'a>> for Processor<'a> {
 			std::process::abort();
 		}
 		let hang = self.shared.get(HANG);
-		if hang > 0.0 {
+		let every = self.shared.get(STALL_EVERY) as u64;
+		self.calls += 1;
+		if hang > 0.0 && (every == 0 || self.calls.is_multiple_of(every)) {
 			std::thread::sleep(std::time::Duration::from_secs_f32(hang / 1000.0));
 		}
 		let gain = self.shared.get(GAIN);

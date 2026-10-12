@@ -4,7 +4,9 @@
 mod common;
 
 use cadenza_dsp::{MidiEvent, Processor, Transport};
-use cadenza_plugin_host::{AuxOutput, ProcessMode, instantiate, instantiate_sandboxed};
+use cadenza_plugin_host::{
+	AuxOutput, ProcessMode, SandboxOptions, instantiate, instantiate_sandboxed,
+};
 use common::{DUCKER_ID, MULTI_ID, routing_descriptor, sandbox_options};
 
 const SR: f32 = 48_000.0;
@@ -20,7 +22,11 @@ fn open(id: &str, sandboxed: bool, state: Option<&[u8]>) -> Box<dyn Processor> {
 				BLOCK,
 				state,
 				ProcessMode::Realtime,
-				sandbox_options(),
+				// Block-by-block checks: no batching latency.
+				SandboxOptions {
+					realtime_chunk: 0,
+					..sandbox_options()
+				},
 			)
 			.expect("sandboxed instance"),
 		)
@@ -160,6 +166,67 @@ fn factory_presets_list_load_and_persist_in_process() {
 #[test]
 fn factory_presets_list_load_and_persist_sandboxed() {
 	check_presets(true);
+}
+
+/// Engine-like quanta through a batched sandbox: the main output, the
+/// sidechain key and the extra outputs all come out exactly as in-process,
+/// delayed by the batching latency.
+#[test]
+fn sidechain_and_extra_outputs_survive_batching() {
+	const Q: usize = 32;
+	let batched = SandboxOptions {
+		realtime_chunk: 128,
+		..sandbox_options()
+	};
+	for id in [DUCKER_ID, MULTI_ID] {
+		let desc = routing_descriptor(id);
+		let mut local = instantiate(desc, SR, Q, None).unwrap();
+		let mut remote =
+			instantiate_sandboxed(desc, SR, Q, None, ProcessMode::Realtime, batched.clone())
+				.unwrap();
+		let delay = (remote.latency() - local.latency()) as usize;
+		assert_eq!(delay, 96);
+		let run = |p: &mut dyn Processor| {
+			let mut out: Vec<Vec<f32>> = vec![Vec::new(); 6];
+			for b in 0..120usize {
+				let x = (b % 7) as f32 * 0.1 + 0.05;
+				let mut l = [x; Q];
+				let mut r = [-x; Q];
+				if b % 3 != 0 {
+					let k = (b % 5) as f32 * 0.2;
+					p.set_sidechain(&[k; Q], &[-k; Q]);
+				}
+				let events = match b % 8 {
+					0 => vec![MidiEvent::NoteOn {
+						offset: 4,
+						pitch: [36, 38, 60][b / 8 % 3],
+						velocity: 1.0,
+					}],
+					5 => vec![MidiEvent::AllNotesOff { offset: 9 }],
+					_ => Vec::new(),
+				};
+				p.process(&mut l, &mut r, &events, &Transport::default());
+				out[0].extend_from_slice(&l);
+				out[1].extend_from_slice(&r);
+				for k in 0..p.aux_output_count() {
+					let (al, ar) = p.aux_output(k).unwrap();
+					assert_eq!(al.len(), Q);
+					out[2 + 2 * k].extend_from_slice(al);
+					out[3 + 2 * k].extend_from_slice(ar);
+				}
+			}
+			out
+		};
+		let a = run(local.as_mut());
+		let b = run(&mut remote);
+		for (c, (a, b)) in a.iter().zip(&b).enumerate() {
+			if a.is_empty() {
+				continue;
+			}
+			assert!(a.iter().any(|&x| x != 0.0), "{id} channel {c} is silent");
+			assert_eq!(&a[..a.len() - delay], &b[delay..], "{id} channel {c}");
+		}
+	}
 }
 
 #[test]

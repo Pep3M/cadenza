@@ -80,6 +80,9 @@ pub(crate) struct Reply {
 	/// `EditorPoll`: what happened in the editor.
 	#[serde(default)]
 	pub events: Vec<EditorEvent>,
+	/// `Init`: how the child's audio thread is scheduled (diagnostics).
+	#[serde(default)]
+	pub scheduling: Option<String>,
 }
 
 /// A factory preset as sent over the control channel.

@@ -38,8 +38,8 @@ pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, fi
 pub use editor::{EDITORS_SUPPORTED, EditorEvent, PluginEditor};
 pub use error::PluginError;
 pub use sandbox::{
-	CrashInfo, CrashReason, SANDBOX_ENV, SandboxMonitor, SandboxOptions, SandboxedProcessor,
-	sandbox_path,
+	CrashInfo, CrashReason, SANDBOX_ENV, SandboxMonitor, SandboxOptions, SandboxStats,
+	SandboxedProcessor, sandbox_path,
 };
 pub use scanner::{DEFAULT_SCAN_TIMEOUT, SCANNER_ENV, scanner_path};
 

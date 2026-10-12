@@ -89,6 +89,14 @@ pub enum ModelError {
 		"routing {from} -> {to} would create a feedback cycle; a bus cannot feed (directly or indirectly) a track that feeds it"
 	)]
 	RoutingCycle { from: TrackId, to: TrackId },
+	#[error("cannot key device {device} from that sidechain source: {reason}")]
+	InvalidSidechain { device: DeviceId, reason: String },
+	#[error("invalid instrument output route on track {track}: {reason}")]
+	InvalidOutputRoute { track: TrackId, reason: String },
+	#[error(
+		"track {0} has no instrument; load one with set_instrument (create_track instrument) first"
+	)]
+	NoInstrument(TrackId),
 	#[error("the master channel {0}")]
 	MasterRestriction(&'static str),
 	#[error("cannot move device {device} to index {index}; the chain has {len} devices (valid: 0..={})", .len.saturating_sub(1))]

@@ -354,6 +354,8 @@ fn builtin_instrument(is_drum: bool) -> Device {
 		bypass: false,
 		params: Default::default(),
 		state: None,
+		sidechain: None,
+		aux_outputs: Vec::new(),
 	}
 }
 

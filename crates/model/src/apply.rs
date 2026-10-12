@@ -8,7 +8,9 @@
 //! - removing a track removes the automation lanes addressing it, removes every send that
 //!   targets it and re-routes tracks that output to it back to the master;
 //! - removing/replacing a device (insert or instrument) removes the automation lanes
-//!   addressing that device.
+//!   addressing that device;
+//! - removing a track also disconnects sidechains keyed by it and drops instrument output
+//!   routes targeting it.
 
 use std::collections::HashSet;
 
@@ -25,6 +27,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 		Command::AddTrack { track, index } => {
 			validate::new_track_ids(project, track)?;
 			validate::track(project, track)?;
+			validate::new_track_sidechains(project, track)?;
 			let index = checked_index("track position", *index, project.tracks.len())?;
 			let mut track = track.clone();
 			track.sort_clips();
@@ -73,6 +76,26 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					index += 1;
 					keep
 				});
+				if let Some(inst) = &mut other.instrument
+					&& inst.aux_outputs.iter().any(|r| r.bus == Some(id))
+				{
+					let old = inst.aux_outputs.clone();
+					inst.aux_outputs.retain(|r| r.bus != Some(id));
+					inverse.push(Command::SetOutputRoutes {
+						track: other_id,
+						routes: old,
+					});
+				}
+				for d in other
+					.instrument
+					.iter_mut()
+					.chain(other.channel.inserts.iter_mut())
+				{
+					unkey(d, id, Some(other_id), &mut inverse);
+				}
+			}
+			for d in &mut project.master.inserts {
+				unkey(d, id, None, &mut inverse);
 			}
 			inverse.extend(take_lanes(project, |a| a.track == Some(id)));
 			Ok(inverse)
@@ -177,6 +200,14 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				if Some(d.id) != current && project.device_id_in_use(d.id) {
 					return Err(ModelError::DuplicateDeviceId(d.id));
 				}
+				if d.sidechain.is_some() || !d.aux_outputs.is_empty() {
+					// Judge the new links without the outgoing instrument's.
+					let mut without = project.clone();
+					if let Some(t) = without.track_mut(*track) {
+						t.instrument = None;
+					}
+					validate::device_links(&without, Some(*track), d, true)?;
+				}
 			}
 			let t = project
 				.track_mut(*track)
@@ -210,6 +241,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			if project.device_id_in_use(device.id) {
 				return Err(ModelError::DuplicateDeviceId(device.id));
 			}
+			validate::device_links(project, *track, device, false)?;
 			let index = checked_index("insert position", *index, chain_len)?;
 			let channel = project
 				.channel_mut(*track)
@@ -286,6 +318,65 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				track: *track,
 				device: *device,
 				bypass: old,
+			}])
+		}
+
+		Command::SetDeviceState {
+			track,
+			device,
+			state,
+			params,
+		} => {
+			if let Some(params) = params {
+				validate::params(*device, params)?;
+			}
+			let d = existing_device_mut(project, *track, *device)?;
+			let old_state = std::mem::replace(&mut d.state, state.clone());
+			let old_params = params
+				.as_ref()
+				.map(|p| std::mem::replace(&mut d.params, p.clone()));
+			Ok(vec![Command::SetDeviceState {
+				track: *track,
+				device: *device,
+				state: old_state,
+				params: old_params,
+			}])
+		}
+
+		Command::SetSidechain {
+			track,
+			device,
+			source,
+		} => {
+			existing_device_mut(project, *track, *device)?;
+			if let Some(source) = source {
+				validate::sidechain(project, *track, *device, *source)?;
+			}
+			let d = existing_device_mut(project, *track, *device)?;
+			let old = std::mem::replace(&mut d.sidechain, *source);
+			Ok(vec![Command::SetSidechain {
+				track: *track,
+				device: *device,
+				source: old,
+			}])
+		}
+
+		Command::SetOutputRoutes { track, routes } => {
+			let t = project
+				.track(*track)
+				.ok_or(ModelError::TrackNotFound(*track))?;
+			if t.instrument.is_none() {
+				return Err(ModelError::NoInstrument(*track));
+			}
+			validate::output_routes(project, *track, routes)?;
+			let instrument = project
+				.track_mut(*track)
+				.and_then(|t| t.instrument.as_mut())
+				.ok_or(ModelError::NoInstrument(*track))?;
+			let old = std::mem::replace(&mut instrument.aux_outputs, routes.clone());
+			Ok(vec![Command::SetOutputRoutes {
+				track: *track,
+				routes: old,
 			}])
 		}
 
@@ -834,6 +925,40 @@ fn take_lanes(project: &mut Project, pred: impl Fn(&ParamAddress) -> bool) -> Ve
 		keep
 	});
 	restore
+}
+
+/// Disconnects `device`'s sidechain if it is keyed by `source`, recording the undo.
+fn unkey(
+	device: &mut crate::Device,
+	source: TrackId,
+	owner: Option<TrackId>,
+	inverse: &mut Vec<Command>,
+) {
+	if device.sidechain.is_some_and(|s| s.track == source) {
+		inverse.push(Command::SetSidechain {
+			track: owner,
+			device: device.id,
+			source: device.sidechain.take(),
+		});
+	}
+}
+
+fn existing_device_mut(
+	project: &mut Project,
+	track: Option<TrackId>,
+	device: cadenza_core::DeviceId,
+) -> Result<&mut crate::Device, ModelError> {
+	if let Some(id) = track
+		&& project.track(id).is_none()
+	{
+		return Err(ModelError::TrackNotFound(id));
+	}
+	project
+		.device_mut(track, device)
+		.ok_or_else(|| ModelError::DeviceNotFound {
+			location: location(track),
+			device,
+		})
 }
 
 fn targets_device(address: &ParamAddress, id: cadenza_core::DeviceId) -> bool {

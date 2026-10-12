@@ -1293,6 +1293,8 @@ fn command_json_shape_is_stable() {
 					bypass: false,
 					params: [("gain".to_owned(), 1.5)].into(),
 					state: None,
+					sidechain: None,
+					aux_outputs: Vec::new(),
 				},
 				index: None,
 			},
@@ -1371,4 +1373,369 @@ fn command_schema_generates() {
 			.unwrap()
 			.contains("pitch_range")
 	);
+}
+
+/// Adds an instrument track "Pad" (poly synth + compressor insert, output to master).
+fn with_pad(project: &Project) -> (Project, TrackId, DeviceId, DeviceId) {
+	let synth = Device::builtin("poly_synth", "Pad Synth");
+	let comp = Device::builtin("compressor", "Pad Comp");
+	let mut pad = Track::new("Pad", TrackKind::Instrument).with_instrument(synth.clone());
+	pad.channel.inserts.push(comp.clone());
+	let id = pad.id;
+	let mut doc = Document::new(project.clone());
+	doc.execute(Command::AddTrack {
+		track: pad,
+		index: None,
+	})
+	.unwrap();
+	(doc.into_project(), id, synth.id, comp.id)
+}
+
+fn key(track: Option<TrackId>, device: DeviceId, source: TrackId, pre_fader: bool) -> Command {
+	Command::SetSidechain {
+		track,
+		device,
+		source: Some(SidechainSource {
+			track: source,
+			pre_fader,
+		}),
+	}
+}
+
+#[test]
+fn sidechains_round_trip_and_reject_feedback() {
+	let fx = fixture();
+	let (p, pad, _, pad_comp) = with_pad(&fx.project);
+
+	let keyed = round_trip(&p, key(Some(pad), pad_comp, fx.drums, true));
+	let source = keyed
+		.device(Some(pad), pad_comp)
+		.unwrap()
+		.sidechain
+		.unwrap();
+	assert_eq!((source.track, source.pre_fader), (fx.drums, true));
+	round_trip(
+		&keyed,
+		Command::SetSidechain {
+			track: Some(pad),
+			device: pad_comp,
+			source: None,
+		},
+	);
+	// Master inserts may be keyed by any track; buses by tracks that do not depend on them.
+	round_trip(&p, key(None, fx.limiter, fx.reverb, false));
+	let bus_comp = p.tracks[3].channel.inserts[0].id;
+	round_trip(&p, key(Some(fx.drum_bus), bus_comp, fx.lead, false));
+
+	assert!(matches!(
+		exec_err(&p, key(Some(pad), pad_comp, pad, false)),
+		ModelError::InvalidSidechain { .. }
+	));
+	// The lead sends to the reverb bus, so the reverb cannot key the lead.
+	let err = exec_err(&p, key(Some(fx.lead), fx.comp, fx.reverb, false));
+	assert!(matches!(err, ModelError::InvalidSidechain { .. }), "{err}");
+	assert!(err.to_string().contains("feedback loop"), "{err}");
+	// drum bus -> reverb: the drum bus compressor cannot be keyed by the reverb.
+	assert!(matches!(
+		exec_err(&p, key(Some(fx.drum_bus), bus_comp, fx.reverb, false)),
+		ModelError::InvalidSidechain { .. }
+	));
+	let ghost = TrackId::new();
+	assert_eq!(
+		exec_err(&p, key(Some(pad), pad_comp, ghost, false)),
+		ModelError::TrackNotFound(ghost)
+	);
+	assert!(matches!(
+		exec_err(&p, key(Some(pad), DeviceId::new(), fx.drums, false)),
+		ModelError::DeviceNotFound { .. }
+	));
+
+	// Once the pad is keyed by the reverb, routing the pad into the reverb (directly or
+	// through the drum bus) would close a loop.
+	let mut doc = Document::new(p.clone());
+	doc.execute(key(Some(pad), pad_comp, fx.reverb, false))
+		.unwrap();
+	assert!(matches!(
+		doc.execute(Command::SetChannel {
+			track: Some(pad),
+			patch: ChannelPatch {
+				output: Some(Output::Bus(fx.drum_bus)),
+				..Default::default()
+			},
+		}),
+		Err(ModelError::RoutingCycle { .. })
+	));
+	assert!(matches!(
+		doc.execute(Command::AddSend {
+			track: pad,
+			send: Send::new(fx.reverb, -6.0),
+			index: None,
+		}),
+		Err(ModelError::RoutingCycle { .. })
+	));
+
+	// A device inserted (or a track added) with a sidechain is validated the same way.
+	assert!(matches!(
+		exec_err(
+			&p,
+			Command::InsertDevice {
+				track: Some(fx.lead),
+				device: Device::builtin("compressor", "Duck").with_sidechain(fx.reverb, false),
+				index: None,
+			}
+		),
+		ModelError::InvalidSidechain { .. }
+	));
+	let mut looped = Track::new("Loop", TrackKind::Audio);
+	looped.channel.output = Output::Bus(fx.reverb);
+	looped
+		.channel
+		.inserts
+		.push(Device::builtin("compressor", "Duck").with_sidechain(fx.reverb, false));
+	assert!(matches!(
+		exec_err(
+			&p,
+			Command::AddTrack {
+				track: looped,
+				index: None
+			}
+		),
+		ModelError::InvalidSidechain { .. }
+	));
+}
+
+#[test]
+fn removing_a_key_source_disconnects_and_undo_reconnects() {
+	let fx = fixture();
+	let (p, pad, synth, pad_comp) = with_pad(&fx.project);
+	let mut doc = Document::new(p);
+	doc.execute(key(Some(pad), pad_comp, fx.drums, false))
+		.unwrap();
+	doc.execute(key(None, fx.limiter, fx.drums, true)).unwrap();
+	doc.execute(Command::SetOutputRoutes {
+		track: pad,
+		routes: vec![OutputRoute {
+			port: 1,
+			bus: Some(fx.drum_bus),
+		}],
+	})
+	.unwrap();
+	let before = doc.project().clone();
+	round_trip(&before, Command::RemoveTrack { track: fx.drums });
+	round_trip(&before, Command::RemoveTrack { track: fx.drum_bus });
+	doc.execute(Command::RemoveTrack { track: fx.drums })
+		.unwrap();
+	doc.execute(Command::RemoveTrack { track: fx.drum_bus })
+		.unwrap();
+	let p = doc.project();
+	assert_eq!(p.device(Some(pad), pad_comp).unwrap().sidechain, None);
+	assert_eq!(p.device(None, fx.limiter).unwrap().sidechain, None);
+	assert!(p.device(Some(pad), synth).unwrap().aux_outputs.is_empty());
+	doc.undo().unwrap();
+	doc.undo().unwrap();
+	assert_eq!(doc.project(), &before);
+}
+
+#[test]
+fn output_routes_round_trip_and_validate() {
+	let fx = fixture();
+	let (p, pad, _, pad_comp) = with_pad(&fx.project);
+	let routes = |list: &[(u32, Option<TrackId>)]| Command::SetOutputRoutes {
+		track: fx.drums,
+		routes: list
+			.iter()
+			.map(|&(port, bus)| OutputRoute { port, bus })
+			.collect(),
+	};
+	let routed = round_trip(
+		&p,
+		routes(&[(1, Some(fx.reverb)), (2, None), (3, Some(fx.drum_bus))]),
+	);
+	let summary = routed.summary();
+	let drums = summary.tracks.iter().find(|t| t.id == fx.drums).unwrap();
+	assert_eq!(drums.instrument.as_ref().unwrap().aux_outputs.len(), 3);
+	round_trip(&routed, routes(&[]));
+
+	let invalid = |list: &[(u32, Option<TrackId>)]| exec_err(&p, routes(list));
+	assert!(matches!(
+		invalid(&[(0, None)]),
+		ModelError::InvalidOutputRoute { .. }
+	));
+	assert!(matches!(
+		invalid(&[(1, None), (1, Some(fx.reverb))]),
+		ModelError::InvalidOutputRoute { .. }
+	));
+	assert!(matches!(
+		invalid(&[(65, None)]),
+		ModelError::InvalidOutputRoute { .. }
+	));
+	assert!(matches!(
+		invalid(&[(1, Some(fx.lead))]),
+		ModelError::NotABus { .. }
+	));
+	assert!(matches!(
+		exec_err(
+			&p,
+			Command::SetOutputRoutes {
+				track: fx.audio,
+				routes: Vec::new()
+			}
+		),
+		ModelError::NoInstrument(_)
+	));
+	// Pad keyed by the reverb: sending a pad output into the drum bus (-> reverb) loops.
+	let mut doc = Document::new(p.clone());
+	doc.execute(key(Some(pad), pad_comp, fx.reverb, false))
+		.unwrap();
+	assert!(matches!(
+		doc.execute(Command::SetOutputRoutes {
+			track: pad,
+			routes: vec![OutputRoute {
+				port: 1,
+				bus: Some(fx.drum_bus)
+			}],
+		}),
+		Err(ModelError::RoutingCycle { .. })
+	));
+	// Effects have no extra outputs.
+	let mut fx_device = Device::builtin("eq", "EQ");
+	fx_device
+		.aux_outputs
+		.push(OutputRoute { port: 1, bus: None });
+	assert!(matches!(
+		exec_err(
+			&p,
+			Command::InsertDevice {
+				track: Some(fx.lead),
+				device: fx_device,
+				index: None
+			}
+		),
+		ModelError::InvalidValue { .. }
+	));
+}
+
+#[test]
+fn device_state_round_trips() {
+	let fx = fixture();
+	let p = &fx.project;
+	let stored = round_trip(
+		p,
+		Command::SetDeviceState {
+			track: Some(fx.lead),
+			device: fx.synth,
+			state: Some("AAEC".into()),
+			params: None,
+		},
+	);
+	let synth = stored.device(Some(fx.lead), fx.synth).unwrap();
+	assert_eq!(synth.state.as_deref(), Some("AAEC"));
+	assert_eq!(synth.params.len(), 2, "params untouched without a map");
+	assert!(
+		stored.summary().tracks[0]
+			.instrument
+			.as_ref()
+			.unwrap()
+			.has_state
+	);
+
+	let preset: std::collections::BTreeMap<String, f32> = [("cutoff".to_owned(), 300.0)].into();
+	let loaded = round_trip(
+		&stored,
+		Command::SetDeviceState {
+			track: Some(fx.lead),
+			device: fx.synth,
+			state: None,
+			params: Some(preset.clone()),
+		},
+	);
+	let synth = loaded.device(Some(fx.lead), fx.synth).unwrap();
+	assert_eq!((synth.state.as_deref(), &synth.params), (None, &preset));
+
+	round_trip(
+		p,
+		Command::SetDeviceState {
+			track: None,
+			device: fx.limiter,
+			state: Some("eA==".into()),
+			params: Some(Default::default()),
+		},
+	);
+	assert!(matches!(
+		exec_err(
+			p,
+			Command::SetDeviceState {
+				track: Some(fx.lead),
+				device: fx.synth,
+				state: None,
+				params: Some([("bad/id".to_owned(), 1.0)].into()),
+			}
+		),
+		ModelError::InvalidValue { .. }
+	));
+	assert!(matches!(
+		exec_err(
+			p,
+			Command::SetDeviceState {
+				track: Some(fx.audio),
+				device: fx.synth,
+				state: None,
+				params: None,
+			}
+		),
+		ModelError::DeviceNotFound { .. }
+	));
+}
+
+#[test]
+fn routing_fields_persist_and_old_files_load() {
+	let fx = fixture();
+	let (p, pad, _, pad_comp) = with_pad(&fx.project);
+	let mut doc = Document::new(p);
+	doc.execute(key(Some(pad), pad_comp, fx.drums, true))
+		.unwrap();
+	doc.execute(Command::SetOutputRoutes {
+		track: pad,
+		routes: vec![OutputRoute {
+			port: 2,
+			bus: Some(fx.reverb),
+		}],
+	})
+	.unwrap();
+	let p = doc.project().clone();
+	let json = p.to_json_string().unwrap();
+	assert!(json.contains("\"sidechain\"") && json.contains("\"aux_outputs\""));
+	assert_eq!(Project::from_json_str(&json).unwrap(), p);
+
+	// Files written before sidechains existed have neither field.
+	let old = fx.project.to_json_string().unwrap();
+	assert!(!old.contains("sidechain") && !old.contains("aux_outputs"));
+	assert_eq!(Project::from_json_str(&old).unwrap(), fx.project);
+
+	// Loading rejects keys from missing tracks, self-keys and keyed feedback loops.
+	let mut bad = p.clone();
+	let pad_index = bad.track_index(pad).unwrap();
+	bad.tracks[pad_index].channel.inserts[0].sidechain = Some(SidechainSource {
+		track: pad,
+		pre_fader: false,
+	});
+	assert!(Project::from_json_str(&bad.to_json_string().unwrap()).is_err());
+	let mut bad = p.clone();
+	bad.tracks[pad_index].channel.inserts[0].sidechain = Some(SidechainSource {
+		track: TrackId::new(),
+		pre_fader: false,
+	});
+	assert!(matches!(
+		Project::from_json_str(&bad.to_json_string().unwrap()),
+		Err(ModelError::TrackNotFound(_))
+	));
+	let mut bad = p.clone();
+	bad.tracks[pad_index].channel.inserts[0].sidechain = Some(SidechainSource {
+		track: fx.reverb,
+		pre_fader: false,
+	});
+	assert!(matches!(
+		Project::from_json_str(&bad.to_json_string().unwrap()),
+		Err(ModelError::RoutingCycle { .. })
+	));
 }

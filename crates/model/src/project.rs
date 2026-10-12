@@ -98,9 +98,40 @@ pub struct Device {
 	/// Plain (unnormalized) values by param id; missing params use the device default.
 	#[serde(default)]
 	pub params: BTreeMap<String, f32>,
-	/// Opaque plugin state, base64.
+	/// Opaque plugin state, base64. Explicit `params` are applied on top of it.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub state: Option<String>,
+	/// Track feeding the device's sidechain (key) input, e.g. a kick ducking a bass
+	/// compressor. Missing = no sidechain.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sidechain: Option<SidechainSource>,
+	/// Instruments only: extra output ports to mix in (default: only the main output).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub aux_outputs: Vec<OutputRoute>,
+}
+
+/// Where a device's sidechain signal comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SidechainSource {
+	/// Any track other than the device's own; it must not (directly or through buses and
+	/// other sidechains) be fed by the device's track.
+	pub track: TrackId,
+	/// `true`: the source's signal after its inserts, before fader/pan/mute (a muted
+	/// "ghost" kick still keys). `false` (default): what the source sends to its output.
+	#[serde(default)]
+	pub pre_fader: bool,
+}
+
+/// One extra output port of a multi-output instrument (e.g. a drum sampler's separate
+/// kick/snare outputs) and where it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OutputRoute {
+	/// Extra output port, 1-based (port 0 is the main output, always mixed into the track).
+	pub port: u32,
+	/// `null`: mixed into the instrument's own track (before its inserts). A Bus track id:
+	/// sent there at unity gain instead, to get its own inserts and fader.
+	#[serde(default)]
+	pub bus: Option<TrackId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -313,6 +344,11 @@ impl Track {
 		self
 	}
 
+	/// Instrument (first) and inserts, in processing order.
+	pub fn devices(&self) -> impl Iterator<Item = &Device> {
+		self.instrument.iter().chain(self.channel.inserts.iter())
+	}
+
 	/// Instrument or insert with this id.
 	pub fn device(&self, id: DeviceId) -> Option<&Device> {
 		self.instrument
@@ -351,12 +387,24 @@ impl Device {
 			bypass: false,
 			params: BTreeMap::new(),
 			state: None,
+			sidechain: None,
+			aux_outputs: Vec::new(),
 		}
 	}
 
 	pub fn with_param(mut self, param: impl Into<String>, value: f32) -> Self {
 		self.params.insert(param.into(), value);
 		self
+	}
+
+	pub fn with_sidechain(mut self, track: TrackId, pre_fader: bool) -> Self {
+		self.sidechain = Some(SidechainSource { track, pre_fader });
+		self
+	}
+
+	/// Plugin device (`Clap`/`Vst3`), i.e. not built-in.
+	pub fn is_plugin(&self) -> bool {
+		!matches!(self.kind, DeviceKind::Builtin { .. })
 	}
 }
 

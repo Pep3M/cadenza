@@ -1,10 +1,14 @@
 //! The undoable command API shared by the UI and the AI.
 
+use std::collections::BTreeMap;
+
 use cadenza_core::{ClipId, DeviceId, NoteId, ParamAddress, Tick, TimeSignature, TrackId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::project::{AutomationPoint, Clip, Device, Marker, Note, Output, Send, Track};
+use crate::project::{
+	AutomationPoint, Clip, Device, Marker, Note, Output, OutputRoute, Send, SidechainSource, Track,
+};
 
 /// Every mutation of a [`crate::Project`]. Commands carry every id they create, so
 /// executing the same command twice (e.g. redo) is deterministic.
@@ -66,6 +70,31 @@ pub enum Command {
 		track: Option<TrackId>,
 		device: DeviceId,
 		bypass: bool,
+	},
+	/// Replaces a device's opaque plugin state (`null` clears it) and, when `params` is
+	/// given, its whole explicit parameter map (e.g. after loading a preset).
+	SetDeviceState {
+		#[serde(default)]
+		track: Option<TrackId>,
+		device: DeviceId,
+		#[serde(default)]
+		state: Option<String>,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		params: Option<BTreeMap<String, f32>>,
+	},
+	/// Feeds a device's sidechain input from another track (`source: null` disconnects it).
+	SetSidechain {
+		#[serde(default)]
+		track: Option<TrackId>,
+		device: DeviceId,
+		#[serde(default)]
+		source: Option<SidechainSource>,
+	},
+	/// Replaces which extra outputs of a track's (multi-output) instrument are used and
+	/// where they go; an empty list means main output only.
+	SetOutputRoutes {
+		track: TrackId,
+		routes: Vec<OutputRoute>,
 	},
 	/// Volume (dB), pan (-1..1) or a device parameter (plain value).
 	SetParam {
@@ -229,6 +258,9 @@ impl Command {
 			Self::RemoveDevice { .. } => "remove_device",
 			Self::MoveDevice { .. } => "move_device",
 			Self::SetDeviceBypass { .. } => "set_device_bypass",
+			Self::SetDeviceState { .. } => "set_device_state",
+			Self::SetSidechain { .. } => "set_sidechain",
+			Self::SetOutputRoutes { .. } => "set_output_routes",
 			Self::SetParam { .. } => "set_param",
 			Self::ResetParam { .. } => "reset_param",
 			Self::AddSend { .. } => "add_send",
@@ -291,6 +323,18 @@ impl Command {
 			Self::MoveDevice { .. } => "Move device".into(),
 			Self::SetDeviceBypass { bypass: true, .. } => "Bypass device".into(),
 			Self::SetDeviceBypass { bypass: false, .. } => "Enable device".into(),
+			Self::SetDeviceState {
+				params: Some(_), ..
+			} => "Load device preset".into(),
+			Self::SetDeviceState { .. } => "Store plugin state".into(),
+			Self::SetSidechain {
+				source: Some(_), ..
+			} => "Set sidechain".into(),
+			Self::SetSidechain { source: None, .. } => "Remove sidechain".into(),
+			Self::SetOutputRoutes { routes, .. } if routes.is_empty() => {
+				"Use main instrument output only".into()
+			}
+			Self::SetOutputRoutes { .. } => "Route instrument outputs".into(),
 			Self::SetParam { address, value } => match &address.target {
 				cadenza_core::ParamTarget::Volume => format!("Set volume to {value:.1} dB"),
 				cadenza_core::ParamTarget::Pan => format!("Set pan to {value:.2}"),

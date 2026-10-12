@@ -8,7 +8,8 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::project::{
-	Channel, Clip, ClipContent, Device, DeviceKind, Output, Project, Track, TrackKind,
+	Channel, Clip, ClipContent, Device, DeviceKind, Output, OutputRoute, Project, SidechainSource,
+	Track, TrackKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -78,6 +79,15 @@ pub struct DeviceSummary {
 	pub bypass: bool,
 	/// Only explicitly set values; other params are at their defaults.
 	pub params: BTreeMap<String, f32>,
+	/// Plugin state is stored (presets/captured settings are restored on load).
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub has_state: bool,
+	/// Track keying this device's sidechain input.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub sidechain: Option<SidechainSource>,
+	/// Extra instrument outputs in use (main output only when empty).
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub aux_outputs: Vec<OutputRoute>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -212,6 +222,9 @@ fn device_summary(device: &Device) -> DeviceSummary {
 		name: device.name.clone(),
 		bypass: device.bypass,
 		params: device.params.clone(),
+		has_state: device.state.is_some(),
+		sidechain: device.sidechain,
+		aux_outputs: device.aux_outputs.clone(),
 	}
 }
 

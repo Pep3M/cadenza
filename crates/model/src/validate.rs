@@ -2,12 +2,16 @@
 
 use std::collections::HashSet;
 
-use cadenza_core::{ClipId, ParamAddress, ParamTarget, Tick, TimeSignature, TrackId};
+use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TimeSignature, TrackId};
 
 use crate::error::ModelError;
 use crate::project::{
-	AutomationPoint, Channel, Clip, ClipContent, Device, Note, Output, Project, Track, TrackKind,
+	AutomationPoint, Channel, Clip, ClipContent, Device, Note, Output, OutputRoute, Project,
+	SidechainSource, Track, TrackKind,
 };
+
+/// Highest extra output port an instrument route may use.
+pub const MAX_AUX_PORT: u32 = 64;
 
 pub const MIN_VOLUME_DB: f32 = -144.0;
 pub const MAX_VOLUME_DB: f32 = 12.0;
@@ -124,7 +128,19 @@ pub(crate) fn finite(what: impl Into<String>, value: f32) -> Result<(), ModelErr
 
 pub(crate) fn device(device: &Device) -> Result<(), ModelError> {
 	name("device", &device.name)?;
-	for (param, value) in &device.params {
+	params(device.id, &device.params)
+}
+
+/// Explicit parameter values of device `id`.
+pub(crate) fn params(
+	id: DeviceId,
+	params: &std::collections::BTreeMap<String, f32>,
+) -> Result<(), ModelError> {
+	let device = Device {
+		id,
+		..Device::builtin("", "")
+	};
+	for (param, value) in params {
 		if param.is_empty() || param.contains('/') {
 			return Err(ModelError::invalid(
 				format!("parameter id on device {}", device.id),
@@ -252,7 +268,34 @@ fn targets(channel: &Channel) -> impl Iterator<Item = TrackId> + '_ {
 		.chain(channel.sends.iter().map(|s| s.target))
 }
 
-/// Whether audio leaving `from` can arrive at `to` (including `from == to`).
+/// Buses fed by the extra outputs of `track`'s instrument.
+fn aux_targets(track: &Track) -> impl Iterator<Item = TrackId> + '_ {
+	track
+		.instrument
+		.iter()
+		.flat_map(|d| d.aux_outputs.iter().filter_map(|r| r.bus))
+}
+
+/// Tracks that need `track`'s signal before they can be processed: its output bus, send
+/// targets, buses fed by its instrument's extra outputs, and tracks with a device keyed
+/// by it.
+fn consumers(project: &Project, track: &Track) -> Vec<TrackId> {
+	let mut out: Vec<TrackId> = targets(&track.channel).chain(aux_targets(track)).collect();
+	out.extend(
+		project
+			.tracks
+			.iter()
+			.filter(|t| {
+				t.devices()
+					.any(|d| d.sidechain.is_some_and(|s| s.track == track.id))
+			})
+			.map(|t| t.id),
+	);
+	out
+}
+
+/// Whether the signal leaving `from` can arrive at `to` (including `from == to`), through
+/// outputs, sends, instrument output routes and sidechains.
 fn reaches(project: &Project, from: TrackId, to: TrackId) -> bool {
 	let mut stack = vec![from];
 	let mut seen = HashSet::new();
@@ -263,10 +306,152 @@ fn reaches(project: &Project, from: TrackId, to: TrackId) -> bool {
 		if seen.insert(id)
 			&& let Some(track) = project.track(id)
 		{
-			stack.extend(targets(&track.channel));
+			stack.extend(consumers(project, track));
 		}
 	}
 	false
+}
+
+/// A sidechain on `device` sitting on `owner` (`None` = master inserts) keyed by `source`.
+pub(crate) fn sidechain(
+	project: &Project,
+	owner: Option<TrackId>,
+	device: DeviceId,
+	source: SidechainSource,
+) -> Result<(), ModelError> {
+	if project.track(source.track).is_none() {
+		return Err(ModelError::TrackNotFound(source.track));
+	}
+	if let Some(owner) = owner {
+		if owner == source.track {
+			return Err(ModelError::InvalidSidechain {
+				device,
+				reason:
+					"a device cannot be keyed by its own track; pick another track (e.g. the kick)"
+						.into(),
+			});
+		}
+		if reaches(project, owner, source.track) {
+			return Err(ModelError::InvalidSidechain {
+				device,
+				reason: format!(
+					"track {owner} feeds track {} (through its output, sends, buses or other \
+					 sidechains), so keying from it would create a feedback loop; key from a track \
+					 that does not depend on this one",
+					source.track
+				),
+			});
+		}
+	}
+	Ok(())
+}
+
+/// Structural checks of instrument output routes (ports, duplicates, own track).
+fn output_route_shape(track: TrackId, routes: &[OutputRoute]) -> Result<(), ModelError> {
+	let fail = |reason: String| ModelError::InvalidOutputRoute { track, reason };
+	let mut ports = HashSet::new();
+	for r in routes {
+		if r.port == 0 {
+			return Err(fail(
+				"port 0 is the main output and is always mixed into the track; extra outputs are \
+				 numbered from 1"
+					.into(),
+			));
+		}
+		if r.port > MAX_AUX_PORT {
+			return Err(fail(format!(
+				"port {} is out of range; extra outputs are numbered 1..={MAX_AUX_PORT}",
+				r.port
+			)));
+		}
+		if !ports.insert(r.port) {
+			return Err(fail(format!(
+				"port {} is routed twice; give each extra output one destination",
+				r.port
+			)));
+		}
+		if r.bus == Some(track) {
+			return Err(fail(
+				"an output cannot be routed to its own track as a bus; use bus: null to mix it \
+				 into the track"
+					.into(),
+			));
+		}
+	}
+	Ok(())
+}
+
+/// Instrument output routes of `track` against the project (bus targets, cycles).
+pub(crate) fn output_routes(
+	project: &Project,
+	track: TrackId,
+	routes: &[OutputRoute],
+) -> Result<(), ModelError> {
+	output_route_shape(track, routes)?;
+	for bus in routes.iter().filter_map(|r| r.bus) {
+		let Some(b) = project.track(bus) else {
+			return Err(ModelError::TrackNotFound(bus));
+		};
+		if b.kind != TrackKind::Bus {
+			return Err(ModelError::NotABus {
+				track: bus,
+				kind: b.kind,
+			});
+		}
+		if reaches(project, bus, track) {
+			return Err(ModelError::RoutingCycle {
+				from: track,
+				to: bus,
+			});
+		}
+	}
+	Ok(())
+}
+
+/// Links from a device placed on `owner` (`None` = master inserts) to other tracks: its
+/// sidechain and, for instruments, extra output routes.
+pub(crate) fn device_links(
+	project: &Project,
+	owner: Option<TrackId>,
+	device: &Device,
+	instrument: bool,
+) -> Result<(), ModelError> {
+	if let Some(source) = device.sidechain {
+		sidechain(project, owner, device.id, source)?;
+	}
+	if device.aux_outputs.is_empty() {
+		return Ok(());
+	}
+	match owner {
+		Some(track) if instrument => output_routes(project, track, &device.aux_outputs),
+		_ => Err(ModelError::invalid(
+			format!("aux_outputs of device {}", device.id),
+			format!("{} route(s)", device.aux_outputs.len()),
+			"only a track's instrument has extra outputs; remove aux_outputs from effects",
+		)),
+	}
+}
+
+/// Feedback loops a not-yet-added `track` would close through its devices' sidechains.
+pub(crate) fn new_track_sidechains(project: &Project, track: &Track) -> Result<(), ModelError> {
+	let feeds: Vec<TrackId> = targets(&track.channel).chain(aux_targets(track)).collect();
+	for d in track.devices() {
+		let Some(source) = d.sidechain else { continue };
+		if feeds
+			.iter()
+			.any(|&c| c == source.track || reaches(project, c, source.track))
+		{
+			return Err(ModelError::InvalidSidechain {
+				device: d.id,
+				reason: format!(
+					"track {} feeds track {} (through its output, sends or buses), so keying \
+					 from it would create a feedback loop",
+					track.id, source.track
+				),
+			});
+		}
+	}
+	Ok(())
 }
 
 /// Checks a track's own content and the routes it declares. Does not check id uniqueness
@@ -284,6 +469,43 @@ pub(crate) fn track(project: &Project, track: &Track) -> Result<(), ModelError> 
 			});
 		}
 		device(instrument)?;
+		output_route_shape(track.id, &instrument.aux_outputs)?;
+		for bus in aux_targets(track) {
+			match project.track(bus) {
+				None => return Err(ModelError::TrackNotFound(bus)),
+				Some(b) if b.kind != TrackKind::Bus => {
+					return Err(ModelError::NotABus {
+						track: bus,
+						kind: b.kind,
+					});
+				}
+				Some(_) => {}
+			}
+		}
+	}
+	for d in &track.channel.inserts {
+		if !d.aux_outputs.is_empty() {
+			return Err(ModelError::invalid(
+				format!("aux_outputs of device {}", d.id),
+				format!("{} route(s)", d.aux_outputs.len()),
+				"only a track's instrument has extra outputs; remove aux_outputs from effects",
+			));
+		}
+	}
+	for d in track.devices() {
+		if let Some(source) = d.sidechain {
+			if source.track == track.id {
+				return Err(ModelError::InvalidSidechain {
+					device: d.id,
+					reason: "a device cannot be keyed by its own track; pick another track (e.g. \
+						 the kick)"
+						.into(),
+				});
+			}
+			if project.track(source.track).is_none() {
+				return Err(ModelError::TrackNotFound(source.track));
+			}
+		}
 	}
 	for c in &track.clips {
 		clip_on_track(track, c)?;
@@ -462,8 +684,11 @@ pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	for t in &project.tracks {
 		track(project, t)?;
 	}
+	for d in &project.master.inserts {
+		device_links(project, None, d, false)?;
+	}
 	for t in &project.tracks {
-		for target in targets(&t.channel) {
+		for target in consumers(project, t) {
 			if reaches(project, target, t.id) {
 				return Err(ModelError::RoutingCycle {
 					from: t.id,

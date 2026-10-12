@@ -17,7 +17,8 @@ pub use document::Document;
 pub use error::ModelError;
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, Device, DeviceKind,
-	FORMAT_VERSION, Marker, Note, Output, Project, Send, Track, TrackKind,
+	FORMAT_VERSION, Marker, Note, Output, OutputRoute, Project, Send, SidechainSource, Track,
+	TrackKind,
 };
 pub use summary::{
 	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,

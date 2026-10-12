@@ -261,6 +261,16 @@ impl<'a> Compiler<'a> {
 				)),
 			}
 		}
+		if !device.zones.is_empty() || cadenza_dsp::uses_samples(id) {
+			let zones = self.sample_zones(device, owner);
+			let count = zones.len();
+			if !processor.set_zones(zones) && count > 0 {
+				self.warnings.push(format!(
+					"{owner}: device '{}' ({id}) does not play samples; its {count} sample zones are ignored",
+					device.name
+				));
+			}
+		}
 		// Snap internal smoothers to the configured values.
 		processor.reset();
 		self.tail = self.tail.max(processor.tail_seconds());
@@ -411,6 +421,43 @@ impl<'a> Compiler<'a> {
 		};
 		self.files.insert(path.clone(), loaded.clone());
 		loaded
+	}
+
+	/// The device's sample zones with their audio loaded at the engine rate. A file that
+	/// cannot be read leaves its zone silent, with one warning per file.
+	fn sample_zones(
+		&mut self,
+		device: &cadenza_model::Device,
+		owner: &str,
+	) -> Vec<cadenza_dsp::Zone> {
+		device
+			.zones
+			.iter()
+			.map(|z| {
+				let path = &z.sample.path;
+				let sample = match self.files.get(path) {
+					Some(cached) => cached.clone(),
+					None => {
+						let loaded = match audio_clip::load(path, self.sample_rate) {
+							Ok(data) => Some(data),
+							Err(e) => {
+								self.warnings.push(format!(
+									"{owner}: '{}' sample '{}' (key {}): {e}; the zone is silent (load the \
+									 sample again or fix the path)",
+									device.name,
+									z.sample.display_name(),
+									cadenza_model::note_name(z.key_low),
+								));
+								None
+							}
+						};
+						self.files.insert(path.clone(), loaded.clone());
+						loaded
+					}
+				};
+				crate::samples::dsp_zone(z, sample)
+			})
+			.collect()
 	}
 
 	fn source(&mut self, track: &Track, owner: &str) -> (Source, bool) {

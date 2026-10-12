@@ -12,12 +12,14 @@ mod automation;
 mod compile;
 mod devices;
 mod error;
+pub mod factory;
 mod graph;
 pub mod hosting;
 mod meter;
 mod pdc;
 mod player;
 mod render;
+mod samples;
 mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
@@ -41,6 +43,7 @@ pub use render::{
 	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,
 	export_options_for_path, render_offline, render_to_file, render_to_wav,
 };
+pub use samples::{auto_zone, detect_root};
 
 /// Internal processing quantum in samples: devices always process this many samples at a
 /// time, and automation and transport changes are applied at quantum boundaries.

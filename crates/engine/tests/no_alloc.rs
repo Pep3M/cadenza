@@ -74,6 +74,52 @@ fn graph_process_does_not_allocate() {
 		],
 	)];
 	p.automation.extend(lanes.clone());
+	// Both samplers, with loops, choke groups and a pad on an extra output routed to a bus.
+	let wav = write_sine_wav(
+		"no-alloc-sample.wav",
+		44_100,
+		2,
+		(hound::SampleFormat::Float, 32),
+		220.0,
+		0.5,
+		0.4,
+	);
+	let mut looped = cadenza_model::SampleZone::full_keyboard(&wav, 57);
+	looped.loop_mode = cadenza_model::LoopMode::PingPong;
+	looped.loop_start = 0.1;
+	looped.loop_crossfade = 0.02;
+	let notes: Vec<(u8, f64, f64)> = (0..32)
+		.map(|i| (36 + (i % 12) as u8, i as f64 * 0.25, 0.5))
+		.collect();
+	p.tracks.push(instrument_track(
+		"Sampler",
+		cadenza_model::Device::builtin("sampler", "Sampler")
+			.with_param("filter_type", 1.0)
+			.with_param("glide", 30.0)
+			.with_zones(vec![looped]),
+		&notes,
+		8.0,
+	));
+	let mut pads: Vec<cadenza_model::SampleZone> = (36..48)
+		.map(|n| cadenza_model::SampleZone::pad(&wav, n))
+		.collect();
+	pads[6].choke = 1;
+	pads[10].choke = 1;
+	pads[2].output = 3;
+	pads[3].reverse = true;
+	let pad_bus = bus("Pads");
+	let mut drums = instrument_track(
+		"Pads",
+		cadenza_model::Device::builtin("drum_sampler", "Pads").with_zones(pads),
+		&notes,
+		8.0,
+	);
+	drums.instrument.as_mut().unwrap().aux_outputs = vec![cadenza_model::OutputRoute {
+		port: 3,
+		bus: Some(pad_bus.id),
+	}];
+	p.tracks.push(drums);
+	p.tracks.push(pad_bus);
 	let mut graph = compile(&p, 48_000, 1024).unwrap();
 	assert!(graph.warnings().is_empty(), "{:?}", graph.warnings());
 	let mut left = vec![0.0f32; 1024];

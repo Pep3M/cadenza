@@ -124,3 +124,44 @@ fn export_options_serialize() {
 	assert_eq!(back, opts);
 	assert!(matches!(back.format, ExportFormat::Wav { .. }));
 }
+
+#[test]
+fn metadata_is_written_and_files_still_decode() {
+	use cadenza_audio_io::{Metadata, export_with_metadata, tags};
+	let dir = tempfile::tempdir().unwrap();
+	let src = sine(48_000, 440.0, 0.5, 4_801, 2);
+	let meta = Metadata {
+		title: "Song".into(),
+		artist: "Me".into(),
+		date: "2026".into(),
+		..Metadata::default()
+	};
+	for fmt in [
+		WavSampleFormat::Int16,
+		WavSampleFormat::Int24,
+		WavSampleFormat::Float32,
+	] {
+		let p = dir.path().join(format!("{fmt:?}.wav"));
+		export_with_metadata(&src, &p, &ExportOptions::wav(fmt), &meta).unwrap();
+		let info = tags::read_wav_info(&p).unwrap();
+		assert!(info.contains(&("INAM".into(), "Song".into())), "{info:?}");
+		assert!(info.contains(&("IART".into(), "Me".into())));
+		assert!(info.contains(&("ISFT".into(), "Cadenza".into())));
+		assert_eq!(decode_file(&p).unwrap().frames(), 4_801);
+		let len = std::fs::metadata(&p).unwrap().len();
+		let bytes = std::fs::read(&p).unwrap();
+		assert_eq!(
+			u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as u64,
+			len - 8
+		);
+	}
+	for depth in [FlacBitDepth::Bits16, FlacBitDepth::Bits24] {
+		let p = dir.path().join(format!("{depth:?}.flac"));
+		export_with_metadata(&src, &p, &ExportOptions::flac(depth), &meta).unwrap();
+		let comments = tags::read_flac_comments(&std::fs::read(&p).unwrap());
+		assert_eq!(comments, vec!["TITLE=Song", "ARTIST=Me", "DATE=2026"]);
+		let back = decode_file(&p).unwrap();
+		assert_eq!(back.frames(), 4_801);
+		assert!(max_abs_diff(&back, &src) < 1e-3);
+	}
+}

@@ -18,6 +18,7 @@ pub mod peaks;
 pub mod resample;
 #[cfg(feature = "stretch")]
 pub mod stretch;
+pub mod tags;
 
 pub use buffer::{AudioBuffer, stereo_downmix_gains};
 pub use cache::{AudioCache, CacheKey, CacheStats};
@@ -27,8 +28,12 @@ pub use clip::{
 };
 pub use decode::{AudioFile, AudioFormat, AudioInfo, decode_file, decode_to_buffer, probe};
 pub use error::{AudioIoError, Result};
-pub use export::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat, export};
+pub use export::{
+	Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat, export,
+	export_with_metadata,
+};
 pub use peaks::{DEFAULT_RESOLUTIONS, MinMax, PeakLevel, WaveformPeaks};
 pub use resample::resample;
 #[cfg(feature = "stretch")]
 pub use stretch::{pitch_shift, stretch_and_shift, time_stretch};
+pub use tags::Metadata;

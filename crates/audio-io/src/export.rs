@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::buffer::AudioBuffer;
 use crate::error::{AudioIoError, Result};
+use crate::tags::Metadata;
 
 /// PCM sample format for WAV.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,13 +88,29 @@ impl ExportOptions {
 /// Writes `buffer` to `path` in the requested format. Samples beyond full scale are
 /// clipped for integer formats; float WAV keeps them.
 pub fn export(buffer: &AudioBuffer, path: impl AsRef<Path>, options: &ExportOptions) -> Result<()> {
+	export_with_metadata(buffer, path, options, &Metadata::default())
+}
+
+/// [`export`] with song information: WAV `LIST/INFO`, FLAC Vorbis comments, MP3 ID3v2.4.
+pub fn export_with_metadata(
+	buffer: &AudioBuffer,
+	path: impl AsRef<Path>,
+	options: &ExportOptions,
+	meta: &Metadata,
+) -> Result<()> {
 	let path = path.as_ref();
 	match options.format {
 		ExportFormat::Wav { sample_format } => {
-			write_wav(buffer, path, sample_format, options.dither)
+			write_wav(buffer, path, sample_format, options.dither)?;
+			if !meta.is_empty() {
+				crate::tags::append_wav_info(path, meta)?;
+			}
+			Ok(())
 		}
-		ExportFormat::Flac { bit_depth } => write_flac(buffer, path, bit_depth, options.dither),
-		ExportFormat::Mp3 { bitrate_kbps } => write_mp3(buffer, path, bitrate_kbps),
+		ExportFormat::Flac { bit_depth } => {
+			write_flac(buffer, path, bit_depth, options.dither, meta)
+		}
+		ExportFormat::Mp3 { bitrate_kbps } => write_mp3(buffer, path, bitrate_kbps, meta),
 	}
 }
 
@@ -142,6 +159,7 @@ fn write_flac(
 	path: &Path,
 	depth: FlacBitDepth,
 	dither: Dither,
+	meta: &Metadata,
 ) -> Result<()> {
 	use flacenc::component::BitRepr;
 	use flacenc::error::Verify;
@@ -174,6 +192,9 @@ fn write_flac(
 		let (min, max) = bytes[8..12].split_at_mut(2);
 		min.copy_from_slice(max);
 	}
+	if !meta.is_empty() {
+		crate::tags::flac_insert_comments(&mut bytes, meta)?;
+	}
 	std::fs::write(path, bytes).map_err(|source| AudioIoError::Io {
 		path: path.to_path_buf(),
 		source,
@@ -181,7 +202,7 @@ fn write_flac(
 }
 
 #[cfg(feature = "mp3")]
-fn write_mp3(buffer: &AudioBuffer, path: &Path, bitrate_kbps: u16) -> Result<()> {
+fn write_mp3(buffer: &AudioBuffer, path: &Path, bitrate_kbps: u16, meta: &Metadata) -> Result<()> {
 	use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, Quality};
 
 	const RATES: [(u16, Bitrate); 13] = [
@@ -229,7 +250,7 @@ fn write_mp3(buffer: &AudioBuffer, path: &Path, bitrate_kbps: u16) -> Result<()>
 		.map_err(|e| enc("quality", &e))?
 		.build()
 		.map_err(|e| enc("init", &e))?;
-	let mut out = Vec::new();
+	let mut out = crate::tags::id3v2_tag(meta);
 	const CHUNK: usize = 8192;
 	for (l, r) in stereo
 		.channel(0)
@@ -252,7 +273,7 @@ fn write_mp3(buffer: &AudioBuffer, path: &Path, bitrate_kbps: u16) -> Result<()>
 }
 
 #[cfg(not(feature = "mp3"))]
-fn write_mp3(_: &AudioBuffer, _: &Path, _: u16) -> Result<()> {
+fn write_mp3(_: &AudioBuffer, _: &Path, _: u16, _: &Metadata) -> Result<()> {
 	Err(AudioIoError::Encode(
 		"MP3 export is not available in this build (enable the `mp3` feature of cadenza-audio-io); export WAV or FLAC instead".into(),
 	))

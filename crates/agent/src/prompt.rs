@@ -175,7 +175,7 @@ pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, 
 - To add or move a section, shift what follows with move_clip and move the markers, keep parts continuous across the seam, and add transitions where they help.
 - Match what is there: key, scale, tempo, groove, register and sound palette. Check the clip's notes (get_clip_notes) before writing a part that must fit it.
 - Mixing: gain-stage, EQ by role, compress for control and punch, share reverb and delay through buses, and keep the master's true peak at or below -1 dBTP. analyze_mix reports loudness, peaks, band balance and per-track levels with plain-language observations; use it to check mix work.
-- Do not save the project, render or export unless the user asks; the user saves when they are happy. Playback belongs to the user's transport.
+- Do not save the project, render or export unless the user asks; the user saves when they are happy. Playback and recording belong to the user's transport: you cannot record (no access to the audio or MIDI hardware), so ask the user to arm tracks and press Record (Ctrl+R) when a part should be played in. Recorded takes are clips with a `take` (group + lane); only the active take of a group plays.
 - If a request is genuinely ambiguous or impossible with the tools, ask one short question or say what you can do instead, without editing.
 
 # Musical craft
@@ -208,6 +208,9 @@ pub struct AppContext {
 	pub open_clip: Option<String>,
 	/// "song" or "pattern".
 	pub transport_mode: Option<String>,
+	/// Armed tracks, metronome and count-in ("Vox (audio, In 1, monitor auto); metronome
+	/// on while recording; count-in 1 bar"), when anything is armed or recording.
+	pub recording: Option<String>,
 }
 
 impl AppContext {
@@ -248,6 +251,9 @@ impl AppContext {
 		}
 		if let Some(mode) = &self.transport_mode {
 			out.push_str(&format!("- Transport mode: {mode}\n"));
+		}
+		if let Some(recording) = &self.recording {
+			out.push_str(&format!("- Recording setup: {recording}\n"));
 		}
 		out
 	}
@@ -316,6 +322,7 @@ mod tests {
 			playhead_beats: 16.0,
 			loop_beats: Some((16.0, 32.0)),
 			transport_mode: Some("song".into()),
+			recording: Some("Vox (audio, In 1, monitor auto) armed".into()),
 			..AppContext::default()
 		};
 		let with =
@@ -324,6 +331,7 @@ mod tests {
 		assert!(with.contains("Selected tracks: Bass (track t1, instrument)"));
 		assert!(with.contains("Selected clips: none"));
 		assert!(with.contains("Loop: beats 16.00 to 32.00"));
+		assert!(with.contains("Recording setup: Vox (audio, In 1, monitor auto) armed"));
 		assert!(with.contains("$0.25"));
 		assert!(with.contains("{\"name\":\"x\"}"));
 		let without = session_request_message("again", &context, 0.25, None);

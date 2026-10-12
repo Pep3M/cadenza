@@ -586,6 +586,7 @@ impl AppState {
 			loop_beats,
 			open_clip: self.view.piano.clip.and_then(describe_clip),
 			transport_mode: Some(self.view.transport.mode.name().to_lowercase()),
+			recording: Default::default(),
 		}
 	}
 

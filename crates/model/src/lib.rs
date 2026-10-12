@@ -9,6 +9,7 @@ pub mod document;
 pub mod error;
 mod persist;
 pub mod project;
+pub mod sample;
 pub mod summary;
 pub mod validate;
 
@@ -22,9 +23,10 @@ pub use project::{
 	FORMAT_VERSION, FadeCurve, Marker, Note, Output, OutputRoute, PointShape, Project, Send,
 	SidechainSource, Track, TrackKind, automation_value,
 };
+pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{
 	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,
-	TempoSummary, TrackSummary, note_name,
+	TempoSummary, TrackSummary, ZoneSummary, note_name,
 };
 
 #[cfg(test)]

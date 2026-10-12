@@ -9,6 +9,8 @@ use cadenza_core::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::sample::SampleZone;
+
 /// Current on-disk format version written by [`Project::save_json`].
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -108,6 +110,10 @@ pub struct Device {
 	/// Instruments only: extra output ports to mix in (default: only the main output).
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<OutputRoute>,
+	/// Sample-based built-ins (`sampler`, `drum_sampler`): the samples and where they
+	/// play. Replaced as a whole by `Command::SetSampleZones`.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub zones: Vec<SampleZone>,
 }
 
 /// Where a device's sidechain signal comes from.
@@ -461,6 +467,20 @@ impl Device {
 			state: None,
 			sidechain: None,
 			aux_outputs: Vec::new(),
+			zones: Vec::new(),
+		}
+	}
+
+	pub fn with_zones(mut self, zones: Vec<SampleZone>) -> Self {
+		self.zones = zones;
+		self
+	}
+
+	/// The built-in registry id, `None` for plugins.
+	pub fn builtin_id(&self) -> Option<&str> {
+		match &self.kind {
+			DeviceKind::Builtin { id } => Some(id),
+			_ => None,
 		}
 	}
 

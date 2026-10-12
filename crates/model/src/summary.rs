@@ -11,6 +11,7 @@ use crate::project::{
 	Channel, Clip, ClipContent, Device, DeviceKind, Output, OutputRoute, Project, SidechainSource,
 	Track, TrackKind,
 };
+use crate::sample::{LoopMode, SampleZone};
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ProjectSummary {
@@ -88,6 +89,25 @@ pub struct DeviceSummary {
 	/// Extra instrument outputs in use (main output only when empty).
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<OutputRoute>,
+	/// Sample zones (sampler / drum_sampler), by index.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub zones: Vec<ZoneSummary>,
+}
+
+/// One sample zone, compactly: `keys` is a note ("C1 (36)") for drum pads, a range
+/// ("C2..B3") otherwise; settings appear only when not at their defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct ZoneSummary {
+	pub index: usize,
+	pub keys: String,
+	/// Original file name of the sample.
+	pub sample: String,
+	pub root: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub velocity: Option<String>,
+	/// Non-default settings, e.g. "gain_db=-3 choke=1 loop=forward".
+	#[serde(skip_serializing_if = "String::is_empty")]
+	pub settings: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -228,6 +248,63 @@ fn device_summary(device: &Device) -> DeviceSummary {
 		has_state: device.state.is_some(),
 		sidechain: device.sidechain,
 		aux_outputs: device.aux_outputs.clone(),
+		zones: device
+			.zones
+			.iter()
+			.enumerate()
+			.map(|(i, z)| zone_summary(i, z))
+			.collect(),
+	}
+}
+
+fn zone_summary(index: usize, z: &SampleZone) -> ZoneSummary {
+	let keys = if z.is_single_key() {
+		format!("{} ({})", note_name(z.key_low), z.key_low)
+	} else {
+		format!("{}..{}", note_name(z.key_low), note_name(z.key_high))
+	};
+	let velocity = (z.vel_low > 0.0 || z.vel_high < 1.0)
+		.then(|| format!("{:.2}..{:.2}", z.vel_low, z.vel_high));
+	let mut settings: Vec<String> = Vec::new();
+	let num = |settings: &mut Vec<String>, name: &str, v: f64| {
+		if v != 0.0 {
+			settings.push(format!("{name}={}", (v * 1000.0).round() / 1000.0));
+		}
+	};
+	num(&mut settings, "tune", f64::from(z.tune));
+	num(&mut settings, "gain_db", f64::from(z.gain_db));
+	num(&mut settings, "pan", f64::from(z.pan));
+	num(&mut settings, "start", z.start);
+	num(&mut settings, "end", z.end.unwrap_or(0.0));
+	num(&mut settings, "attack_ms", f64::from(z.attack_ms));
+	num(
+		&mut settings,
+		"decay_ms",
+		f64::from(z.decay_ms.unwrap_or(0.0)),
+	);
+	num(&mut settings, "choke", f64::from(z.choke));
+	num(&mut settings, "output", f64::from(z.output));
+	num(&mut settings, "round_robin", f64::from(z.round_robin));
+	if !z.loop_mode.is_off() {
+		let mode = match z.loop_mode {
+			LoopMode::PingPong => "ping_pong",
+			_ => "forward",
+		};
+		settings.push(format!("loop={mode}"));
+		num(&mut settings, "loop_start", z.loop_start);
+		num(&mut settings, "loop_end", z.loop_end.unwrap_or(0.0));
+		num(&mut settings, "loop_crossfade", z.loop_crossfade);
+	}
+	if z.reverse {
+		settings.push("reverse".into());
+	}
+	ZoneSummary {
+		index,
+		keys,
+		sample: z.sample.display_name(),
+		root: note_name(z.root_key),
+		velocity,
+		settings: settings.join(" "),
 	}
 }
 

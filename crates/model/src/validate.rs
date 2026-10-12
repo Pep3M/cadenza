@@ -130,7 +130,15 @@ pub(crate) fn finite(what: impl Into<String>, value: f32) -> Result<(), ModelErr
 
 pub(crate) fn device(device: &Device) -> Result<(), ModelError> {
 	name("device", &device.name)?;
-	params(device.id, &device.params)
+	params(device.id, &device.params)?;
+	if !device.zones.is_empty() && device.is_plugin() {
+		return Err(ModelError::invalid(
+			format!("zones of device {}", device.id),
+			format!("{} zones", device.zones.len()),
+			"only the built-in sampler and drum_sampler play sample zones",
+		));
+	}
+	crate::sample::validate_zones(&device.zones)
 }
 
 /// Explicit parameter values of device `id`.

@@ -1321,6 +1321,7 @@ fn command_json_shape_is_stable() {
 					state: None,
 					sidechain: None,
 					aux_outputs: Vec::new(),
+					zones: Vec::new(),
 				},
 				index: None,
 			},
@@ -2140,4 +2141,134 @@ fn aborting_a_group_reverts_it() {
 	assert_eq!(doc.project(), &before);
 	assert_eq!(doc.history_labels(), vec!["Add marker 'User'"]);
 	assert_eq!(doc.abort_group().unwrap(), 0);
+}
+
+fn drum_kit_zones() -> Vec<SampleZone> {
+	let mut closed = SampleZone::pad("/kit/Closed Hat.wav", 42);
+	closed.choke = 1;
+	let mut open = SampleZone::pad("/kit/Open Hat.wav", 46);
+	open.choke = 1;
+	open.decay_ms = Some(400.0);
+	open.output = 2;
+	let mut loop_pad = SampleZone::full_keyboard("/kit/Pad C3.wav", 48);
+	loop_pad.loop_mode = LoopMode::PingPong;
+	loop_pad.loop_start = 0.25;
+	loop_pad.loop_end = Some(1.5);
+	loop_pad.loop_crossfade = 0.05;
+	loop_pad.vel_low = 0.5;
+	vec![SampleZone::pad("/kit/Kick.wav", 36), closed, open, loop_pad]
+}
+
+#[test]
+fn sample_zones_round_trip_persist_and_summarize() {
+	let fx = fixture();
+	let zones = drum_kit_zones();
+	let after = round_trip(
+		&fx.project,
+		Command::SetSampleZones {
+			track: Some(fx.lead),
+			device: fx.synth,
+			zones: zones.clone(),
+		},
+	);
+	assert_eq!(after.device(Some(fx.lead), fx.synth).unwrap().zones, zones);
+	// Persistence keeps every field; projects without zones still load (format 1).
+	let json = after.to_json_string().unwrap();
+	assert!(json.contains("\"ping_pong\"") && json.contains("Open Hat.wav"));
+	assert_eq!(Project::from_json_str(&json).unwrap(), after);
+	let old = fx.project.to_json_string().unwrap();
+	assert!(!old.contains("zones"));
+	assert_eq!(Project::from_json_str(&old).unwrap(), fx.project);
+
+	let summary = after.summary();
+	let zs = &summary.tracks[0].instrument.as_ref().unwrap().zones;
+	assert_eq!(zs.len(), 4);
+	assert_eq!(zs[0].keys, "C2 (36)");
+	assert_eq!(zs[0].sample, "Kick.wav");
+	assert!(zs[2].settings.contains("choke=1") && zs[2].settings.contains("output=2"));
+	assert_eq!(zs[3].keys, "C-1..G9");
+	assert!(
+		zs[3].settings.contains("loop=ping_pong"),
+		"{}",
+		zs[3].settings
+	);
+	assert_eq!(zs[3].velocity.as_deref(), Some("0.50..1.00"));
+
+	assert_eq!(
+		Command::SetSampleZones {
+			track: None,
+			device: fx.limiter,
+			zones: Vec::new()
+		}
+		.label(),
+		"Unload samples"
+	);
+}
+
+#[test]
+fn sample_zones_are_validated() {
+	let fx = fixture();
+	let mut bad = drum_kit_zones();
+	bad[1].key_high = 200;
+	let err = exec_err(
+		&fx.project,
+		Command::SetSampleZones {
+			track: Some(fx.lead),
+			device: fx.synth,
+			zones: bad,
+		},
+	);
+	assert!(err.to_string().contains("zone 1 key_high"), "{err}");
+	assert!(matches!(
+		exec_err(
+			&fx.project,
+			Command::SetSampleZones {
+				track: Some(fx.lead),
+				device: DeviceId::new(),
+				zones: Vec::new(),
+			}
+		),
+		ModelError::DeviceNotFound { .. }
+	));
+	// Plugins cannot hold zones, neither through the command nor a new device.
+	let mut p = fx.project.clone();
+	let plugin = Device {
+		kind: DeviceKind::Clap {
+			plugin_id: "x.sampler".into(),
+			path: "/x.clap".into(),
+		},
+		..Device::builtin("", "Plugin")
+	};
+	let plugin_id = plugin.id;
+	let mut doc = Document::new(p.clone());
+	doc.execute(Command::InsertDevice {
+		track: Some(fx.lead),
+		device: plugin.clone(),
+		index: None,
+	})
+	.unwrap();
+	p = doc.project().clone();
+	assert!(
+		exec_err(
+			&p,
+			Command::SetSampleZones {
+				track: Some(fx.lead),
+				device: plugin_id,
+				zones: drum_kit_zones(),
+			}
+		)
+		.to_string()
+		.contains("only the built-in sampler")
+	);
+	assert!(matches!(
+		exec_err(
+			&fx.project,
+			Command::InsertDevice {
+				track: Some(fx.lead),
+				device: plugin.with_zones(drum_kit_zones()),
+				index: None,
+			}
+		),
+		ModelError::InvalidValue { .. }
+	));
 }

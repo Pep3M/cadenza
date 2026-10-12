@@ -356,6 +356,7 @@ fn builtin_instrument(is_drum: bool) -> Device {
 		state: None,
 		sidechain: None,
 		aux_outputs: Vec::new(),
+		zones: Vec::new(),
 	}
 }
 

@@ -263,6 +263,7 @@ fn round_trips_project_export_and_import() {
 			state: None,
 			sidechain: None,
 			aux_outputs: Vec::new(),
+			zones: Vec::new(),
 		}),
 		clips: vec![Clip {
 			id: cadenza_core::ClipId::new(),

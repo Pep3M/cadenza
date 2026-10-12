@@ -11,6 +11,7 @@ use crate::project::{
 	AutomationPoint, Clip, ClipFade, Device, Marker, Note, Output, OutputRoute, Send,
 	SidechainSource, Track,
 };
+use crate::sample::SampleZone;
 
 /// Every mutation of a [`crate::Project`]. Commands carry every id they create, so
 /// executing the same command twice (e.g. redo) is deterministic.
@@ -88,6 +89,14 @@ pub enum Command {
 		state: Option<String>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		params: Option<BTreeMap<String, f32>>,
+	},
+	/// Replaces the sample zones of a sample-based built-in device (`sampler`,
+	/// `drum_sampler`); an empty list unloads every sample.
+	SetSampleZones {
+		#[serde(default)]
+		track: Option<TrackId>,
+		device: DeviceId,
+		zones: Vec<SampleZone>,
 	},
 	/// Feeds a device's sidechain input from another track (`source: null` disconnects it).
 	SetSidechain {
@@ -295,6 +304,7 @@ impl Command {
 			Self::MoveDevice { .. } => "move_device",
 			Self::SetDeviceBypass { .. } => "set_device_bypass",
 			Self::SetDeviceState { .. } => "set_device_state",
+			Self::SetSampleZones { .. } => "set_sample_zones",
 			Self::SetSidechain { .. } => "set_sidechain",
 			Self::SetOutputRoutes { .. } => "set_output_routes",
 			Self::SetParam { .. } => "set_param",
@@ -366,6 +376,8 @@ impl Command {
 				params: Some(_), ..
 			} => "Load device preset".into(),
 			Self::SetDeviceState { .. } => "Store plugin state".into(),
+			Self::SetSampleZones { zones, .. } if zones.is_empty() => "Unload samples".into(),
+			Self::SetSampleZones { .. } => "Edit sample zones".into(),
 			Self::SetSidechain {
 				source: Some(_), ..
 			} => "Set sidechain".into(),

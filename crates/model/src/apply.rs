@@ -370,6 +370,29 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetSampleZones {
+			track,
+			device,
+			zones,
+		} => {
+			crate::sample::validate_zones(zones)?;
+			let d = existing_device_mut(project, *track, *device)?;
+			if d.is_plugin() {
+				return Err(ModelError::invalid(
+					format!("zones of device {device}"),
+					format!("{} zones", zones.len()),
+					"only the built-in sampler and drum_sampler play sample zones; plugins load \
+					 samples in their own editor",
+				));
+			}
+			let old = std::mem::replace(&mut d.zones, zones.clone());
+			Ok(vec![Command::SetSampleZones {
+				track: *track,
+				device: *device,
+				zones: old,
+			}])
+		}
+
 		Command::SetSidechain {
 			track,
 			device,

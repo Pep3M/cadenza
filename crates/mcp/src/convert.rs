@@ -363,6 +363,7 @@ pub fn build_device(
 		state: None,
 		sidechain: None,
 		aux_outputs: Vec::new(),
+		zones: Vec::new(),
 	})
 }
 

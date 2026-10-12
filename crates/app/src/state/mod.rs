@@ -12,6 +12,7 @@ pub mod audio_edit;
 pub mod automation;
 pub mod browser;
 pub mod dnd;
+pub mod editors;
 pub mod edits;
 pub mod files;
 pub mod layout;
@@ -40,6 +41,7 @@ use crate::audio::{AudioEngine, AudioEvent, Waker};
 use crate::jobs::{FileAction, Job, PeakCache};
 use browser::BrowserItem;
 use dnd::{DropAction, DropTarget, Payload};
+use editors::PluginEditors;
 use files::FileBrowser;
 use layout::{FollowMode, PanelKind, PanelLayout, Prefs};
 use meters::Meters;
@@ -178,6 +180,8 @@ pub struct AppState {
 	pub confirm: Option<Pending>,
 	/// Set when the app may close (nothing unsaved, or the user chose to discard/save).
 	pub quit_confirmed: bool,
+	/// Plugin editor windows and the edits made in them.
+	pub editors: PluginEditors,
 	/// What to continue with once a "Save As" dialog finished.
 	after_save: Option<Pending>,
 	browser_items: Option<Vec<BrowserItem>>,
@@ -232,6 +236,7 @@ impl AppState {
 			previewing: Vec::new(),
 			confirm: None,
 			quit_confirmed: false,
+			editors: PluginEditors::default(),
 			after_save: None,
 			browser_items: None,
 			audio: None,
@@ -331,7 +336,14 @@ impl AppState {
 		let project = self.session.document().project();
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
-		match before.and_then(|b| live::diff(b, self.project())) {
+		self.editors.prune(project);
+		let editors = &self.editors;
+		let changes = before.and_then(|b| {
+			live::diff(b, self.project(), &|device, state| {
+				editors.live_state(device, state)
+			})
+		});
+		match changes {
 			Some(changes) => self.send_live(&changes),
 			None => self.schedule_reload(),
 		}
@@ -657,6 +669,9 @@ impl AppState {
 		if let Some(v) = self.previews.params.get(&(device, param.to_owned())) {
 			return Some(*v);
 		}
+		if let Some(v) = self.editors.live_value(device, param) {
+			return Some(v);
+		}
 		self.automated(&ParamAddress::device(track, device, param))
 			.or_else(|| {
 				self.project()
@@ -825,6 +840,122 @@ impl AppState {
 				.inserts
 				.iter()
 				.find(|d| d.id == r.device),
+		}
+	}
+
+	/// Whether `device` is a third-party plugin (CLAP/VST3), which may have an editor.
+	pub fn is_plugin(&self, device: DeviceId) -> bool {
+		editors::locate(self.project(), device)
+			.and_then(|track| self.project().device(track, device))
+			.is_some_and(|d| !matches!(d.kind, cadenza_model::DeviceKind::Builtin { .. }))
+	}
+
+	pub fn plugin_editor_open(&self, device: DeviceId) -> bool {
+		self.editors.is_open(device)
+	}
+
+	/// Opens the plugin's editor window, or closes it when open.
+	pub fn toggle_plugin_editor(&mut self, device: DeviceId) {
+		if self.editors.is_open(device) {
+			self.close_plugin_editor(device);
+		} else {
+			self.open_plugin_editor(device);
+		}
+	}
+
+	/// Opens (or raises) the editor window of plugin device `device`, titled
+	/// "<device> — <track>". Edits made there come back as commands (see
+	/// [`editors`]).
+	pub fn open_plugin_editor(&mut self, device: DeviceId) {
+		let project = self.project();
+		let Some(d) = editors::locate(project, device).and_then(|t| project.device(t, device))
+		else {
+			return;
+		};
+		if matches!(d.kind, cadenza_model::DeviceKind::Builtin { .. }) {
+			self.notices.info(format!(
+				"{} is a built-in device: edit it in the inspector (F8)",
+				d.name
+			));
+			return;
+		}
+		if d.bypass {
+			self.notices.warn(format!(
+				"{} is bypassed: enable it to open its editor",
+				d.name
+			));
+			return;
+		}
+		if !cadenza_engine::EDITORS_SUPPORTED {
+			self.notices
+				.warn("Plugin editor windows are not available on this OS yet; use the inspector");
+			return;
+		}
+		let Some(title) = editors::title(project, device) else {
+			return;
+		};
+		match &self.audio_status {
+			AudioStatus::Unavailable(e) => {
+				self.notices.error(format!(
+					"Plugin editors need the audio engine, which is unavailable: {e}"
+				));
+				return;
+			}
+			AudioStatus::Off => {
+				self.notices
+					.error("Plugin editors need the audio engine (not running)");
+				return;
+			}
+			_ => {}
+		}
+		if self.reload_pending() || self.loaded_generation < self.generation || self.clock.is_none()
+		{
+			// The player does not have this device yet: open once it does.
+			self.editors.queue(device, title);
+			return;
+		}
+		self.editors.opened(device);
+		if let Some(a) = &self.audio {
+			a.open_editor(device, title);
+		}
+	}
+
+	/// Closes the plugin's editor window, keeping what was changed there.
+	pub fn close_plugin_editor(&mut self, device: DeviceId) {
+		self.editors.closed(device);
+		if let Some(a) = &self.audio {
+			a.close_editor(device);
+			a.capture_states(self.project().clone(), vec![device]);
+		}
+	}
+
+	/// What the user did in plugin editors (from the player): gestures become commands.
+	pub fn editor_updates(&mut self, updates: Vec<cadenza_engine::EditorUpdate>, now: Instant) {
+		let actions = self
+			.editors
+			.handle(self.session.document().project(), updates, now);
+		self.editor_actions(actions);
+	}
+
+	/// Applies commands produced by plugin editors and asks for state captures.
+	fn editor_actions(&mut self, actions: editors::Actions) {
+		for cmd in actions.commands {
+			self.apply(cmd);
+		}
+		if !actions.capture.is_empty()
+			&& let Some(a) = &self.audio
+		{
+			a.capture_states(self.project().clone(), actions.capture);
+		}
+	}
+
+	/// Stores live plugin states (no reload: the instances already hold them).
+	pub fn store_editor_states(&mut self, states: Vec<cadenza_engine::EditorState>) {
+		let commands = self
+			.editors
+			.store_states(self.session.document().project(), states);
+		for cmd in commands {
+			self.apply(cmd);
 		}
 	}
 
@@ -1089,6 +1220,13 @@ impl AppState {
 	}
 
 	fn reset_view(&mut self) {
+		let open: Vec<DeviceId> = self.editors.open_devices().collect();
+		if let Some(a) = &self.audio {
+			for device in open {
+				a.close_editor(device);
+			}
+		}
+		self.editors = PluginEditors::default();
 		self.dirty = false;
 		self.selection = Selection::default();
 		self.previews = Previews::default();
@@ -1129,6 +1267,7 @@ impl AppState {
 	}
 
 	fn save_to(&mut self, path: Option<PathBuf>) -> bool {
+		self.capture_editors_now();
 		let args = cadenza_mcp::tools::project::SaveProjectArgs {
 			path: path.map(|p| p.display().to_string()),
 			capture_plugin_states: None,
@@ -1145,6 +1284,32 @@ impl AppState {
 			}
 			None => false,
 		}
+	}
+
+	/// Stores what plugin editors changed and the project does not have yet (pending
+	/// one-off values, live states of open editors). Blocks briefly: used before saving.
+	fn capture_editors_now(&mut self) {
+		let actions = self
+			.editors
+			.flush(self.session.document().project(), Instant::now(), true);
+		let mut devices = actions.capture.clone();
+		self.editor_actions(editors::Actions {
+			capture: Vec::new(),
+			..actions
+		});
+		devices.extend(self.editors.needs_capture());
+		devices.sort_unstable_by_key(|d| d.to_string());
+		devices.dedup();
+		if devices.is_empty() {
+			return;
+		}
+		let Some(a) = &self.audio else { return };
+		let states = a.capture_states_now(
+			self.project().clone(),
+			devices,
+			crate::audio::CAPTURE_TIMEOUT,
+		);
+		self.store_editor_states(states);
 	}
 
 	/// Imports an audio file at the playhead: onto the selected audio track, or a new one.
@@ -1798,6 +1963,7 @@ impl AppState {
 			self.reload_since = Some(Instant::now());
 			return;
 		}
+		self.editors.reloaded();
 		let plugins = self.session.plugins_for_project();
 		audio.load(
 			self.session.document().project().clone(),
@@ -1821,6 +1987,10 @@ impl AppState {
 		{
 			self.send_reload();
 		}
+		let actions = self
+			.editors
+			.flush(self.session.document().project(), now, false);
+		self.editor_actions(actions);
 		self.poll_jobs();
 		self.sync_transport();
 		self.peaks.poll();
@@ -1829,6 +1999,7 @@ impl AppState {
 		self.is_playing()
 			|| self.meters.any_active()
 			|| self.reload_since.is_some()
+			|| self.editors.busy()
 			|| self.jobs.scan.is_some()
 			|| self.jobs.export.is_some()
 			|| self.jobs.process.is_some()
@@ -1863,6 +2034,13 @@ impl AppState {
 				} => {
 					self.loaded_generation = self.loaded_generation.max(generation);
 					self.bank = meters;
+					if self.loaded_generation >= self.generation && self.reload_since.is_none() {
+						for (device, title) in self.editors.take_queued() {
+							if let Some(a) = &self.audio {
+								a.open_editor(device, title);
+							}
+						}
+					}
 					if warnings != self.load_warnings {
 						for w in &warnings {
 							self.notices.warn(w.clone());
@@ -1879,6 +2057,12 @@ impl AppState {
 					for c in crashes {
 						self.notices.error(c.message);
 					}
+				}
+				AudioEvent::Editor(updates) => self.editor_updates(updates, Instant::now()),
+				AudioEvent::EditorStates(states) => self.store_editor_states(states),
+				AudioEvent::EditorFailed { device, error } => {
+					self.editors.closed(device);
+					self.notices.error(error);
 				}
 				AudioEvent::Error(e) => self.notices.error(format!("Audio: {e}")),
 			}

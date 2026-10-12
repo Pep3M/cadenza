@@ -24,8 +24,10 @@ struct ParamRow {
 	unit: String,
 }
 
-/// Most plugin parameters shown at once (plugins can expose thousands).
+/// Plugin parameters shown before "Show all" (plugins can expose thousands).
 const MAX_PLUGIN_PARAMS: usize = 64;
+/// Above this many parameters the generic editor offers a filter.
+const FILTER_FROM: usize = 12;
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
 	ui.add_space(4.0);
@@ -128,6 +130,7 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 							device: d.id,
 						});
 					}
+					editor_button(ui, state, d.id);
 				}
 				None => {
 					ui.label(
@@ -397,7 +400,6 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 					desc.params
 						.iter()
 						.filter(|p| p.automatable && !p.bypass)
-						.take(MAX_PLUGIN_PARAMS)
 						.map(|p| ParamRow {
 							id: p.id.clone(),
 							name: p.name.clone(),
@@ -438,12 +440,14 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 		if ui.small_button("Remove").clicked() {
 			state.remove_device(r.track, d.id);
 		}
+		editor_button(ui, state, d.id);
 	});
 	ui.add_space(6.0);
 	if params.is_empty() {
 		ui.label(RichText::new("No editable parameters").color(theme::TEXT_FAINT));
 		return;
 	}
+	let params = filter_params(ui, d.id, params);
 	// One row per parameter: fixed-width name, then a slider filling the rest.
 	let label_w = 104.0;
 	for ParamRow {
@@ -495,6 +499,87 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 			}
 		});
 	}
+}
+
+/// "Edit" (opens the plugin's own window) / "Close editor" for plugin devices.
+fn editor_button(ui: &mut Ui, state: &mut AppState, device: cadenza_core::DeviceId) {
+	if !state.is_plugin(device) {
+		return;
+	}
+	let open = state.plugin_editor_open(device);
+	let label = if open { "Close editor" } else { "Edit" };
+	if ui
+		.small_button(label)
+		.on_hover_text(
+			"The plugin's own editor window (also: double-click the device in the mixer); \
+			 changes made there are part of the project and undoable",
+		)
+		.clicked()
+	{
+		state.toggle_plugin_editor(device);
+	}
+}
+
+/// The generic editor's rows: everything for small devices; a name filter and the
+/// first [`MAX_PLUGIN_PARAMS`] matches (or all, on request) for large plugins.
+fn filter_params(
+	ui: &mut Ui,
+	device: cadenza_core::DeviceId,
+	params: Vec<ParamRow>,
+) -> Vec<ParamRow> {
+	if params.len() <= FILTER_FROM {
+		return params;
+	}
+	let filter_id = Id::new(("param-filter", device));
+	let all_id = Id::new(("param-all", device));
+	let mut filter: String = ui.data_mut(|d| d.get_temp(filter_id).unwrap_or_default());
+	let mut all: bool = ui.data_mut(|d| d.get_temp(all_id).unwrap_or(false));
+	let total = params.len();
+	ui.horizontal(|ui| {
+		ui.label(
+			RichText::new(format!("{total} parameters"))
+				.font(theme::small())
+				.color(theme::TEXT_DIM),
+		);
+		ui.add(
+			egui::TextEdit::singleline(&mut filter)
+				.hint_text("filter")
+				.desired_width(ui.available_width().min(140.0)),
+		);
+	});
+	let needle = filter.trim().to_lowercase();
+	let matching: Vec<ParamRow> = params
+		.into_iter()
+		.filter(|p| needle.is_empty() || p.name.to_lowercase().contains(&needle))
+		.collect();
+	let found = matching.len();
+	let shown: Vec<ParamRow> = if all {
+		matching
+	} else {
+		matching.into_iter().take(MAX_PLUGIN_PARAMS).collect()
+	};
+	if found > MAX_PLUGIN_PARAMS {
+		let label = if all {
+			format!("Show the first {MAX_PLUGIN_PARAMS}")
+		} else {
+			format!("Show all {found}")
+		};
+		if ui.small_button(label).clicked() {
+			all = !all;
+		}
+	}
+	ui.data_mut(|d| {
+		d.insert_temp(filter_id, filter);
+		d.insert_temp(all_id, all);
+	});
+	if shown.is_empty() {
+		ui.label(
+			RichText::new("No parameter matches")
+				.font(theme::small())
+				.color(theme::TEXT_FAINT),
+		);
+	}
+	shown
 }
 
 fn history(ui: &mut Ui, state: &mut AppState) {

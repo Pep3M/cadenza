@@ -888,6 +888,16 @@ impl ArrangeUi {
 					device: d.id,
 				});
 			}
+			// Double-click the instrument: its editor window (plugins) or the piano roll.
+			if ir.double_clicked() {
+				match &track.instrument {
+					Some(d) if state.is_plugin(d.id) => state.toggle_plugin_editor(d.id),
+					_ if track.kind == TrackKind::Instrument => {
+						state.open_track_in_piano_roll(track.id);
+					}
+					_ => {}
+				}
+			}
 			let vol_rect = Rect::from_min_size(pos2(right - 58.0, row2), vec2(58.0, 14.0));
 			widgets::volume_bar(&p, vol_rect, state.volume_db(Some(track.id)), color);
 		}

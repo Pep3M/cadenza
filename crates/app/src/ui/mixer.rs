@@ -194,6 +194,21 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 			device: d.id,
 		});
 	}
+	if let Some(d) = track.and_then(|t| t.instrument.as_ref())
+		&& state.is_plugin(d.id)
+	{
+		if state.plugin_editor_open(d.id) {
+			p.circle_filled(
+				pos2(what_r.right() - 5.0, what_r.center().y),
+				2.5,
+				theme::ACCENT,
+			);
+		}
+		let wr = wr.on_hover_text("Double-click: plugin editor");
+		if wr.double_clicked() {
+			state.toggle_plugin_editor(d.id);
+		}
+	}
 
 	section_label(&p, inserts_label, "INSERTS");
 	p.rect_filled(inserts_r, CornerRadius::same(2), theme::BG_DEEP);
@@ -543,14 +558,20 @@ fn insert_row(
 	let nr = ui.interact(name, Id::new(("insert", d.id)), Sense::click_and_drag());
 	let font = FontId::proportional(10.5);
 	let shown = elide(ui, &d.name, &font, name.width() - 4.0);
-	let nr = if shown != d.name {
-		nr.on_hover_text(format!(
-			"{}\n\nDrag to reorder or onto another strip (Ctrl: copy)",
-			d.name
-		))
+	let plugin = state.is_plugin(d.id);
+	let hint = if plugin {
+		"Double-click: plugin editor. Drag to reorder or onto another strip (Ctrl: copy)"
 	} else {
-		nr.on_hover_text("Drag to reorder or onto another strip (Ctrl: copy)")
+		"Drag to reorder or onto another strip (Ctrl: copy)"
 	};
+	let nr = if shown != d.name {
+		nr.on_hover_text(format!("{}\n\n{hint}", d.name))
+	} else {
+		nr.on_hover_text(hint)
+	};
+	if plugin && nr.double_clicked() {
+		state.toggle_plugin_editor(d.id);
+	}
 	if nr.drag_started_by(egui::PointerButton::Primary) {
 		egui::DragAndDrop::set_payload(
 			ui.ctx(),
@@ -561,7 +582,7 @@ fn insert_row(
 		);
 	}
 	let p = ui.painter();
-	if dragging_me {
+	if dragging_me || state.plugin_editor_open(d.id) {
 		p.rect_stroke(
 			rect,
 			CornerRadius::same(2),

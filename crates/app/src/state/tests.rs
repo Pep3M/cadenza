@@ -575,3 +575,101 @@ fn note_edits_reschedule_live_without_reloading() {
 	}));
 	assert!(!s.reload_pending(), "nor do MIDI clip moves");
 }
+
+#[test]
+fn plugin_editor_gestures_are_undoable_and_live_states_need_no_reload() {
+	use cadenza_engine::{EditorEvent, EditorState, EditorUpdate};
+	let (mut s, keys) = state_with_song();
+	let mut fx = cadenza_model::Device::builtin("unused", "Surge XT Effects");
+	fx.kind = cadenza_model::DeviceKind::Clap {
+		plugin_id: "org.surge-synth-team.surge-xt-fx".into(),
+		path: "/usr/lib/clap/Surge XT Effects.clap".into(),
+	};
+	let fx_id = fx.id;
+	assert!(s.apply(Command::InsertDevice {
+		track: Some(keys),
+		device: fx,
+		index: None,
+	}));
+	let t0 = Instant::now();
+	s.tick(t0 + RELOAD_DEBOUNCE * 2);
+	assert!(!s.reload_pending());
+	assert!(s.is_plugin(fx_id));
+	let steps = s.document().history_labels().len();
+
+	// Without an audio engine there is no editor to open: say so.
+	s.open_plugin_editor(fx_id);
+	assert!(!s.plugin_editor_open(fx_id));
+
+	// One gesture in the plugin's GUI = one undo step, applied live.
+	let up = |event| EditorUpdate {
+		device: fx_id,
+		event,
+	};
+	s.editor_updates(
+		vec![
+			up(EditorEvent::GestureBegin { param: "12".into() }),
+			up(EditorEvent::Value {
+				param: "12".into(),
+				value: 0.25,
+			}),
+		],
+		t0,
+	);
+	assert_eq!(s.param_value(Some(keys), fx_id, "12"), Some(0.25));
+	assert_eq!(s.document().history_labels().len(), steps);
+	s.editor_updates(
+		vec![
+			up(EditorEvent::Value {
+				param: "12".into(),
+				value: 0.75,
+			}),
+			up(EditorEvent::GestureEnd { param: "12".into() }),
+		],
+		t0,
+	);
+	assert_eq!(s.document().history_labels().len(), steps + 1);
+	assert_eq!(
+		s.project()
+			.device(Some(keys), fx_id)
+			.unwrap()
+			.params
+			.get("12"),
+		Some(&0.75)
+	);
+	assert!(!s.reload_pending(), "parameter edits are live");
+	s.undo();
+	assert_eq!(s.document().history_labels().len(), steps);
+	// (The parameter had no explicit value before: back to the plugin's own, reload.)
+	assert!(s.reload_pending());
+	s.tick(Instant::now() + RELOAD_DEBOUNCE * 2);
+
+	// A state captured from the running instance is stored without a reload; undoing
+	// it reloads (the instance must go back to the old state).
+	s.store_editor_states(vec![EditorState {
+		track: Some(keys),
+		device: fx_id,
+		state: "U1RBVEU=".into(),
+	}]);
+	assert_eq!(
+		s.project()
+			.device(Some(keys), fx_id)
+			.unwrap()
+			.state
+			.as_deref(),
+		Some("U1RBVEU=")
+	);
+	assert!(!s.reload_pending());
+	s.undo();
+	assert!(s.reload_pending());
+	// An identical state is not stored twice.
+	s.tick(Instant::now() + RELOAD_DEBOUNCE * 2);
+	s.redo();
+	let steps = s.document().history_labels().len();
+	s.store_editor_states(vec![EditorState {
+		track: Some(keys),
+		device: fx_id,
+		state: "U1RBVEU=".into(),
+	}]);
+	assert_eq!(s.document().history_labels().len(), steps);
+}

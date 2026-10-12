@@ -247,6 +247,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		"Maximize the focused panel / restore",
 	),
 	sc("Windows", "F12", "Close all tool panels"),
+	sc(
+		"Windows",
+		"Double-click plugin",
+		"Plugin editor window (mixer insert / instrument, track instrument name)",
+	),
 	sc("Transport", "Space", "Play / stop (in the current mode)"),
 	sc("Transport", "L", "Pattern / Song mode"),
 	sc("Transport", "Ctrl+L", "Loop region on / off"),

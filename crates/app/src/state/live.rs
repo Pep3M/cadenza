@@ -7,6 +7,8 @@
 //! (`Player::set_live_*`, `Player::set_automation`, `Player::set_track_clips`) and
 //! sounding notes keep playing. Anything else (tracks, devices, routing, audio clips,
 //! tempo, a parameter reset to its default...) is structural and reloads the player.
+//! A device state is live only when the running instance already holds it (a state
+//! captured from a plugin editor; see `state::editors`).
 
 use cadenza_core::{DeviceId, TrackId};
 use cadenza_model::{Channel, Device, Project, TrackKind};
@@ -32,8 +34,11 @@ impl LiveChanges {
 	}
 }
 
+/// Whether the running instance of a device holds this (base64) state.
+pub type LiveState<'a> = &'a dyn Fn(DeviceId, Option<&str>) -> bool;
+
 /// The live changes turning `old` into `new`, or `None` when the edit is structural.
-pub fn diff(old: &Project, new: &Project) -> Option<LiveChanges> {
+pub fn diff(old: &Project, new: &Project, live_state: LiveState) -> Option<LiveChanges> {
 	if old.tracks.len() != new.tracks.len() {
 		return None;
 	}
@@ -43,16 +48,28 @@ pub fn diff(old: &Project, new: &Project) -> Option<LiveChanges> {
 		if o.id != n.id {
 			return None;
 		}
-		channel(Some(o.id), &mut o.channel, &n.channel, &mut changes)?;
+		channel(
+			Some(o.id),
+			&mut o.channel,
+			&n.channel,
+			&mut changes,
+			live_state,
+		)?;
 		if let (Some(od), Some(nd)) = (&mut o.instrument, &n.instrument) {
-			device(od, nd, &mut changes)?;
+			device(od, nd, &mut changes, live_state)?;
 		}
 		if o.clips != n.clips && o.kind == TrackKind::Instrument && n.kind == o.kind {
 			o.clips = n.clips.clone();
 			changes.clips.push(n.id);
 		}
 	}
-	channel(None, &mut normalized.master, &new.master, &mut changes)?;
+	channel(
+		None,
+		&mut normalized.master,
+		&new.master,
+		&mut changes,
+		live_state,
+	)?;
 	if normalized.automation != new.automation {
 		changes.automation = true;
 		normalized.automation = new.automation.clone();
@@ -65,6 +82,7 @@ fn channel(
 	o: &mut Channel,
 	n: &Channel,
 	changes: &mut LiveChanges,
+	live_state: LiveState,
 ) -> Option<()> {
 	if o.volume_db != n.volume_db {
 		o.volume_db = n.volume_db;
@@ -84,16 +102,25 @@ fn channel(
 		}
 	}
 	for (od, nd) in o.inserts.iter_mut().zip(&n.inserts) {
-		device(od, nd, changes)?;
+		device(od, nd, changes, live_state)?;
 	}
 	Some(())
 }
 
 /// Parameter values set or changed on the same device; a parameter that disappeared
-/// (reset to the device default) is structural.
-fn device(o: &mut Device, n: &Device, changes: &mut LiveChanges) -> Option<()> {
+/// (reset to the device default) is structural, and so is a new state unless the
+/// running instance already holds it.
+fn device(
+	o: &mut Device,
+	n: &Device,
+	changes: &mut LiveChanges,
+	live_state: LiveState,
+) -> Option<()> {
 	if o.id != n.id {
 		return Some(());
+	}
+	if o.state != n.state && live_state(n.id, n.state.as_deref()) {
+		o.state = n.state.clone();
 	}
 	if o.params.keys().any(|k| !n.params.contains_key(k)) {
 		return None;
@@ -124,6 +151,10 @@ mod tests {
 		let id = t.id;
 		p.tracks = vec![t, bus];
 		(p, id, did, sid)
+	}
+
+	fn diff(old: &Project, new: &Project) -> Option<LiveChanges> {
+		super::diff(old, new, &|_, _| false)
 	}
 
 	fn after(p: &Project, cmd: Command) -> Project {
@@ -254,5 +285,24 @@ mod tests {
 			},
 		);
 		assert!(diff(&p, &tempo).is_none());
+	}
+
+	#[test]
+	fn states_the_running_instance_holds_are_live() {
+		let (p, track, synth, _) = project();
+		let n = after(
+			&p,
+			Command::SetDeviceState {
+				track: Some(track),
+				device: synth,
+				state: Some("TElWRQ==".into()),
+				params: None,
+			},
+		);
+		assert!(diff(&p, &n).is_none());
+		let live = |d: DeviceId, s: Option<&str>| d == synth && s == Some("TElWRQ==");
+		assert!(super::diff(&p, &n, &live).unwrap().is_empty());
+		// Undoing it restores a state the instance does not hold: reload.
+		assert!(super::diff(&n, &p, &live).is_none());
 	}
 }

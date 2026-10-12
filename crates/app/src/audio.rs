@@ -9,19 +9,30 @@
 //!
 //! The playhead and play state are read lock-free through a [`PlayerClock`], and levels
 //! through the loaded graph's [`MeterBank`].
+//!
+//! Plugin editors are opened and closed through the player too (they belong to the
+//! loaded instances); while any is open the thread polls them every [`EDITOR_POLL`] and
+//! forwards what happened as [`AudioEvent::Editor`].
 
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
-use cadenza_engine::{AuditionScope, MeterBank, Player, PlayerClock, PluginCrash, PluginHosting};
+use cadenza_engine::{
+	AuditionScope, EditorState, EditorUpdate, MeterBank, Player, PlayerClock, PluginCrash,
+	PluginHosting,
+};
 use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
 
 /// How often the player thread polls sandboxed plugins for crashes.
 const CRASH_POLL: Duration = Duration::from_millis(500);
+/// How often the player thread polls open plugin editors.
+pub const EDITOR_POLL: Duration = Duration::from_millis(30);
+/// How long saving waits for the live states of open plugin editors.
+pub const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Wakes the UI when an event arrives (e.g. `egui::Context::request_repaint`).
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -59,6 +70,17 @@ enum Request {
 		clips: Vec<Clip>,
 		tempo: TempoMap,
 	},
+	OpenEditor {
+		device: DeviceId,
+		title: String,
+	},
+	CloseEditor(DeviceId),
+	/// Capture live plugin states (reported as `EditorStates`, or through `reply`).
+	CaptureStates {
+		project: Box<Project>,
+		devices: Vec<DeviceId>,
+		reply: Option<SyncSender<Vec<EditorState>>>,
+	},
 	Shutdown,
 }
 
@@ -79,6 +101,15 @@ pub enum AudioEvent {
 		error: String,
 	},
 	PluginCrashes(Vec<PluginCrash>),
+	/// What happened in open plugin editors.
+	Editor(Vec<EditorUpdate>),
+	/// Live plugin states to store in the project (captured, or carried over by a load).
+	EditorStates(Vec<EditorState>),
+	/// An editor could not be opened.
+	EditorFailed {
+		device: DeviceId,
+		error: String,
+	},
 	/// A live change could not reach the running graph (e.g. an automation lane was
 	/// removed): the project must be reloaded.
 	ReloadNeeded,
@@ -179,6 +210,42 @@ impl AudioEngine {
 		});
 	}
 
+	/// Opens (or raises) the editor of plugin device `device`.
+	pub fn open_editor(&self, device: DeviceId, title: String) {
+		self.send(Request::OpenEditor { device, title });
+	}
+
+	pub fn close_editor(&self, device: DeviceId) {
+		self.send(Request::CloseEditor(device));
+	}
+
+	/// Captures the live state of `devices` (and of every editor that reported a state
+	/// change); results come back as [`AudioEvent::EditorStates`].
+	pub fn capture_states(&self, project: Project, devices: Vec<DeviceId>) {
+		self.send(Request::CaptureStates {
+			project: Box::new(project),
+			devices,
+			reply: None,
+		});
+	}
+
+	/// Like [`AudioEngine::capture_states`], waiting (at most `timeout`) for the result:
+	/// used right before saving.
+	pub fn capture_states_now(
+		&self,
+		project: Project,
+		devices: Vec<DeviceId>,
+		timeout: Duration,
+	) -> Vec<EditorState> {
+		let (tx, rx) = mpsc::sync_channel(1);
+		self.send(Request::CaptureStates {
+			project: Box::new(project),
+			devices,
+			reply: Some(tx),
+		});
+		rx.recv_timeout(timeout).unwrap_or_default()
+	}
+
 	/// Next pending event, if any (never blocks).
 	pub fn poll(&self) -> Option<AudioEvent> {
 		self.events.try_recv().ok()
@@ -212,8 +279,19 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 			emit(AudioEvent::Unavailable(e.to_string()));
 			// Keep draining so senders never see a closed channel mid-session.
 			for r in rx {
-				if matches!(r, Request::Shutdown) {
-					break;
+				match r {
+					Request::Shutdown => break,
+					Request::OpenEditor { device, .. } => emit(AudioEvent::EditorFailed {
+						device,
+						error: "plugin editors need the audio engine, and there is no audio output"
+							.into(),
+					}),
+					Request::CaptureStates {
+						reply: Some(tx), ..
+					} => {
+						let _ = tx.send(Vec::new());
+					}
+					_ => {}
 				}
 			}
 			return;
@@ -222,16 +300,33 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 	emit(AudioEvent::Ready {
 		clock: player.clock(),
 	});
+	let mut next_crash_poll = Instant::now() + CRASH_POLL;
+	let mut next_editor_poll = Instant::now() + EDITOR_POLL;
 	loop {
-		let first = match rx.recv_timeout(CRASH_POLL) {
-			Ok(r) => r,
-			Err(RecvTimeoutError::Timeout) => {
-				let crashes = player.take_plugin_crashes();
-				if !crashes.is_empty() {
-					emit(AudioEvent::PluginCrashes(crashes));
-				}
-				continue;
+		let now = Instant::now();
+		if now >= next_crash_poll {
+			next_crash_poll = now + CRASH_POLL;
+			let crashes = player.take_plugin_crashes();
+			if !crashes.is_empty() {
+				emit(AudioEvent::PluginCrashes(crashes));
 			}
+		}
+		let editors = !player.open_editors().is_empty();
+		if editors && now >= next_editor_poll {
+			next_editor_poll = now + EDITOR_POLL;
+			let updates = player.poll_editors();
+			if !updates.is_empty() {
+				emit(AudioEvent::Editor(updates));
+			}
+		}
+		let next = if editors {
+			next_crash_poll.min(next_editor_poll)
+		} else {
+			next_crash_poll
+		};
+		let first = match rx.recv_timeout(next.saturating_duration_since(Instant::now())) {
+			Ok(r) => r,
+			Err(RecvTimeoutError::Timeout) => continue,
 			Err(RecvTimeoutError::Disconnected) => break,
 		};
 		let mut batch = vec![first];
@@ -270,6 +365,16 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 							generation,
 							error: e.to_string(),
 						}),
+					}
+					// Editor states carried over to the new instances, and editors that
+					// lost their device.
+					let states = player.take_editor_states();
+					if !states.is_empty() {
+						emit(AudioEvent::EditorStates(states));
+					}
+					let updates = player.poll_editors();
+					if !updates.is_empty() {
+						emit(AudioEvent::Editor(updates));
 					}
 					Ok(())
 				}
@@ -314,6 +419,33 @@ fn run(rx: Receiver<Request>, events: Sender<AudioEvent>, waker: Option<Waker>) 
 					}
 					Err(e) => Err(e),
 				},
+				Request::OpenEditor { device, title } => {
+					if let Err(e) = player.open_editor(device, &title) {
+						emit(AudioEvent::EditorFailed {
+							device,
+							error: e.to_string(),
+						});
+					}
+					next_editor_poll = Instant::now() + EDITOR_POLL;
+					Ok(())
+				}
+				Request::CloseEditor(device) => player.close_editor(device),
+				Request::CaptureStates {
+					project,
+					devices,
+					reply,
+				} => {
+					player.capture_editor_states(&project, &devices);
+					let states = player.take_editor_states();
+					match reply {
+						Some(tx) => {
+							let _ = tx.send(states);
+						}
+						None if !states.is_empty() => emit(AudioEvent::EditorStates(states)),
+						None => {}
+					}
+					Ok(())
+				}
 				Request::Shutdown => {
 					let _ = player.stop();
 					return;

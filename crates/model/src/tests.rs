@@ -2023,3 +2023,121 @@ fn update_audio_clip_swaps_source_offset_and_gain() {
 		ModelError::NotAnAudioClip(_)
 	));
 }
+
+fn marker(beat: f64, name: &str) -> Command {
+	Command::AddMarker {
+		marker: Marker::new(beats(beat), name),
+	}
+}
+
+#[test]
+fn a_group_is_one_undo_step_that_redoes() {
+	let mut doc = Document::new(Project::new("x"));
+	doc.execute(marker(0.0, "Intro")).unwrap();
+	let before = doc.project().clone();
+	let r0 = doc.revision();
+	doc.begin_group("AI: add a bridge");
+	doc.execute(marker(8.0, "Bridge")).unwrap();
+	doc.execute(Command::SetTempo {
+		tick: Tick::ZERO,
+		bpm: 90.0,
+	})
+	.unwrap();
+	assert!(doc.in_group());
+	assert!(doc.end_group());
+	assert!(!doc.in_group());
+	assert!(doc.revision() > r0);
+	assert_eq!(
+		doc.history_labels(),
+		vec!["Add marker 'Intro'", "AI: add a bridge"]
+	);
+	let after = doc.project().clone();
+
+	assert_eq!(doc.undo().unwrap(), "AI: add a bridge");
+	assert_eq!(doc.project(), &before);
+	assert_eq!(doc.redo().unwrap(), "AI: add a bridge");
+	assert_eq!(doc.project(), &after);
+	doc.undo().unwrap();
+	doc.undo().unwrap();
+	assert!(doc.project().markers.is_empty());
+}
+
+#[test]
+fn empty_and_nested_groups() {
+	let mut doc = Document::new(Project::new("x"));
+	doc.execute(marker(0.0, "A")).unwrap();
+	doc.undo().unwrap();
+	let r = doc.revision();
+	// Empty group: no step, the user's redo survives.
+	doc.begin_group("AI: nothing");
+	assert!(!doc.end_group());
+	assert_eq!(doc.revision(), r);
+	assert!(doc.can_redo());
+	assert!(!doc.end_group(), "no group open");
+
+	// Nested: the outer label wins and only the outer end folds.
+	doc.begin_group("outer");
+	doc.execute(marker(1.0, "B")).unwrap();
+	doc.begin_group("inner");
+	doc.execute(marker(2.0, "C")).unwrap();
+	assert!(!doc.end_group());
+	assert!(doc.in_group());
+	doc.execute(marker(3.0, "D")).unwrap();
+	assert!(doc.end_group());
+	assert_eq!(doc.history_labels(), vec!["outer"]);
+	assert!(!doc.can_redo(), "executing cleared the redo stack");
+	doc.undo().unwrap();
+	assert!(doc.project().markers.is_empty());
+}
+
+#[test]
+fn undo_inside_a_group_stays_inside_it() {
+	let mut doc = Document::new(Project::new("x"));
+	doc.execute(marker(0.0, "User")).unwrap();
+	doc.begin_group("AI");
+	assert_eq!(
+		doc.undo(),
+		Err(ModelError::NothingToUndo),
+		"user step is out of reach"
+	);
+	doc.execute(marker(4.0, "Mine")).unwrap();
+	doc.execute(marker(8.0, "Scratch")).unwrap();
+	doc.undo().unwrap();
+	assert!(doc.can_redo());
+	doc.undo().unwrap();
+	assert_eq!(doc.undo(), Err(ModelError::NothingToUndo));
+	doc.redo().unwrap();
+	assert!(doc.end_group());
+	// The scratch step the group undid is not redoable afterwards.
+	assert!(!doc.can_redo());
+	assert_eq!(doc.history_labels(), vec!["Add marker 'User'", "AI"]);
+	assert_eq!(doc.project().markers.len(), 2);
+}
+
+#[test]
+fn redo_inside_a_group_cannot_reach_older_steps() {
+	let mut doc = Document::new(Project::new("x"));
+	doc.execute(marker(0.0, "User")).unwrap();
+	doc.undo().unwrap();
+	doc.begin_group("AI");
+	assert_eq!(doc.redo(), Err(ModelError::NothingToRedo));
+	doc.end_group();
+	doc.redo().unwrap();
+	assert_eq!(doc.project().markers.len(), 1);
+}
+
+#[test]
+fn aborting_a_group_reverts_it() {
+	let mut doc = Document::new(Project::new("x"));
+	doc.execute(marker(0.0, "User")).unwrap();
+	let before = doc.project().clone();
+	doc.begin_group("AI");
+	doc.begin_group("nested");
+	doc.execute(marker(4.0, "A")).unwrap();
+	doc.execute(marker(8.0, "B")).unwrap();
+	assert_eq!(doc.abort_group().unwrap(), 2);
+	assert!(!doc.in_group());
+	assert_eq!(doc.project(), &before);
+	assert_eq!(doc.history_labels(), vec!["Add marker 'User'"]);
+	assert_eq!(doc.abort_group().unwrap(), 0);
+}

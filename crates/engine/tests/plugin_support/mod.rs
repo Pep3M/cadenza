@@ -189,3 +189,44 @@ pub fn catalog() -> Arc<PluginCatalog> {
 pub fn plugin_path(id: &str) -> PathBuf {
 	catalog().find(id).expect("scanned").path.clone()
 }
+
+pub const DUCKER_ID: &str = "dev.cadenza.test.ducker";
+pub const MULTI_ID: &str = "dev.cadenza.test.multi";
+
+/// A catalog holding the sidechain/multi-output test plugins (`clap_routing` example)
+/// plus the regular test plugins (gain, sine).
+pub fn routing_catalog() -> Arc<PluginCatalog> {
+	static CATALOG: OnceLock<Arc<PluginCatalog>> = OnceLock::new();
+	CATALOG
+		.get_or_init(|| {
+			let library = cargo_build(&["-p", "cadenza-test-plugins", "--example", "clap_routing"])
+				.into_iter()
+				.find(|f| {
+					let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+					let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned());
+					matches!(ext, "so" | "dll" | "dylib")
+						&& stem.is_some_and(|s| s.contains("clap_routing"))
+				})
+				.expect("cargo reported no cdylib for clap_routing");
+			let dir = plugin_dir("routing-plugins");
+			std::fs::copy(&library, dir.join("cadenza-routing.clap")).unwrap();
+			let cache = dir.join("../catalog.json");
+			let mut catalog = PluginCatalog::load_or_default(&cache);
+			let report = catalog
+				.scan(&[dir], &scanner())
+				.expect("scan routing plugins");
+			assert_eq!(report.added.len(), 4, "{report:?}");
+			Arc::new(catalog)
+		})
+		.clone()
+}
+
+/// A CLAP device for `id` from [`routing_catalog`].
+pub fn routing_device(id: &str, name: &str) -> cadenza_model::Device {
+	let mut d = cadenza_model::Device::builtin("unused", name);
+	d.kind = cadenza_model::DeviceKind::Clap {
+		plugin_id: id.into(),
+		path: routing_catalog().find(id).expect("scanned").path.clone(),
+	};
+	d
+}

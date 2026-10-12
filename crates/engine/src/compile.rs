@@ -23,9 +23,11 @@ use cadenza_plugin_host::{
 use crate::audio_clip::{AudioData, ClipPlayback, load_wav};
 use crate::automation::{AutoTarget, Binding, Curve, DeviceSlot};
 use crate::error::EngineError;
-use crate::graph::{Device, Edge, Fader, Graph, Master, Node, Source, StereoBuf, StereoDelay};
+use crate::graph::{
+	AuxEdge, Device, Edge, Fader, Graph, Master, Node, Sidechain, Source, StereoBuf, StereoDelay,
+};
 use crate::hosting::{PluginHosting, PluginWatch, sandbox_unavailable};
-use crate::pdc::{PdcEdge, PdcNode, plan};
+use crate::pdc::{PdcEdge, PdcNode, PdcStage, Tap, plan};
 use crate::schedule::MidiSchedule;
 use crate::{MAX_TAIL_SECONDS, QUANTUM};
 
@@ -280,15 +282,7 @@ impl<'a> Compiler<'a> {
 			));
 			return None;
 		};
-		let Some(desc) = catalog
-			.find_at(plugin_id, path)
-			.filter(|d| d.format == format)
-			.or_else(|| {
-				catalog
-					.descriptors()
-					.find(|d| d.id == plugin_id && d.format == format)
-			})
-		else {
+		let Some(desc) = crate::devices::find_plugin(catalog, format, plugin_id, path) else {
 			self.warnings.push(format!(
 				"{label} is not installed or not scanned (expected at '{}'); run scan_plugins; bypassed",
 				path.display()
@@ -309,23 +303,8 @@ impl<'a> Compiler<'a> {
 		let mode = self.mode;
 		let sandboxed = self.sandbox_ok();
 		let hosting = self.hosting;
-		let options = &hosting.sandbox;
-		let create = |state: Option<&[u8]>| -> Result<_, PluginError> {
-			if sandboxed {
-				let p = cadenza_plugin_host::instantiate_sandboxed(
-					desc,
-					sr,
-					QUANTUM,
-					state,
-					mode,
-					options.clone(),
-				)?;
-				let monitor = p.monitor();
-				Ok((Box::new(p) as Box<dyn Processor>, Some(monitor)))
-			} else {
-				cadenza_plugin_host::instantiate_with_mode(desc, sr, QUANTUM, state, mode)
-					.map(|p| (p, None))
-			}
+		let create = |state: Option<&[u8]>| {
+			crate::devices::create_plugin(desc, sr, state, mode, hosting, sandboxed)
 		};
 		let result = match create(state.as_deref()) {
 			Err(e @ PluginError::State { .. }) if state.is_some() => {
@@ -399,6 +378,7 @@ impl<'a> Compiler<'a> {
 					.map(|processor| Device {
 						id: d.id,
 						processor,
+						sidechain: None,
 					})
 			})
 			.collect()
@@ -428,6 +408,7 @@ impl<'a> Compiler<'a> {
 						.map(|processor| Device {
 							id: d.id,
 							processor,
+							sidechain: None,
 						})
 				});
 				if track.instrument.is_none() && track.clips.iter().any(|c| !c.notes().is_empty()) {
@@ -451,6 +432,7 @@ impl<'a> Compiler<'a> {
 						schedule,
 						events,
 						notes_off_on_reset,
+						midi_delay: 0,
 					},
 					false,
 				)
@@ -515,18 +497,19 @@ impl<'a> Compiler<'a> {
 			buses.iter().enumerate().map(|(i, &b)| (b, i)).collect();
 		let master_acc = buses.len();
 
-		let mut order: Vec<usize> = project
+		let mut priority: Vec<usize> = project
 			.tracks
 			.iter()
 			.enumerate()
 			.filter(|(_, t)| t.kind != TrackKind::Bus)
 			.map(|(i, _)| i)
 			.collect();
-		order.extend(
+		priority.extend(
 			buses
 				.iter()
 				.map(|b| project.track_index(*b).expect("bus exists")),
 		);
+		let order = self.processing_order(&priority, &routes);
 		let position: HashMap<TrackId, usize> = order
 			.iter()
 			.enumerate()
@@ -552,7 +535,7 @@ impl<'a> Compiler<'a> {
 			false
 		};
 
-		let mut nodes = Vec::with_capacity(order.len());
+		let mut nodes: Vec<Node> = Vec::with_capacity(order.len());
 		let mut pdc_nodes = Vec::with_capacity(order.len());
 		let mut pdc_edges = Vec::new();
 		for (pos, &ti) in order.iter().enumerate() {
@@ -563,21 +546,25 @@ impl<'a> Compiler<'a> {
 			if let Source::Bus { accumulator } = &mut source {
 				*accumulator = bus_acc[&track.id];
 			}
-			let inserts = self.inserts(&track.channel.inserts, &owner);
-			let instrument_latency = match &source {
-				Source::Instrument {
-					device: Some(d), ..
-				} => d.processor.latency(),
-				_ => 0,
-			};
-			let chain_latency =
-				instrument_latency + inserts.iter().map(|d| d.processor.latency()).sum::<u32>();
+			let mut inserts = self.inserts(&track.channel.inserts, &owner);
+			let mut stages = Vec::new();
+			if let Source::Instrument {
+				device: Some(d), ..
+			} = &mut source
+			{
+				self.key(d, track.devices(), Some(pos), &position, &mut nodes, &owner);
+				stages.push(stage(d));
+			}
+			for d in &mut inserts {
+				self.key(d, track.devices(), Some(pos), &position, &mut nodes, &owner);
+				stages.push(stage(d));
+			}
 			pdc_nodes.push(PdcNode {
-				chain_latency,
 				input: match &source {
 					Source::Bus { accumulator } => Some(*accumulator),
 					_ => None,
 				},
+				stages,
 			});
 
 			let mut edges = Vec::new();
@@ -605,6 +592,7 @@ impl<'a> Compiler<'a> {
 				pdc_edges.push(PdcEdge {
 					from: pos,
 					to_accumulator: accumulator,
+					tap: Tap::Out,
 				});
 				edges.push(Edge {
 					accumulator,
@@ -612,6 +600,16 @@ impl<'a> Compiler<'a> {
 					pre_fader,
 					delay: StereoDelay::new(0),
 				});
+			}
+			let aux_edges = self.aux_edges(track, &source, pos, &position, &bus_acc, &owner);
+			for e in &aux_edges {
+				if let Some(accumulator) = e.accumulator {
+					pdc_edges.push(PdcEdge {
+						from: pos,
+						to_accumulator: accumulator,
+						tap: Tap::FirstStage,
+					});
+				}
 			}
 
 			let audible = !track.channel.mute
@@ -625,15 +623,29 @@ impl<'a> Compiler<'a> {
 				fader: Fader::new(track.channel.volume_db, track.channel.pan, mono, sr as f32),
 				audible,
 				edges,
+				aux_edges,
 				buf: StereoBuf::new(),
+				tap_pre: false,
+				pre: StereoBuf::new(),
 				out_latency: 0,
 			});
 		}
 
 		self.current_track = None;
-		let master_inserts = self.inserts(&project.master.inserts, "master");
-		let master_chain: u32 = master_inserts.iter().map(|d| d.processor.latency()).sum();
-		let pdc = plan(&pdc_nodes, &pdc_edges, master_acc + 1);
+		let mut master_inserts = self.inserts(&project.master.inserts, "master");
+		let mut master_stages = Vec::new();
+		for d in &mut master_inserts {
+			self.key(
+				d,
+				project.master.inserts.iter(),
+				None,
+				&position,
+				&mut nodes,
+				"master",
+			);
+			master_stages.push(stage(d));
+		}
+		let pdc = plan(&pdc_nodes, &pdc_edges, master_acc + 1, &master_stages);
 		let mut edge_index = 0;
 		for (i, node) in nodes.iter_mut().enumerate() {
 			node.out_latency = pdc.node_out_latency[i];
@@ -641,8 +653,34 @@ impl<'a> Compiler<'a> {
 				edge.delay = StereoDelay::new(pdc.edge_delay[edge_index]);
 				edge_index += 1;
 			}
+			for edge in node
+				.aux_edges
+				.iter_mut()
+				.filter(|e| e.accumulator.is_some())
+			{
+				edge.delay = StereoDelay::new(pdc.edge_delay[edge_index]);
+				edge_index += 1;
+			}
+			let mut delays = pdc.stage_delays[i].iter();
+			if let Source::Instrument {
+				device: Some(d),
+				midi_delay,
+				..
+			} = &mut node.source
+				&& let Some(delay) = delays.next()
+			{
+				// Instruments have no audio input: their notes are delayed instead.
+				*midi_delay = delay.main;
+				apply_delay(d, delay.key, 0);
+			}
+			for (d, delay) in node.inserts.iter_mut().zip(delays) {
+				apply_delay(d, delay.key, delay.main);
+			}
 		}
-		let latency = pdc.accumulator_latency[master_acc] + master_chain;
+		for (d, delay) in master_inserts.iter_mut().zip(&pdc.master_delays) {
+			apply_delay(d, delay.key, delay.main);
+		}
+		let latency = pdc.latency;
 
 		let master = Master {
 			inserts: master_inserts,
@@ -674,6 +712,170 @@ impl<'a> Compiler<'a> {
 			playing: false,
 			needs_reset: true,
 		})
+	}
+
+	/// Processing order: non-bus tracks in display order, then buses (`priority`), moved
+	/// only as much as needed so every track comes after the tracks it needs (audio
+	/// routed to a bus, extra instrument outputs, sidechain keys). Tracks caught in a loop
+	/// keep their priority order; the connections that would run backwards are dropped
+	/// later with a warning.
+	fn processing_order(
+		&self,
+		priority: &[usize],
+		routes: &HashMap<TrackId, Vec<Dest>>,
+	) -> Vec<usize> {
+		let project = self.project;
+		let index: HashMap<TrackId, usize> = priority
+			.iter()
+			.enumerate()
+			.map(|(k, &ti)| (project.tracks[ti].id, k))
+			.collect();
+		let mut needs: Vec<Vec<usize>> = vec![Vec::new(); priority.len()];
+		for (k, &ti) in priority.iter().enumerate() {
+			let track = &project.tracks[ti];
+			let aux = track
+				.instrument
+				.iter()
+				.flat_map(|d| d.aux_outputs.iter().filter_map(|r| r.bus));
+			let feeds = routes[&track.id]
+				.iter()
+				.filter_map(|d| match d {
+					Dest::Bus(b) => Some(*b),
+					Dest::Master => None,
+				})
+				.chain(aux);
+			for bus in feeds {
+				if let Some(&b) = index.get(&bus)
+					&& b != k
+				{
+					needs[b].push(k);
+				}
+			}
+			for d in track.devices() {
+				if let Some(&src) = d.sidechain.and_then(|s| index.get(&s.track))
+					&& src != k
+				{
+					needs[k].push(src);
+				}
+			}
+		}
+		let mut done = vec![false; priority.len()];
+		let mut order = Vec::with_capacity(priority.len());
+		while order.len() < priority.len() {
+			let ready =
+				(0..priority.len()).find(|&k| !done[k] && needs[k].iter().all(|&n| done[n]));
+			let Some(k) = ready.or_else(|| (0..priority.len()).find(|&k| !done[k])) else {
+				break;
+			};
+			done[k] = true;
+			order.push(priority[k]);
+		}
+		order
+	}
+
+	/// Connects `device`'s sidechain (as declared on the model device with the same id
+	/// among `declared`) when its source is processed earlier; warns otherwise.
+	/// `pos` is the position of the device's node (`None` = master).
+	fn key<'d>(
+		&mut self,
+		device: &mut Device,
+		mut declared: impl Iterator<Item = &'d cadenza_model::Device>,
+		pos: Option<usize>,
+		position: &HashMap<TrackId, usize>,
+		nodes: &mut [Node],
+		owner: &str,
+	) {
+		let Some(model) = declared.find(|d| d.id == device.id) else {
+			return;
+		};
+		let Some(source) = model.sidechain else {
+			return;
+		};
+		let name = &model.name;
+		let source_name = self
+			.project
+			.track(source.track)
+			.map_or_else(|| source.track.to_string(), |t| format!("'{}'", t.name));
+		let Some(&src) = position.get(&source.track) else {
+			self.warnings.push(format!(
+				"{owner}: device '{name}' is keyed by track {source_name}, which does not exist; sidechain ignored"
+			));
+			return;
+		};
+		if pos.is_some_and(|p| src >= p) {
+			self.warnings.push(format!(
+				"{owner}: device '{name}' keyed by track {source_name} would create a feedback loop; sidechain ignored"
+			));
+			return;
+		}
+		if !device.processor.has_sidechain() {
+			self.warnings.push(format!(
+				"{owner}: device '{name}' has no sidechain input; the sidechain from track {source_name} is ignored (use a compressor or a plugin with a sidechain input)"
+			));
+			return;
+		}
+		if source.pre_fader {
+			nodes[src].tap_pre = true;
+		}
+		device.sidechain = Some(Box::new(Sidechain {
+			source: src,
+			pre_fader: source.pre_fader,
+			key: StereoBuf::new(),
+			key_delay: StereoDelay::new(0),
+			main_delay: StereoDelay::new(0),
+		}));
+	}
+
+	/// Extra instrument outputs routed by `track`'s instrument.
+	fn aux_edges(
+		&mut self,
+		track: &Track,
+		source: &Source,
+		pos: usize,
+		position: &HashMap<TrackId, usize>,
+		bus_acc: &HashMap<TrackId, usize>,
+		owner: &str,
+	) -> Vec<AuxEdge> {
+		let routes = track
+			.instrument
+			.as_ref()
+			.map_or(&[][..], |d| d.aux_outputs.as_slice());
+		let Source::Instrument {
+			device: Some(device),
+			..
+		} = source
+		else {
+			return Vec::new();
+		};
+		let available = device.processor.aux_output_count();
+		let mut edges = Vec::new();
+		for route in routes {
+			let port = route.port as usize;
+			if port == 0 || port > available {
+				self.warnings.push(format!(
+					"{owner}: the instrument has {available} extra output(s); output {port} is not available and was ignored"
+				));
+				continue;
+			}
+			let accumulator = match route.bus {
+				None => None,
+				Some(bus) if bus != track.id && self.is_bus(bus) && position[&bus] > pos => {
+					Some(bus_acc[&bus])
+				}
+				Some(bus) => {
+					self.warnings.push(format!(
+						"{owner}: instrument output {port} -> {bus} is not a valid bus route (missing, not a bus, or a feedback loop); ignored"
+					));
+					continue;
+				}
+			};
+			edges.push(AuxEdge {
+				port: port - 1,
+				accumulator,
+				delay: StereoDelay::new(0),
+			});
+		}
+		edges
 	}
 
 	fn bind_automation(&mut self, nodes: &[Node], master: &Master) -> Vec<Binding> {
@@ -753,6 +955,20 @@ fn find_device<'g>(
 		.iter()
 		.position(|d| d.id == id)
 		.map(|k| (DeviceSlot::Insert(k), inserts[k].processor.as_ref()))
+}
+
+fn stage(d: &Device) -> PdcStage {
+	PdcStage {
+		latency: d.processor.latency(),
+		key: d.sidechain.as_ref().map(|s| s.source),
+	}
+}
+
+fn apply_delay(d: &mut Device, key: u32, main: u32) {
+	if let Some(sc) = &mut d.sidechain {
+		sc.key_delay = StereoDelay::new(key);
+		sc.main_delay = StereoDelay::new(main);
+	}
 }
 
 fn role_name(role: DeviceRole) -> &'static str {

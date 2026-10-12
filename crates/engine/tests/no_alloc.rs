@@ -50,8 +50,17 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 
 #[test]
 fn graph_process_does_not_allocate() {
-	let p = mini_song();
+	let mut p = mini_song();
+	// Key a compressor on the last track from the first one (pre-fader), so sidechain
+	// delivery is covered too.
+	let source = p.tracks[0].id;
+	let last = p.tracks.len() - 1;
+	p.tracks[last]
+		.channel
+		.inserts
+		.push(cadenza_model::Device::builtin("compressor", "Duck").with_sidechain(source, true));
 	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	assert!(graph.warnings().is_empty(), "{:?}", graph.warnings());
 	let mut left = vec![0.0f32; 1024];
 	let mut right = vec![0.0f32; 1024];
 	graph.play();

@@ -54,6 +54,49 @@ impl StereoDelay {
 		self.r.fill(0.0);
 		self.pos = 0;
 	}
+
+	/// Delays `buf` in place.
+	fn process(&mut self, buf: &mut StereoBuf) {
+		let len = self.l.len();
+		if len == 0 {
+			return;
+		}
+		for i in 0..QUANTUM {
+			let (yl, yr) = (self.l[self.pos], self.r[self.pos]);
+			self.l[self.pos] = buf.l[i];
+			self.r[self.pos] = buf.r[i];
+			buf.l[i] = yl;
+			buf.r[i] = yr;
+			self.pos += 1;
+			if self.pos == len {
+				self.pos = 0;
+			}
+		}
+	}
+
+	/// Adds `l`/`r` (at most one quantum) to `dst` through the delay.
+	fn mix(&mut self, l: &[f32], r: &[f32], gain: f32, dst: &mut StereoBuf) {
+		let n = l.len().min(r.len()).min(QUANTUM);
+		if self.l.is_empty() {
+			for i in 0..n {
+				dst.l[i] += l[i] * gain;
+				dst.r[i] += r[i] * gain;
+			}
+			return;
+		}
+		let len = self.l.len();
+		for i in 0..QUANTUM {
+			let (yl, yr) = (self.l[self.pos], self.r[self.pos]);
+			self.l[self.pos] = if i < n { l[i] } else { 0.0 };
+			self.r[self.pos] = if i < n { r[i] } else { 0.0 };
+			self.pos += 1;
+			if self.pos == len {
+				self.pos = 0;
+			}
+			dst.l[i] += yl * gain;
+			dst.r[i] += yr * gain;
+		}
+	}
 }
 
 /// A connection from a node to a summing accumulator (bus input or master input).
@@ -67,27 +110,30 @@ pub(crate) struct Edge {
 
 impl Edge {
 	fn mix(&mut self, src: &StereoBuf, dst: &mut StereoBuf) {
-		let d = &mut self.delay;
-		if d.l.is_empty() {
-			for i in 0..QUANTUM {
-				dst.l[i] += src.l[i] * self.gain;
-				dst.r[i] += src.r[i] * self.gain;
-			}
-			return;
-		}
-		let len = d.l.len();
-		for i in 0..QUANTUM {
-			let (yl, yr) = (d.l[d.pos], d.r[d.pos]);
-			d.l[d.pos] = src.l[i];
-			d.r[d.pos] = src.r[i];
-			d.pos += 1;
-			if d.pos == len {
-				d.pos = 0;
-			}
-			dst.l[i] += yl * self.gain;
-			dst.r[i] += yr * self.gain;
-		}
+		self.delay.mix(&src.l, &src.r, self.gain, dst);
 	}
+}
+
+/// An extra instrument output (multi-output plugins) mixed into the instrument's own
+/// track or into a bus accumulator.
+pub(crate) struct AuxEdge {
+	/// 0-based extra output index (`OutputRoute.port - 1`).
+	pub port: usize,
+	/// `None`: the node's own signal, right after the instrument.
+	pub accumulator: Option<usize>,
+	pub delay: StereoDelay,
+}
+
+/// A device's sidechain input: where the key comes from and how it is aligned.
+pub(crate) struct Sidechain {
+	/// Node (index in processing order) whose signal keys the device.
+	pub source: usize,
+	pub pre_fader: bool,
+	/// Scratch copy of the key for the current quantum.
+	pub key: StereoBuf,
+	pub key_delay: StereoDelay,
+	/// Delay of the chain signal before the device (inserts only).
+	pub main_delay: StereoDelay,
 }
 
 /// Volume + pan stage with per-sample one-pole smoothing (5 ms) of both channel gains.
@@ -190,6 +236,32 @@ impl Fader {
 pub(crate) struct Device {
 	pub id: DeviceId,
 	pub processor: Box<dyn Processor>,
+	pub sidechain: Option<Box<Sidechain>>,
+}
+
+impl Device {
+	/// Runs one quantum: aligns and hands over the key (if any), then processes `buf`.
+	fn run(&mut self, buf: &mut StereoBuf, events: &[MidiEvent], t: &Transport, done: &[Node]) {
+		if let Some(sc) = &mut self.sidechain
+			&& let Some(src) = done.get(sc.source)
+		{
+			let tap = if sc.pre_fader { &src.pre } else { &src.buf };
+			sc.key.l.copy_from_slice(&tap.l);
+			sc.key.r.copy_from_slice(&tap.r);
+			sc.key_delay.process(&mut sc.key);
+			sc.main_delay.process(buf);
+			self.processor.set_sidechain(&sc.key.l, &sc.key.r);
+		}
+		self.processor.process(&mut buf.l, &mut buf.r, events, t);
+	}
+
+	fn reset(&mut self) {
+		self.processor.reset();
+		if let Some(sc) = &mut self.sidechain {
+			sc.key_delay.clear();
+			sc.main_delay.clear();
+		}
+	}
 }
 
 pub(crate) enum Source {
@@ -201,6 +273,9 @@ pub(crate) enum Source {
 		/// already kills every voice (CLAP `reset` contract), and some (e.g. Surge XT)
 		/// mishandle the wildcard note-off that `AllNotesOff` becomes.
 		notes_off_on_reset: bool,
+		/// Samples the notes are played late by, so the instrument meets a sidechain key
+		/// that arrives later than the timeline (PDC).
+		midi_delay: u32,
 	},
 	Audio {
 		clips: Vec<ClipPlayback>,
@@ -221,8 +296,13 @@ pub(crate) struct Node {
 	/// False when muted or silenced by another track's solo.
 	pub audible: bool,
 	pub edges: Vec<Edge>,
+	/// Extra instrument outputs in use.
+	pub aux_edges: Vec<AuxEdge>,
 	/// Post-fader signal of the last quantum (what the track contributes).
 	pub buf: StereoBuf,
+	/// Whether a device is keyed by this node's pre-fader signal, kept in `pre`.
+	pub tap_pre: bool,
+	pub pre: StereoBuf,
 	/// Latency of this node's output relative to the timeline.
 	pub out_latency: u32,
 }
@@ -455,24 +535,31 @@ impl Graph {
 		self.apply_automation();
 		for node in &mut self.nodes {
 			if let Source::Instrument {
-				device, schedule, ..
+				device,
+				schedule,
+				midi_delay,
+				..
 			} = &mut node.source
 			{
 				if let Some(d) = device {
-					d.processor.reset();
+					d.reset();
 				}
-				schedule.seek(pos);
+				schedule.seek(pos - i64::from(*midi_delay));
 			}
 			for d in &mut node.inserts {
-				d.processor.reset();
+				d.reset();
 			}
 			for e in &mut node.edges {
 				e.delay.clear();
 			}
+			for e in &mut node.aux_edges {
+				e.delay.clear();
+			}
+			node.pre.clear();
 			node.fader.snap();
 		}
 		for d in &mut self.master.inserts {
-			d.processor.reset();
+			d.reset();
 		}
 		self.master.fader.snap();
 	}
@@ -537,7 +624,9 @@ impl Graph {
 			master,
 			..
 		} = self;
-		for node in nodes.iter_mut() {
+		for i in 0..nodes.len() {
+			let (done, rest) = nodes.split_at_mut(i);
+			let node = &mut rest[0];
 			let buf = &mut node.buf;
 			buf.clear();
 			match &mut node.source {
@@ -546,7 +635,9 @@ impl Graph {
 					schedule,
 					events,
 					notes_off_on_reset,
+					midi_delay,
 				} => {
+					let pos = pos - i64::from(*midi_delay);
 					events.clear();
 					if all_notes_off {
 						if *notes_off_on_reset {
@@ -558,8 +649,16 @@ impl Graph {
 					}
 					schedule.collect(pos, QUANTUM, events);
 					if let Some(d) = device {
-						d.processor
-							.process(&mut buf.l, &mut buf.r, events, &transport);
+						d.run(buf, events, &transport, done);
+						for e in &mut node.aux_edges {
+							let Some((l, r)) = d.processor.aux_output(e.port) else {
+								continue;
+							};
+							match e.accumulator {
+								Some(a) => e.delay.mix(l, r, 1.0, &mut accumulators[a]),
+								None => e.delay.mix(l, r, 1.0, buf),
+							}
+						}
 					}
 				}
 				Source::Audio { clips } => {
@@ -574,7 +673,11 @@ impl Graph {
 				}
 			}
 			for d in &mut node.inserts {
-				d.processor.process(&mut buf.l, &mut buf.r, &[], &transport);
+				d.run(buf, &[], &transport, done);
+			}
+			if node.tap_pre {
+				node.pre.l.copy_from_slice(&buf.l);
+				node.pre.r.copy_from_slice(&buf.r);
 			}
 			if !node.audible {
 				buf.clear();
@@ -592,8 +695,7 @@ impl Graph {
 		master.buf.l.copy_from_slice(&master_in.l);
 		master.buf.r.copy_from_slice(&master_in.r);
 		for d in &mut master.inserts {
-			d.processor
-				.process(&mut master.buf.l, &mut master.buf.r, &[], &transport);
+			d.run(&mut master.buf, &[], &transport, nodes);
 		}
 		master.fader.apply(&mut master.buf);
 		self.engine_pos += QUANTUM as i64;

@@ -13,4 +13,6 @@ pub enum EngineError {
 	Audio(String),
 	#[error("the audio thread is not consuming updates (is the output stream stalled?)")]
 	Busy,
+	#[error("{0}")]
+	Device(String),
 }

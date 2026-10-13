@@ -13,6 +13,7 @@
 pub mod ai;
 pub mod audio_edit;
 pub mod automation;
+pub mod autowrite;
 pub mod browser;
 pub mod dnd;
 pub mod editors;
@@ -323,6 +324,10 @@ pub struct AppState {
 	last_tick: Option<Instant>,
 	/// Lane points last sent to the player by a running gesture.
 	lane_preview: Option<(ParamAddress, Vec<cadenza_model::AutomationPoint>)>,
+	/// Automation recording (transport Read / Touch / Latch).
+	pub autowrite: autowrite::Writer,
+	/// Lanes whose playback is suspended while they are written (last sent to the player).
+	write_suspended: Vec<ParamAddress>,
 	/// Play was pressed (and not stopped since): pattern mode auditions only then.
 	play_intent: bool,
 	/// The user placed the playhead since the last stop: pattern mode starts there
@@ -402,6 +407,8 @@ impl AppState {
 			waker,
 			last_tick: None,
 			lane_preview: None,
+			autowrite: autowrite::Writer::default(),
+			write_suspended: Vec::new(),
 			play_intent: false,
 			cued: false,
 			play_config: None,
@@ -916,6 +923,13 @@ impl AppState {
 		if let Some(a) = &self.audio {
 			a.live_volume(track, db);
 		}
+		self.write_value(
+			ParamAddress {
+				track,
+				target: ParamTarget::Volume,
+			},
+			db,
+		);
 	}
 
 	pub fn preview_pan(&mut self, track: Option<TrackId>, pan: f32) {
@@ -923,12 +937,98 @@ impl AppState {
 		if let Some(a) = &self.audio {
 			a.live_pan(track, pan);
 		}
+		self.write_value(
+			ParamAddress {
+				track,
+				target: ParamTarget::Pan,
+			},
+			pan,
+		);
+	}
+
+	// --- Automation write ----------------------------------------------------------
+
+	/// Sets the transport's automation mode; leaving a write mode ends the pass (one undo
+	/// step for what was written).
+	pub fn set_write_mode(&mut self, mode: autowrite::WriteMode) {
+		if self.autowrite.mode == mode {
+			return;
+		}
+		self.autowrite.mode = mode;
+		if mode == autowrite::WriteMode::Off {
+			self.finish_write_pass();
+		}
+	}
+
+	/// A control moved: while playing in a write mode the value is written into its lane.
+	/// Returns whether it was.
+	fn write_value(&mut self, address: ParamAddress, value: f32) -> bool {
+		if !self.autowrite.armed(self.is_playing()) {
+			return false;
+		}
+		let at = self.position();
+		self.autowrite.touch(&address, value, at);
+		self.sync_write_suspension();
+		true
+	}
+
+	/// A control was let go: true when it was being written (nothing else to commit).
+	fn release_write(&mut self, address: &ParamAddress) -> bool {
+		if !self.autowrite.owns(address) {
+			return false;
+		}
+		let at = self.position();
+		self.autowrite.release(address, at);
+		self.sync_write_suspension();
+		true
+	}
+
+	/// Plays the project's lanes minus the ones being written.
+	fn sync_write_suspension(&mut self) {
+		let suspended = self.autowrite.suspended();
+		if suspended == self.write_suspended {
+			return;
+		}
+		self.write_suspended = suspended;
+		if let Some(a) = &self.audio {
+			let mut lanes = self.project().automation.clone();
+			lanes.retain(|l| !self.write_suspended.contains(&l.address));
+			a.automation(lanes, self.project().tempo.clone());
+		}
+	}
+
+	/// Each frame: latched controls follow the playhead; when playback stops the pass is
+	/// committed.
+	pub(crate) fn tick_autowrite(&mut self, playing: bool, position: Tick) {
+		if playing {
+			if self.autowrite.has_pass() {
+				self.autowrite.advance(position);
+			}
+		} else if self.autowrite.has_pass() {
+			self.finish_write_pass();
+		}
+	}
+
+	fn finish_write_pass(&mut self) {
+		let cmd = self.autowrite.finish(&self.doc.project);
+		self.write_suspended.clear();
+		let applied = cmd.is_some_and(|c| self.apply_or_queue(c));
+		if !applied && let Some(a) = &self.audio {
+			let p = self.project();
+			a.automation(p.automation.clone(), p.tempo.clone());
+		}
 	}
 
 	/// Ends a fader gesture with one undoable command. Like every mix/parameter edit it
 	/// reaches the player live (see [`live`]): no recompilation cutting sounding notes.
 	pub fn commit_volume(&mut self, track: Option<TrackId>, db: f32) {
 		self.previews.volume.remove(&track);
+		if self.release_write(&ParamAddress {
+			track,
+			target: ParamTarget::Volume,
+		}) {
+			return;
+		}
 		if self.project().channel(track).map(|c| c.volume_db) == Some(db) {
 			return;
 		}
@@ -943,6 +1043,12 @@ impl AppState {
 
 	pub fn commit_pan(&mut self, track: Option<TrackId>, pan: f32) {
 		self.previews.pan.remove(&track);
+		if self.release_write(&ParamAddress {
+			track,
+			target: ParamTarget::Pan,
+		}) {
+			return;
+		}
 		if self.project().channel(track).map(|c| c.pan) == Some(pan) {
 			return;
 		}
@@ -1040,11 +1146,24 @@ impl AppState {
 		if let Some(a) = &self.audio {
 			a.live_send(send, db);
 		}
+		let track = self
+			.project()
+			.tracks
+			.iter()
+			.find(|t| t.channel.sends.iter().any(|s| s.id == send))
+			.map(|t| t.id);
+		if let Some(track) = track {
+			self.write_value(ParamAddress::send(track, send), db);
+		}
 	}
 
 	pub fn commit_send(&mut self, track: TrackId, send: DeviceId, db: f32) {
 		self.previews.sends.remove(&send);
-		self.set_param(ParamAddress::send(track, send), db);
+		let address = ParamAddress::send(track, send);
+		if self.release_write(&address) {
+			return;
+		}
+		self.set_param(address, db);
 	}
 
 	/// A device parameter being dragged: heard live (built-ins and plugins, sandboxed
@@ -1056,6 +1175,22 @@ impl AppState {
 		if let Some(a) = &self.audio {
 			a.live_param(device, param, value);
 		}
+		if let Some(track) = self.device_track(device) {
+			self.write_value(ParamAddress::device(track, device, param), value);
+		}
+	}
+
+	/// The channel holding `device` (`Some(None)` = the master).
+	fn device_track(&self, device: DeviceId) -> Option<Option<TrackId>> {
+		let p = self.project();
+		let on = |c: &cadenza_model::Channel| c.inserts.iter().any(|d| d.id == device);
+		if on(&p.master) {
+			return Some(None);
+		}
+		p.tracks
+			.iter()
+			.find(|t| on(&t.channel) || t.instrument.as_ref().is_some_and(|d| d.id == device))
+			.map(|t| Some(t.id))
 	}
 
 	pub fn commit_param(
@@ -1066,7 +1201,11 @@ impl AppState {
 		value: f32,
 	) {
 		self.previews.params.remove(&(device, param.to_owned()));
-		self.set_param(ParamAddress::device(track, device, param), value);
+		let address = ParamAddress::device(track, device, param);
+		if self.release_write(&address) {
+			return;
+		}
+		self.set_param(address, value);
 	}
 
 	/// One `SetParam` unless the value is already set.
@@ -1306,12 +1445,47 @@ impl AppState {
 
 	/// What the user did in plugin editors (from the player): gestures become commands.
 	pub fn editor_updates(&mut self, updates: Vec<cadenza_engine::EditorUpdate>, now: Instant) {
+		// Automation write: editor knob moves during playback go into their lanes
+		// (gesture begin/value/end = touch, write, release).
+		if self.autowrite.armed(self.is_playing()) {
+			for u in &updates {
+				let Some(track) = self.device_track(u.device) else {
+					continue;
+				};
+				match &u.event {
+					cadenza_engine::EditorEvent::Value { param, value } => {
+						let address = ParamAddress::device(track, u.device, param.clone());
+						self.write_value(address, *value as f32);
+					}
+					cadenza_engine::EditorEvent::GestureEnd { param } => {
+						let address = ParamAddress::device(track, u.device, param.clone());
+						self.release_write(&address);
+					}
+					_ => {}
+				}
+			}
+		}
 		let actions = self.editors.handle(&self.doc.project, updates, now);
 		self.editor_actions(actions);
 	}
 
-	/// Applies commands produced by plugin editors and asks for state captures.
-	fn editor_actions(&mut self, actions: editors::Actions) {
+	/// Applies commands produced by plugin editors and asks for state captures. Values of
+	/// parameters being written into automation are not committed as static values.
+	fn editor_actions(&mut self, mut actions: editors::Actions) {
+		if self.autowrite.has_pass() {
+			let w = &self.autowrite;
+			let keep =
+				|c: &Command| !matches!(c, Command::SetParam { address, .. } if w.owns(address));
+			actions.commands.retain(&keep);
+			for c in &mut actions.commands {
+				if let Command::Batch { commands, .. } = c {
+					commands.retain(&keep);
+				}
+			}
+			actions
+				.commands
+				.retain(|c| !matches!(c, Command::Batch { commands, .. } if commands.is_empty()));
+		}
 		for cmd in actions.commands {
 			self.apply_or_queue(cmd);
 		}
@@ -2481,6 +2655,8 @@ impl AppState {
 		self.poll_file_jobs();
 		self.tick_autosave(now);
 		self.sync_transport();
+		let (playing, position) = (self.is_playing(), self.position());
+		self.tick_autowrite(playing, position);
 		self.tick_record(dt);
 		self.peaks.poll();
 		let ids: Vec<TrackId> = self.project().tracks.iter().map(|t| t.id).collect();

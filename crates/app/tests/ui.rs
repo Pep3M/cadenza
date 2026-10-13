@@ -2468,3 +2468,19 @@ fn piano_roll_event_lane_draws_controllers_in_one_step() {
 	h.run_steps(2);
 	assert_eq!(lane(&h, Controller::PitchBend).len(), n - 1);
 }
+
+#[test]
+fn the_automation_mode_button_cycles_read_touch_latch() {
+	use cadenza_app::state::autowrite::WriteMode;
+	let mut h = harness(app());
+	h.run_steps(2);
+	h.get_by_label("A: Read").click();
+	h.run_steps(2);
+	assert_eq!(h.state().state.autowrite.mode, WriteMode::Touch);
+	h.get_by_label("A: Touch").click();
+	h.run_steps(2);
+	assert_eq!(h.state().state.autowrite.mode, WriteMode::Latch);
+	h.get_by_label("A: Latch").click();
+	h.run_steps(2);
+	assert_eq!(h.state().state.autowrite.mode, WriteMode::Off);
+}

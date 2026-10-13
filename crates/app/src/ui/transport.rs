@@ -40,6 +40,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 		mode_switch(ui, state);
 		loop_button(ui, state);
 		record_controls(ui, state);
+		automation_mode(ui, state);
 		ui.add_space(8.0);
 		position_display(ui, state);
 		ui.add_space(8.0);
@@ -332,6 +333,44 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 		});
 	});
 	state.set_record_settings(s);
+}
+
+/// Automation mode: Read (play lanes) / Touch / Latch (moving a control while playing
+/// writes its lane). Click cycles, right-click picks.
+fn automation_mode(ui: &mut Ui, state: &mut AppState) {
+	use crate::state::autowrite::WriteMode;
+	let mode = state.autowrite.mode;
+	let writing = mode != WriteMode::Off;
+	let color = if writing {
+		theme::AUTOMATION_WRITE
+	} else {
+		theme::AUTOMATION
+	};
+	let resp = widgets::toggle(
+		ui,
+		writing,
+		&format!("A: {}", mode.name()),
+		color,
+		vec2(64.0, 22.0),
+	);
+	let resp = resp.on_hover_text(
+		"Automation mode. Read: lanes play. Touch: moving a fader, knob or plugin control 		 while playing writes its lane until you let go. Latch: keeps writing the last value 		 until playback stops. Each playback pass is one undo step. Click cycles, right-click 		 picks.",
+	);
+	if resp.clicked() {
+		state.set_write_mode(match mode {
+			WriteMode::Off => WriteMode::Touch,
+			WriteMode::Touch => WriteMode::Latch,
+			WriteMode::Latch => WriteMode::Off,
+		});
+	}
+	resp.context_menu(|ui| {
+		for m in [WriteMode::Off, WriteMode::Touch, WriteMode::Latch] {
+			if ui.selectable_label(m == mode, m.name()).clicked() {
+				state.set_write_mode(m);
+				ui.close();
+			}
+		}
+	});
 }
 
 #[derive(Clone, Copy)]

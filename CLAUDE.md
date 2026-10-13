@@ -588,6 +588,17 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   bar/beat/step lines restarted at every bar line), snapping (`snap_meter`), bars.beats
   display, pattern length, new clips, loop-the-bar, export bar ranges and MIDI clip growth all
   follow the changes; the ruler tags each change.
+- Automation recording (phase 17, `state::autowrite`): transport "A: Read/Touch/Latch" button
+  (click cycles, right-click picks; `AppState::set_write_mode`). While playing in Touch/Latch,
+  `preview_volume/pan/send/param` and plugin editor values (`editor_updates`: Value = write,
+  GestureEnd = release) write `(position, value)` samples per frame into a `Writer` pass and the
+  `commit_*` calls release instead of committing a static value; Touch returns to the old
+  curve (or static value) one tick after the release, Latch keeps writing the last value until
+  stop. Lanes being written are suspended in the player (`sync_write_suspension`). When playback
+  stops (or the mode goes to Read) the pass becomes ONE undo step "Write automation" (Batch of
+  `SetAutomation`, each stretch replacing the points inside it, thinned by Ramer-Douglas-Peucker
+  at 1 % of its range; a loop wrap starts a new stretch so the later pass wins). Nothing of
+  this runs on the audio thread.
 - Audio editor (`state::audio_edit` + `ui::audio_editor`; double-click an audio clip): shares
   the bottom editor dock with the piano roll (`view.audio_editor`; F7 toggles the dock).
   Source-file time axis, peaks when zoomed out and decoded samples (`PeakCache::samples`) when

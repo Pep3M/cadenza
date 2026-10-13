@@ -1323,3 +1323,72 @@ fn save_as_elsewhere_offers_to_collect_outside_files() {
 	assert!(s.save_as(tmp.path().join("Copy").join("Copy.cadenza.json")));
 	assert!(s.collect_prompt);
 }
+
+#[test]
+fn moving_controls_while_playing_writes_automation_in_one_step() {
+	use autowrite::WriteMode;
+	let (mut s, keys) = state_with_song();
+	let synth = s
+		.project()
+		.track(keys)
+		.unwrap()
+		.instrument
+		.clone()
+		.unwrap()
+		.id;
+	// A virtual (silent) player drives the clock.
+	let (mut player, mut dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	player.load(s.project()).unwrap();
+	s.clock = Some(player.clock());
+	let mut out = vec![0.0f32; 512];
+	let mut run = |dev: &mut cadenza_engine::VirtualDevice, blocks: usize| {
+		for _ in 0..blocks {
+			dev.process(&mut out, &[]);
+		}
+	};
+	// Not playing: a fader move is an ordinary edit.
+	s.set_write_mode(WriteMode::Touch);
+	s.preview_volume(Some(keys), -2.0);
+	s.commit_volume(Some(keys), -2.0);
+	assert_eq!(s.undo_label(), Some("Set track volume to -2.0 dB"));
+	let depth = s.document().history_labels().len();
+
+	player.play().unwrap();
+	run(&mut dev, 20);
+	assert!(s.is_playing());
+	for i in 0..10 {
+		s.preview_volume(Some(keys), -2.0 - i as f32);
+		s.preview_param(synth, "filter_cutoff", 500.0 + i as f32 * 100.0);
+		run(&mut dev, 10);
+		let (playing, pos) = (s.is_playing(), s.position());
+		s.tick_autowrite(playing, pos);
+	}
+	s.commit_volume(Some(keys), -11.0);
+	s.commit_param(Some(keys), synth, "filter_cutoff", 1400.0);
+	assert_eq!(
+		s.document().history_labels().len(),
+		depth,
+		"nothing is committed while the pass runs"
+	);
+	player.stop().unwrap();
+	run(&mut dev, 1);
+	let (playing, pos) = (s.is_playing(), s.position());
+	s.tick_autowrite(playing, pos);
+	assert_eq!(s.undo_label(), Some("Write automation"));
+	assert_eq!(s.document().history_labels().len(), depth + 1, "one step");
+	let lanes = &s.project().automation;
+	assert_eq!(lanes.len(), 2, "volume and cutoff lanes");
+	let vol = lanes
+		.iter()
+		.find(|l| l.address == ParamAddress::track_volume(keys))
+		.unwrap();
+	assert_eq!(vol.points.last().unwrap().value, -11.0);
+	assert!(vol.points.len() >= 2);
+	assert_eq!(
+		s.project().track(keys).unwrap().channel.volume_db,
+		-2.0,
+		"the static value is untouched"
+	);
+	s.undo();
+	assert!(s.project().automation.is_empty());
+}

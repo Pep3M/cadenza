@@ -174,8 +174,14 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 				theme::BG_RAISED
 			},
 		);
-		p.with_clip_rect(what_r).text(
-			what_r.center(),
+		// A frozen track's FRZ badge takes the right end.
+		let text_r = if track.is_some_and(|t| t.freeze.is_some()) {
+			what_r.with_max_x(what_r.right() - 27.0)
+		} else {
+			what_r
+		};
+		p.with_clip_rect(text_r).text(
+			text_r.center(),
 			Align2::CENTER_CENTER,
 			&what,
 			theme::small(),

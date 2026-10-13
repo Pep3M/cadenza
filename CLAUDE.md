@@ -327,9 +327,9 @@ fixed-size hints when not resizable); VST3 `IPlugView` attached with `X11EmbedWi
 floating is the fallback when a CLAP plugin cannot embed at all. The window is the plugin's
 content size plus a `TITLE_STRIP_HEIGHT` (24 px) strip on top (`editor::geometry`, built-in
 8x8 bitmap font in `editor::font`: XWayland here ships no X11 core fonts), drawn with the
-title and a close (×) button; dragging it sends `_NET_WM_MOVERESIZE` to the root (Hyprland
-honors it) with a manual `ConfigureWindow` fallback if a window manager never grabs the
-pointer. New editors center on the RandR monitor under the pointer (whole root if RandR is
+title and a close (×) button; dragging it moves the window ourselves (pointer grabbed for the
+gesture, window placed at pointer minus press offset with `ConfigureWindow`;
+`_NET_WM_MOVERESIZE` was unreliable under Hyprland). New editors center on the RandR monitor under the pointer (whole root if RandR is
 unavailable); a position the user drags to is remembered per plugin id for the process's
 life and reused next time that plugin opens. Resizes both ways, close button (ours or the
 window manager's) = close (reported `Closed`).

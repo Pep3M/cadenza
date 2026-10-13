@@ -17,10 +17,13 @@
 //! [`geometry::content_offset`]. The plugin only ever sees its own content
 //! size; `geometry` converts both ways.
 //!
-//! Dragging the strip sends `_NET_WM_MOVERESIZE` to the root window, which
-//! Hyprland honors for interactive moves; a manual fallback (tracking motion
-//! events and `ConfigureWindow`) keeps dragging working if a window manager
-//! ignores that message or never grabs the pointer. Text is drawn with the
+//! Dragging the strip moves the window ourselves: the pointer is grabbed for
+//! the whole gesture and every motion places the window at the pointer minus
+//! the offset where the strip was pressed (`ConfigureWindow`). Nothing depends
+//! on positions reported earlier, so a window manager that is late with (or
+//! never sends) `ConfigureNotify` cannot make the window jump. Handing the move
+//! to the window manager with `_NET_WM_MOVERESIZE` proved unreliable under
+//! Hyprland (the drag dropped mid-gesture and fought our own moves). Text is drawn with the
 //! tiny built-in bitmap font in `font.rs` rather than X11 core fonts: XWayland
 //! here ships none of the classic core font packages, so `OpenFont` cannot be
 //! relied on.
@@ -35,7 +38,8 @@ use x11rb::protocol::Event;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::{
 	AtomEnum, ChangeGCAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, CreateGCAux,
-	CreateWindowAux, EventMask, Gcontext, PropMode, Rectangle, Segment, Window, WindowClass,
+	CreateWindowAux, EventMask, Gcontext, GrabMode, KeyButMask, PropMode, Rectangle, Segment,
+	Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -67,16 +71,13 @@ struct Atoms {
 	net_wm_window_type: u32,
 	net_wm_window_type_dialog: u32,
 	net_wm_pid: u32,
-	net_wm_moveresize: u32,
 }
 
 /// A pointer-drag of the strip in progress.
 #[derive(Debug, Clone, Copy)]
 struct DragAnchor {
-	/// Pointer position (root coordinates) when the drag started.
-	root: (i32, i32),
-	/// Our window's position when the drag started.
-	win: (i32, i32),
+	/// Pointer position inside our window when the strip was pressed.
+	offset: (i32, i32),
 }
 
 /// Everything we keep about one of our top-level editor windows, keyed by
@@ -137,7 +138,6 @@ impl Display {
 			net_wm_window_type: intern(b"_NET_WM_WINDOW_TYPE")?,
 			net_wm_window_type_dialog: intern(b"_NET_WM_WINDOW_TYPE_DIALOG")?,
 			net_wm_pid: intern(b"_NET_WM_PID")?,
-			net_wm_moveresize: intern(b"_NET_WM_MOVERESIZE")?,
 		};
 		Ok(Self {
 			conn,
@@ -517,37 +517,33 @@ impl Display {
 		let _ = self.conn.flush();
 	}
 
-	fn begin_drag(&self, window: Window, root: (i32, i32)) {
-		let win_pos = match self.strips.borrow().get(&window) {
-			Some(s) => s.pos,
+	fn begin_drag(&self, window: Window, offset: (i32, i32), time: u32) {
+		match self.strips.borrow_mut().get_mut(&window) {
+			Some(s) => s.drag = Some(DragAnchor { offset }),
 			None => return,
-		};
-		if let Some(s) = self.strips.borrow_mut().get_mut(&window) {
-			s.drag = Some(DragAnchor { root, win: win_pos });
 		}
-		// Ungrab first: the WM's own interactive move takes over the pointer
-		// grab, and our window then stops seeing further motion/release
-		// events (so the manual fallback below naturally never fires).
-		let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
-		let event = ClientMessageEvent::new(
-			32,
-			window,
-			self.atoms.net_wm_moveresize,
-			[
-				root.0 as u32,
-				root.1 as u32,
-				8, /* _NET_WM_MOVERESIZE_MOVE */
-				1,
-				1,
-			],
-		);
-		let _ = self.conn.send_event(
+		// An explicit grab keeps motion and the release coming to us even when a
+		// fast move leaves the window behind the pointer.
+		let _ = self.conn.grab_pointer(
 			false,
-			self.root,
-			EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-			event,
+			window,
+			EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+			GrabMode::ASYNC,
+			GrabMode::ASYNC,
+			x11rb::NONE,
+			x11rb::NONE,
+			time,
 		);
 		let _ = self.conn.flush();
+	}
+
+	fn end_drag(&self, window: Window, time: u32) {
+		if let Some(s) = self.strips.borrow_mut().get_mut(&window)
+			&& s.drag.take().is_some()
+		{
+			let _ = self.conn.ungrab_pointer(time);
+			let _ = self.conn.flush();
+		}
 	}
 
 	/// Position/size bookkeeping common to every `ConfigureNotify` (resize,
@@ -612,38 +608,44 @@ impl Display {
 						if geometry::hit_close_button(width, x, y) {
 							out.push((e.event, WindowEvent::CloseRequested));
 						} else if geometry::in_strip(y) {
-							self.begin_drag(e.event, (i32::from(e.root_x), i32::from(e.root_y)));
+							self.begin_drag(e.event, (x, y), e.time);
 						}
 					}
 				}
-				Event::ButtonRelease(e) if e.detail == 1 => {
-					if let Some(s) = self.strips.borrow_mut().get_mut(&e.event) {
-						s.drag = None;
-					}
-				}
+				Event::ButtonRelease(e) if e.detail == 1 => self.end_drag(e.event, e.time),
 				Event::MotionNotify(e) => {
-					self.on_motion(e.event, e.event_x, e.event_y, e.root_x, e.root_y)
+					let held = e.state.contains(KeyButMask::BUTTON1);
+					self.on_motion(e.event, (e.event_x, e.event_y), (e.root_x, e.root_y), held)
 				}
 				_ => {}
 			}
 		}
 	}
 
-	fn on_motion(&self, window: Window, event_x: i16, event_y: i16, root_x: i16, root_y: i16) {
+	fn on_motion(
+		&self,
+		window: Window,
+		(event_x, event_y): (i16, i16),
+		(root_x, root_y): (i16, i16),
+		button_held: bool,
+	) {
 		let mut strips = self.strips.borrow_mut();
 		let Some(s) = strips.get_mut(&window) else {
 			return;
 		};
-		if let Some(drag) = s.drag {
-			let (dx, dy) = (
-				i32::from(root_x) - drag.root.0,
-				i32::from(root_y) - drag.root.1,
-			);
-			let (nx, ny) = (drag.win.0 + dx, drag.win.1 + dy);
+		// A release we never saw (focus stolen, grab broken) must not leave the
+		// window chasing the pointer.
+		if !button_held && s.drag.is_some() {
 			drop(strips);
-			// The fallback path: a window manager that never grabbed the
-			// pointer for the `_NET_WM_MOVERESIZE` we sent still leaves our
-			// window receiving motion, so we move it ourselves.
+			self.end_drag(window, x11rb::CURRENT_TIME);
+			return;
+		}
+		if let Some(drag) = s.drag {
+			let (nx, ny) = (
+				i32::from(root_x) - drag.offset.0,
+				i32::from(root_y) - drag.offset.1,
+			);
+			drop(strips);
 			let _ = self
 				.conn
 				.configure_window(window, &ConfigureWindowAux::new().x(nx).y(ny));

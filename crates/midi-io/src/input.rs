@@ -125,14 +125,14 @@ pub fn open_input_port(
 }
 
 /// Maps a queued hardware message to the realtime [`MidiEvent`] vocabulary when
-/// possible, keeping the raw message too (sustain pedal, pitch bend and the rest have
-/// no `MidiEvent` representation yet).
+/// possible (notes, control changes, pitch bend, channel pressure), keeping the raw
+/// message too.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MappedEvent {
 	pub offset: u32,
 	pub raw: RawMessage,
-	/// `None` for messages `cadenza_dsp::MidiEvent` cannot represent (CC other than
-	/// all-notes-off, pitch bend, program change, ...).
+	/// `None` for messages `cadenza_dsp::MidiEvent` cannot represent (program change,
+	/// poly aftertouch, system messages).
 	pub dsp: Option<MidiEvent>,
 }
 
@@ -156,7 +156,29 @@ fn to_dsp_event(message: &RawMessage, offset: u32) -> Option<MidiEvent> {
 	if message.controller_number() == Some(CC_ALL_NOTES_OFF) {
 		return Some(MidiEvent::AllNotesOff { offset });
 	}
-	None
+	if message.len < 2 || message.channel().is_none() {
+		return None;
+	}
+	let data = |i: usize| f32::from(message.bytes[i] & 0x7f) / 127.0;
+	match message.status() & 0xF0 {
+		0xB0 if message.len == 3 => Some(MidiEvent::ControlChange {
+			offset,
+			controller: message.bytes[1] & 0x7f,
+			value: data(2),
+		}),
+		0xE0 if message.len == 3 => {
+			let v = u16::from(message.bytes[1] & 0x7f) | (u16::from(message.bytes[2] & 0x7f) << 7);
+			Some(MidiEvent::PitchBend {
+				offset,
+				value: ((f32::from(v) - 8192.0) / 8191.0).clamp(-1.0, 1.0),
+			})
+		}
+		0xD0 => Some(MidiEvent::ChannelPressure {
+			offset,
+			value: data(1),
+		}),
+		_ => None,
+	}
 }
 
 /// Drains every queued message whose timestamp falls within
@@ -255,15 +277,32 @@ mod tests {
 	}
 
 	#[test]
-	fn sustain_pedal_has_no_dsp_mapping_but_is_kept_raw() {
+	fn controllers_map_to_dsp_events_and_stay_raw() {
 		let (mut producer, mut consumer) = new_queue(16);
 		push_timed(&mut producer, 0, &[0xB0, 64, 127]);
+		push_timed(&mut producer, 0, &[0xE0, 0x00, 0x40]);
+		push_timed(&mut producer, 0, &[0xE0, 0x7f, 0x7f]);
+		push_timed(&mut producer, 0, &[0xD0, 127]);
+		push_timed(&mut producer, 0, &[0xC0, 5]);
 
-		let mut out = Vec::with_capacity(4);
+		let mut out = Vec::with_capacity(8);
 		drain_into_block(&mut consumer, 0, 48_000, 48_000.0, &mut out);
 
-		assert_eq!(out[0].dsp, None);
+		assert!(matches!(
+			out[0].dsp,
+			Some(MidiEvent::ControlChange {
+				controller: 64,
+				value,
+				..
+			}) if value == 1.0
+		));
 		assert_eq!(out[0].raw.controller_number(), Some(64));
+		assert!(matches!(out[1].dsp, Some(MidiEvent::PitchBend { value, .. }) if value == 0.0));
+		assert!(matches!(out[2].dsp, Some(MidiEvent::PitchBend { value, .. }) if value == 1.0));
+		assert!(
+			matches!(out[3].dsp, Some(MidiEvent::ChannelPressure { value, .. }) if value == 1.0)
+		);
+		assert_eq!(out[4].dsp, None, "program change has no dsp event");
 	}
 
 	#[test]

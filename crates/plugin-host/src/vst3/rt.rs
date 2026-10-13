@@ -179,6 +179,8 @@ impl HeldNotes {
 				}
 			}
 			MidiEvent::AllNotesOff { .. } => self.release_all(list, time),
+			// Controllers go through IMidiMapping as parameter changes.
+			_ => {}
 		}
 	}
 

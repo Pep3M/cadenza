@@ -79,9 +79,32 @@ fn process_and_set_param_never_allocate() {
 			}
 		})
 		.chain([
+			MidiEvent::ControlChange {
+				offset: 14,
+				controller: 64,
+				value: 1.0,
+			},
+			MidiEvent::ControlChange {
+				offset: 15,
+				controller: 1,
+				value: 0.7,
+			},
+			MidiEvent::PitchBend {
+				offset: 16,
+				value: -0.4,
+			},
+			MidiEvent::ChannelPressure {
+				offset: 17,
+				value: 0.6,
+			},
 			MidiEvent::NoteOff {
 				offset: 20,
 				pitch: 60,
+			},
+			MidiEvent::ControlChange {
+				offset: 25,
+				controller: 64,
+				value: 0.0,
 			},
 			MidiEvent::AllNotesOff { offset: 30 },
 		])

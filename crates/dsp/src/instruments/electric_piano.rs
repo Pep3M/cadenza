@@ -4,6 +4,7 @@
 use super::{VoiceSlot, pick_voice};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::envelope::{Adsr, DecayEnv};
+use crate::util::expression::{Expression, ExpressionAction};
 use crate::util::smoother::Smoother;
 use crate::util::{ParamValues, TAU, db_to_gain, event_spans, midi_to_hz};
 
@@ -123,6 +124,7 @@ struct Voice {
 }
 
 pub struct ElectricPiano {
+	expr: Expression,
 	params: ParamValues<N_PARAMS>,
 	sample_rate: f32,
 	voices: [Voice; VOICES],
@@ -148,6 +150,7 @@ impl ElectricPiano {
 			lfo_phase: 0.0,
 			trem_depth: Smoother::new(params.get(P_TREM_DEPTH) * 0.01),
 			gain: Smoother::new(db_to_gain(params.get(P_GAIN))),
+			expr: Expression::default(),
 			params,
 		}
 	}
@@ -187,20 +190,32 @@ impl ElectricPiano {
 			active: true,
 			released: false,
 			started: self.note_counter,
+			pedal: false,
 		};
 	}
 
 	fn note_off(&mut self, pitch: u8) {
+		let sustain = self.expr.sustain;
 		for v in &mut self.voices {
-			if v.slot.active && !v.slot.released && v.slot.note == pitch {
+			if v.slot.active && !v.slot.released && v.slot.note == pitch && v.slot.key_up(sustain) {
 				v.slot.released = true;
 				v.amp.gate_off();
 			}
 		}
 	}
 
+	fn release_all(&mut self) {
+		for v in &mut self.voices {
+			v.slot.released = true;
+			v.slot.pedal = false;
+			v.amp.gate_off();
+		}
+	}
+
 	fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
 		let inv_sr = 1.0 / self.sample_rate;
+		// Bend and mod wheel vibrato for this span.
+		let ratio = 2.0_f32.powf(self.expr.pitch_offset(left.len(), self.sample_rate) / 12.0);
 		let lfo_inc = self.params.get(P_TREM_RATE) * inv_sr;
 		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
 			let mut mono = 0.0;
@@ -210,7 +225,7 @@ impl ElectricPiano {
 				let body = (TAU * v.phase_c + m).sin();
 				let bell = (TAU * v.phase_b + 0.5 * m).sin() * v.bell * v.bell_env.tick();
 				mono += (body + bell) * a * v.gain;
-				let inc = v.freq * inv_sr;
+				let inc = v.freq * ratio * inv_sr;
 				v.phase_c = (v.phase_c + inc).fract();
 				// Slight modulator detune gives the tine its slow beating.
 				v.phase_m = (v.phase_m + inc * 1.0007).fract();
@@ -273,12 +288,22 @@ impl Processor for ElectricPiano {
 					}
 				}
 				Some(&MidiEvent::NoteOff { pitch, .. }) => self.note_off(pitch),
-				Some(MidiEvent::AllNotesOff { .. }) => {
-					for v in &mut self.voices {
-						v.slot.released = true;
-						v.amp.gate_off();
-					}
+				Some(ev @ MidiEvent::AllNotesOff { .. }) => {
+					self.expr.apply(ev);
+					self.release_all();
 				}
+				Some(ev) => match self.expr.apply(ev) {
+					ExpressionAction::PedalUp => {
+						for v in &mut self.voices {
+							if v.slot.pedal_up() {
+								v.slot.released = true;
+								v.amp.gate_off();
+							}
+						}
+					}
+					ExpressionAction::AllNotesOff => self.release_all(),
+					ExpressionAction::None => {}
+				},
 				None => {}
 			}
 		}
@@ -289,6 +314,7 @@ impl Processor for ElectricPiano {
 			*v = Voice::default();
 		}
 		self.lfo_phase = 0.0;
+		self.expr.reset_controllers();
 		self.trem_depth.snap();
 		self.gain.snap();
 	}

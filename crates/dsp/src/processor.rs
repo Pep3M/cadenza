@@ -91,6 +91,33 @@ pub enum MidiEvent {
 	AllNotesOff {
 		offset: u32,
 	},
+	/// Control change: `controller` 0..=127 (1 = mod wheel, 64 = sustain pedal), `value`
+	/// in `0.0..=1.0` (MIDI 0..=127).
+	ControlChange {
+		offset: u32,
+		controller: u8,
+		value: f32,
+	},
+	/// Pitch bend, `value` in `-1.0..=1.0` (0 = center; instruments bend ±2 semitones by
+	/// default).
+	PitchBend {
+		offset: u32,
+		value: f32,
+	},
+	/// Channel pressure (aftertouch), `value` in `0.0..=1.0`.
+	ChannelPressure {
+		offset: u32,
+		value: f32,
+	},
+}
+
+/// MIDI controller numbers with a meaning in the built-in instruments.
+pub mod cc {
+	pub const MOD_WHEEL: u8 = 1;
+	pub const SUSTAIN: u8 = 64;
+	pub const ALL_SOUND_OFF: u8 = 120;
+	pub const RESET_ALL_CONTROLLERS: u8 = 121;
+	pub const ALL_NOTES_OFF: u8 = 123;
 }
 
 impl MidiEvent {
@@ -98,8 +125,45 @@ impl MidiEvent {
 		match *self {
 			MidiEvent::NoteOn { offset, .. }
 			| MidiEvent::NoteOff { offset, .. }
-			| MidiEvent::AllNotesOff { offset } => offset,
+			| MidiEvent::AllNotesOff { offset }
+			| MidiEvent::ControlChange { offset, .. }
+			| MidiEvent::PitchBend { offset, .. }
+			| MidiEvent::ChannelPressure { offset, .. } => offset,
 		}
+	}
+
+	/// The same event at another offset.
+	pub fn with_offset(self, offset: u32) -> Self {
+		match self {
+			MidiEvent::NoteOn {
+				pitch, velocity, ..
+			} => MidiEvent::NoteOn {
+				offset,
+				pitch,
+				velocity,
+			},
+			MidiEvent::NoteOff { pitch, .. } => MidiEvent::NoteOff { offset, pitch },
+			MidiEvent::AllNotesOff { .. } => MidiEvent::AllNotesOff { offset },
+			MidiEvent::ControlChange {
+				controller, value, ..
+			} => MidiEvent::ControlChange {
+				offset,
+				controller,
+				value,
+			},
+			MidiEvent::PitchBend { value, .. } => MidiEvent::PitchBend { offset, value },
+			MidiEvent::ChannelPressure { value, .. } => {
+				MidiEvent::ChannelPressure { offset, value }
+			}
+		}
+	}
+
+	/// Whether this is a note event (on, off, all off) rather than a controller.
+	pub fn is_note(&self) -> bool {
+		matches!(
+			self,
+			MidiEvent::NoteOn { .. } | MidiEvent::NoteOff { .. } | MidiEvent::AllNotesOff { .. }
+		)
 	}
 }
 

@@ -16,6 +16,29 @@ pub struct VoiceSlot {
 	pub released: bool,
 	/// Monotonic start stamp; lower = older.
 	pub started: u64,
+	/// Key released while the sustain pedal is down: keeps sounding until the pedal
+	/// goes up.
+	pub pedal: bool,
+}
+
+impl VoiceSlot {
+	/// A key went up: `true` when the voice should release now, `false` when the
+	/// sustain pedal holds it (marked for [`VoiceSlot::pedal_up`]).
+	pub fn key_up(&mut self, sustain: bool) -> bool {
+		if sustain {
+			self.pedal = true;
+			false
+		} else {
+			true
+		}
+	}
+
+	/// The pedal went up: `true` when this voice was held by it and should release now.
+	pub fn pedal_up(&mut self) -> bool {
+		let held = self.active && !self.released && self.pedal;
+		self.pedal = false;
+		held
+	}
 }
 
 /// Chooses which voice should play `note`:
@@ -57,6 +80,7 @@ mod tests {
 			active,
 			released,
 			started,
+			pedal: false,
 		}
 	}
 

@@ -394,3 +394,74 @@ fn block_size_does_not_change_output() {
 		}
 	}
 }
+
+#[test]
+fn sustain_pedal_holds_released_notes() {
+	let on = MidiEvent::NoteOn {
+		offset: 0,
+		pitch: 60,
+		velocity: 1.0,
+	};
+	let pedal = |value| MidiEvent::ControlChange {
+		offset: 0,
+		controller: crate::cc::SUSTAIN,
+		value,
+	};
+	let off = MidiEvent::NoteOff {
+		offset: 10,
+		pitch: 60,
+	};
+	// Level 0.15 s after the key went up, with and without the pedal.
+	let tail = |id: &str, with_pedal: bool| {
+		let mut p = prepared(id, SR, 256);
+		let start: Vec<MidiEvent> = if with_pedal {
+			vec![pedal(1.0), on]
+		} else {
+			vec![on]
+		};
+		render(&mut *p, 2400, 256, &start);
+		let (after, _) = render(&mut *p, 9600, 256, &[off]);
+		let level = peak(&after[7200..]);
+		(p, level)
+	};
+	for id in ["poly_synth", "electric_piano", "sampler"] {
+		let (_, dry) = tail(id, false);
+		let (mut p, held) = tail(id, true);
+		assert!(
+			held > dry * 2.0,
+			"{id}: the pedal holds the note ({held} vs {dry})"
+		);
+		render(&mut *p, 256, 256, &[pedal(0.0)]);
+		let (after, _) = render(&mut *p, 96_000, 256, &[]);
+		assert!(
+			peak(&after[90_000..]) < held * 0.1,
+			"{id}: pedal up releases it"
+		);
+	}
+}
+
+#[test]
+fn pitch_bend_and_mod_wheel_move_the_pitch() {
+	use crate::util::pitch::detect_pitch;
+	for id in ["poly_synth", "electric_piano", "sampler"] {
+		let mut p = prepared(id, SR, 256);
+		let on = MidiEvent::NoteOn {
+			offset: 0,
+			pitch: 57,
+			velocity: 1.0,
+		};
+		let (plain, _) = render(&mut *p, 4800, 256, &[on]);
+		let base = detect_pitch(&plain[1200..], SR).unwrap();
+		let bend = MidiEvent::PitchBend {
+			offset: 0,
+			value: 1.0,
+		};
+		let (bent, _) = render(&mut *p, 4800, 256, &[bend]);
+		let up = detect_pitch(&bent[1200..], SR).unwrap();
+		let ratio = up / base;
+		assert!(
+			(ratio - 2.0_f32.powf(2.0 / 12.0)).abs() < 0.02,
+			"{id}: full bend = +2 semitones ({base} -> {up} Hz)"
+		);
+	}
+}

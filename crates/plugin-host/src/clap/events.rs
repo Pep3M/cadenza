@@ -3,7 +3,8 @@
 
 use cadenza_dsp::MidiEvent;
 use clack_host::events::event_types::{
-	MidiEvent as ClapMidiEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent,
+	MidiEvent as ClapMidiEvent, NoteExpressionEvent, NoteExpressionType, NoteOffEvent, NoteOnEvent,
+	ParamValueEvent,
 };
 use clack_host::events::io::InputEventBuffer;
 use clack_host::events::{Event, Match, Pckn, UnknownEvent};
@@ -16,18 +17,97 @@ enum HostEvent {
 	NoteOn(NoteOnEvent),
 	NoteOff(NoteOffEvent),
 	Midi(ClapMidiEvent),
+	Expression(NoteExpressionEvent),
 	Param(ParamValueEvent),
+}
+
+/// How controller events (CC, pitch bend, pressure) reach a plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControllerRoute {
+	/// Raw MIDI 1.0 bytes on the note port (it accepts the MIDI dialect).
+	Midi,
+	/// CLAP-only note port: pitch bend and pressure become per-note expressions of the
+	/// held keys (tuning, pressure); other CCs have no CLAP equivalent and are dropped.
+	Expressions,
 }
 
 /// Time-ordered input events for one `process` call.
 pub(crate) struct EventList {
 	events: Vec<HostEvent>,
+	/// Keys sounding (CLAP note events), for per-note expressions.
+	held: u128,
+	/// Channel-wide pitch bend (semitones) and pressure applied to new notes too.
+	tuning: f64,
+	pressure: f64,
 }
+
+/// Pitch bend range used when bends become CLAP tuning expressions (semitones).
+const BEND_RANGE: f64 = 2.0;
 
 impl EventList {
 	pub fn with_capacity(capacity: usize) -> Self {
 		Self {
 			events: Vec::with_capacity(capacity),
+			held: 0,
+			tuning: 0.0,
+			pressure: 0.0,
+		}
+	}
+
+	/// Per-note expression for every held key (CLAP-only plugins).
+	fn expression_all(&mut self, time: u32, kind: NoteExpressionType, value: f64) -> bool {
+		let mut held = self.held;
+		let mut ok = true;
+		while held != 0 {
+			let key = held.trailing_zeros() as u16;
+			held &= held - 1;
+			ok &= self.push(HostEvent::Expression(NoteExpressionEvent::new(
+				time,
+				Pckn::new(0u16, 0u16, key, Match::All),
+				kind,
+				value,
+			)));
+		}
+		ok
+	}
+
+	/// Converts a controller event (CC / pitch bend / pressure).
+	pub fn push_controller(&mut self, e: &MidiEvent, frames: u32, route: ControllerRoute) -> bool {
+		let time = e.offset().min(frames.saturating_sub(1));
+		let midi7 = |v: f32| (v.clamp(0.0, 1.0) * 127.0).round() as u8;
+		match (route, *e) {
+			(
+				ControllerRoute::Midi,
+				MidiEvent::ControlChange {
+					controller, value, ..
+				},
+			) => self.push(HostEvent::Midi(ClapMidiEvent::new(
+				time,
+				0,
+				[0xB0, controller.min(127), midi7(value)],
+			))),
+			(ControllerRoute::Midi, MidiEvent::PitchBend { value, .. }) => {
+				let v = ((value.clamp(-1.0, 1.0) + 1.0) * 8191.5)
+					.round()
+					.clamp(0.0, 16383.0) as u16;
+				self.push(HostEvent::Midi(ClapMidiEvent::new(
+					time,
+					0,
+					[0xE0, (v & 0x7f) as u8, (v >> 7) as u8],
+				)))
+			}
+			(ControllerRoute::Midi, MidiEvent::ChannelPressure { value, .. }) => self.push(
+				HostEvent::Midi(ClapMidiEvent::new(time, 0, [0xD0, midi7(value), 0])),
+			),
+			(ControllerRoute::Expressions, MidiEvent::PitchBend { value, .. }) => {
+				self.tuning = f64::from(value.clamp(-1.0, 1.0)) * BEND_RANGE;
+				self.expression_all(time, NoteExpressionType::Tuning, self.tuning)
+			}
+			(ControllerRoute::Expressions, MidiEvent::ChannelPressure { value, .. }) => {
+				self.pressure = f64::from(value.clamp(0.0, 1.0));
+				self.expression_all(time, NoteExpressionType::Pressure, self.pressure)
+			}
+			_ => true,
 		}
 	}
 
@@ -59,9 +139,26 @@ impl EventList {
 	/// otherwise CLAP note events. "All notes off" becomes one note-off per key
 	/// (CLAP) or CC 123 (MIDI): the spec-valid wildcard key (-1) makes some plugins
 	/// (Surge XT) index out of bounds and abort.
+	#[cfg(test)]
 	pub fn push_midi(&mut self, e: &MidiEvent, frames: u32, midi_dialect: bool) -> bool {
+		self.push_event(e, frames, midi_dialect, ControllerRoute::Midi)
+	}
+
+	/// Converts any Cadenza event: notes as [`EventList::push_midi`], controllers by
+	/// `controllers`.
+	pub fn push_event(
+		&mut self,
+		e: &MidiEvent,
+		frames: u32,
+		midi_dialect: bool,
+		controllers: ControllerRoute,
+	) -> bool {
+		if !e.is_note() {
+			return self.push_controller(e, frames, controllers);
+		}
 		let time = e.offset().min(frames.saturating_sub(1));
 		if let (MidiEvent::AllNotesOff { .. }, false) = (*e, midi_dialect) {
+			self.held = 0;
 			return (0u16..128).all(|key| {
 				self.push(HostEvent::NoteOff(NoteOffEvent::new(
 					time,
@@ -69,6 +166,13 @@ impl EventList {
 					0.0,
 				)))
 			});
+		}
+		if !midi_dialect {
+			match *e {
+				MidiEvent::NoteOn { pitch, .. } => self.held |= 1u128 << pitch.min(127),
+				MidiEvent::NoteOff { pitch, .. } => self.held &= !(1u128 << pitch.min(127)),
+				_ => {}
+			}
 		}
 		let event = match (*e, midi_dialect) {
 			(
@@ -102,8 +206,32 @@ impl EventList {
 			(MidiEvent::AllNotesOff { .. }, true) => {
 				HostEvent::Midi(ClapMidiEvent::new(time, 0, [0xB0, 123, 0]))
 			}
+			_ => return true,
 		};
-		self.push(event)
+		let ok = self.push(event);
+		// A note starting while the channel is bent / pressed gets the same expression.
+		if let (MidiEvent::NoteOn { pitch, .. }, false) = (*e, midi_dialect)
+			&& controllers == ControllerRoute::Expressions
+		{
+			let pckn = Pckn::new(0u16, 0u16, u16::from(pitch.min(127)), Match::All);
+			if self.tuning != 0.0 {
+				self.push(HostEvent::Expression(NoteExpressionEvent::new(
+					time,
+					pckn,
+					NoteExpressionType::Tuning,
+					self.tuning,
+				)));
+			}
+			if self.pressure != 0.0 {
+				self.push(HostEvent::Expression(NoteExpressionEvent::new(
+					time,
+					pckn,
+					NoteExpressionType::Pressure,
+					self.pressure,
+				)));
+			}
+		}
+		ok
 	}
 
 	#[cfg(test)]
@@ -122,6 +250,7 @@ impl InputEventBuffer for EventList {
 			HostEvent::NoteOn(e) => e.as_unknown(),
 			HostEvent::NoteOff(e) => e.as_unknown(),
 			HostEvent::Midi(e) => e.as_unknown(),
+			HostEvent::Expression(e) => e.as_unknown(),
 			HostEvent::Param(e) => e.as_unknown(),
 		})
 	}
@@ -238,6 +367,57 @@ mod tests {
 		match input.get(0).unwrap().as_core_event() {
 			Some(CoreEventSpace::Midi(e)) => assert_eq!(e.data(), [0x90, 64, 127]),
 			_ => panic!("expected midi"),
+		}
+	}
+
+	#[test]
+	fn controllers_as_midi_bytes_or_note_expressions() {
+		let mut list = EventList::with_capacity(8);
+		let cc = MidiEvent::ControlChange {
+			offset: 0,
+			controller: 64,
+			value: 1.0,
+		};
+		let bend = MidiEvent::PitchBend {
+			offset: 1,
+			value: 1.0,
+		};
+		list.push_event(&cc, 8, false, ControllerRoute::Midi);
+		list.push_event(&bend, 8, false, ControllerRoute::Midi);
+		{
+			let input = InputEvents::from_buffer(&list);
+			match input.get(0).unwrap().as_core_event() {
+				Some(CoreEventSpace::Midi(e)) => assert_eq!(e.data(), [0xB0, 64, 127]),
+				_ => panic!("expected a CC"),
+			}
+			match input.get(1).unwrap().as_core_event() {
+				Some(CoreEventSpace::Midi(e)) => assert_eq!(e.data(), [0xE0, 0x7f, 0x7f]),
+				_ => panic!("expected a pitch bend"),
+			}
+		}
+		// CLAP-only: a bend tunes the held keys (and notes started while bent).
+		let mut list = EventList::with_capacity(8);
+		let on = |pitch| MidiEvent::NoteOn {
+			offset: 0,
+			pitch,
+			velocity: 1.0,
+		};
+		list.push_event(&on(60), 8, false, ControllerRoute::Expressions);
+		list.push_event(&bend, 8, false, ControllerRoute::Expressions);
+		list.push_event(&cc, 8, false, ControllerRoute::Expressions);
+		list.push_event(&on(64), 8, false, ControllerRoute::Expressions);
+		assert_eq!(list.len(), 4, "note, tuning, (CC dropped), note, tuning");
+		let input = InputEvents::from_buffer(&list);
+		match input.get(1).unwrap().as_core_event() {
+			Some(CoreEventSpace::NoteExpression(e)) => {
+				assert_eq!(e.key(), Match::Specific(60));
+				assert_eq!(e.value(), 2.0);
+			}
+			_ => panic!("expected a tuning expression"),
+		}
+		match input.get(3).unwrap().as_core_event() {
+			Some(CoreEventSpace::NoteExpression(e)) => assert_eq!(e.key(), Match::Specific(64)),
+			_ => panic!("expected a tuning expression for the new note"),
 		}
 	}
 }

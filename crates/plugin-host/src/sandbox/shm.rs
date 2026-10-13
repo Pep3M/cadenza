@@ -70,6 +70,10 @@ const SUB_KEYED: u32 = 2;
 const EV_NOTE_ON: u32 = 1;
 const EV_NOTE_OFF: u32 = 2;
 const EV_ALL_OFF: u32 = 3;
+/// Control change: the pitch word holds the controller number.
+const EV_CC: u32 = 4;
+const EV_BEND: u32 = 5;
+const EV_PRESSURE: u32 = 6;
 
 /// Upper bounds a child accepts from a header (the host never exceeds them).
 pub(crate) const MAX_CAPACITY: u32 = 1 << 16;
@@ -193,17 +197,11 @@ pub(crate) struct SubBlock {
 
 /// `e` with its offset replaced.
 pub(crate) fn with_offset(e: MidiEvent, offset: u32) -> MidiEvent {
-	match e {
-		MidiEvent::NoteOn {
-			pitch, velocity, ..
-		} => MidiEvent::NoteOn {
-			offset,
-			pitch,
-			velocity,
-		},
-		MidiEvent::NoteOff { pitch, .. } => MidiEvent::NoteOff { offset, pitch },
-		MidiEvent::AllNotesOff { .. } => MidiEvent::AllNotesOff { offset },
-	}
+	e.with_offset(offset)
+}
+
+fn finite(v: f32) -> f32 {
+	if v.is_finite() { v } else { 0.0 }
 }
 
 /// A typed view of a mapped region with a validated [`Layout`]. All accessors
@@ -328,6 +326,13 @@ impl<'a> Block<'a> {
 				} => (EV_NOTE_ON, offset, pitch, velocity),
 				MidiEvent::NoteOff { offset, pitch } => (EV_NOTE_OFF, offset, pitch, 0.0),
 				MidiEvent::AllNotesOff { offset } => (EV_ALL_OFF, offset, 0, 0.0),
+				MidiEvent::ControlChange {
+					offset,
+					controller,
+					value,
+				} => (EV_CC, offset, controller, value),
+				MidiEvent::PitchBend { offset, value } => (EV_BEND, offset, 0, value),
+				MidiEvent::ChannelPressure { offset, value } => (EV_PRESSURE, offset, 0, value),
 			};
 			self.store(w, kind);
 			self.store(w + 1, offset.saturating_sub(shift));
@@ -365,6 +370,19 @@ impl<'a> Block<'a> {
 				},
 				EV_ALL_OFF => MidiEvent::AllNotesOff { offset },
 				EV_NOTE_OFF => MidiEvent::NoteOff { offset, pitch },
+				EV_CC => MidiEvent::ControlChange {
+					offset,
+					controller: pitch,
+					value: finite(velocity).clamp(0.0, 1.0),
+				},
+				EV_BEND => MidiEvent::PitchBend {
+					offset,
+					value: finite(velocity).clamp(-1.0, 1.0),
+				},
+				EV_PRESSURE => MidiEvent::ChannelPressure {
+					offset,
+					value: finite(velocity).clamp(0.0, 1.0),
+				},
 				_ => MidiEvent::NoteOff { offset, pitch: 0 },
 			};
 			out.push(event);
@@ -695,7 +713,10 @@ mod tests {
 			bpm: 97.5,
 			playing: true,
 			beat_position: 3.25,
-			..Default::default()
+			time_sig_numerator: 7,
+			time_sig_denominator: 8,
+			bar_start: 3.0,
+			bar_number: 2,
 		};
 		ba.set_request(CMD_PROCESS, FLAG_RESET, 5);
 		assert_eq!(bb.cmd(), CMD_PROCESS);
@@ -733,6 +754,24 @@ mod tests {
 		let mut out = Vec::with_capacity(8);
 		bb.read_events(&mut out);
 		assert_eq!(out, events[..3]);
+		let controllers = [
+			MidiEvent::ControlChange {
+				offset: 1,
+				controller: 64,
+				value: 1.0,
+			},
+			MidiEvent::PitchBend {
+				offset: 2,
+				value: -0.5,
+			},
+			MidiEvent::ChannelPressure {
+				offset: 3,
+				value: 0.25,
+			},
+		];
+		assert_eq!(ba.write_events_shifted(&controllers, 0), 3);
+		bb.read_events(&mut out);
+		assert_eq!(out, controllers);
 		assert_eq!(
 			with_offset(events[0], 9),
 			MidiEvent::NoteOn {

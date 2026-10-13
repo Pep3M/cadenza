@@ -14,7 +14,7 @@ use clack_host::events::spaces::CoreEventSpace;
 use clack_host::prelude::*;
 use clack_host::utils::BeatTime;
 
-use super::events::{EventList, ParamQueue};
+use super::events::{ControllerRoute, EventList, ParamQueue};
 use super::host::{CadenzaHost, HostAudioProcessor, HostFlags};
 use super::{
 	Hosted, PortLayout, audio_config, new_instance, query_latency, query_ports, run_on_main,
@@ -99,6 +99,7 @@ pub struct ClapProcessor {
 	audio: Option<PluginAudioProcessor<CadenzaHost>>,
 	flags: Arc<HostFlags>,
 	midi_dialect: bool,
+	controllers: ControllerRoute,
 	ports: PortLayout,
 	in_bufs: Vec<Vec<f32>>,
 	out_bufs: Vec<Vec<f32>>,
@@ -134,18 +135,19 @@ impl ClapProcessor {
 			EditorShared::new(&desc.id, desc.params.iter().map(|p| p.id.clone()).collect());
 		let (id, path, host_flags) = (desc.id.clone(), desc.path.clone(), flags.clone());
 		let shared = editor.clone();
-		let (key, midi_dialect) = run_on_main(move |main| -> Result<_, PluginError> {
-			let entry = main.entry(&path)?;
-			let mut instance = new_instance(&entry, &id, &path, host_flags.clone())?;
-			let caps = super::query_capabilities(&mut instance);
-			let key = main.insert(Hosted {
-				instance,
-				flags: host_flags,
-				editor: None,
-				shared: Some(shared),
-			});
-			Ok((key, caps.midi_dialect))
-		})??;
+		let (key, midi_dialect, midi_controllers) =
+			run_on_main(move |main| -> Result<_, PluginError> {
+				let entry = main.entry(&path)?;
+				let mut instance = new_instance(&entry, &id, &path, host_flags.clone())?;
+				let caps = super::query_capabilities(&mut instance);
+				let key = main.insert(Hosted {
+					instance,
+					flags: host_flags,
+					editor: None,
+					shared: Some(shared),
+				});
+				Ok((key, caps.midi_dialect, caps.midi_controllers))
+			})??;
 
 		let param_ids: Vec<ClapId> = desc
 			.params
@@ -180,6 +182,11 @@ impl ClapProcessor {
 			audio: None,
 			flags,
 			midi_dialect,
+			controllers: if midi_controllers {
+				ControllerRoute::Midi
+			} else {
+				ControllerRoute::Expressions
+			},
 			ports: PortLayout::default(),
 			in_bufs: Vec::new(),
 			out_bufs: Vec::new(),
@@ -418,7 +425,8 @@ impl Processor for ClapProcessor {
 			});
 		}
 		for e in events {
-			self.events.push_midi(e, n as u32, self.midi_dialect);
+			self.events
+				.push_event(e, n as u32, self.midi_dialect, self.controllers);
 		}
 
 		// Inputs: the main port gets the track's signal (effects), the

@@ -293,17 +293,7 @@ fn main() -> std::io::Result<()> {
 				.filter(|(at, _)| (pos..pos + n).contains(at))
 			{
 				let offset = (at - pos) as u32;
-				block_events.push(match ev {
-					MidiEvent::NoteOn {
-						pitch, velocity, ..
-					} => MidiEvent::NoteOn {
-						offset,
-						pitch,
-						velocity,
-					},
-					MidiEvent::NoteOff { pitch, .. } => MidiEvent::NoteOff { offset, pitch },
-					MidiEvent::AllNotesOff { .. } => MidiEvent::AllNotesOff { offset },
-				});
+				block_events.push(ev.with_offset(offset));
 			}
 			buf_l[..n].fill(0.0);
 			buf_r[..n].fill(0.0);

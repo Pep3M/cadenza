@@ -424,17 +424,7 @@ pub(crate) enum Source {
 
 /// `event` moved to the start of a quantum.
 fn at_offset_zero(event: MidiEvent) -> MidiEvent {
-	match event {
-		MidiEvent::NoteOn {
-			pitch, velocity, ..
-		} => MidiEvent::NoteOn {
-			offset: 0,
-			pitch,
-			velocity,
-		},
-		MidiEvent::NoteOff { pitch, .. } => MidiEvent::NoteOff { offset: 0, pitch },
-		MidiEvent::AllNotesOff { .. } => MidiEvent::AllNotesOff { offset: 0 },
-	}
+	event.with_offset(0)
 }
 
 pub(crate) struct Node {
@@ -899,6 +889,7 @@ impl Graph {
 				self.held[usize::from(pitch >> 6) & 1] &= !(1 << (pitch & 63));
 			}
 			MidiEvent::AllNotesOff { .. } => self.held = [0; 2],
+			_ => {}
 		}
 		self.live.push(event);
 		if !self.playing {
@@ -1703,11 +1694,7 @@ mod tests {
 				unreachable!()
 			};
 			for e in events {
-				let offset = match *e {
-					MidiEvent::NoteOn { offset, .. }
-					| MidiEvent::NoteOff { offset, .. }
-					| MidiEvent::AllNotesOff { offset } => offset,
-				};
+				let offset = e.offset();
 				if !matches!(e, MidiEvent::AllNotesOff { .. }) {
 					out.push(((q * QUANTUM) as i64 + i64::from(offset), *e));
 				}

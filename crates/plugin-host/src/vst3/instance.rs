@@ -121,6 +121,9 @@ pub struct Vst3Processor {
 	out_changes: ComWrapper<ParameterChanges>,
 	held: HeldNotes,
 	release_held: bool,
+	/// `IMidiMapping`: the parameter of each controller (0..=127 CC, 128 pressure,
+	/// 129 pitch bend); empty = the plugin maps none (controllers are dropped).
+	midi_map: Vec<Option<u32>>,
 	context: ProcessContext,
 	audio: Option<SendPtr<ComPtr<IAudioProcessor>>>,
 	flags: Arc<Vst3Flags>,
@@ -191,12 +194,13 @@ impl Vst3Processor {
 				}
 			};
 			let curves = plugin.curves(&ids, &stepped);
+			let midi_map = plugin.midi_mapping();
 			plugin.attachment = Some(attachment);
 			let audio = SendPtr(plugin.processor.clone());
 			let key = main.vst3.insert(plugin);
-			Ok((key, audio, curves))
+			Ok((key, audio, curves, midi_map))
 		})?;
-		let (key, audio, curves) = created.map_err(|f| match f {
+		let (key, audio, curves, midi_map) = created.map_err(|f| match f {
 			Failure::Plugin(e) => e,
 			Failure::Instantiate(reason) => inst_err(reason),
 		})?;
@@ -226,6 +230,7 @@ impl Vst3Processor {
 			out_changes: ParameterChanges::with_capacity(OUTPUT_PARAM_CAPACITY),
 			held: HeldNotes::default(),
 			release_held: false,
+			midi_map,
 			// SAFETY: plain C struct; all-zero is valid and fully set per block.
 			context: unsafe { std::mem::zeroed() },
 			audio: Some(audio),
@@ -523,7 +528,15 @@ impl Processor for Vst3Processor {
 			self.release_held = false;
 		}
 		for e in events {
-			self.held.push(&self.events, e, n as u32);
+			if let Some((slot, value)) = controller_slot(e) {
+				// Controllers drive the parameters the plugin maps to them (one value per
+				// block: the latest).
+				if let Some(Some(id)) = self.midi_map.get(slot) {
+					self.changes.push(*id, value);
+				}
+			} else {
+				self.held.push(&self.events, e, n as u32);
+			}
 		}
 
 		// Inputs: the main bus gets the track's signal (effects), the
@@ -653,5 +666,22 @@ impl Drop for Vst3Processor {
 			super::editor::close(main, key);
 			main.vst3.remove(key);
 		});
+	}
+}
+
+/// `IMidiMapping` slot and normalized value of a controller event (`None` for notes).
+fn controller_slot(e: &MidiEvent) -> Option<(usize, f64)> {
+	match *e {
+		MidiEvent::ControlChange {
+			controller, value, ..
+		} => Some((
+			usize::from(controller.min(127)),
+			f64::from(value.clamp(0.0, 1.0)),
+		)),
+		MidiEvent::ChannelPressure { value, .. } => Some((128, f64::from(value.clamp(0.0, 1.0)))),
+		MidiEvent::PitchBend { value, .. } => {
+			Some((129, f64::from((value.clamp(-1.0, 1.0) + 1.0) * 0.5)))
+		}
+		_ => None,
 	}
 }

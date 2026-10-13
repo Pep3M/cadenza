@@ -86,6 +86,8 @@ pub(crate) struct Capabilities {
 	pub note_input: bool,
 	/// The note port only understands raw MIDI.
 	pub midi_dialect: bool,
+	/// The note port accepts raw MIDI (controllers go as MIDI bytes).
+	pub midi_controllers: bool,
 }
 
 pub(crate) fn query_ports(instance: &mut PluginInstance<CadenzaHost>) -> PortLayout {
@@ -165,6 +167,7 @@ pub(crate) fn query_capabilities(instance: &mut PluginInstance<CadenzaHost>) -> 
 
 	let mut note_input = false;
 	let mut midi_dialect = false;
+	let mut midi_controllers = false;
 	if let Some(ext) = handle.get_extension::<PluginNotePorts>() {
 		let mut buf = NotePortInfoBuffer::new();
 		if ext.count(&handle, true) > 0 {
@@ -172,6 +175,7 @@ pub(crate) fn query_capabilities(instance: &mut PluginInstance<CadenzaHost>) -> 
 			if let Some(info) = ext.get(&handle, 0, true, &mut buf) {
 				midi_dialect = !info.supported_dialects.contains(NoteDialects::CLAP)
 					&& info.supported_dialects.contains(NoteDialects::MIDI);
+				midi_controllers = info.supported_dialects.contains(NoteDialects::MIDI);
 			}
 		}
 	}
@@ -181,6 +185,7 @@ pub(crate) fn query_capabilities(instance: &mut PluginInstance<CadenzaHost>) -> 
 		ports,
 		note_input,
 		midi_dialect,
+		midi_controllers,
 	}
 }
 

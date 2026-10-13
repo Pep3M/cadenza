@@ -3,6 +3,7 @@
 use super::{VoiceSlot, pick_voice};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::envelope::Adsr;
+use crate::util::expression::{Expression, ExpressionAction};
 use crate::util::oscillator::{Oscillator, Waveform};
 use crate::util::smoother::Smoother;
 use crate::util::svf::{Svf, SvfCoeffs};
@@ -289,6 +290,7 @@ pub struct PolySynth {
 	voices: [Voice; VOICES],
 	note_counter: u64,
 	last_pitch: Option<f32>,
+	expr: Expression,
 	rng: Rng,
 	envelopes_dirty: bool,
 	cutoff_oct: Smoother,
@@ -317,6 +319,7 @@ impl PolySynth {
 			voices: [Voice::default(); VOICES],
 			note_counter: 0,
 			last_pitch: None,
+			expr: Expression::default(),
 			rng: Rng::new(0x5EED_1234),
 			envelopes_dirty: true,
 			cutoff_oct: Smoother::new(params.get(P_CUTOFF).log2()),
@@ -387,6 +390,7 @@ impl PolySynth {
 			active: true,
 			released: false,
 			started: self.note_counter,
+			pedal: false,
 		};
 		v.amp_env.gate_on();
 		v.filter_env.gate_on();
@@ -394,8 +398,19 @@ impl PolySynth {
 	}
 
 	fn note_off(&mut self, pitch: u8) {
+		let sustain = self.expr.sustain;
 		for v in &mut self.voices {
-			if v.slot.active && !v.slot.released && v.slot.note == pitch {
+			if v.slot.active && !v.slot.released && v.slot.note == pitch && v.slot.key_up(sustain) {
+				v.slot.released = true;
+				v.amp_env.gate_off();
+				v.filter_env.gate_off();
+			}
+		}
+	}
+
+	fn pedal_up(&mut self) {
+		for v in &mut self.voices {
+			if v.slot.pedal_up() {
 				v.slot.released = true;
 				v.amp_env.gate_off();
 				v.filter_env.gate_off();
@@ -425,7 +440,15 @@ impl PolySynth {
 				}
 			}
 			MidiEvent::NoteOff { pitch, .. } => self.note_off(pitch),
-			MidiEvent::AllNotesOff { .. } => self.all_notes_off(),
+			MidiEvent::AllNotesOff { .. } => {
+				self.expr.apply(ev);
+				self.all_notes_off();
+			}
+			_ => match self.expr.apply(ev) {
+				ExpressionAction::PedalUp => self.pedal_up(),
+				ExpressionAction::AllNotesOff => self.all_notes_off(),
+				ExpressionAction::None => {}
+			},
 		}
 	}
 
@@ -465,11 +488,14 @@ impl PolySynth {
 		let key_track = p.get(P_KEY_TRACK) * 0.01;
 		let vel_sens = p.get(P_VEL_SENS) * 0.01;
 		let glide_coeff = one_pole_coeff(p.get(P_GLIDE) * 0.4, sr);
+		// Bend + mod wheel vibrato for this chunk; pressure opens the filter.
+		let pitch_offset = self.expr.pitch_offset(n, sr);
+		let pressure_semis = self.expr.pressure * 24.0;
 
 		for v in self.voices.iter_mut().filter(|v| v.slot.active) {
 			let vel_scale = 1.0 - vel_sens * (1.0 - v.velocity);
 			let amp_scale = vel_scale * vel_scale * VOICE_GAIN;
-			let mut inc = midi_to_hz(v.pitch) / sr;
+			let mut inc = midi_to_hz(v.pitch + pitch_offset) / sr;
 			for i in 0..n {
 				if v.pitch != v.target_pitch {
 					v.pitch += (v.target_pitch - v.pitch) * glide_coeff;
@@ -480,8 +506,10 @@ impl PolySynth {
 				let fenv = v.filter_env.tick();
 				let aenv = v.amp_env.tick();
 				if v.control_counter == 0 {
-					inc = midi_to_hz(v.pitch) / sr;
-					let semis = fenv * env_amount * vel_scale + key_track * (v.pitch - 60.0);
+					inc = midi_to_hz(v.pitch + pitch_offset) / sr;
+					let semis = fenv * env_amount * vel_scale
+						+ key_track * (v.pitch - 60.0)
+						+ pressure_semis;
 					let cutoff = (self.s_cutoff[i] + semis / 12.0).exp2();
 					let res = self.s_res[i];
 					v.coeffs = SvfCoeffs::new(cutoff, res, sr);
@@ -605,6 +633,7 @@ impl Processor for PolySynth {
 			}
 		}
 		self.last_pitch = None;
+		self.expr.reset_controllers();
 		for s in [
 			&mut self.cutoff_oct,
 			&mut self.resonance,

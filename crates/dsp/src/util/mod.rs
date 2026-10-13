@@ -4,6 +4,7 @@
 pub mod biquad;
 pub mod delay_line;
 pub mod envelope;
+pub mod expression;
 pub mod interp;
 pub mod oscillator;
 pub mod pitch;

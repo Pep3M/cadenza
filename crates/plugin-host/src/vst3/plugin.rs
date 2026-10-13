@@ -8,8 +8,9 @@ use std::sync::Arc;
 use vst3::Steinberg::Vst::{
 	BusDirections_, BusInfo, BusTypes_, IAudioProcessor, IAudioProcessorTrait, IComponent,
 	IComponentHandler, IComponentTrait, IConnectionPoint, IConnectionPointTrait, IEditController,
-	IEditControllerTrait, MediaTypes_, ParameterInfo, ParameterInfo_, ProcessModes_, ProcessSetup,
-	SpeakerArr, SpeakerArrangement, SymbolicSampleSizes_,
+	IEditControllerTrait, IMidiMapping, IMidiMappingTrait, MediaTypes_, ParameterInfo,
+	ParameterInfo_, ProcessModes_, ProcessSetup, SpeakerArr, SpeakerArrangement,
+	SymbolicSampleSizes_,
 };
 use vst3::Steinberg::{FUnknown, IPluginBaseTrait, TUID};
 use vst3::Steinberg::{kResultOk, kResultTrue};
@@ -448,6 +449,27 @@ impl Vst3Plugin {
 			Some(c) => unsafe { c.normalizedParamToPlain(ids[i], n) },
 			None => n,
 		})
+	}
+
+	/// The parameter each MIDI controller drives (`IMidiMapping`, bus 0 channel 0):
+	/// index 0..=127 = CC, 128 = channel pressure, 129 = pitch bend. Empty when the
+	/// plugin has no MIDI mapping.
+	pub fn midi_mapping(&self) -> Vec<Option<u32>> {
+		let Some(mapping) = self
+			.controller
+			.as_ref()
+			.and_then(|c| c.cast::<IMidiMapping>())
+		else {
+			return Vec::new();
+		};
+		(0..130i16)
+			.map(|cc| {
+				let mut id: u32 = 0;
+				// SAFETY: plain query with a valid out-pointer.
+				let r = unsafe { mapping.getMidiControllerAssignment(0, 0, cc, &mut id) };
+				(r == kResultOk || r == kResultTrue).then_some(id)
+			})
+			.collect()
 	}
 
 	/// Exact plain → normalized conversion through the controller.

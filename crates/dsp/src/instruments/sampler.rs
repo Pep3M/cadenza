@@ -6,6 +6,7 @@ use super::sample_voice::{
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::sample::Zone;
 use crate::util::envelope::Adsr;
+use crate::util::expression::{Expression, ExpressionAction};
 use crate::util::smoother::Smoother;
 use crate::util::svf::{Svf, SvfCoeffs};
 use crate::util::{ParamValues, db_to_gain, event_spans, one_pole_coeff};
@@ -282,6 +283,8 @@ struct Voice {
 	counter: u32,
 	svf: [Svf; 2],
 	coeffs: SvfCoeffs,
+	/// Key up while the sustain pedal is down.
+	pedal: bool,
 }
 
 /// Multi-zone sampler.
@@ -297,6 +300,9 @@ pub struct Sampler {
 	rr: [u32; 17],
 	/// Longest playable region without a loop (seconds), for one-shot tails.
 	longest: f32,
+	expr: Expression,
+	/// Bend + vibrato of the span being rendered (semitones).
+	pitch_offset: f32,
 }
 
 impl Default for Sampler {
@@ -320,6 +326,8 @@ impl Sampler {
 			last_pitch: None,
 			rr: [0; 17],
 			longest: 0.0,
+			expr: Expression::default(),
+			pitch_offset: 0.0,
 		}
 	}
 
@@ -465,6 +473,7 @@ impl Sampler {
 			counter: 0,
 			svf: [Svf::default(); 2],
 			coeffs: SvfCoeffs::default(),
+			pedal: false,
 		};
 		self.set_envelopes(&mut v);
 		v.amp.gate_on();
@@ -476,12 +485,28 @@ impl Sampler {
 		if self.one_shot() {
 			return;
 		}
+		let sustain = self.expr.sustain;
 		for v in self.voices.iter_mut() {
 			if v.slot.active && !v.slot.released && v.note == pitch {
+				if sustain {
+					v.pedal = true;
+					continue;
+				}
 				v.slot.released = true;
 				v.amp.gate_off();
 				v.filter_env.gate_off();
 			}
+		}
+	}
+
+	fn pedal_up(&mut self) {
+		for v in self.voices.iter_mut() {
+			if v.slot.active && !v.slot.released && v.pedal {
+				v.slot.released = true;
+				v.amp.gate_off();
+				v.filter_env.gate_off();
+			}
+			v.pedal = false;
 		}
 	}
 
@@ -508,19 +533,22 @@ impl Sampler {
 			v.pitch = v.target;
 		}
 		let zone = &self.zones[v.zone];
-		let semis = v.pitch - f32::from(zone.root_key) + zone.tune + p.get(P_TRANSPOSE);
+		let semis =
+			v.pitch - f32::from(zone.root_key) + zone.tune + p.get(P_TRANSPOSE) + self.pitch_offset;
 		v.ratio = 2.0_f64.powf(f64::from(semis) / 12.0) * f64::from(self.rt[v.zone].sample_rate)
 			/ f64::from(self.sample_rate);
 		if p.choice(P_FILTER_TYPE) != 0 {
 			let offset = v.filter_env.level() * p.get(P_FILTER_ENV_AMOUNT)
 				+ v.velocity * 48.0 * p.get(P_FILTER_VELOCITY) * 0.01
-				+ (v.pitch - 60.0) * p.get(P_FILTER_KEY_TRACK) * 0.01;
+				+ (v.pitch - 60.0) * p.get(P_FILTER_KEY_TRACK) * 0.01
+				+ self.expr.pressure * 24.0;
 			let cutoff = p.get(P_FILTER_CUTOFF) * 2.0_f32.powf(offset / 12.0);
 			v.coeffs = SvfCoeffs::new(cutoff, p.get(P_FILTER_RESONANCE) * 0.01, self.sample_rate);
 		}
 	}
 
 	fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+		self.pitch_offset = self.expr.pitch_offset(left.len(), self.sample_rate);
 		let filter = self.params.choice(P_FILTER_TYPE);
 		for i in 0..self.voices.len() {
 			if !self.voices[i].slot.active {
@@ -621,7 +649,15 @@ impl Processor for Sampler {
 				}) if velocity > 0.0 => self.note_on(pitch, velocity),
 				Some(&MidiEvent::NoteOn { pitch, .. })
 				| Some(&MidiEvent::NoteOff { pitch, .. }) => self.note_off(pitch),
-				Some(MidiEvent::AllNotesOff { .. }) => self.all_notes_off(),
+				Some(ev @ MidiEvent::AllNotesOff { .. }) => {
+					self.expr.apply(ev);
+					self.all_notes_off();
+				}
+				Some(ev) => match self.expr.apply(ev) {
+					ExpressionAction::PedalUp => self.pedal_up(),
+					ExpressionAction::AllNotesOff => self.all_notes_off(),
+					ExpressionAction::None => {}
+				},
 				None => {}
 			}
 		}
@@ -634,6 +670,7 @@ impl Processor for Sampler {
 		self.gain.snap();
 		self.last_pitch = None;
 		self.rr = [0; 17];
+		self.expr.reset_controllers();
 	}
 
 	fn tail_seconds(&self) -> f32 {
@@ -708,22 +745,7 @@ mod tests {
 			let evs: Vec<MidiEvent> = events
 				.iter()
 				.filter(|(f, _)| (at..at + 256).contains(f))
-				.map(|(f, e)| match *e {
-					MidiEvent::NoteOn {
-						pitch, velocity, ..
-					} => MidiEvent::NoteOn {
-						offset: (f - at) as u32,
-						pitch,
-						velocity,
-					},
-					MidiEvent::NoteOff { pitch, .. } => MidiEvent::NoteOff {
-						offset: (f - at) as u32,
-						pitch,
-					},
-					MidiEvent::AllNotesOff { .. } => MidiEvent::AllNotesOff {
-						offset: (f - at) as u32,
-					},
-				})
+				.map(|(f, e)| e.with_offset((f - at) as u32))
 				.collect();
 			let mut l = [0.0f32; 256];
 			let mut r = [0.0f32; 256];

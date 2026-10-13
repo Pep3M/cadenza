@@ -70,10 +70,21 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.track_index(id)
 				.ok_or(ModelError::TrackNotFound(id))?;
 			let removed = project.tracks.remove(index);
+			let parent = removed.folder;
 			let mut inverse = vec![Command::AddTrack {
 				track: removed,
 				index: Some(index),
 			}];
+			// Tracks inside a removed folder move up to its parent.
+			for other in &mut project.tracks {
+				if other.folder == Some(id) {
+					other.folder = parent;
+					inverse.push(Command::SetTrackFolder {
+						track: other.id,
+						folder: Some(id),
+					});
+				}
+			}
 			let mut dropped_sends = Vec::new();
 			for other in &mut project.tracks {
 				if other.channel.output == Output::Bus(id) {
@@ -278,6 +289,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			if project.device_id_in_use(device.id) {
 				return Err(ModelError::DuplicateDeviceId(device.id));
 			}
+			validate::not_folder(project, *track, "devices")?;
 			validate::device_links(project, *track, device, false)?;
 			let index = checked_index("insert position", *index, chain_len)?;
 			let channel = project
@@ -515,6 +527,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.track(*track)
 				.ok_or(ModelError::TrackNotFound(*track))?;
 			let len = t.channel.sends.len();
+			validate::not_folder(project, Some(*track), "sends")?;
 			validate::volume(send.level_db)?;
 			if project.device_id_in_use(send.id) {
 				return Err(ModelError::DuplicateDeviceId(send.id));
@@ -840,6 +853,18 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			Ok(vec![Command::UpdateNotes {
 				clip: *clip,
 				notes: inverse,
+			}])
+		}
+
+		Command::SetTrackFolder { track, folder } => {
+			validate::track_folder(project, *track, *folder)?;
+			let t = project
+				.track_mut(*track)
+				.ok_or(ModelError::TrackNotFound(*track))?;
+			let old = std::mem::replace(&mut t.folder, *folder);
+			Ok(vec![Command::SetTrackFolder {
+				track: *track,
+				folder: old,
 			}])
 		}
 

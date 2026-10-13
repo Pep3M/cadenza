@@ -81,6 +81,9 @@ pub struct TrackSummary {
 	pub clips: Vec<ClipSummary>,
 	/// Addresses of automated parameters on this track.
 	pub automation: Vec<String>,
+	/// The folder track this track is in.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub folder: Option<TrackId>,
 	/// Audio input it records from (audio tracks).
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub input: Option<TrackInput>,
@@ -251,6 +254,7 @@ impl Project {
 			clips: track.clips.iter().map(clip_summary).collect(),
 			automation: self.automation_addresses(Some(track.id)),
 			input: track.input,
+			folder: track.folder,
 		}
 	}
 

@@ -544,6 +544,7 @@ pub fn build_import_command(
 					clips: vec![clip],
 					channel: Default::default(),
 					input: None,
+					folder: None,
 				};
 				commands.push(Command::AddTrack { track, index: None });
 			}

@@ -2445,3 +2445,75 @@ fn controller_lanes_round_trip_split_and_persist() {
 	assert!(json.contains("\"controller\": \"pitch_bend\""));
 	assert_eq!(&Project::from_json_str(&json).unwrap(), doc.project());
 }
+
+#[test]
+fn folder_tracks_hold_tracks_and_reparent_on_removal() {
+	let fx = fixture();
+	let mut p = fx.project.clone();
+	let outer = Track::new("Group", TrackKind::Folder);
+	let inner = Track::new("Sub", TrackKind::Folder);
+	let (outer_id, inner_id) = (outer.id, inner.id);
+	p.tracks.push(outer);
+	p.tracks.push(inner);
+	let p = round_trip(
+		&p,
+		Command::SetTrackFolder {
+			track: inner_id,
+			folder: Some(outer_id),
+		},
+	);
+	let p = round_trip(
+		&p,
+		Command::SetTrackFolder {
+			track: fx.lead,
+			folder: Some(inner_id),
+		},
+	);
+	assert_eq!(p.folders_of(fx.lead), vec![inner_id, outer_id]);
+	assert_eq!(p.folder_contents(outer_id), vec![fx.lead, inner_id]);
+	// No cycles, folders only, no audio on folders.
+	assert!(
+		exec_err(
+			&p,
+			Command::SetTrackFolder {
+				track: outer_id,
+				folder: Some(inner_id),
+			}
+		)
+		.to_string()
+		.contains("inside itself")
+	);
+	assert!(
+		exec_err(
+			&p,
+			Command::SetTrackFolder {
+				track: fx.lead,
+				folder: Some(fx.drum_bus),
+			}
+		)
+		.to_string()
+		.contains("Folder tracks")
+	);
+	assert!(
+		exec_err(
+			&p,
+			Command::InsertDevice {
+				track: Some(outer_id),
+				device: Device::builtin("eq", "EQ"),
+				index: None,
+			}
+		)
+		.to_string()
+		.contains("folder tracks carry no audio")
+	);
+	// Removing the inner folder moves its tracks up to the outer one (undo restores).
+	let p2 = round_trip(&p, Command::RemoveTrack { track: inner_id });
+	assert_eq!(p2.track(fx.lead).unwrap().folder, Some(outer_id));
+	let s = p.summary();
+	assert_eq!(
+		s.tracks.iter().find(|t| t.id == fx.lead).unwrap().folder,
+		Some(inner_id)
+	);
+	let json = p.to_json_string().unwrap();
+	assert_eq!(Project::from_json_str(&json).unwrap(), p);
+}

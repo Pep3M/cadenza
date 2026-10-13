@@ -2410,6 +2410,23 @@ fn render_phase17_screens() {
 		s.view.timeline.px_per_beat = 60.0;
 	}
 	shot(&mut h, &dir, "crossfade");
+
+	// A folder with two tracks (expanded, then folded).
+	{
+		let s = &mut h.state_mut().state;
+		let ids: Vec<_> = s
+			.project()
+			.tracks
+			.iter()
+			.filter(|t| t.name == "Bass" || t.name == "Pad")
+			.map(|t| t.id)
+			.collect();
+		s.group_into_folder(&ids);
+	}
+	shot(&mut h, &dir, "folder_open");
+	let folder = h.state().state.selection.track.unwrap();
+	h.state_mut().state.toggle_folder(folder);
+	shot(&mut h, &dir, "folder_folded");
 }
 
 #[test]
@@ -2500,4 +2517,34 @@ fn the_automation_mode_button_cycles_read_touch_latch() {
 	h.get_by_label("A: Latch").click();
 	h.run_steps(2);
 	assert_eq!(h.state().state.autowrite.mode, WriteMode::Off);
+}
+
+#[test]
+fn folders_group_tracks_and_fold_in_the_arrange() {
+	let mut a = app();
+	let ids: Vec<_> = a
+		.state
+		.project()
+		.tracks
+		.iter()
+		.filter(|t| t.name == "Bass" || t.name == "Pad")
+		.map(|t| t.id)
+		.collect();
+	a.state.group_into_folder(&ids);
+	assert_eq!(a.state.undo_label(), Some("Group into folder"));
+	let folder = a.state.selection.track.unwrap();
+	assert_eq!(a.state.project().folder_contents(folder), ids);
+	let mut h = harness(a);
+	h.run_steps(2);
+	let rows_of = |h: &Harness<'_, CadenzaApp>| {
+		let s = &h.state().state;
+		cadenza_app::state::rows::Rows::new(s.project(), &s.view)
+			.rows
+			.len()
+	};
+	let rows = rows_of(&h);
+	h.get_by_label("Fold").click();
+	h.run_steps(2);
+	assert!(h.state().state.view.collapsed.contains(&folder));
+	assert_eq!(rows_of(&h), rows - 2, "contents hidden");
 }

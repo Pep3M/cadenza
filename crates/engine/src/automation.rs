@@ -69,6 +69,10 @@ pub(crate) enum AutoTarget {
 	Volume {
 		node: Option<usize>,
 	},
+	/// A folder's volume: an offset for the tracks inside.
+	FolderVolume {
+		folder: usize,
+	},
 	Pan {
 		node: Option<usize>,
 	},
@@ -116,6 +120,8 @@ pub(crate) enum Unresolved {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Resolver {
 	pub nodes: HashMap<TrackId, usize>,
+	/// Folder tracks -> index in `Graph::folders` (their volume is a group offset).
+	pub folders: HashMap<TrackId, usize>,
 	pub devices: HashMap<DeviceId, DeviceEntry>,
 	pub sends: HashMap<DeviceId, (usize, usize)>,
 	/// Nodes with an instrument source (MIDI schedules).
@@ -146,6 +152,11 @@ impl Resolver {
 	}
 
 	pub fn target(&self, address: &ParamAddress) -> Result<AutoTarget, Unresolved> {
+		if let (Some(id), ParamTarget::Volume) = (address.track, &address.target)
+			&& let Some(&folder) = self.folders.get(&id)
+		{
+			return Ok(AutoTarget::FolderVolume { folder });
+		}
 		let node = match address.track {
 			None => None,
 			Some(id) => Some(*self.nodes.get(&id).ok_or(Unresolved::Track)?),

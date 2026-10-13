@@ -389,7 +389,7 @@ impl CadenzaServer {
 	// -- tracks / mixer ----------------------------------------------------------------
 
 	#[tool(
-		description = "Creates a track (instrument, audio or bus), optionally with an instrument \
+		description = "Creates a track (instrument, audio, bus or folder), optionally with an instrument \
 			loaded: a built-in id (\"poly_synth\") or a plugin id (\"clap:<plugin id>\") from \
 			list_devices, plus optional params."
 	)]
@@ -406,6 +406,16 @@ impl CadenzaServer {
 		Parameters(args): Parameters<tracks::UpdateTrackArgs>,
 	) -> Result<(), ErrorData> {
 		self.run_mut(|s| tracks::update_track(s, args))
+	}
+
+	#[tool(
+		description = "Puts a track into a folder track (kind folder) or, without folder_id, back to the top level. Folders group tracks: the folder's volume offsets every track inside (VCA-like), its mute/solo apply to them; folders hold no clips or devices. get_project shows each track's folder."
+	)]
+	fn set_track_folder(
+		&self,
+		Parameters(args): Parameters<tracks::SetTrackFolderArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| tracks::set_track_folder(s, args))
 	}
 
 	#[tool(description = "Deletes a track and everything on it (clips, devices, sends).")]

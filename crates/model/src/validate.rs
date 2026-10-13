@@ -628,8 +628,78 @@ pub(crate) fn new_track_sidechains(project: &Project, track: &Track) -> Result<(
 
 /// Checks a track's own content and the routes it declares. Does not check id uniqueness
 /// against the project (see [`new_track_ids`]).
+/// Folder tracks carry no audio: no devices or sends.
+pub(crate) fn not_folder(
+	project: &Project,
+	track: Option<TrackId>,
+	what: &str,
+) -> Result<(), ModelError> {
+	match track.and_then(|t| project.track(t)) {
+		Some(t) if t.kind == TrackKind::Folder => Err(ModelError::invalid(
+			format!("{what} on track {}", t.id),
+			t.name.clone(),
+			"folder tracks carry no audio (no devices or sends); put them on the tracks inside, or on a bus the tracks feed",
+		)),
+		_ => Ok(()),
+	}
+}
+
+/// `folder` must be a folder track that is not `track` nor inside it.
+pub(crate) fn track_folder(
+	project: &Project,
+	track: TrackId,
+	folder: Option<TrackId>,
+) -> Result<(), ModelError> {
+	if project.track(track).is_none() {
+		return Err(ModelError::TrackNotFound(track));
+	}
+	let Some(folder) = folder else {
+		return Ok(());
+	};
+	let Some(f) = project.track(folder) else {
+		return Err(ModelError::TrackNotFound(folder));
+	};
+	if f.kind != TrackKind::Folder {
+		return Err(ModelError::invalid(
+			"folder",
+			folder.to_string(),
+			"tracks can only be put into Folder tracks (create one with kind folder)",
+		));
+	}
+	if folder == track || project.folders_of(folder).contains(&track) {
+		return Err(ModelError::invalid(
+			"folder",
+			folder.to_string(),
+			"a folder cannot be put inside itself or inside one of its own sub-folders",
+		));
+	}
+	Ok(())
+}
+
 pub(crate) fn track(project: &Project, track: &Track) -> Result<(), ModelError> {
 	name("track", &track.name)?;
+	if let Some(folder) = track.folder {
+		match project.track(folder) {
+			Some(f) if f.kind == TrackKind::Folder => {}
+			Some(_) => {
+				return Err(ModelError::invalid(
+					"folder",
+					folder.to_string(),
+					"tracks can only be put into Folder tracks",
+				));
+			}
+			None => return Err(ModelError::TrackNotFound(folder)),
+		}
+	}
+	if track.kind == TrackKind::Folder
+		&& (!track.channel.inserts.is_empty() || !track.channel.sends.is_empty())
+	{
+		return Err(ModelError::invalid(
+			format!("folder track {}", track.id),
+			track.name.clone(),
+			"folder tracks carry no audio: no devices or sends",
+		));
+	}
 	track_input(track.id, track.kind, track.input.as_ref())?;
 	if let Some(c) = &track.color {
 		color(c)?;
@@ -816,6 +886,15 @@ pub(crate) fn location(track: Option<TrackId>) -> String {
 pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	name("project", &project.name)?;
 	time_signature(project.time_signature)?;
+	for t in &project.tracks {
+		if project.folders_of(t.id).contains(&t.id) {
+			return Err(ModelError::invalid(
+				"folder",
+				t.id.to_string(),
+				"folder tracks form a cycle; a folder cannot be inside itself",
+			));
+		}
+	}
 	if project.time_signature_changes.len() > MAX_METER_CHANGES {
 		return Err(ModelError::invalid(
 			"time signature changes",

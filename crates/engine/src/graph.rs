@@ -430,8 +430,36 @@ fn at_offset_zero(event: MidiEvent) -> MidiEvent {
 	event.with_offset(0)
 }
 
+/// A folder's volume: every track inside moves by the difference. Realtime safe.
+fn folder_volume(folders: &mut [FolderGain], nodes: &mut [Node], folder: usize, db: f32) {
+	let Some(f) = folders.get_mut(folder) else {
+		return;
+	};
+	let delta = db - f.db;
+	if delta == 0.0 {
+		return;
+	}
+	f.db = db;
+	for &i in &f.nodes {
+		if let Some(n) = nodes.get_mut(i) {
+			n.folder_db += delta;
+			n.fader.set_volume_db(n.own_db + n.folder_db);
+		}
+	}
+}
+
+/// A folder track's volume and the nodes inside it (at any depth).
+pub(crate) struct FolderGain {
+	pub track: TrackId,
+	pub db: f32,
+	pub nodes: Vec<usize>,
+}
+
 pub(crate) struct Node {
 	pub track_id: TrackId,
+	/// The channel's own fader volume and the sum of its folders' volumes (dB).
+	pub own_db: f32,
+	pub folder_db: f32,
 	pub name: String,
 	/// Index in `Project::tracks` (display order).
 	pub display_index: usize,
@@ -500,6 +528,8 @@ pub struct Graph {
 	pub(crate) automation: Vec<Binding>,
 	/// Address -> target map (control side only; never used by `process`).
 	pub(crate) resolver: Resolver,
+	/// Folder tracks (group volume offsets).
+	pub(crate) folders: Vec<FolderGain>,
 	/// Which `Player::load` this graph came from (0 offline), to match automation sets.
 	pub(crate) load_id: u64,
 	pub(crate) tempo: Vec<TempoSegment>,
@@ -660,17 +690,28 @@ impl Graph {
 		track.is_none() || next.is_some()
 	}
 
-	/// Sets a channel's fader volume (`track: None` = master) without recompiling; the
-	/// change is smoothed. Realtime safe. Returns false for an unknown track.
+	/// Sets a channel's fader volume (`track: None` = master; a folder track offsets the
+	/// tracks inside) without recompiling; the change is smoothed. Realtime safe. Returns
+	/// false for an unknown track.
 	pub fn set_channel_volume(&mut self, track: Option<TrackId>, db: f32) -> bool {
 		match track {
 			None => self.master.fader.set_volume_db(db),
 			Some(id) => match self.nodes.iter_mut().find(|n| n.track_id == id) {
-				Some(n) => n.fader.set_volume_db(db),
-				None => return false,
+				Some(n) => {
+					n.own_db = db;
+					n.fader.set_volume_db(db + n.folder_db);
+				}
+				None => match self.folders.iter().position(|f| f.track == id) {
+					Some(i) => self.set_folder_volume(i, db),
+					None => return false,
+				},
 			},
 		}
 		true
+	}
+
+	fn set_folder_volume(&mut self, folder: usize, db: f32) {
+		folder_volume(&mut self.folders, &mut self.nodes, folder, db);
 	}
 
 	/// Like [`Graph::set_channel_volume`], for pan (-1..1).
@@ -1269,9 +1310,16 @@ impl Graph {
 			b.last = v;
 			match b.target {
 				AutoTarget::Volume { node } => match node {
-					Some(i) => self.nodes[i].fader.set_volume_db(v),
+					Some(i) => {
+						let n = &mut self.nodes[i];
+						n.own_db = v;
+						n.fader.set_volume_db(v + n.folder_db);
+					}
 					None => self.master.fader.set_volume_db(v),
 				},
+				AutoTarget::FolderVolume { folder } => {
+					folder_volume(&mut self.folders, &mut self.nodes, folder, v)
+				}
 				AutoTarget::Pan { node } => match node {
 					Some(i) => self.nodes[i].fader.set_pan(v),
 					None => self.master.fader.set_pan(v),

@@ -321,6 +321,7 @@ fn round_trips_project_export_and_import() {
 		}],
 		channel: Default::default(),
 		input: None,
+		folder: None,
 	});
 
 	let bytes = export_project(&project).unwrap();

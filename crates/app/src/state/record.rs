@@ -365,7 +365,7 @@ impl AppState {
 					name: t.name.clone(),
 					input: None,
 				}),
-				TrackKind::Bus => None,
+				TrackKind::Bus | TrackKind::Folder => None,
 			})
 			.collect();
 		if tracks.is_empty() {

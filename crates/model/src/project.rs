@@ -46,6 +46,9 @@ pub enum TrackKind {
 	Instrument,
 	Audio,
 	Bus,
+	/// Holds other tracks (their `folder`): no audio of its own; its volume is an offset
+	/// for every track inside (VCA-like), its mute/solo apply to them.
+	Folder,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -67,6 +70,9 @@ pub struct Track {
 	/// (missing = no input assigned).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub input: Option<TrackInput>,
+	/// The folder track this track is in (missing = top level).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub folder: Option<TrackId>,
 }
 
 /// Which channels of the audio input device an audio track records, and when the track
@@ -396,6 +402,29 @@ impl Project {
 		Meter::new(self.time_signature, &self.time_signature_changes)
 	}
 
+	/// The folders holding `track`, innermost first.
+	pub fn folders_of(&self, track: TrackId) -> Vec<TrackId> {
+		let mut out = Vec::new();
+		let mut at = self.track(track).and_then(|t| t.folder);
+		while let Some(f) = at {
+			if out.contains(&f) || out.len() > self.tracks.len() {
+				break;
+			}
+			out.push(f);
+			at = self.track(f).and_then(|t| t.folder);
+		}
+		out
+	}
+
+	/// Tracks inside `folder`, at any depth, in display order.
+	pub fn folder_contents(&self, folder: TrackId) -> Vec<TrackId> {
+		self.tracks
+			.iter()
+			.filter(|t| t.id != folder && self.folders_of(t.id).contains(&folder))
+			.map(|t| t.id)
+			.collect()
+	}
+
 	pub fn track(&self, id: TrackId) -> Option<&Track> {
 		self.tracks.iter().find(|t| t.id == id)
 	}
@@ -519,6 +548,7 @@ impl Track {
 			clips: Vec::new(),
 			channel: Channel::default(),
 			input: None,
+			folder: None,
 		}
 	}
 

@@ -117,6 +117,23 @@ pub fn update_track(session: &mut Session, args: UpdateTrackArgs) -> Result<(), 
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetTrackFolderArgs {
+	pub track_id: TrackId,
+	/// A Folder track (create one with create_track kind "folder"); omit to take the
+	/// track out to the top level.
+	#[serde(default)]
+	pub folder_id: Option<TrackId>,
+}
+
+pub fn set_track_folder(session: &mut Session, args: SetTrackFolderArgs) -> Result<(), McpError> {
+	session.document_mut().execute(Command::SetTrackFolder {
+		track: args.track_id,
+		folder: args.folder_id,
+	})?;
+	Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct DeleteTrackArgs {
 	pub track_id: TrackId,
 }

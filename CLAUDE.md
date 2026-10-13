@@ -92,9 +92,10 @@ pub struct Project {
 	pub automation: Vec<AutomationLane>,
 	pub markers: Vec<Marker>,          // song sections: Intro, Verse 1, Chorus...
 }
-pub enum TrackKind { Instrument, Audio, Bus }
+pub enum TrackKind { Instrument, Audio, Bus, Folder }
 pub struct Track { id: TrackId, name, kind, color: Option<String /* #RRGGBB */>,
 	instrument: Option<Device>, clips: Vec<Clip>, channel: Channel,
+	folder: Option<TrackId> /* the folder track holding it; optional */,
 	input: Option<TrackInput { channel: u16 /* 0-based */, stereo: bool /* channel+1 */, monitor: MonitorMode /* off|auto (default)|on */ }> /* audio tracks */ }
 pub struct Channel { volume_db: f32, pan: f32 /* -1..1 */, mute: bool, solo: bool,
 	inserts: Vec<Device>, sends: Vec<Send>, output: Output }
@@ -133,7 +134,7 @@ master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature { time_signature, bar /* 0-based index, 0 = bar 1, omitted when 0 */ },
-RemoveTimeSignature { bar }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
+RemoveTimeSignature { bar }, SetTrackFolder { track, folder: Option }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
@@ -175,6 +176,12 @@ helpers: `window` (split/trim: the value in effect at the cut becomes a point at
 (MIDI-quantized, curved), `splice`. `takes::split_clip` carries lanes; validation: ticks >= 0,
 values in range, one lane per controller, <= 100000 points (points past the clip end are kept
 but never played). Summary: `controllers: ["cc1 (12 events, 0.00..1.00)"]`.
+
+Folders (phase 17): `TrackKind::Folder` tracks hold other tracks (`Track::folder`, nesting
+allowed, no cycles); they carry no audio (no clips/devices/sends: rejected with actionable
+errors). Their volume is a dB offset for every track inside (VCA), their mute/solo apply to
+them. `Project::folders_of` (innermost first) / `folder_contents` (any depth, display order).
+Removing a folder moves its tracks up to its parent (undo restores). Summary: `folder`.
 
 Implemented extras: `ResetParam` (inverse of a first `SetParam`), `UpdateSend`, optional `index`
 on AddTrack/InsertDevice/AddSend, `UpdateClip` can move a clip to another track. Instruments are
@@ -390,6 +397,10 @@ pad C2-C5, mono 48 kHz WAV) in `$CADENZA_FACTORY_SAMPLES` or
 versioned), `list_factory_samples`, `preset_zones`, `default_content(id)` (a new sampler starts
 with "Sine Pad", a drum_sampler with "Synth Kit"). `auto_zone(path)`/`detect_root`: name, else
 pitch, else C4.
+Folders: folder tracks get no node; each node's fader is `own_db + folder_db` (sum of its
+folders' volumes), `set_channel_volume(folder)` moves every node inside (`Graph::folders`,
+realtime safe) and folder volume lanes bind to `AutoTarget::FolderVolume`; a folder's mute
+mutes and its solo solos the tracks inside.
 Audio clips: files are decoded + resampled to the engine rate at compile time through
 `AudioCache::global()` (any format symphonia reads) and played with `render_clip` (realtime
 safe). Crossfades (phase 17, `audio_clip::crossfade_overlaps`): where a playing clip starts
@@ -606,6 +617,15 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   `SetAutomation`, each stretch replacing the points inside it, thinned by Ramer-Douglas-Peucker
   at 1 % of its range; a loop wrap starts a new stretch so the later pass wins). Nothing of
   this runs on the audio thread.
+- Folder tracks (phase 17, `state::folders` pure builders): "+ Folder" track button, track
+  menu "Group into new folder" / "Take out of folder"; headers indent with a guide line per
+  folder level, folders have a disclosure triangle (`view.collapsed`, `toggle_folder`) and a
+  row that summarizes the clips inside; collapsed contents are hidden in the arrange
+  (`Rows::hidden`) and the mixer (folder strips: fold toggle, VCA fader, M/S; no inserts,
+  sends, output or pan). Dragging a header (`move_track_to` -> `folders::move_track`, one undo
+  step) moves a folder with its contents and files the track: right under an open folder =
+  into it, else into the folder of the row above. MCP: `set_track_folder`, create_track kind
+  folder.
 - Audio editor (`state::audio_edit` + `ui::audio_editor`; double-click an audio clip): shares
   the bottom editor dock with the piano roll (`view.audio_editor`; F7 toggles the dock).
   Source-file time axis, peaks when zoomed out and decoded samples (`PeakCache::samples`) when

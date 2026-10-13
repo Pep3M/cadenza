@@ -97,6 +97,9 @@ pub struct ArrangeUi {
 	alt: bool,
 }
 
+/// Header indentation per folder level.
+const FOLDER_INDENT: f32 = 10.0;
+
 /// Geometry shared by the painting helpers.
 #[derive(Debug, Clone, Copy)]
 struct Layout {
@@ -801,7 +804,21 @@ impl ArrangeUi {
 			super::record::header_input_meter(&p, state, track, rect);
 		}
 
-		let left = rect.left() + 12.0;
+		// Folder nesting: indentation and one guide line per enclosing folder.
+		let folders = state.project().folders_of(track.id);
+		for (k, f) in folders.iter().rev().enumerate() {
+			let c = state
+				.project()
+				.track(*f)
+				.map_or(theme::BORDER, |f| theme::track_color(f.color.as_deref()));
+			let x = rect.left() + 10.0 + k as f32 * FOLDER_INDENT;
+			p.vline(
+				x,
+				rect.top()..=rect.bottom(),
+				Stroke::new(2.0, c.gamma_multiply(0.6)),
+			);
+		}
+		let left = rect.left() + 12.0 + folders.len() as f32 * FOLDER_INDENT;
 		let meter_w = 8.0;
 		let right = rect.right() - meter_w - 10.0;
 		// Row 1: number, name, mute, solo.
@@ -817,10 +834,32 @@ impl ArrangeUi {
 		let mute_rect = solo_rect.translate(vec2(-21.0, 0.0));
 		let auto_rect = mute_rect.translate(vec2(-21.0, 0.0));
 		let record_left = super::record::header_buttons(ui, state, track, id, auto_rect);
-		let name_rect = Rect::from_min_max(
-			pos2(left + 16.0, row1),
-			pos2(record_left - 4.0, row1 + 16.0),
-		);
+		let mut name_left = left + 16.0;
+		if track.kind == TrackKind::Folder {
+			// Collapse / expand toggle before the name.
+			let open = !state.view.collapsed.contains(&track.id);
+			let r = Rect::from_min_size(pos2(name_left - 2.0, row1), vec2(16.0, 16.0));
+			let resp = ui.interact(r, id.with("fold"), Sense::click());
+			resp.widget_info(|| {
+				egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, open, "Fold")
+			});
+			widgets::paint_disclosure(
+				&p,
+				r.center(),
+				open,
+				if resp.hovered() {
+					Color32::WHITE
+				} else {
+					theme::TEXT_DIM
+				},
+			);
+			if resp.on_hover_text("Collapse / expand the folder").clicked() {
+				state.toggle_folder(track.id);
+			}
+			name_left += 16.0;
+		}
+		let name_rect =
+			Rect::from_min_max(pos2(name_left, row1), pos2(record_left - 4.0, row1 + 16.0));
 		match &mut self.rename {
 			Some((t, text)) if *t == track.id => {
 				let edit = ui.put(
@@ -908,6 +947,10 @@ impl ArrangeUi {
 					.map_or("No instrument".to_owned(), |d| d.name.clone()),
 				TrackKind::Audio => "Audio".to_owned(),
 				TrackKind::Bus => "Bus".to_owned(),
+				TrackKind::Folder => {
+					let n = state.project().folder_contents(track.id).len();
+					format!("Folder · {n} track{}", if n == 1 { "" } else { "s" })
+				}
 			};
 			let instrument_rect =
 				Rect::from_min_max(pos2(left, row2), pos2(right - 62.0, row2 + 14.0));
@@ -1019,10 +1062,9 @@ impl ArrangeUi {
 			if response.drag_stopped() || ui.input(|i| i.pointer.any_released()) {
 				let d = self.track_drag.take().expect("track drag");
 				if d.to != d.from {
-					state.apply(Command::MoveTrack {
-						track: d.track,
-						index: d.to,
-					});
+					// Folders move with their contents; landing under an open folder
+					// files the track into it.
+					state.move_track_to(d.track, d.to);
 				}
 			}
 		}
@@ -1162,6 +1204,47 @@ impl ArrangeUi {
 			}
 			for xf in xfs {
 				self.xfades.push((row(xf.start, xf.overlap_end), xf));
+			}
+		}
+
+		// Folder rows: a summary of the clips inside (one thin bar per track).
+		for (i, t) in tracks.iter().enumerate() {
+			if t.kind != TrackKind::Folder {
+				continue;
+			}
+			let y = self.top(layout, i, scroll);
+			if y > area.bottom() || y + h < area.top() {
+				continue;
+			}
+			let inside: Vec<&Track> = state
+				.project()
+				.folder_contents(t.id)
+				.iter()
+				.filter_map(|id| tracks.iter().find(|x| x.id == *id))
+				.filter(|x| x.kind != TrackKind::Folder)
+				.collect();
+			if inside.is_empty() {
+				continue;
+			}
+			let band = ((h - 10.0) / inside.len() as f32).clamp(2.0, 8.0);
+			for (k, c) in inside.iter().enumerate() {
+				let color = theme::track_color(c.color.as_deref());
+				let cy = y + 5.0 + k as f32 * band;
+				if cy + band > y + h - 2.0 {
+					break;
+				}
+				for clip in c.clips.iter().filter(|c| c.plays()) {
+					let x0 = area.left() + tl.tick_to_x(clip.start);
+					let x1 = area.left() + tl.tick_to_x(clip.end());
+					if x1 < area.left() || x0 > area.right() {
+						continue;
+					}
+					painter.rect_filled(
+						Rect::from_min_max(pos2(x0, cy), pos2(x1.max(x0 + 2.0), cy + band - 1.0)),
+						CornerRadius::same(1),
+						color.gamma_multiply(0.7),
+					);
+				}
 			}
 		}
 
@@ -1682,6 +1765,7 @@ fn kind_glyph(kind: TrackKind) -> &'static str {
 		TrackKind::Instrument => "♪",
 		TrackKind::Audio => "~",
 		TrackKind::Bus => "»",
+		TrackKind::Folder => "",
 	}
 }
 
@@ -1697,6 +1781,7 @@ pub fn add_track_buttons(ui: &mut Ui, state: &mut AppState) {
 		("+ Instrument", TrackKind::Instrument),
 		("+ Audio", TrackKind::Audio),
 		("+ Bus", TrackKind::Bus),
+		("+ Folder", TrackKind::Folder),
 	] {
 		if ui.small_button(label).clicked() {
 			add_track(state, kind);
@@ -1738,6 +1823,14 @@ fn track_menu(
 	}
 	if ui.button("Rename").clicked() {
 		*rename = Some((track.id, track.name.clone()));
+		ui.close();
+	}
+	if ui.button("Group into new folder").clicked() {
+		state.group_into_folder(&[track.id]);
+		ui.close();
+	}
+	if track.folder.is_some() && ui.button("Take out of folder").clicked() {
+		state.take_out_of_folder(track.id);
 		ui.close();
 	}
 	ui.horizontal_wrapped(|ui| {

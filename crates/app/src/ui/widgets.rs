@@ -709,3 +709,22 @@ mod knob_tests {
 		assert_eq!(int.from_pos(2.0), 16.0);
 	}
 }
+
+/// A disclosure triangle (pointing down when `open`, right when folded).
+pub fn paint_disclosure(p: &egui::Painter, center: egui::Pos2, open: bool, color: Color32) {
+	let s = 4.0;
+	let pts = if open {
+		vec![
+			center + egui::vec2(-s, -s * 0.6),
+			center + egui::vec2(s, -s * 0.6),
+			center + egui::vec2(0.0, s * 0.7),
+		]
+	} else {
+		vec![
+			center + egui::vec2(-s * 0.6, -s),
+			center + egui::vec2(-s * 0.6, s),
+			center + egui::vec2(s * 0.7, 0.0),
+		]
+	};
+	p.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}

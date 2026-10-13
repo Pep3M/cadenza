@@ -26,10 +26,15 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 	let full = ui.available_rect_before_wrap();
 	ui.painter().rect_filled(full, 0.0, theme::BG_DEEP);
 
+	// Tracks inside collapsed folders fold away with them.
+	let visible = |t: &&Track| {
+		!crate::state::folders::is_hidden(state.project(), &state.view.collapsed, t.id)
+	};
 	let mut order: Vec<Track> = state
 		.project()
 		.tracks
 		.iter()
+		.filter(visible)
 		.filter(|t| t.kind != TrackKind::Bus)
 		.cloned()
 		.collect();
@@ -38,6 +43,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			.project()
 			.tracks
 			.iter()
+			.filter(visible)
 			.filter(|t| t.kind == TrackKind::Bus)
 			.cloned(),
 	);
@@ -150,8 +156,13 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 			.map_or("No instrument".to_owned(), |d| d.name.clone()),
 		Some(TrackKind::Audio) => "Audio".into(),
 		Some(TrackKind::Bus) => "Bus".into(),
+		Some(TrackKind::Folder) => {
+			let n = track.map_or(0, |t| state.project().folder_contents(t.id).len());
+			format!("   Folder ({n})")
+		}
 		None => "Main out".into(),
 	};
+	let folder = track.filter(|t| t.kind == TrackKind::Folder).map(|t| t.id);
 	if let Some(what_r) = what_r {
 		let wr = ui.interact(what_r, Id::new(("strip-what", id)), Sense::click());
 		p.rect_filled(
@@ -170,6 +181,23 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 			theme::small(),
 			theme::TEXT_DIM,
 		);
+		if let Some(f) = folder {
+			let open = !state.view.collapsed.contains(&f);
+			super::widgets::paint_disclosure(
+				&p,
+				pos2(what_r.left() + 9.0, what_r.center().y),
+				open,
+				theme::TEXT_DIM,
+			);
+		}
+		if let Some(f) = folder
+			&& wr
+				.clone()
+				.on_hover_text("Fold / unfold the tracks inside")
+				.clicked()
+		{
+			state.toggle_folder(f);
+		}
 		if wr.clicked()
 			&& let Some(d) = track.and_then(|t| t.instrument.as_ref())
 		{
@@ -206,6 +234,13 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		}
 	}
 
+	// Folders carry no audio: no inserts, sends, output or pan (their fader is a group
+	// offset, their mute/solo apply to the tracks inside).
+	let (inserts_area, sends_area, output_r) = if folder.is_some() {
+		(None, None, None)
+	} else {
+		(inserts_area, sends_area, output_r)
+	};
 	let inserts_r = inserts_area.map_or(Rect::NOTHING, |(_, r)| r);
 	let mut row_rects = Vec::with_capacity(channel.inserts.len());
 	if let Some((inserts_label, inserts_r)) = inserts_area {
@@ -284,23 +319,25 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		output_selector(&mut out, state, t, &channel, w);
 	}
 
-	let mut pan_ui = ui.new_child(egui::UiBuilder::new().max_rect(pan_r));
-	let (gesture, pan_resp) = widgets::pan(
-		&mut pan_ui,
-		Id::new(("pan", id)),
-		state.pan(id),
-		pan_r.size(),
-	);
-	match gesture {
-		Gesture::Preview(v) => state.preview_pan(id, v),
-		Gesture::Commit(v) => state.commit_pan(id, v),
-		Gesture::Idle => {}
+	if folder.is_none() {
+		let mut pan_ui = ui.new_child(egui::UiBuilder::new().max_rect(pan_r));
+		let (gesture, pan_resp) = widgets::pan(
+			&mut pan_ui,
+			Id::new(("pan", id)),
+			state.pan(id),
+			pan_r.size(),
+		);
+		match gesture {
+			Gesture::Preview(v) => state.preview_pan(id, v),
+			Gesture::Commit(v) => state.commit_pan(id, v),
+			Gesture::Idle => {}
+		}
+		let pan_addr = crate::state::pan_address(id);
+		if state.is_automated(&pan_addr) {
+			super::automation::automated_badge(ui, pan_r);
+		}
+		pan_resp.context_menu(|ui| super::automation::automate_item(ui, state, pan_addr));
 	}
-	let pan_addr = crate::state::pan_address(id);
-	if state.is_automated(&pan_addr) {
-		super::automation::automated_badge(ui, pan_r);
-	}
-	pan_resp.context_menu(|ui| super::automation::automate_item(ui, state, pan_addr));
 
 	let db = state.volume_db(id);
 	let levels = state.meters.get(id);

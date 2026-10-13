@@ -20,6 +20,7 @@ pub mod editors;
 pub mod edits;
 pub mod export;
 pub mod files;
+pub mod folders;
 pub mod layout;
 pub mod live;
 pub mod meter;
@@ -116,6 +117,8 @@ pub struct ViewState {
 	pub start_screen: bool,
 	/// Tracks whose take lanes are expanded.
 	pub takes: Vec<TrackId>,
+	/// Collapsed folder tracks (their contents hidden in the arrange and the mixer).
+	pub collapsed: std::collections::HashSet<TrackId>,
 }
 
 impl Default for ViewState {
@@ -138,6 +141,7 @@ impl Default for ViewState {
 			transport: transport::TransportView::default(),
 			start_screen: false,
 			takes: Vec::new(),
+			collapsed: std::collections::HashSet::new(),
 		}
 	}
 }
@@ -944,6 +948,41 @@ impl AppState {
 			},
 			pan,
 		);
+	}
+
+	// --- Folders --------------------------------------------------------------------
+
+	/// Collapses / expands a folder track.
+	pub fn toggle_folder(&mut self, folder: TrackId) {
+		if !self.view.collapsed.remove(&folder) {
+			self.view.collapsed.insert(folder);
+		}
+	}
+
+	/// Moves a track (a folder with its contents) to display index `to`, filing it into
+	/// the folder it lands in (one undo step).
+	pub fn move_track_to(&mut self, track: TrackId, to: usize) {
+		if let Some(cmd) = folders::move_track(self.project(), &self.view.collapsed, track, to) {
+			self.apply(cmd);
+		}
+	}
+
+	/// Puts `tracks` into a new folder named "Folder N" (one undo step) and selects it.
+	pub fn group_into_folder(&mut self, tracks: &[TrackId]) {
+		let folder = edits::new_track(self.project(), TrackKind::Folder);
+		let id = folder.id;
+		if let Some(cmd) = folders::group_into_folder(self.project(), tracks, folder)
+			&& self.apply(cmd)
+		{
+			self.selection.select_track(id);
+		}
+	}
+
+	/// Takes a track one level out of its folder.
+	pub fn take_out_of_folder(&mut self, track: TrackId) {
+		if let Some(cmd) = folders::take_out(self.project(), track) {
+			self.apply(cmd);
+		}
 	}
 
 	// --- Automation write ----------------------------------------------------------

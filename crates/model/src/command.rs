@@ -180,6 +180,12 @@ pub enum Command {
 		clip: ClipId,
 		notes: Vec<NotePatch>,
 	},
+	/// Puts a track into a folder track (`None`: back to the top level). Display order is
+	/// unchanged (pair it with MoveTrack to place it under the folder).
+	SetTrackFolder {
+		track: TrackId,
+		folder: Option<TrackId>,
+	},
 	/// Replaces the `controller` lane of a MIDI clip (clip-relative points, sorted on
 	/// apply); empty `points` removes the lane.
 	SetControllerLane {
@@ -352,6 +358,7 @@ impl Command {
 			Self::RemoveNotes { .. } => "remove_notes",
 			Self::UpdateNotes { .. } => "update_notes",
 			Self::SetControllerLane { .. } => "set_controller_lane",
+			Self::SetTrackFolder { .. } => "set_track_folder",
 			Self::SetTempo { .. } => "set_tempo",
 			Self::RemoveTempoPoint { .. } => "remove_tempo_point",
 			Self::SetTimeSignature { .. } => "set_time_signature",
@@ -463,6 +470,8 @@ impl Command {
 			Self::AddNotes { notes, .. } => plural("Add", notes.len(), "note"),
 			Self::RemoveNotes { notes, .. } => plural("Remove", notes.len(), "note"),
 			Self::UpdateNotes { notes, .. } => plural("Edit", notes.len(), "note"),
+			Self::SetTrackFolder { folder: None, .. } => "Take track out of folder".into(),
+			Self::SetTrackFolder { .. } => "Move track into folder".into(),
 			Self::SetControllerLane {
 				controller, points, ..
 			} if points.is_empty() => format!("Clear {}", controller.label()),

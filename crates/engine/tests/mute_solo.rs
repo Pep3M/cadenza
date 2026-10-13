@@ -56,3 +56,38 @@ fn solo_in_place_silences_other_sources_but_keeps_buses() {
 	assert_eq!(report.tracks[1].stats.peak_db, FLOOR_DB);
 	assert!(report.tracks[2].stats.peak_db > -40.0);
 }
+
+#[test]
+fn folders_offset_volume_and_carry_mute_and_solo() {
+	use cadenza_model::{Track, TrackKind};
+	let (mut a, b) = two_tracks();
+	let mut folder = Track::new("Group", TrackKind::Folder);
+	a.folder = Some(folder.id);
+	let plain = analyze_mix(&project(vec![a.clone(), b.clone()]), &opts(4.0)).unwrap();
+	folder.channel.volume_db = -12.0;
+	let p = project(vec![folder.clone(), a.clone(), b.clone()]);
+	let report = analyze_mix(&p, &opts(4.0)).unwrap();
+	assert_eq!(report.tracks.len(), 2, "the folder has no audio node");
+	let drop = plain.tracks[0].stats.peak_db - report.tracks[0].stats.peak_db;
+	assert!((drop - 12.0).abs() < 0.3, "VCA offset: {drop} dB");
+	assert!((plain.tracks[1].stats.peak_db - report.tracks[1].stats.peak_db).abs() < 0.01);
+
+	folder.channel.volume_db = 0.0;
+	folder.channel.mute = true;
+	let report = analyze_mix(
+		&project(vec![folder.clone(), a.clone(), b.clone()]),
+		&opts(4.0),
+	)
+	.unwrap();
+	assert_eq!(report.tracks[0].stats.peak_db, FLOOR_DB, "folder mute");
+	assert!(report.tracks[1].stats.peak_db > -40.0);
+
+	folder.channel.mute = false;
+	folder.channel.solo = true;
+	let report = analyze_mix(&project(vec![folder, a, b]), &opts(4.0)).unwrap();
+	assert!(
+		report.tracks[0].stats.peak_db > -40.0,
+		"inside the soloed folder"
+	);
+	assert_eq!(report.tracks[1].stats.peak_db, FLOOR_DB, "outside it");
+}

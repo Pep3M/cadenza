@@ -535,6 +535,14 @@ impl<'a> Compiler<'a> {
 				(Source::Audio { clips, fade_in: 0 }, mono)
 			}
 			TrackKind::Bus => (Source::Bus { accumulator: 0 }, false),
+			// Folders have no node (never in the processing order).
+			TrackKind::Folder => (
+				Source::Audio {
+					clips: Vec::new(),
+					fade_in: 0,
+				},
+				false,
+			),
 		}
 	}
 
@@ -572,7 +580,7 @@ impl<'a> Compiler<'a> {
 			.tracks
 			.iter()
 			.enumerate()
-			.filter(|(_, t)| t.kind != TrackKind::Bus)
+			.filter(|(_, t)| !matches!(t.kind, TrackKind::Bus | TrackKind::Folder))
 			.map(|(i, _)| i)
 			.collect();
 		priority.extend(
@@ -587,14 +595,36 @@ impl<'a> Compiler<'a> {
 			.map(|(pos, &i)| (project.tracks[i].id, pos))
 			.collect();
 
-		// Solo-in-place: a source track plays when nothing is soloed, when it is soloed, or
-		// when a bus on its output path is soloed. Buses and master are never solo-muted.
+		// Solo-in-place: a source track plays when nothing is soloed, when it (or a folder
+		// holding it) is soloed, or when a bus on its output path is. Buses and master are
+		// never solo-muted. Folders: their mute mutes, their volume offsets (VCA) the tracks
+		// inside.
 		let any_solo = project.tracks.iter().any(|t| t.channel.solo);
+		let folder_solo = |t: &Track| {
+			project
+				.folders_of(t.id)
+				.iter()
+				.any(|f| project.track(*f).is_some_and(|f| f.channel.solo))
+		};
+		let folder_mute = |t: &Track| {
+			project
+				.folders_of(t.id)
+				.iter()
+				.any(|f| project.track(*f).is_some_and(|f| f.channel.mute))
+		};
+		let folder_db = |t: &Track| -> f32 {
+			project
+				.folders_of(t.id)
+				.iter()
+				.filter_map(|f| project.track(*f))
+				.map(|f| f.channel.volume_db)
+				.sum()
+		};
 		let solo_path = |track: &Track| {
 			let mut current = Some(track);
 			let mut hops = 0;
 			while let Some(t) = current {
-				if t.channel.solo {
+				if t.channel.solo || folder_solo(t) {
 					return true;
 				}
 				hops += 1;
@@ -706,17 +736,25 @@ impl<'a> Compiler<'a> {
 				}
 			}
 
-			let audible = !track.channel.mute
-				&& (track.kind == TrackKind::Bus || !any_solo || solo_path(track));
+			let muted = track.channel.mute || folder_mute(track);
+			let audible = !muted && (track.kind == TrackKind::Bus || !any_solo || solo_path(track));
+			let group_db = folder_db(track);
 			nodes.push(Node {
 				track_id: track.id,
 				name: track.name.clone(),
 				display_index: ti,
 				source,
 				inserts,
-				fader: Fader::new(track.channel.volume_db, track.channel.pan, mono, sr as f32),
+				fader: Fader::new(
+					track.channel.volume_db + group_db,
+					track.channel.pan,
+					mono,
+					sr as f32,
+				),
+				own_db: track.channel.volume_db,
+				folder_db: group_db,
 				audible,
-				muted: track.channel.mute,
+				muted,
 				edges,
 				aux_edges,
 				buf: StereoBuf::new(),
@@ -790,7 +828,30 @@ impl<'a> Compiler<'a> {
 			),
 			buf: StereoBuf::new(),
 		};
-		let resolver = resolver(&nodes, &master, &project.tempo, f64::from(sr));
+		let folders: Vec<crate::graph::FolderGain> = project
+			.tracks
+			.iter()
+			.filter(|t| t.kind == TrackKind::Folder)
+			.map(|f| {
+				let inside = project.folder_contents(f.id);
+				crate::graph::FolderGain {
+					track: f.id,
+					db: f.channel.volume_db,
+					nodes: nodes
+						.iter()
+						.enumerate()
+						.filter(|(_, n)| inside.contains(&n.track_id))
+						.map(|(i, _)| i)
+						.collect(),
+				}
+			})
+			.collect();
+		let mut resolver = resolver(&nodes, &master, &project.tempo, f64::from(sr));
+		resolver.folders = folders
+			.iter()
+			.enumerate()
+			.map(|(i, f)| (f.track, i))
+			.collect();
 		let automation = resolver.bind(
 			&project.automation,
 			&project.tempo,
@@ -807,6 +868,7 @@ impl<'a> Compiler<'a> {
 			master,
 			automation,
 			resolver,
+			folders,
 			load_id: 0,
 			tempo: crate::graph::tempo_segments(&project.tempo, sr as f64),
 			latency,

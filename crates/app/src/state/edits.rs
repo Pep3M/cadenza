@@ -21,6 +21,7 @@ pub fn kind_name(kind: TrackKind) -> &'static str {
 		TrackKind::Instrument => "Instrument",
 		TrackKind::Audio => "Audio",
 		TrackKind::Bus => "Bus",
+		TrackKind::Folder => "Folder",
 	}
 }
 

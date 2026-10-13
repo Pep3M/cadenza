@@ -66,7 +66,12 @@ pub struct Rows {
 	pub rows: Vec<Row>,
 	/// Bottom of the last row.
 	pub height: f32,
+	/// Tracks (display indexes) hidden in collapsed folders.
+	pub hidden: Vec<usize>,
 }
+
+/// Where hidden tracks are "drawn": far below anything on screen (culled).
+pub const HIDDEN_Y: f32 = 1.0e9;
 
 impl Rows {
 	pub fn new(project: &Project, view: &ViewState) -> Self {
@@ -81,7 +86,12 @@ impl Rows {
 			});
 			y += height;
 		};
+		let mut hidden = Vec::new();
 		for (index, t) in project.tracks.iter().enumerate() {
+			if super::folders::is_hidden(project, &view.collapsed, t.id) {
+				hidden.push(index);
+				continue;
+			}
 			push(
 				RowKind::Track { id: t.id, index },
 				view.track_height,
@@ -125,7 +135,16 @@ impl Rows {
 				}
 			}
 		}
-		Self { rows, height: y }
+		Self {
+			rows,
+			height: y,
+			hidden,
+		}
+	}
+
+	/// Whether track `index` is hidden in a collapsed folder.
+	pub fn is_hidden(&self, index: usize) -> bool {
+		self.hidden.contains(&index)
 	}
 
 	/// The row at content `y`.
@@ -159,6 +178,9 @@ impl Rows {
 
 	/// Top of track `index`'s group; `tracks.len()` gives the end of the track groups.
 	pub fn track_top(&self, index: usize) -> f32 {
+		if self.is_hidden(index) {
+			return HIDDEN_Y;
+		}
 		self.track(index).map_or_else(
 			|| {
 				self.rows

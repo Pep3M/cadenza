@@ -10,10 +10,12 @@
 //! the arrange view follows. Notes cannot go before the clip start (they are clamped):
 //! growing the clip to the left would move its start and shift every other note.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{ClipId, Meter, NoteId, PPQ, Tick, TimeSignature, TrackId};
+use cadenza_model::controller::splice;
 use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project, TrackKind};
+use cadenza_model::{Controller, ControllerPoint};
 use cadenza_theory::Scale;
 use serde::{Deserialize, Serialize};
 
@@ -198,6 +200,8 @@ pub struct PianoView {
 	pub scale: Option<Scale>,
 	pub ghosts: Ghosts,
 	pub velocity_lane: bool,
+	/// What the event lane under the notes edits (velocity or a controller).
+	pub event_lane: EventLane,
 	pub snap: PianoSnap,
 	pub clipboard: NoteClipboard,
 	/// Clip the view was last framed for (scroll/zoom to its notes once on open).
@@ -223,6 +227,7 @@ impl Default for PianoView {
 			scale: None,
 			ghosts: Ghosts::SameTrack,
 			velocity_lane: true,
+			event_lane: EventLane::Velocity,
 			snap: PianoSnap::default(),
 			clipboard: NoteClipboard::default(),
 			framed: None,
@@ -658,6 +663,92 @@ pub fn set_velocities(
 		})
 		.collect();
 	(!notes.is_empty()).then_some(Command::UpdateNotes { clip, notes })
+}
+
+/// What the piano roll's event lane shows (FL Studio's event selector).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum EventLane {
+	#[default]
+	Velocity,
+	Controller(Controller),
+}
+
+impl EventLane {
+	/// The lanes offered first in the selector (any CC# can be typed too).
+	pub const COMMON: [EventLane; 8] = [
+		EventLane::Velocity,
+		EventLane::Controller(Controller::Cc(1)),
+		EventLane::Controller(Controller::Cc(11)),
+		EventLane::Controller(Controller::Cc(64)),
+		EventLane::Controller(Controller::PitchBend),
+		EventLane::Controller(Controller::ChannelPressure),
+		EventLane::Controller(Controller::Cc(74)),
+		EventLane::Controller(Controller::Cc(7)),
+	];
+
+	pub fn label(self) -> String {
+		match self {
+			EventLane::Velocity => "Velocity".into(),
+			EventLane::Controller(Controller::Cc(74)) => "Brightness (CC 74)".into(),
+			EventLane::Controller(c) => c.label(),
+		}
+	}
+}
+
+/// Snaps a lane value to what the controller can hold (switches are on/off; MIDI
+/// resolution otherwise).
+pub fn controller_value(controller: Controller, v: f32) -> f32 {
+	let (lo, hi) = controller.range();
+	let v = v.clamp(lo, hi);
+	if controller.is_switch() {
+		if v >= 0.5 { 1.0 } else { 0.0 }
+	} else if controller == Controller::PitchBend {
+		(v * 8191.0).round() / 8191.0
+	} else {
+		(v * 127.0).round() / 127.0
+	}
+}
+
+/// Pencil stroke in a controller lane: `cells` (clip-relative tick -> value, one per
+/// grid cell the pointer crossed) replace the events in their span.
+pub fn controller_paint(
+	old: &[ControllerPoint],
+	cells: &BTreeMap<Tick, f32>,
+) -> Option<Vec<ControllerPoint>> {
+	let (&first, _) = cells.first_key_value()?;
+	let (&last, _) = cells.last_key_value()?;
+	let new: Vec<ControllerPoint> = cells
+		.iter()
+		.map(|(&t, &v)| ControllerPoint::new(t, v))
+		.collect();
+	Some(splice(old, first, last, &new))
+}
+
+/// The SetControllerLane for `points` on the lane, `None` when nothing changes. Points
+/// outside the clip are dropped.
+pub fn set_controller(
+	project: &Project,
+	clip: ClipId,
+	controller: Controller,
+	points: Vec<ControllerPoint>,
+) -> Option<Command> {
+	let c = midi_clip(project, clip)?;
+	let points: Vec<ControllerPoint> = points
+		.into_iter()
+		.filter(|p| p.tick >= Tick::ZERO && p.tick < c.length)
+		.map(|p| ControllerPoint::new(p.tick, controller_value(controller, p.value)))
+		.collect();
+	let old = c.controller(controller).map_or(&[][..], |l| &l.points[..]);
+	(old != points.as_slice()).then_some(Command::SetControllerLane {
+		clip,
+		controller,
+		points,
+	})
+}
+
+/// Removes the event at `tick` (clip-relative) from the lane.
+pub fn controller_delete(old: &[ControllerPoint], tick: Tick) -> Vec<ControllerPoint> {
+	old.iter().filter(|p| p.tick != tick).copied().collect()
 }
 
 /// Notes overlapping the relative time range `t0..t1` and the pitch range `lo..=hi`.

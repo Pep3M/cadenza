@@ -2368,4 +2368,103 @@ fn render_phase17_screens() {
 	a.state.open_piano_roll(midi);
 	let mut h = screenshot_harness(a);
 	shot(&mut h, &dir, "time_signatures");
+
+	// Controller lanes in the piano roll: a mod wheel swell and a pitch bend dive.
+	{
+		use cadenza_model::controller::ramp;
+		use cadenza_model::{Command, Controller};
+		let s = &mut h.state_mut().state;
+		let len = s.project().find_clip(midi).unwrap().1.length;
+		for (c, a, b) in [
+			(Controller::MOD_WHEEL, 0.0, 1.0),
+			(Controller::PitchBend, 0.0, -1.0),
+		] {
+			let points = ramp(c, Tick(0), a, len - Tick(1), b, Tick(PPQ / 4), 0.6);
+			assert!(s.apply(Command::SetControllerLane {
+				clip: midi,
+				controller: c,
+				points,
+			}));
+		}
+		s.view.piano.event_lane =
+			cadenza_app::state::piano::EventLane::Controller(Controller::MOD_WHEEL);
+	}
+	shot(&mut h, &dir, "controller_lane_mod_wheel");
+	h.state_mut().state.view.piano.event_lane =
+		cadenza_app::state::piano::EventLane::Controller(cadenza_model::Controller::PitchBend);
+	shot(&mut h, &dir, "controller_lane_pitch_bend");
+}
+
+#[test]
+fn piano_roll_event_lane_draws_controllers_in_one_step() {
+	use cadenza_model::Controller;
+	let (mut h, clip) = fl_piano();
+	h.state_mut().state.view.piano.event_lane =
+		cadenza_app::state::piano::EventLane::Controller(Controller::MOD_WHEEL);
+	h.run_steps(2);
+	let lane_y = h.state().piano_grid().unwrap().bottom() + 30.0;
+	let x = |h: &Harness<'_, CadenzaApp>, beat: f64| note_pos(h, clip, beat, 60).x;
+	let undo_depth = h.state().state.document().history_labels().len();
+	// Pencil: a stroke rising from left to right.
+	h.hover_at(pos2(x(&h, 0.1), lane_y + 20.0));
+	h.run_steps(1);
+	h.drag_at(pos2(x(&h, 0.1), lane_y + 20.0));
+	h.run_steps(1);
+	for i in 1..=6 {
+		h.hover_at(pos2(
+			x(&h, 0.1 + f64::from(i) * 0.3),
+			lane_y + 20.0 - i as f32 * 6.0,
+		));
+		h.run_steps(1);
+	}
+	h.drop_at(pos2(x(&h, 1.9), lane_y - 16.0));
+	h.run_steps(2);
+	let lane = |h: &Harness<'_, CadenzaApp>, c: Controller| {
+		h.state()
+			.state
+			.project()
+			.find_clip(clip)
+			.unwrap()
+			.1
+			.controller(c)
+			.map(|l| l.points.clone())
+			.unwrap_or_default()
+	};
+	let points = lane(&h, Controller::MOD_WHEEL);
+	assert!(points.len() >= 4, "{points:?}");
+	assert!(
+		points.last().unwrap().value > points[0].value,
+		"rising stroke"
+	);
+	assert_eq!(
+		h.state().state.document().history_labels().len(),
+		undo_depth + 1,
+		"one undo step"
+	);
+	assert_eq!(h.state().state.undo_label(), Some("Edit Mod wheel"));
+
+	// Pitch bend: a right-drag ramp, then a right-click deletes one event.
+	h.state_mut().state.view.piano.event_lane =
+		cadenza_app::state::piano::EventLane::Controller(Controller::PitchBend);
+	h.run_steps(2);
+	h.hover_at(pos2(x(&h, 2.0), lane_y));
+	h.run_steps(1);
+	right_button(&h, pos2(x(&h, 2.0), lane_y), true);
+	h.run_steps(1);
+	h.hover_at(pos2(x(&h, 3.0), lane_y - 30.0));
+	h.run_steps(1);
+	right_button(&h, pos2(x(&h, 3.0), lane_y - 30.0), false);
+	h.run_steps(2);
+	let bend = lane(&h, Controller::PitchBend);
+	assert!(bend.len() >= 3, "{bend:?}");
+	assert!(bend.last().unwrap().value > 0.5);
+	let n = bend.len();
+	let at = pos2(x(&h, bend[1].tick.beats()), lane_y);
+	h.hover_at(at);
+	h.run_steps(1);
+	right_button(&h, at, true);
+	h.run_steps(1);
+	right_button(&h, at, false);
+	h.run_steps(2);
+	assert_eq!(lane(&h, Controller::PitchBend).len(), n - 1);
 }

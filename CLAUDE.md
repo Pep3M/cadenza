@@ -116,7 +116,8 @@ pub enum DeviceKind { Builtin { id: String }, Clap { plugin_id: String, path: Pa
 	Vst3 { class_id: String, path: PathBuf } }
 pub struct Clip { id: ClipId, name: String, start: Tick, length: Tick, content: ClipContent,
 	take: Option<Take { group: TakeGroupId, lane: u32 /* 0 = first take */, active: bool }> }
-pub enum ClipContent { Midi { notes: Vec<Note> }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32,
+pub enum ClipContent { Midi { notes: Vec<Note>, controllers: Vec<ControllerLane { controller: Controller /* "cc0".."cc127" | "pitch_bend" | "channel_pressure" */,
+	points: Vec<ControllerPoint { tick /* clip-relative */, value: f32 /* CC/pressure 0..1, bend -1..1 */ }> }> /* optional */ }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32,
 	fade_in: Option<ClipFade>, fade_out: Option<ClipFade> } }
 pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
 pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick }
@@ -132,7 +133,7 @@ master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature { time_signature, bar /* 0-based index, 0 = bar 1, omitted when 0 */ },
-RemoveTimeSignature { bar }, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
+RemoveTimeSignature { bar }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
@@ -165,6 +166,15 @@ bar_lines/segments_between/change_ticks/signature_at`) is the single bar/beat ma
 the denominator note); `MeterMap` owns a copy. Summary: `time_signature` (bar 1) +
 `time_signature_changes [{bar (1-based), beat, time_signature}]`, marker bars and
 `length_bars` follow the changes. At most 1024 changes, bar index 1..=100000.
+
+Controller lanes (phase 17, `model::controller`): MIDI semantics, each point is one event whose
+value holds until the next (FL event editor). `Controller` serializes as a string and parses
+names ("sustain", "mod wheel", "bend", "aftertouch", "CC 74"); `default_value` (bend center,
+CC7 100, CC10 center, CC11 full, else 0) is the resting value; `is_switch` (CC64..69). Pure
+helpers: `window` (split/trim: the value in effect at the cut becomes a point at 0), `ramp`
+(MIDI-quantized, curved), `splice`. `takes::split_clip` carries lanes; validation: ticks >= 0,
+values in range, one lane per controller, <= 100000 points (points past the clip end are kept
+but never played). Summary: `controllers: ["cc1 (12 events, 0.00..1.00)"]`.
 
 Implemented extras: `ResetParam` (inverse of a first `SetParam`), `UpdateSend`, optional `index`
 on AddTrack/InsertDevice/AddSend, `UpdateClip` can move a clip to another track. Instruments are
@@ -220,7 +230,9 @@ pub struct ParamInfo { id: &'static str, name: &'static str, min: f32, max: f32,
 	unit: &'static str, description: &'static str }
 pub struct DeviceInfo { id: &'static str, name: &'static str, role: DeviceRole,
 	description: &'static str /* written for an AI choosing devices */, params: &'static [ParamInfo] }
-pub enum MidiEvent { NoteOn { offset: u32, pitch: u8, velocity: f32 }, NoteOff { offset: u32, pitch: u8 }, AllNotesOff { offset: u32 } }
+pub enum MidiEvent { NoteOn { offset: u32, pitch: u8, velocity: f32 }, NoteOff { offset: u32, pitch: u8 }, AllNotesOff { offset: u32 },
+	ControlChange { offset, controller: u8, value: f32 /* 0..1 */ }, PitchBend { offset, value: f32 /* -1..1 */ }, ChannelPressure { offset, value: f32 } }
+// offset()/with_offset()/is_note(); `cc::{MOD_WHEEL, SUSTAIN, ALL_SOUND_OFF, RESET_ALL_CONTROLLERS, ALL_NOTES_OFF}`
 pub struct Transport { pub bpm: f64, pub playing: bool, pub beat_position: f64,
 	time_sig_numerator: u16, time_sig_denominator: u16, bar_start: f64 /* quarters */, bar_number: i32 } // Default = 4/4
 pub trait Processor: Send {
@@ -251,6 +263,15 @@ velocity layers; stolen/choked voices fade 4-5 ms in spare slots), `util::interp
 Hermite up to 1.25x, table windowed-sinc with cutoff 1/ratio above), `util::pitch` (YIN
 `detect_pitch`). `uses_samples(id)`; factory presets carry `FactoryZone`s naming files of the
 factory sample folder (`factory_samples::*`).
+Performance controls (`util::expression::Expression`): poly_synth, electric_piano and sampler
+honor the sustain pedal (`VoiceSlot::key_up/pedal_up`: released keys keep sounding until pedal
+up; AllNotesOff lifts it), pitch bend (±2 semitones), mod wheel (5.5 Hz vibrato up to ±0.5
+st) and channel pressure (poly_synth/sampler: filter +24 st); drums ignore them. Plugins:
+CLAP ports that accept MIDI get raw CC/bend/pressure bytes (`ControllerRoute::Midi`), CLAP-only
+ports get per-note tuning/pressure expressions of the held keys (other CCs dropped); VST3
+controllers become parameter changes through `IMidiMapping` (queried at instantiation, 128 =
+pressure, 129 = bend); the sandbox shm carries them (EV_CC/EV_BEND/EV_PRESSURE). Live MIDI input
+maps CC/bend/pressure to these events (`midi_io::input`).
 The built-in `compressor` has a sidechain input (detector keyed by it when set).
 Instruments receive silence in `left/right` and must write (not add) their output.
 Events are sorted by `offset` within the block.
@@ -373,6 +394,10 @@ Audio clips: files are decoded + resampled to the engine rate at compile time th
 `AudioCache::global()` (any format symphonia reads) and played with `render_clip` (realtime
 safe); overlapping clips on a track sum. An unreadable file is a `MixReport`/`Player::load`
 warning (clip silent), never a hard error.
+Controller lanes play through `MidiSchedule` (`EventKind::Control`; note-offs, then
+controllers, then note-ons at a sample): chase sends every lane's value before the position (or
+its resting value) ahead of re-triggered notes, and a clip ending bent or with the pedal down
+gets a reset event at its end. Covered by `no_alloc`.
 Live MIDI: the midir callback pushes into an rtrb queue whose consumer is handed to the audio
 thread (and back to be dropped); each callback drains it into a pre-allocated buffer and
 `Graph::push_live_event` feeds the monitored instrument at the next quantum (offset 0: midir
@@ -390,6 +415,12 @@ track in the same batch); `build_device` fills default content; presets (factory
 zones; `set_output_routes` accepts built-in extra outputs; `write_drum_pattern` knows rim/pedal_hat/
 tambourine/cowbell lanes and warns about lanes a drum_sampler has no sample for. The agent's
 `PathPolicy::resolve_sample` allows the session folder or the factory folder.
+MCP controllers (`tools::controllers`): `set_controller_events { clip_id, controller, events:
+[{beat, value}], replace? }`, `draw_controller_curve { clip_id, controller, start_beat, end_beat,
+from, to, shape: linear|exponential|logarithmic|sine, cycles?, resolution_beats? }` (replaces
+the range), `get_controller_events`. MIDI import turns CC/bend/channel pressure into lanes
+(`controller_lanes`, per track or channel), export writes them; MIDI recording keeps them
+(`Recorder::take_controls`, `control_lanes`; overdub merges, replace clears the range).
 MCP time signatures: `set_time_signature { numerator, denominator, at_bar? (1-based) }`,
 `remove_time_signature { bar }`; `render`/export bar ranges, `write_drum_pattern` bars and
 `export_midi` follow the changes. MIDI import keeps every signature (`midi_io::meter_changes`:
@@ -628,8 +659,13 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   quantize, Ctrl+U glue (selected same-pitch notes), Ctrl+L quick legato (so the global
   loop toggle is Ctrl+L from other panels), Up/Down semitone, Shift or Ctrl+Up/Down octave,
   Left/Right snap step, Shift+Left/Right bar — arrows/legato apply to all notes when nothing
-  is selected (`targets`). Velocity lane: drag paints (relative on a multi-selection),
-  Alt/right-drag draws a line (`velocity_line`). Selected notes are warm red
+  is selected (`targets`). Event lane (toolbar "Events" toggle; selector left of the lane, `PianoView::event_lane`:
+  Velocity, Mod wheel, Expression, Sustain, Pitch bend, Pressure, CC 74, CC 7, any CC#, lanes
+  with data marked ●). Velocity: drag paints (relative on a multi-selection), Alt/right-drag
+  draws a line (`velocity_line`). Controllers (step graph, value tag under the pointer): pencil
+  drag writes one event per snap cell (`controller_paint`), Alt/right-drag a ramp, right-click
+  deletes the event under the pointer; switches snap on/off; one `SetControllerLane` per
+  gesture (`set_controller`). Selected notes are warm red
   (`theme::NOTE_SELECTED`), brightness by velocity, names when zoom allows, dim ghost notes;
   off-screen notes are culled (2000 notes cost ~1 ms/frame). Opening a clip centers on its
   pitch range (C4 when empty). One command per gesture; editing past the clip end grows the

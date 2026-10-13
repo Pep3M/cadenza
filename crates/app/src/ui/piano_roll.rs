@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{NoteId, PPQ, Tick, TrackId};
-use cadenza_model::{Clip, Note};
+use cadenza_model::{Clip, Controller, ControllerPoint, Note};
 use cadenza_theory::{PitchClass, Scale, ScaleKind};
 use egui::{
 	Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Key, KeyboardShortcut, Modifiers,
@@ -23,7 +23,7 @@ use egui::{
 
 use crate::state::AppState;
 use crate::state::layout::PanelKind;
-use crate::state::piano::{self, Ghosts, MIN_NOTE_LENGTH, PianoSnap, PianoView, Tool};
+use crate::state::piano::{self, EventLane, Ghosts, MIN_NOTE_LENGTH, PianoSnap, PianoView, Tool};
 use crate::state::timeline::{self, LineKind, Timeline};
 use crate::theme;
 use crate::ui::arrange;
@@ -130,6 +130,24 @@ impl VelocityDrag {
 	}
 }
 
+/// A gesture in a controller lane (clip-relative ticks).
+#[derive(Debug, Clone)]
+enum ControlDrag {
+	/// Pencil: one value per grid cell the pointer crosses.
+	Paint {
+		cells: BTreeMap<Tick, f32>,
+		last: Option<(Tick, f32)>,
+	},
+	/// Alt+drag or right-drag: a straight ramp; a right-click without moving deletes the
+	/// event under the pointer instead.
+	Line {
+		from: (Tick, f32),
+		to: (Tick, f32),
+		press: Pos2,
+		moved: bool,
+	},
+}
+
 /// The note properties popover (double-click a note).
 #[derive(Debug, Clone)]
 struct Props {
@@ -143,6 +161,7 @@ pub struct PianoUi {
 	gesture: Option<Gesture>,
 	erase: Option<Erase>,
 	velocity: Option<VelocityDrag>,
+	control: Option<ControlDrag>,
 	props: Option<Props>,
 	/// Key held on the keyboard (auditioning).
 	key: Option<u8>,
@@ -278,7 +297,11 @@ impl PianoUi {
 		self.grid(ui, state, &g, &t);
 		self.keyboard(ui, state, &g, &t);
 		if let Some(r) = g.velocity {
-			self.velocity_lane(ui, state, r, &g, &t);
+			event_lane_selector(ui, state, r, &g, &t);
+			match state.view.piano.event_lane {
+				EventLane::Velocity => self.velocity_lane(ui, state, r, &t),
+				EventLane::Controller(c) => self.controller_lane(ui, state, c, r, &t),
+			}
 		}
 		ruler(ui, state, &g, &t);
 		self.scrollbars(ui, state, &g, &t);
@@ -468,8 +491,10 @@ impl PianoUi {
 			.response
 			.on_hover_text("Show the notes of other clips dimmed behind this one");
 		if ui
-			.selectable_label(v.velocity_lane, "Velocity")
-			.on_hover_text("Show the velocity lane")
+			.selectable_label(v.velocity_lane, "Events")
+			.on_hover_text(
+				"Show the event lane under the notes (velocity, mod wheel, sustain, pitch bend, any CC)",
+			)
 			.clicked()
 		{
 			v.velocity_lane = !v.velocity_lane;
@@ -1336,32 +1361,7 @@ impl PianoUi {
 		);
 	}
 
-	fn velocity_lane(
-		&mut self,
-		ui: &mut Ui,
-		state: &mut AppState,
-		lane: Rect,
-		g: &Geometry,
-		t: &Target,
-	) {
-		let label = Rect::from_min_max(
-			pos2(g.keys.left(), lane.top()),
-			pos2(lane.left(), lane.bottom()),
-		);
-		let lp = ui.painter_at(label);
-		lp.rect_filled(label, 0.0, theme::BG_PANEL);
-		lp.text(
-			label.center(),
-			Align2::CENTER_CENTER,
-			"VELOCITY",
-			FontId::proportional(9.0),
-			theme::TEXT_FAINT,
-		);
-		lp.vline(
-			label.right() - 0.5,
-			label.y_range(),
-			Stroke::new(1.0, theme::BORDER_STRONG),
-		);
+	fn velocity_lane(&mut self, ui: &mut Ui, state: &mut AppState, lane: Rect, t: &Target) {
 		let p = ui.painter_at(lane);
 		p.rect_filled(lane, 0.0, theme::BG_PANEL);
 		p.hline(
@@ -1494,6 +1494,241 @@ impl PianoUi {
 		}
 		if response.hovered() {
 			ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+		}
+	}
+
+	/// A controller lane (FL Studio event editor): the value as a step graph, pencil
+	/// drawing per grid cell, Alt/right-drag ramps, right-click deletes an event.
+	fn controller_lane(
+		&mut self,
+		ui: &mut Ui,
+		state: &mut AppState,
+		controller: Controller,
+		lane: Rect,
+		t: &Target,
+	) {
+		let p = ui.painter_at(lane);
+		p.rect_filled(lane, 0.0, theme::BG_PANEL);
+		p.hline(
+			lane.x_range(),
+			lane.top() + 0.5,
+			Stroke::new(1.0, theme::BORDER_STRONG),
+		);
+		let inner = lane.shrink2(vec2(0.0, 6.0));
+		let (lo, hi) = controller.range();
+		let y_of = |v: f32| inner.bottom() - (v - lo) / (hi - lo) * inner.height();
+		let value_at = |y: f32| {
+			piano::controller_value(
+				controller,
+				lo + ((inner.bottom() - y) / inner.height()).clamp(0.0, 1.0) * (hi - lo),
+			)
+		};
+		for frac in [0.25, 0.5, 0.75] {
+			let center = controller == Controller::PitchBend && frac == 0.5;
+			p.hline(
+				lane.x_range(),
+				inner.bottom() - inner.height() * frac,
+				Stroke::new(
+					1.0,
+					if center {
+						theme::GRID_BAR
+					} else {
+						theme::GRID_FINE
+					},
+				),
+			);
+		}
+		let v = state.view.piano.clone();
+		let tl = v.timeline;
+		let clip = &t.clip;
+		let x_of = |tick: Tick| lane.left() + tl.tick_to_x(clip.start + tick);
+		let tick_at = |x: f32| tl.x_to_tick(x - lane.left()) - clip.start;
+		let step = key_step(state).max(Tick(PPQ / 64));
+		let cell = |tick: Tick| Tick(tick.0.max(0).div_euclid(step.0) * step.0);
+		let old: Vec<ControllerPoint> = clip
+			.controller(controller)
+			.map(|l| l.points.clone())
+			.unwrap_or_default();
+
+		let response = ui.interact(lane, Id::new("piano-controller"), Sense::click_and_drag());
+		let (pressed, r_pressed, down, alt) = ui.input(|i| {
+			(
+				i.pointer.primary_pressed(),
+				i.pointer.button_pressed(PointerButton::Secondary),
+				i.pointer.primary_down() || i.pointer.secondary_down(),
+				i.modifiers.alt,
+			)
+		});
+		if (pressed || r_pressed)
+			&& response.hovered()
+			&& let Some(pos) = ui.ctx().pointer_latest_pos()
+		{
+			let at = (tick_at(pos.x), value_at(pos.y));
+			self.control = Some(if r_pressed || alt {
+				ControlDrag::Line {
+					from: at,
+					to: at,
+					press: pos,
+					moved: false,
+				}
+			} else {
+				ControlDrag::Paint {
+					cells: BTreeMap::new(),
+					last: None,
+				}
+			});
+		}
+		if let (Some(drag), Some(pos)) = (self.control.as_mut(), ui.ctx().pointer_latest_pos()) {
+			let (tick, value) = (tick_at(pos.x), value_at(pos.y));
+			match drag {
+				ControlDrag::Paint { cells, last } => {
+					let c = cell(tick);
+					// Fill the cells between the last pointer position and this one.
+					if let Some((lt, lv)) = *last {
+						let (a, b) = if lt <= c { (lt, c) } else { (c, lt) };
+						let mut k = a;
+						while k <= b {
+							let f = if b == a {
+								1.0
+							} else {
+								(k - lt).0 as f32 / (c - lt).0 as f32
+							};
+							let f = f.clamp(0.0, 1.0);
+							cells.insert(
+								k,
+								piano::controller_value(controller, lv + (value - lv) * f),
+							);
+							k = k + step;
+						}
+					}
+					cells.insert(c, value);
+					*last = Some((c, value));
+				}
+				ControlDrag::Line {
+					to, press, moved, ..
+				} => {
+					*to = (tick, value);
+					*moved |= pos.distance(*press) > 4.0;
+				}
+			}
+		}
+		if !down && let Some(drag) = self.control.take() {
+			let points = match drag {
+				ControlDrag::Paint { cells, .. } => piano::controller_paint(&old, &cells),
+				ControlDrag::Line {
+					from, to, moved, ..
+				} if moved => {
+					let (a, b) = if from.0 <= to.0 {
+						(from, to)
+					} else {
+						(to, from)
+					};
+					let ramp = cadenza_model::controller::ramp(
+						controller,
+						cell(a.0),
+						a.1,
+						cell(b.0),
+						b.1,
+						step,
+						0.0,
+					);
+					Some(cadenza_model::controller::splice(
+						&old,
+						cell(a.0),
+						cell(b.0),
+						&ramp,
+					))
+				}
+				ControlDrag::Line { press, .. } => {
+					// A plain right-click: delete the event nearest the pointer.
+					old.iter()
+						.map(|p| (p.tick, (x_of(p.tick) - press.x).abs()))
+						.filter(|(_, d)| *d <= 6.0)
+						.min_by(|a, b| a.1.total_cmp(&b.1))
+						.map(|(tick, _)| piano::controller_delete(&old, tick))
+				}
+			};
+			if let Some(points) = points
+				&& let Some(cmd) =
+					piano::set_controller(state.project(), clip.id, controller, points)
+			{
+				state.apply(cmd);
+			}
+		}
+
+		// The lane as it would be with the gesture applied.
+		let shown: Vec<ControllerPoint> = match &self.control {
+			Some(ControlDrag::Paint { cells, .. }) => {
+				piano::controller_paint(&old, cells).unwrap_or_else(|| old.clone())
+			}
+			_ => old.clone(),
+		};
+		let base = y_of(controller.default_value().clamp(lo, hi));
+		let clip_x0 = x_of(Tick::ZERO).max(lane.left());
+		let clip_x1 = x_of(clip.length).min(lane.right());
+		let color = theme::mix(t.color, Color32::WHITE, 0.2);
+		let mut value = controller.default_value();
+		let mut x = x_of(Tick::ZERO);
+		let mut line = Vec::new();
+		for pt in shown.iter().filter(|p| p.tick < clip.length) {
+			let nx = x_of(pt.tick);
+			if nx > lane.left() && x < lane.right() {
+				let (a, b) = (x.max(clip_x0), nx.min(clip_x1));
+				if b > a {
+					p.rect_filled(
+						Rect::from_two_pos(pos2(a, y_of(value)), pos2(b, base)),
+						0.0,
+						color.gamma_multiply(0.25),
+					);
+				}
+			}
+			line.push(pos2(nx, y_of(value)));
+			line.push(pos2(nx, y_of(pt.value)));
+			value = pt.value;
+			x = nx;
+			if (lane.left() - 4.0..=lane.right() + 4.0).contains(&nx) {
+				p.circle_filled(pos2(nx, y_of(pt.value)), 2.5, color);
+			}
+		}
+		if clip_x1 > x.max(clip_x0) {
+			p.rect_filled(
+				Rect::from_two_pos(pos2(x.max(clip_x0), y_of(value)), pos2(clip_x1, base)),
+				0.0,
+				color.gamma_multiply(0.25),
+			);
+		}
+		line.push(pos2(clip_x1, y_of(value)));
+		if line.len() > 1 {
+			p.add(egui::Shape::line(line, Stroke::new(1.5, color)));
+		}
+		if let Some(ControlDrag::Line {
+			from, to, moved, ..
+		}) = &self.control
+			&& *moved
+		{
+			p.line_segment(
+				[
+					pos2(x_of(from.0), y_of(from.1)),
+					pos2(x_of(to.0), y_of(to.1)),
+				],
+				Stroke::new(1.5, theme::NOTE_SELECTED),
+			);
+		}
+		if let Some(pos) = response.hover_pos() {
+			ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+			let v = value_at(pos.y);
+			let text = match controller {
+				Controller::PitchBend => format!("{:+.0}", v * 8191.0),
+				c if c.is_switch() => if v >= 0.5 { "On" } else { "Off" }.to_owned(),
+				_ => format!("{}", (v * 127.0).round()),
+			};
+			p.text(
+				pos + vec2(10.0, -10.0),
+				Align2::LEFT_BOTTOM,
+				text,
+				theme::small(),
+				theme::TEXT,
+			);
 		}
 	}
 
@@ -2137,5 +2372,75 @@ fn piano_grid(
 			LineKind::Step => Stroke::new(1.0, theme::PIANO_GRID_STEP),
 		};
 		p.vline(x, area.y_range(), stroke);
+	}
+}
+
+/// The event lane's selector, left of the lane (under the keyboard): velocity, the
+/// common controllers (marked when the clip has events in them) and any CC number.
+fn event_lane_selector(ui: &mut Ui, state: &mut AppState, lane: Rect, g: &Geometry, t: &Target) {
+	let label = Rect::from_min_max(
+		pos2(g.keys.left(), lane.top()),
+		pos2(lane.left(), lane.bottom()),
+	);
+	let lp = ui.painter_at(label);
+	lp.rect_filled(label, 0.0, theme::BG_PANEL);
+	lp.vline(
+		label.right() - 0.5,
+		label.y_range(),
+		Stroke::new(1.0, theme::BORDER_STRONG),
+	);
+	let current = state.view.piano.event_lane;
+	let has = |l: EventLane| match l {
+		EventLane::Velocity => false,
+		EventLane::Controller(c) => t.clip.controller(c).is_some(),
+	};
+	let mut child = ui.new_child(
+		egui::UiBuilder::new()
+			.max_rect(label.shrink(3.0))
+			.layout(egui::Layout::top_down(egui::Align::Min)),
+	);
+	let mut pick = None;
+	egui::ComboBox::from_id_salt("piano-event-lane")
+		.width(label.width() - 8.0)
+		.selected_text(RichText::new(current.label()).font(theme::small()))
+		.show_ui(&mut child, |ui| {
+			ui.set_min_width(170.0);
+			let mut lanes: Vec<EventLane> = EventLane::COMMON.to_vec();
+			for l in t.clip.controllers() {
+				let l = EventLane::Controller(l.controller);
+				if !lanes.contains(&l) {
+					lanes.push(l);
+				}
+			}
+			for l in lanes {
+				let text = if has(l) {
+					format!("● {}", l.label())
+				} else {
+					format!("   {}", l.label())
+				};
+				if ui.selectable_label(l == current, text).clicked() {
+					pick = Some(l);
+				}
+			}
+			ui.separator();
+			ui.horizontal(|ui| {
+				ui.label("CC #");
+				let mut n = match current {
+					EventLane::Controller(Controller::Cc(n)) => n,
+					_ => 1,
+				};
+				if ui
+					.add(egui::DragValue::new(&mut n).range(0..=119))
+					.changed()
+				{
+					pick = Some(EventLane::Controller(Controller::Cc(n)));
+				}
+			});
+		})
+		.response
+		.on_hover_text("What the event lane edits: velocity or a MIDI controller");
+	if let Some(l) = pick {
+		state.view.piano.event_lane = l;
+		state.view.piano.velocity_lane = true;
 	}
 }

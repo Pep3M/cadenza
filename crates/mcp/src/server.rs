@@ -27,8 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, devices, midi, playback, portable, presets, project, render,
-	samples, tracks,
+	arrange, audio, clips, compose, controllers, devices, midi, playback, portable, presets,
+	project, render, samples, tracks,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -48,7 +48,8 @@ instrument device inline.\n\
 with voicing and comping pattern) and `write_drum_pattern` (ASCII step grids on GM lanes \
 like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_notes`. Use \
 `scale_info`/`snap_to_scale` to keep melodies in key, `quantize_notes`/`humanize_notes`/\
-`transpose_notes` to shape them.\n\
+`transpose_notes` to shape them. Add expression with `set_controller_events`/\
+`draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend).\n\
 4. Route tracks to reverb/delay buses with `create_track` (kind: bus) + `add_send`; shape \
 tone with `insert_device`/`set_device_params` on a track or the master.\n\
 Samples: the built-in `drum_sampler` (16 GM pads, starts with the factory 'Synth Kit') and \
@@ -610,6 +611,41 @@ impl CadenzaServer {
 		Parameters(args): Parameters<clips::AddMidiClipArgs>,
 	) -> Result<Json<clips::AddMidiClipOutput>, ErrorData> {
 		Ok(Json(self.run_mut(|s| clips::add_midi_clip(s, args))?))
+	}
+
+	#[tool(
+		description = "Writes MIDI controller events into a MIDI clip: mod wheel (cc1), sustain pedal (cc64: 1 = down, 0 = up), expression (cc11), any cc0..cc127, pitch_bend (-1..1, ±2 semitones) or channel_pressure. Beats are clip-relative; each value holds until the next event. replace (default true) replaces the lane, false merges."
+	)]
+	fn set_controller_events(
+		&self,
+		Parameters(args): Parameters<controllers::SetControllerEventsArgs>,
+	) -> Result<Json<controllers::ControllerLaneOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| {
+			controllers::set_controller_events(s, args)
+		})?))
+	}
+
+	#[tool(
+		description = "Draws a controller curve into a MIDI clip between two beats (clip-relative): linear, exponential (swell), logarithmic or sine (wobble, with cycles) from one value to another, e.g. a mod wheel swell, a filter (cc74) sweep or a pitch bend dive. Replaces the events inside the range."
+	)]
+	fn draw_controller_curve(
+		&self,
+		Parameters(args): Parameters<controllers::DrawControllerCurveArgs>,
+	) -> Result<Json<controllers::ControllerLaneOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| {
+			controllers::draw_controller_curve(s, args)
+		})?))
+	}
+
+	#[tool(description = "Lists the events of one controller lane of a MIDI clip.")]
+	fn get_controller_events(
+		&self,
+		Parameters(args): Parameters<controllers::GetControllerEventsArgs>,
+	) -> Result<Json<controllers::GetControllerEventsOutput>, ErrorData> {
+		Ok(Json(controllers::get_controller_events(
+			&self.session(),
+			args,
+		)?))
 	}
 
 	#[tool(description = "Adds notes to an existing MIDI clip.")]

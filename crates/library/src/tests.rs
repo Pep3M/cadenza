@@ -12,6 +12,18 @@ fn core() -> Library {
 	lib
 }
 
+/// macOS and Windows file systems ignore case: two files differing only in case would
+/// collide in a checkout there (ids may differ in case, file names may not).
+#[test]
+fn core_pack_file_names_differ_beyond_case() {
+	let mut seen = std::collections::BTreeMap::new();
+	for (path, _) in crate::library::embedded::CORE_FILES {
+		if let Some(other) = seen.insert(path.to_lowercase(), *path) {
+			panic!("'{path}' and '{other}' differ only in case");
+		}
+	}
+}
+
 #[test]
 fn core_pack_loads_without_issues() {
 	let lib = core();

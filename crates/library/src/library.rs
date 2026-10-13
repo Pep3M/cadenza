@@ -14,7 +14,7 @@ pub const LIBRARY_DIR_ENV: &str = "CADENZA_LIBRARY_DIR";
 /// Id of the embedded pack.
 pub const CORE_PACK: &str = "core";
 
-mod embedded {
+pub(crate) mod embedded {
 	include!(concat!(env!("OUT_DIR"), "/core_pack.rs"));
 }
 

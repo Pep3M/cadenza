@@ -227,9 +227,10 @@ fn isolated_late_blocks_drop_audio_but_a_sustained_stall_is_a_hang() {
 	p.set_param(every, 400.0);
 	let mut input = Vec::new();
 	let mut output = Vec::new();
-	let started = Instant::now();
+	// A fixed number of quanta (not a duration): short sleeps last much longer on
+	// some systems (macOS CI), which would leave too few stalls to count.
 	let mut i = 0u32;
-	while started.elapsed() < Duration::from_millis(1500) {
+	for _ in 0..4000 {
 		let mut l = [0.0f32; Q];
 		for x in &mut l {
 			i += 1;

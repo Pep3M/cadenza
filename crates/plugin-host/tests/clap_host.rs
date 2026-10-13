@@ -64,7 +64,12 @@ fn scanner_rejects_a_corrupt_file() {
 	std::fs::write(&bad, b"this is not a shared library").unwrap();
 	match scan_in_subprocess(&scanner(), &bad, Duration::from_secs(20)) {
 		Err(ScanFailure::Plugin(reason)) => {
-			assert!(reason.contains("could not be loaded"), "{reason}")
+			// The end of the loader error (macOS dyld lists every path it tried,
+			// so the start may be cut off).
+			assert!(
+				reason.contains("check it is a valid CLAP plugin"),
+				"{reason}"
+			)
 		}
 		other => panic!("expected plugin failure, got {other:?}"),
 	}

@@ -677,7 +677,8 @@ fn tone_wav(dir: &std::path::Path) -> PathBuf {
 #[test]
 fn audio_editor_trims_fades_and_processes_through_commands() {
 	let dir = tempfile::tempdir().unwrap();
-	let wav = tone_wav(dir.path());
+	// As imports store it (macOS temp folders resolve to /private/var).
+	let wav = cadenza_core::paths::real_path(tone_wav(dir.path())).unwrap();
 	let mut a = app();
 	// Saved in the temp dir, so processed copies land in "song audio" there.
 	assert!(a.state.save_as(dir.path().join("song.cadenza.json")));
@@ -1935,7 +1936,10 @@ fn the_start_screen_offers_new_open_demo_and_recent_projects() {
 	assert!(!s.view.start_screen);
 	assert_eq!(s.project().name, "First Light");
 	assert!(s.path().unwrap().starts_with(tmp.path().join("demo")));
-	assert_eq!(s.recent.first().map(|p| p.as_path()), s.path());
+	assert_eq!(
+		s.recent.first(),
+		Some(&cadenza_core::paths::real_path(s.path().unwrap()).unwrap())
+	);
 
 	h.state_mut().state.view.start_screen = true;
 	h.run_steps(2);

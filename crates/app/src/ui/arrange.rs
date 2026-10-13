@@ -695,6 +695,43 @@ impl ArrangeUi {
 				theme::TEXT,
 			);
 		}
+		// Ghost clip where a dropped library pattern will land (from its bar).
+		if let (Payload::Pattern { id, name }, Some(row)) = (&payload, ghost_row)
+			&& accepted
+		{
+			let library = state.library();
+			let meter = state.project().meter();
+			let at = meter.bar_floor(target.at().unwrap_or(state.position()));
+			let bars = library
+				.pattern(id)
+				.map_or(4, crate::state::library::drop_bars);
+			let end = meter.tick_at_bar_position(meter.bar_position(at) + f64::from(bars));
+			let tl = state.view.timeline;
+			let x0 = layout.lanes.left() + tl.tick_to_x(at);
+			let ghost = Rect::from_min_size(
+				pos2(x0, row.top() + 2.0),
+				vec2(tl.ticks_to_px(end - at).max(24.0), row.height() - 4.0),
+			);
+			let gp = ui.painter_at(layout.lanes);
+			gp.rect_filled(
+				ghost,
+				CornerRadius::same(theme::RADIUS),
+				theme::ACCENT.gamma_multiply(0.25),
+			);
+			gp.rect_stroke(
+				ghost,
+				CornerRadius::same(theme::RADIUS),
+				Stroke::new(1.0, theme::ACCENT),
+				StrokeKind::Inside,
+			);
+			gp.text(
+				ghost.left_top() + vec2(4.0, 3.0),
+				Align2::LEFT_TOP,
+				name,
+				theme::small(),
+				theme::TEXT,
+			);
+		}
 		dnd::set_hint(&ctx, action.describe(state.project()), accepted);
 		if in_app.is_some() && ctx.input(|i| i.pointer.any_released()) {
 			egui::DragAndDrop::clear_payload(&ctx);

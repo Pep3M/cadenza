@@ -753,6 +753,7 @@ dependencies = [
  "cadenza-core",
  "cadenza-dsp",
  "cadenza-engine",
+ "cadenza-library",
  "cadenza-mcp",
  "cadenza-midi-io",
  "cadenza-model",

@@ -26,6 +26,7 @@ cadenza-audio-io.workspace = true
 cadenza-midi-io.workspace = true
 cadenza-theory.workspace = true
 cadenza-agent.workspace = true
+cadenza-library.workspace = true
 eframe.workspace = true
 egui.workspace = true
 rfd.workspace = true

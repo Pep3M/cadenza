@@ -1,7 +1,8 @@
 //! Browser: built-in devices and scanned plugins (search, double-click or drag onto a
 //! track / mixer strip / below the tracks), the factory presets of the selected device
-//! (drag onto a device or track), and a Files tab (bookmarked folders, audio/MIDI
-//! filter; drag files onto the arrange view, double-click to import).
+//! (drag onto a device or track), a Files tab (bookmarked folders, audio/MIDI filter;
+//! drag files onto the arrange view, double-click to import) and the style Library tab
+//! (`ui::library`).
 
 use std::path::PathBuf;
 
@@ -20,6 +21,7 @@ enum Tab {
 	#[default]
 	Devices,
 	Files,
+	Library,
 }
 
 #[derive(Default)]
@@ -32,7 +34,11 @@ impl BrowserUi {
 	pub fn show(&mut self, ui: &mut Ui, state: &mut AppState) {
 		ui.add_space(4.0);
 		ui.horizontal(|ui| {
-			for (tab, label) in [(Tab::Devices, "Devices"), (Tab::Files, "Files")] {
+			for (tab, label) in [
+				(Tab::Devices, "Devices"),
+				(Tab::Files, "Files"),
+				(Tab::Library, "Library"),
+			] {
 				if ui
 					.selectable_label(self.tab == tab, RichText::new(label).font(theme::small()))
 					.clicked()
@@ -40,7 +46,7 @@ impl BrowserUi {
 					self.tab = tab;
 				}
 			}
-			if self.tab == Tab::Files {
+			if self.tab != Tab::Devices {
 				return;
 			}
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -57,9 +63,10 @@ impl BrowserUi {
 				}
 			});
 		});
-		if self.tab == Tab::Files {
-			files_tab(ui, state);
-			return;
+		match self.tab {
+			Tab::Files => return files_tab(ui, state),
+			Tab::Library => return super::library::show(ui, state),
+			Tab::Devices => {}
 		}
 		ui.add(
 			egui::TextEdit::singleline(&mut self.query)

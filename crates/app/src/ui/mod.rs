@@ -12,6 +12,7 @@ pub mod chat;
 pub mod dnd;
 pub mod inspector;
 pub mod instrument_editor;
+pub mod library;
 pub mod mixer;
 pub mod piano_roll;
 pub mod project_dialogs;

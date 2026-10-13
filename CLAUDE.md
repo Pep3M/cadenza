@@ -823,6 +823,25 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   mode toggles, global knobs. Audio file drops (browser Files or OS) on a pad / zone / the
   keyboard go through the shared `load_sample` tool; Alt+drop below the tracks or the Files
   context menu "Load into new sampler" adds a sampler track auto-mapped to the file.
+- Style library (phase 18a; `state::library` pure builders + `ui::library`): browser
+  "Library" tab (`AppState::library()` = the session's `Library`; `headless()` uses the
+  core pack only; `new()` loads user packs and warns about broken ones via
+  `report_library`). Search box + filter combos (kind, genre, role, section, energy; Clear),
+  cards (kind glyph, name, role/kind tag, summary, facts, `pack · license`; pattern tooltip
+  = the step grids). Click a pattern = audition it once at the song tempo with the default
+  harmony (`default_harmony`: the song style's first loop, else i-VI-III-VII; A minor /
+  C major) on a fitting instrument track (`preview_track`) through `preview_note_on/off`
+  (`PatternPreview` events sent by `tick`; refused while playing; click again stops);
+  double-click writes it at the playhead; drag = `Payload::Pattern` -> `DropAction::
+  AddPattern` on an instrument lane/header (from the bar under the pointer, ghost clip
+  shown) or below the tracks (new Drums/Bass/Keys/Pad/Lead track with a fitting built-in
+  and preset): `library::add_pattern` = one Batch "Add pattern '<name>'" via the MCP
+  `build_pattern_clip` (4 bars minimum, `drop_bars`). Styles, forms, progressions and
+  grooves open as read-only documents ("‹ Library" back): style = feel, harmony loops,
+  forms with Apply (markers + typical tempo + song style, `apply_library_form`), roles
+  with draggable/previewable pattern chips, sounds, mix, do/don't; form = Apply form +
+  section table with energy blocks. "Credits" lists every pack (license, attribution,
+  links, not-redistributable flag, location) and load problems.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
   including automation lanes, the audio editor, an empty project, (`render_sampler_screens`)
@@ -831,7 +850,8 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   tracks with take lanes, a recording in progress (fed by the engine's virtual device) and the
   audio settings dialog, and (`render_phase17_screens`) time signature changes + the signature
   lane, controller lanes (mod wheel, pitch bend), an automatic crossfade and a folder (open,
-  folded).
+  folded), and (`render_library_screens`) the Library tab (list, filters, preview, pattern
+  tooltip, style and form documents, credits, a pattern dragged over a lane).
 - Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
   30 ms): Edit button in the inspector (device and track instrument), double-click a plugin
   insert / instrument in the mixer or the instrument name in a track header. Window title

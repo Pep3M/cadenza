@@ -23,6 +23,7 @@ pub mod export;
 pub mod files;
 pub mod folders;
 pub mod layout;
+pub mod library;
 pub mod live;
 pub mod meter;
 pub mod meters;
@@ -342,6 +343,12 @@ pub struct AppState {
 	cued: bool,
 	/// Loop and audition last sent to the player.
 	play_config: Option<transport::PlayConfig>,
+	/// The style library (the session's, fetched once).
+	library: Option<Arc<cadenza_library::Library>>,
+	/// The browser's Library tab.
+	pub library_view: library::LibraryView,
+	/// A library pattern sounding through the preview path.
+	library_preview: Option<library::PatternPreview>,
 }
 
 impl AppState {
@@ -351,12 +358,17 @@ impl AppState {
 		s.ai = ai::AiChat::new(waker.clone());
 		s.audio = Some(AudioEngine::start(waker));
 		s.audio_status = AudioStatus::Starting;
+		s.report_library();
 		s
 	}
 
-	/// State without audio (tests, screenshots in CI).
+	/// State without audio (tests, screenshots in CI). The style library is the embedded
+	/// `core` pack only, so tests never read the user's packs.
 	pub fn headless() -> Self {
-		Self::headless_with(None)
+		let s = Self::headless_with(None);
+		s.session()
+			.set_library(Arc::new(cadenza_library::Library::core()));
+		s
 	}
 
 	fn headless_with(waker: Option<Waker>) -> Self {
@@ -419,6 +431,9 @@ impl AppState {
 			play_intent: false,
 			cued: false,
 			play_config: None,
+			library: None,
+			library_view: library::LibraryView::default(),
+			library_preview: None,
 		}
 	}
 
@@ -2239,6 +2254,9 @@ impl AppState {
 			}
 			DropAction::LoadSample { device, path, slot } => self.load_sample(device, &path, slot),
 			DropAction::NewSampler { path } => self.new_sampler_track(&path),
+			DropAction::AddPattern {
+				pattern, track, at, ..
+			} => self.add_library_pattern(&pattern, track, at),
 			DropAction::Reject(why) => {
 				self.notices.info(why);
 				false
@@ -2676,6 +2694,155 @@ impl AppState {
 		}
 	}
 
+	// --- Style library ---------------------------------------------------------------
+
+	/// The style library (the embedded `core` pack plus the user packs).
+	pub fn library(&mut self) -> Arc<cadenza_library::Library> {
+		if let Some(l) = &self.library {
+			return Arc::clone(l);
+		}
+		let l = self.session().library();
+		self.library = Some(Arc::clone(&l));
+		l
+	}
+
+	/// Loads the library at startup and warns about packs with problems (never fatal).
+	pub fn report_library(&mut self) {
+		let library = self.library();
+		for r in library.reports() {
+			if r.issues.is_empty() {
+				continue;
+			}
+			let what = r.pack.as_deref().unwrap_or(&r.location);
+			let text = if r.loaded {
+				format!(
+					"Library pack '{what}': {} item(s) skipped or broken. See Browser > Library > Credits.",
+					r.issues.len()
+				)
+			} else {
+				format!(
+					"Library pack at {} was not loaded: {}",
+					r.location,
+					r.issues.first().map_or("", |i| i.message.as_str())
+				)
+			};
+			self.notices.warn(text);
+		}
+	}
+
+	/// Auditions a library pattern once, at the song tempo, on a fitting instrument track
+	/// (the selected one when it fits). Stops a running preview of the same pattern.
+	pub fn preview_pattern(&mut self, id: &str) -> bool {
+		if self
+			.library_preview
+			.as_ref()
+			.is_some_and(|p| p.pattern == id)
+		{
+			self.stop_pattern_preview();
+			return false;
+		}
+		self.stop_pattern_preview();
+		if self.is_playing() {
+			self.notices
+				.info("Stop playback to preview library patterns");
+			return false;
+		}
+		let library = self.library();
+		let Some(pattern) = library.pattern(id) else {
+			return false;
+		};
+		let Some(track) = library::preview_track(self.project(), self.selection.track, pattern)
+		else {
+			self.notices
+				.info("Add an instrument track to preview patterns (or drag one below the tracks)");
+			return false;
+		};
+		let at = self.position();
+		match library::PatternPreview::new(self.project(), &library, id, track, at, Instant::now())
+		{
+			Ok(p) => {
+				self.library_preview = Some(p);
+				true
+			}
+			Err(e) => {
+				self.notices.error(e);
+				false
+			}
+		}
+	}
+
+	/// The pattern being previewed.
+	pub fn pattern_preview(&self) -> Option<&str> {
+		self.library_preview.as_ref().map(|p| p.pattern.as_str())
+	}
+
+	pub fn stop_pattern_preview(&mut self) {
+		if self.library_preview.take().is_some() {
+			self.release_previews();
+		}
+	}
+
+	/// Sends the preview's due notes; true while it runs.
+	fn tick_pattern_preview(&mut self, now: Instant) -> bool {
+		let Some(preview) = &mut self.library_preview else {
+			return false;
+		};
+		let track = preview.track;
+		let due = preview.due(now);
+		let finished = preview.finished();
+		for (pitch, velocity) in due {
+			match velocity {
+				Some(v) => self.preview_note_on(track, pitch, v),
+				None => self.preview_note_off(track, pitch),
+			}
+		}
+		if finished || self.is_playing() {
+			self.stop_pattern_preview();
+		}
+		!finished
+	}
+
+	/// Writes a library pattern on `track` (`None`: a new track) from the bar of `at`
+	/// (`None`: the playhead): one undo step, selected afterwards.
+	pub fn add_library_pattern(
+		&mut self,
+		id: &str,
+		track: Option<TrackId>,
+		at: Option<Tick>,
+	) -> bool {
+		let library = self.library();
+		let at = at.unwrap_or(self.position());
+		match library::add_pattern(self.project(), &library, id, track, at) {
+			Ok(drop) => {
+				if !self.apply(drop.command) {
+					return false;
+				}
+				self.selection.click_clip(drop.track, drop.clip, false);
+				for w in drop.warnings {
+					self.notices.warn(w);
+				}
+				true
+			}
+			Err(e) => {
+				self.notices.error(e);
+				false
+			}
+		}
+	}
+
+	/// Lays out a library form from bar 1 (markers, and with a style guide its tempo and
+	/// the song's style): one undo step.
+	pub fn apply_library_form(&mut self, form: &str, style: Option<&str>) -> bool {
+		let library = self.library();
+		match library::apply_form(self.project(), &library, form, style) {
+			Ok(cmd) => self.apply(cmd),
+			Err(e) => {
+				self.notices.error(e);
+				false
+			}
+		}
+	}
+
 	// --- Preferences ---------------------------------------------------------------
 
 	/// The per-user layout/zoom preferences to persist.
@@ -2887,10 +3054,12 @@ impl AppState {
 		let (playing, position) = (self.is_playing(), self.position());
 		self.tick_autowrite(playing, position);
 		self.tick_record(dt);
+		let previewing = self.tick_pattern_preview(now);
 		self.peaks.poll();
 		let ids: Vec<TrackId> = self.project().tracks.iter().map(|t| t.id).collect();
 		self.meters.update(self.bank.as_deref(), ids, dt);
 		self.is_playing()
+			|| previewing
 			|| self.meters.any_active()
 			|| self.reload_since.is_some()
 			|| self.editors.busy()

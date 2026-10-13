@@ -28,6 +28,11 @@ pub enum Payload {
 		track: Option<TrackId>,
 		device: DeviceId,
 	},
+	/// A style library pattern (`id` = "core/dembow_basic").
+	Pattern {
+		id: String,
+		name: String,
+	},
 }
 
 impl Payload {
@@ -41,6 +46,7 @@ impl Payload {
 				|f| f.to_string_lossy().into(),
 			),
 			Payload::Insert { .. } => "Insert".into(),
+			Payload::Pattern { name, .. } => name.clone(),
 		}
 	}
 }
@@ -154,6 +160,14 @@ pub enum DropAction {
 	NewSampler {
 		path: PathBuf,
 	},
+	/// A library pattern written on `track` (`None`: a new track) from the bar of `at`
+	/// (`None`: the playhead).
+	AddPattern {
+		pattern: String,
+		name: String,
+		track: Option<TrackId>,
+		at: Option<Tick>,
+	},
 	/// Not possible here; the text says why (shown as the drop hint).
 	Reject(String),
 }
@@ -238,6 +252,22 @@ impl DropAction {
 				"New sampler track with {}",
 				path.file_name().unwrap_or_default().to_string_lossy()
 			),
+			DropAction::AddPattern {
+				name, track: t, at, ..
+			} => format!(
+				"Write '{name}' {}{}",
+				t.as_ref().map_or_else(
+					|| "on a new track".to_owned(),
+					|t| format!("on {}", track(t))
+				),
+				at.map_or_else(
+					|| " at the playhead's bar".to_owned(),
+					|a| format!(
+						" from bar {}",
+						project.meter().bar_position(a).floor() + 1.0
+					)
+				)
+			),
 			DropAction::Reject(why) => why.clone(),
 		}
 	}
@@ -278,6 +308,26 @@ pub fn resolve(project: &Project, payload: &Payload, target: DropTarget, copy: b
 			_ => DropAction::Reject("Drop inserts on a mixer strip".into()),
 		},
 		Payload::File(path) => resolve_file(project, path, target),
+		Payload::Pattern { id, name } => {
+			let add = |track, at| DropAction::AddPattern {
+				pattern: id.clone(),
+				name: name.clone(),
+				track,
+				at,
+			};
+			match target {
+				DropTarget::Below { at } | DropTarget::BelowSampler { at } => add(None, Some(at)),
+				DropTarget::Track(t) | DropTarget::Lane { track: t, .. }
+					if kind_of(project, t) == Some(TrackKind::Instrument) =>
+				{
+					add(Some(t), target.at())
+				}
+				_ => DropAction::Reject(
+					"Drop patterns on an instrument track, or below the tracks for a new one"
+						.into(),
+				),
+			}
+		}
 	}
 }
 
@@ -592,6 +642,36 @@ mod tests {
 			!resolve(&fx.p, &synth, DropTarget::Device(r), false).accepted(),
 			"a synth preset on a compressor"
 		);
+	}
+
+	#[test]
+	fn patterns_go_on_instrument_tracks_or_a_new_one() {
+		let fx = fixture();
+		let at = Tick(1920);
+		let p = Payload::Pattern {
+			id: "core/dembow_basic".into(),
+			name: "Dembow basic".into(),
+		};
+		let on_keys = resolve(&fx.p, &p, DropTarget::Lane { track: fx.keys, at }, false);
+		assert_eq!(
+			on_keys,
+			DropAction::AddPattern {
+				pattern: "core/dembow_basic".into(),
+				name: "Dembow basic".into(),
+				track: Some(fx.keys),
+				at: Some(at)
+			}
+		);
+		assert_eq!(
+			on_keys.describe(&fx.p),
+			"Write 'Dembow basic' on 'Keys' from bar 1"
+		);
+		assert!(matches!(
+			resolve(&fx.p, &p, DropTarget::Below { at }, false),
+			DropAction::AddPattern { track: None, .. }
+		));
+		assert!(!resolve(&fx.p, &p, DropTarget::Track(fx.audio), false).accepted());
+		assert!(!resolve(&fx.p, &p, DropTarget::Strip(None), false).accepted());
 	}
 
 	#[test]

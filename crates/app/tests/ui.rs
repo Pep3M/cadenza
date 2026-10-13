@@ -2548,3 +2548,151 @@ fn folders_group_tracks_and_fold_in_the_arrange() {
 	assert!(h.state().state.view.collapsed.contains(&folder));
 	assert_eq!(rows_of(&h), rows - 2, "contents hidden");
 }
+
+fn open_library(h: &mut Harness<'_, CadenzaApp>) {
+	h.run_steps(2);
+	h.get_by_label("Library").click();
+	h.run_steps(2);
+}
+
+#[test]
+fn library_tab_searches_previews_and_writes_patterns() {
+	let mut h = harness(app());
+	open_library(&mut h);
+	assert!(h.query_by_label("Credits").is_some());
+	h.state_mut().state.library_view.query = "dembow".into();
+	h.run_steps(2);
+	h.get_by_label("Dembow basic").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert_eq!(
+		s.library_view.selected.as_deref(),
+		Some("core/dembow_basic")
+	);
+	assert_eq!(
+		s.pattern_preview(),
+		Some("core/dembow_basic"),
+		"click auditions the pattern"
+	);
+	// Clicking again stops it.
+	h.get_by_label("Dembow basic").click();
+	h.run_steps(2);
+	assert_eq!(h.state().state.pattern_preview(), None);
+
+	// Dropping it below the tracks adds a drum track with the clip: one undo step.
+	let tracks = h.state().state.project().tracks.len();
+	let s = &mut h.state_mut().state;
+	assert!(s.drop_payload(
+		&cadenza_app::state::dnd::Payload::Pattern {
+			id: "core/dembow_basic".into(),
+			name: "Dembow basic".into(),
+		},
+		cadenza_app::state::dnd::DropTarget::Below {
+			at: Tick(PPQ * 4 * 8)
+		},
+		false,
+	));
+	assert_eq!(s.project().tracks.len(), tracks + 1);
+	let track = s.project().tracks.last().unwrap();
+	assert_eq!(track.name, "Drums");
+	assert_eq!(track.clips[0].name, "Dembow basic [core/dembow_basic]");
+	assert_eq!(track.clips[0].start, Tick(PPQ * 4 * 8));
+	assert_eq!(s.undo_label(), Some("Add pattern 'Dembow basic'"));
+	s.undo();
+	assert_eq!(s.project().tracks.len(), tracks);
+}
+
+#[test]
+fn library_documents_apply_forms_and_list_credits() {
+	let mut h = harness(app());
+	open_library(&mut h);
+	{
+		let v = &mut h.state_mut().state.library_view;
+		v.kind = Some(cadenza_library::ItemKind::Style);
+		v.query = "latin pop".into();
+	}
+	h.run_steps(2);
+	h.get_by_label("Latin pop (reggaeton-pop)").click();
+	h.run_steps(2);
+	assert_eq!(
+		h.state().state.library_view.open.as_deref(),
+		Some("core/latin_pop")
+	);
+	assert!(h.query_by_label("HARMONY").is_some());
+	h.get_all_by_label("Apply").next().unwrap().click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert_eq!(s.project().meta.style.as_deref(), Some("core/latin_pop"));
+	assert_eq!(s.project().tempo.points()[0].bpm, 94.0);
+	assert!(s.project().markers.iter().any(|m| m.name == "Post-chorus"));
+	assert_eq!(s.undo_label(), Some("Apply form 'Latin pop radio form'"));
+
+	h.get_by_label("‹ Library").click();
+	h.run_steps(2);
+	h.get_by_label("Credits").click();
+	h.run_steps(2);
+	assert!(h.state().state.library_view.credits);
+	assert!(h.query_by_label("Cadenza Core").is_some());
+}
+
+/// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
+#[test]
+#[ignore]
+fn render_library_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let mut a = app();
+	a.state.view.panels.focus = Some(PanelKind::Browser);
+	let mut h = screenshot_harness(a);
+	open_library(&mut h);
+	shot(&mut h, &dir, "library_list");
+	{
+		let v = &mut h.state_mut().state.library_view;
+		v.genre = Some("reggaeton".into());
+		v.role = Some(cadenza_library::Role::Bass);
+	}
+	shot(&mut h, &dir, "library_filtered");
+	{
+		let s = &mut h.state_mut().state;
+		s.library_view.clear_filters();
+		s.library_view.query = "dembow".into();
+	}
+	h.run_steps(2);
+	h.get_by_label("Dembow basic").click();
+	shot(&mut h, &dir, "library_preview");
+	h.state_mut().state.stop_pattern_preview();
+	h.get_by_label("Dembow basic").hover();
+	h.run_steps(60);
+	shot(&mut h, &dir, "library_pattern_tooltip");
+	h.remove_cursor();
+	{
+		let v = &mut h.state_mut().state.library_view;
+		v.query.clear();
+		v.open = Some("core/latin_pop".into());
+	}
+	shot(&mut h, &dir, "library_style");
+	h.state_mut().state.library_view.open = Some("core/form_latin_pop_radio".into());
+	shot(&mut h, &dir, "library_form");
+	{
+		let v = &mut h.state_mut().state.library_view;
+		v.open = None;
+		v.credits = true;
+	}
+	shot(&mut h, &dir, "library_credits");
+	h.state_mut().state.library_view.credits = false;
+
+	// Dragging a pattern over the Bass lane: the drop hint and the ghost clip.
+	egui::DragAndDrop::set_payload(
+		&h.ctx,
+		cadenza_app::state::dnd::Payload::Pattern {
+			id: "core/bass_tresillo_808".into(),
+			name: "Tresillo 808 bass".into(),
+		},
+	);
+	h.hover_at(pos2(900.0, 365.0));
+	shot(&mut h, &dir, "library_dnd");
+	egui::DragAndDrop::clear_payload(&h.ctx);
+	h.remove_cursor();
+}

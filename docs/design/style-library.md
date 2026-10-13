@@ -1,6 +1,6 @@
 # Style library: patterns, song forms and style guides
 
-Status: design draft (2026-10-12); **SL-1, SL-2 and the SMF part of SL-3 shipped** (2026-10-13, phase 18a): the
+Status: design draft (2026-10-12); **SL-1, SL-2, SL-4 and the SMF part of SL-3 shipped** (2026-10-13, phase 18a): the
 `cadenza-library` crate with the embedded `core` pack and the four MCP tools. See "What
 shipped" at the end.
 
@@ -382,3 +382,11 @@ Independent of the main phases. Each step ships on its own and leaves the tree g
   inferred when not given), `cadenza library validate <dir>` and `cadenza library list`.
   The dataset importers (Groove MIDI, free-midi-chords, LMMS, SALAMI) are not done: nothing
   is downloaded.
+- **SL-4** (`crates/app/src/state/library.rs`, `ui/library.rs`): the browser's Library tab
+  as designed (search + kind/genre/role/section/energy filters, cards with summary and pack
+  license, click previews through the stopped-transport note preview path at the song
+  tempo over the default progression, drag and drop with `Payload::Pattern` through the
+  same `build_pattern_clip` builder, read-only style/form documents with "Apply form",
+  credits). Double-click writes a pattern at the playhead; dropping below the tracks adds a
+  track with a fitting built-in instrument.
+- Not done: SL-5 (kits), the dataset importers of SL-3, an on-disk index cache.

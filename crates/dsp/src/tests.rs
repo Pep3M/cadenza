@@ -179,7 +179,10 @@ fn instruments_sound_and_decay_to_silence() {
 		.filter(|d| d.role == DeviceRole::Instrument)
 	{
 		let notes: &[u8] = if info.id == "drum_machine" {
-			&[36, 38, 39, 42, 46, 41, 45, 48, 49, 51]
+			&[
+				36, 37, 38, 39, 42, 46, 41, 45, 48, 49, 51, 52, 53, 54, 55, 56, 60, 61, 62, 63, 64,
+				65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81,
+			]
 		} else {
 			&[36, 60, 84]
 		};
@@ -192,6 +195,9 @@ fn instruments_sound_and_decay_to_silence() {
 			}];
 			let (l, r) = render(p.as_mut(), (SR * 0.3) as usize, 256, &on);
 			let level = peak(&l).max(peak(&r));
+			if std::env::var_os("CADENZA_PRINT_LEVELS").is_some() {
+				eprintln!("{} {pitch}: {:.1} dB", info.id, gain_to_db(level));
+			}
 			assert!(level > 0.02, "{} note {pitch} silent ({level})", info.id);
 			assert!(level < 4.0, "{} note {pitch} too loud ({level})", info.id);
 			let off = [MidiEvent::NoteOff { offset: 0, pitch }];

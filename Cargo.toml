@@ -43,6 +43,8 @@ clack-plugin = "0.2"
 clack-extensions = "0.2"
 base64 = "0.22"
 tempfile = "3"
+# Font charmap checks in the app tests (already in the tree through epaint).
+skrifa = "0.44"
 vst3 = "0.3"
 libloading = "0.8"
 libc = "0.2"

@@ -39,4 +39,5 @@ keyring.workspace = true
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 tempfile.workspace = true
+skrifa.workspace = true
 hound.workspace = true

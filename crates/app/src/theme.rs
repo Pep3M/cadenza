@@ -142,8 +142,21 @@ pub fn mono(size: f32) -> FontId {
 	FontId::new(size, FontFamily::Monospace)
 }
 
+/// egui's proportional fonts (Ubuntu Light + emoji) lack arrows, geometric shapes and
+/// block elements (`←`, `→`, `◆`, `●`, `⊘`, `▍`); the bundled Hack font (also embedded by
+/// egui, MIT/Bitstream) covers them, so it becomes the last proportional fallback.
+pub fn fonts() -> egui::FontDefinitions {
+	let mut fonts = egui::FontDefinitions::default();
+	let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
+	if !proportional.iter().any(|f| f == "Hack") {
+		proportional.push("Hack".to_owned());
+	}
+	fonts
+}
+
 /// Applies the Cadenza style to `ctx`.
 pub fn apply(ctx: &egui::Context) {
+	ctx.set_fonts(fonts());
 	ctx.set_theme(egui::Theme::Dark);
 	ctx.all_styles_mut(|style| {
 		style.text_styles = [
@@ -246,5 +259,43 @@ mod tests {
 			Color32::from_rgb(128, 128, 128)
 		);
 		assert_eq!(text_on(Color32::WHITE), Color32::from_rgb(0x12, 0x14, 0x17));
+	}
+
+	/// Every non-ASCII character the app draws in proportional text has a glyph in one of
+	/// the proportional faces (no empty boxes): the symbols are scanned from the sources.
+	#[test]
+	fn proportional_fonts_cover_the_app_symbols() {
+		use skrifa::MetadataProvider;
+		let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+		let mut symbols = std::collections::BTreeSet::new();
+		let mut stack = vec![dir];
+		while let Some(d) = stack.pop() {
+			for e in std::fs::read_dir(&d).unwrap().flatten() {
+				let p = e.path();
+				if p.is_dir() {
+					stack.push(p);
+				} else if p.extension().is_some_and(|x| x == "rs") {
+					let text = std::fs::read_to_string(&p).unwrap();
+					for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+						symbols.extend(line.chars().filter(|c| !c.is_ascii()));
+					}
+				}
+			}
+		}
+		assert!(symbols.contains(&'◆') && symbols.contains(&'●'));
+		let defs = fonts();
+		let faces: Vec<_> = defs.families[&FontFamily::Proportional]
+			.iter()
+			.map(|name| &defs.font_data[name])
+			.collect();
+		let covered = |c: char| {
+			faces.iter().any(|data| {
+				skrifa::FontRef::from_index(&data.font, data.index)
+					.is_ok_and(|f| f.charmap().map(c).is_some())
+			})
+		};
+		let missing: String = symbols.iter().filter(|&&c| !covered(c)).collect();
+		assert!(missing.is_empty(), "no glyph for {missing:?}");
+		assert!(covered('←'), "arrows for library/back links");
 	}
 }

@@ -1,5 +1,6 @@
 //! `drum_machine`: synthesized, GM-mapped drum kit.
 
+use super::percussion::{PercParams, Percussion};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::biquad::{Biquad, BiquadCoeffs};
 use crate::util::envelope::{DecayEnv, decay_coeff};
@@ -26,7 +27,10 @@ const P_CYMBAL_DECAY: usize = 16;
 const P_CYMBAL_LEVEL: usize = 17;
 const P_TONE: usize = 18;
 const P_GAIN: usize = 19;
-const N_PARAMS: usize = 20;
+const P_PERC_TUNE: usize = 20;
+const P_PERC_DECAY: usize = 21;
+const P_PERC_LEVEL: usize = 22;
+const N_PARAMS: usize = 23;
 
 const TUNE_DESC: &str = "Pitch offset of the drum in semitones.";
 const LEVEL_DESC: &str = "Level of this drum within the kit.";
@@ -204,6 +208,34 @@ static PARAMS: [ParamInfo; N_PARAMS] = [
 		"dB",
 		"Output level of the whole kit.",
 	),
+	ParamInfo::new(
+		"perc_tune",
+		"Perc Tune",
+		-12.0,
+		12.0,
+		0.0,
+		"semitones",
+		"Pitch offset of the hand percussion (rim, cowbell, bongos, congas, timbales, agogo, \
+		 guiro, claves, woodblocks, triangle).",
+	),
+	ParamInfo::new(
+		"perc_decay",
+		"Perc Decay",
+		25.0,
+		400.0,
+		100.0,
+		"%",
+		"Length of the hand percussion relative to its natural decay.",
+	),
+	ParamInfo::new(
+		"perc_level",
+		"Perc Level",
+		-60.0,
+		6.0,
+		-3.0,
+		"dB",
+		"Level of the hand percussion and shakers.",
+	),
 ];
 
 pub static INFO: DeviceInfo = DeviceInfo {
@@ -212,7 +244,11 @@ pub static INFO: DeviceInfo = DeviceInfo {
 	role: DeviceRole::Instrument,
 	description: "Synthesized drum kit on General MIDI notes: 36 (C1) kick, 38 snare, 39 clap, \
 		42 closed hat, 44 pedal hat, 46 open hat (choked by 42/44), 41/43 low tom, 45/47 mid tom, \
-		48/50 high tom, 49/57 crash, 51/59 ride; 35 and 40 alias kick and snare. Note length does \
+		48/50 high tom, 49/57 crash, 51/59 ride, 52 china, 53 ride bell, 55 splash; 35 and 40 \
+		alias kick and snare. Latin/hand percussion: 37 rim (side stick), 54 tambourine, 56 \
+		cowbell, 60/61 hi/low bongo, 62 mute conga, 63 open conga, 64 low conga, 65/66 \
+		timbales, 67/68 agogo, 69 cabasa, 70 shaker/maracas, 71/72 whistle, 73/74 short/long \
+		guiro, 75 claves, 76/77 woodblocks, 78/79 cuica, 80/81 mute/open triangle. Note length does \
 		not matter (one-shots); velocity controls loudness, so vary hat velocities (0.5-0.9) for \
 		groove. Punchy defaults suit pop, hip-hop, house and electronic. Recipes — TRAP/808: \
 		kick_decay 1200, kick_tune -3, hat_decay 35. HOUSE: kick_decay 350, kick_punch 70, \
@@ -220,6 +256,11 @@ pub static INFO: DeviceInfo = DeviceInfo {
 		300, tom_decay 600.",
 	params: &PARAMS,
 };
+
+/// Whether the drum machine has a sound for this GM note.
+pub fn plays(note: u8) -> bool {
+	matches!(note, 35..=36 | 38..=53 | 55 | 57 | 59) || Percussion::plays(note)
+}
 
 const METAL_RATIOS: [f32; 6] = [205.3, 304.4, 369.6, 522.7, 540.0, 800.0];
 
@@ -326,6 +367,7 @@ pub struct DrumMachine {
 	crash: MetalVoice,
 	ride: MetalVoice,
 	toms: [Tom; 3],
+	perc: Percussion,
 	tone_db: Smoother,
 	gain: Smoother,
 	tone_filters: [Biquad; 2],
@@ -365,6 +407,7 @@ impl DrumMachine {
 			crash: MetalVoice::default(),
 			ride: MetalVoice::default(),
 			toms: [Tom::default(); 3],
+			perc: Percussion::default(),
 			tone_db: Smoother::new(tone_to_db(params.get(P_TONE))),
 			gain: Smoother::new(db_to_gain(params.get(P_GAIN))),
 			tone_filters: [Biquad::default(); 2],
@@ -466,6 +509,48 @@ impl DrumMachine {
 					-0.35,
 				);
 			}
+			52 => {
+				let level = db_to_gain(p.get(P_CYMBAL_LEVEL));
+				let decay = p.get(P_CYMBAL_DECAY) * 0.7;
+				Self::trigger_metal(
+					&mut self.crash,
+					sr,
+					1.05,
+					decay,
+					[4_500.0, 2_500.0],
+					0.7,
+					vel * level * 1.1,
+					-0.45,
+				);
+			}
+			55 => {
+				let level = db_to_gain(p.get(P_CYMBAL_LEVEL));
+				let decay = p.get(P_CYMBAL_DECAY) * 0.35;
+				Self::trigger_metal(
+					&mut self.crash,
+					sr,
+					1.6,
+					decay,
+					[8_000.0, 4_500.0],
+					0.5,
+					vel * level * 0.9,
+					-0.2,
+				);
+			}
+			53 => {
+				let level = db_to_gain(p.get(P_CYMBAL_LEVEL));
+				let decay = p.get(P_CYMBAL_DECAY) * 0.6;
+				Self::trigger_metal(
+					&mut self.ride,
+					sr,
+					2.4,
+					decay,
+					[3_500.0, 1_800.0],
+					0.05,
+					vel * level * 1.4,
+					0.35,
+				);
+			}
 			51 | 59 => {
 				let level = db_to_gain(p.get(P_CYMBAL_LEVEL));
 				let decay = p.get(P_CYMBAL_DECAY) * 0.8;
@@ -494,7 +579,14 @@ impl DrumMachine {
 				t.pan_l = (1.0 - pan).min(1.0);
 				t.pan_r = (1.0 + pan).min(1.0);
 			}
-			_ => {}
+			_ => {
+				let perc = PercParams {
+					tune: p.get(P_PERC_TUNE),
+					decay: p.get(P_PERC_DECAY) * 0.01,
+					level: db_to_gain(p.get(P_PERC_LEVEL)),
+				};
+				self.perc.trigger(pitch, vel, perc, sr);
+			}
 		}
 	}
 
@@ -537,6 +629,7 @@ impl DrumMachine {
 			t.amp.set_decay(30.0, sr);
 		}
 		self.clap.burst = 0.0;
+		self.perc.stop_all(sr);
 	}
 
 	#[inline]
@@ -624,6 +717,10 @@ impl DrumMachine {
 				}
 			}
 
+			let (pl, pr) = self.perc.tick(&mut self.rng, sr);
+			sl += pl;
+			sr_ += pr;
+
 			let tone_db = self.tone_db.tick();
 			if self.tone_counter == 0 && tone_db != self.tone_coeffs_db {
 				self.tone_coeffs = BiquadCoeffs::high_shelf(3_000.0, tone_db, sr);
@@ -695,6 +792,7 @@ impl Processor for DrumMachine {
 		self.crash = MetalVoice::default();
 		self.ride = MetalVoice::default();
 		self.toms = [Tom::default(); 3];
+		self.perc.reset();
 		self.tone_filters = [Biquad::default(); 2];
 		self.tone_db.snap();
 		self.gain.snap();
@@ -709,6 +807,7 @@ impl Processor for DrumMachine {
 			.max(p.get(P_TOM_DECAY))
 			.max(p.get(P_CYMBAL_DECAY))
 			.max(p.get(P_SNARE_DECAY))
+			.max(1_500.0 * p.get(P_PERC_DECAY) * 0.01)
 			.max(250.0);
 		longest * 0.001 * 1.3
 	}

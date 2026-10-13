@@ -3,6 +3,7 @@
 pub mod drum_machine;
 pub mod drum_sampler;
 pub mod electric_piano;
+mod percussion;
 pub mod poly_synth;
 pub mod sample_voice;
 pub mod sampler;

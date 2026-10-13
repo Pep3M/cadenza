@@ -205,11 +205,6 @@ fn lane_pitch(name: &str) -> Result<u8, McpError> {
 	crate::tools::samples::pad_note(name)
 }
 
-/// GM notes the built-in `drum_machine` has a sound for.
-const DRUM_MACHINE_NOTES: &[u8] = &[
-	35, 36, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 57, 59,
-];
-
 /// Lanes the track's drum instrument would leave silent: a drum_sampler pad with no sample,
 /// or a note the drum_machine has no sound for.
 pub(crate) fn drum_lane_warnings<'a>(
@@ -235,10 +230,10 @@ pub(crate) fn drum_lane_warnings<'a>(
 					device.name
 				));
 			}
-			Some("drum_machine") if !DRUM_MACHINE_NOTES.contains(&pitch) => {
+			Some("drum_machine") if !cadenza_dsp::instruments::drum_machine::plays(pitch) => {
 				warnings.push(format!(
-					"lane '{lane}' ({pitch}) is silent on drum_machine (it plays kick, snare, clap, \
-					 hats, toms, crash and ride): use a drum_sampler with a sample on that pad"
+					"lane '{lane}' ({pitch}) is silent on drum_machine (it plays GM notes 35-81: \
+					 kit, cymbals and Latin percussion): use a drum_sampler with a sample on that pad"
 				));
 			}
 			_ => {}

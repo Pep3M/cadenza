@@ -375,7 +375,8 @@ Independent of the main phases. Each step ships on its own and leaves the tree g
   `apply_pattern`, `apply_form` as designed, plus `Project.meta.style` (the open question:
   answered yes; set by `apply_form`, shown in the project summary). `chords` also accepts a
   progression id (read in `key`'s root with the progression's mode). Drum warnings also cover
-  the built-in `drum_machine` (notes it has no sound for, e.g. shaker or congas).
+  the built-in `drum_machine` (notes it has no sound for; since phase 18b it plays every GM
+  percussion note 35-81, so this only fires for notes outside the kit).
 - **SL-3** (partial): `cadenza library import <file.mid>` (SMF -> pattern + groove in a user
   pack: quantize, groove from timing deviations and velocities, role from GM channel 10 /
   program / register, chord-relative or scale-degree lanes through `cadenza-theory`, key

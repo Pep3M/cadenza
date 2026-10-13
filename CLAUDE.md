@@ -337,6 +337,11 @@ controllers become parameter changes through `IMidiMapping` (queried at instanti
 pressure, 129 = bend); the sandbox shm carries them (EV_CC/EV_BEND/EV_PRESSURE). Live MIDI input
 maps CC/bend/pressure to these events (`midi_io::input`).
 The built-in `compressor` has a sidechain input (detector keyed by it when set).
+`drum_machine` plays every GM percussion note 35-81 (phase 18b): kit, cymbals (china, splash,
+ride bell) and synthesized hand percussion in `instruments::percussion` (rim, tambourine,
+cowbell, bongos, congas, timbales, agogo, cabasa, shaker, whistles, guiro, claves, woodblocks,
+cuica, triangle; 8-voice pool, choke pairs; params `perc_tune/perc_decay/perc_level`);
+`drum_machine::plays(note)` drives the MCP silent-lane warnings.
 Instruments receive silence in `left/right` and must write (not add) their output.
 Events are sorted by `offset` within the block.
 
@@ -842,6 +847,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   with draggable/previewable pattern chips, sounds, mix, do/don't; form = Apply form +
   section table with energy blocks. "Credits" lists every pack (license, attribution,
   links, not-redistributable flag, location) and load problems.
+- Fonts: `theme::fonts()` appends egui's bundled Hack to the proportional family (arrows,
+  geometric shapes, block elements: `← → ◆ ● ⊘ ▍`); `proportional_fonts_cover_the_app_symbols`
+  scans the sources for non-ASCII symbols and checks each against the faces' charmaps.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
   including automation lanes, the audio editor, an empty project, (`render_sampler_screens`)

@@ -900,20 +900,36 @@ mod tests {
 	fn apply_pattern_warns_about_silent_drum_lanes_and_wrong_tracks() {
 		let mut s = session();
 		let drums = track(&mut s, "drum_machine");
-		let out = apply_pattern(
-			&mut s,
-			ApplyPatternArgs {
-				pattern: "core/perc_conga_tumbao".into(),
-				track_id: drums,
-				..Default::default()
-			},
-		)
-		.unwrap();
-		assert!(
-			out.warnings
-				.iter()
-				.any(|w| w.contains("silent on drum_machine"))
+		// Every Latin percussion pattern of the core pack sounds on the drum_machine.
+		for pattern in [
+			"core/perc_conga_tumbao",
+			"core/perc_bongo_martillo",
+			"core/perc_guiro_cha",
+			"core/perc_cha_cha_bell",
+			"core/perc_shaker_16ths",
+			"core/clave_son_23",
+		] {
+			let out = apply_pattern(
+				&mut s,
+				ApplyPatternArgs {
+					pattern: pattern.into(),
+					track_id: drums,
+					..Default::default()
+				},
+			)
+			.unwrap();
+			assert!(
+				!out.warnings.iter().any(|w| w.contains("silent")),
+				"{pattern}: {:?}",
+				out.warnings
+			);
+		}
+		let silent = crate::tools::compose::drum_lane_warnings(
+			s.document().project(),
+			drums,
+			[("high note", 100)],
 		);
+		assert!(silent[0].contains("silent on drum_machine"), "{silent:?}");
 		let out = apply_pattern(
 			&mut s,
 			ApplyPatternArgs {

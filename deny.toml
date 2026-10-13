@@ -1,0 +1,68 @@
+# cargo-deny: dependency licenses, security advisories, banned/duplicate crates and
+# sources. CI runs `cargo deny check` (see .github/workflows/ci.yml).
+#
+# Default features only: the optional `mp3` feature links LAME (LGPL) and `stretch`
+# builds Signalsmith Stretch (MIT); neither is part of the default build.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+# Unmaintained crates are reported for direct and transitive deps alike, but only
+# advisories with a vulnerability fail the check.
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.9
+# Permissive licenses (plus MPL-2.0, file-level copyleft: symphonia) that allow
+# shipping Cadenza under any license, commercial included.
+allow = [
+	"0BSD",
+	"Apache-2.0",
+	"Apache-2.0 WITH LLVM-exception",
+	"BSD-2-Clause",
+	"BSD-3-Clause",
+	"BSL-1.0",
+	"CDLA-Permissive-2.0",
+	"ISC",
+	"MIT",
+	"MPL-2.0",
+	"Unicode-3.0",
+	"Unlicense",
+	"Zlib",
+	# Fonts bundled by egui (epaint_default_fonts).
+	"OFL-1.1",
+	"Ubuntu-font-1.0",
+]
+# Cadenza's own crates (license chosen by the owner; see Cargo.toml).
+exceptions = [
+	{ crate = "cadenza-agent", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-analysis", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-app", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-audio-io", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-cli", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-core", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-dsp", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-engine", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-library", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-mcp", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-midi-io", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-model", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-plugin-host", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-test-plugins", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-theory", allow = ["GPL-3.0-or-later"] },
+]
+
+[bans]
+multiple-versions = "allow"
+# The workspace crates depend on each other by path without a version, which
+# cargo-deny counts as wildcards; registry dependencies all carry versions.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

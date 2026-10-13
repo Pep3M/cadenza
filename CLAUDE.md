@@ -13,23 +13,53 @@ text documents). We take ideas, never code or assets (clean-room).
 
 | Crate | Role | Depends on |
 |---|---|---|
-| `cadenza-core` | ids, `Tick`/`PPQ`(960), `TempoMap`, `TimeSignature`, `ParamAddress` URIs, dB helpers | — |
+| `cadenza-core` | ids, `Tick`/`PPQ`(960), `TempoMap`, `TimeSignature`, `ParamAddress` URIs, dB helpers, per-user folders (`paths`) | — |
 | `cadenza-model` | project document, `Command` enum, undo/redo `Document`, persistence, AI summary | core |
 | `cadenza-theory` | notes, scales, chord symbols, roman numerals, voicings | core |
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
-| `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | theory |
+| `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | core, theory |
 | `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
-| `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
+| `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
 | `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
 
-Future: sandbox and plugin editors on Windows/macOS, native Wayland plugin GUIs.
+Future: sandbox on Windows, plugin editors on Windows/macOS (HWND/NSView), native Wayland plugin GUIs.
+
+## Platforms, CI and releases
+
+| | Linux | macOS (arm64 + x86_64) | Windows (x86_64 MSVC) |
+|---|---|---|---|
+| build, tests | yes | yes | yes |
+| plugin sandbox | futex | `os_sync_wait_on_address` (14.4+, `dlsym`), else polling | no (`SANDBOX_SUPPORTED` false): `PluginHosting::from_env` = in-process, logged once |
+| plugin editors | X11/XWayland | no | no (`EDITORS_SUPPORTED` false: inspector "Edit" disabled with a hint, generic controls) |
+| realtime promotion | `SCHED_FIFO`/RealtimeKit | Mach time-constraint policy | `THREAD_PRIORITY_TIME_CRITICAL` |
+| per-user folders | XDG | `~/Library/{Application Support,Caches}` | `%APPDATA%` / `%LOCALAPPDATA%` |
+
+Folders come from `cadenza_core::paths::{data,config,cache,state}_dir()` (each ends in
+`cadenza`; an absolute `XDG_*_HOME` wins on every OS, which tests use). Sandbox and editor
+integration tests are `#![cfg]`-gated to the platforms that have them; `plugin_support::
+sandboxed()` is in-process on Windows so the parity tests still run. `plugin-host` allows
+dead code off Linux (that plumbing is type-checked, not wired). Cross-check locally without
+the platform: rustup targets + `cargo check/clippy --target ...` (C build scripts need a
+target C toolchain or a stub `CC_<target>`); CI is the real check.
+CI (`.github/workflows/ci.yml`, toolchain pinned in `RUST_TOOLCHAIN`): Linux fmt/clippy
+`-D warnings`/`cargo test --release` + `cargo deny check` (`deny.toml`: permissive licenses +
+MPL-2.0 + egui's font licenses, Cadenza crates as exceptions) on every push/PR; Windows and
+macOS clippy + release tests (+ `cargo check --target x86_64-apple-darwin`) only on PRs to
+main/staging, pushes to main, `v*` tags and `workflow_dispatch` (`platforms` input); docs-only
+changes skipped, superseded runs cancelled. No secrets: AI tests use the scripted provider.
+Release (`release.yml`, `v*` tags or manual; `packaging/`): Linux tar.gz + AppImage (built on
+ubuntu-22.04), Windows zip (no sandbox binary), macOS universal `Cadenza.app` (lipo, ad-hoc
+signed) in a dmg; each ships `cadenza`, `cadenza-app`, `cadenza-plugin-scanner` (+
+`cadenza-plugin-sandbox` on Unix) side by side. Tags get a draft GitHub Release; a manual run
+with `draft_release=<tag>` too (a draft creates no tag). TODO: Developer ID signing +
+notarization (macOS), Authenticode (Windows).
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
 `cadenza-audio-io` and are forwarded by `cadenza-engine` and `cadenza-cli`; both are OFF by

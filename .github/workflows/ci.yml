@@ -67,6 +67,9 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+          # Default features only (the action defaults to --all-features, which pulls
+          # in the optional LGPL `mp3` encoder).
+          arguments: --locked
 
   windows:
     name: Windows (clippy, test)
@@ -86,7 +89,7 @@ jobs:
         with:
           shared-key: windows
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --release --locked
+      - run: cargo test --workspace --release --locked --no-fail-fast
 
   macos:
     name: macOS (clippy, test; x86_64 check)
@@ -109,4 +112,4 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Check the Intel build
         run: cargo check --workspace --locked --target x86_64-apple-darwin
-      - run: cargo test --workspace --release --locked
+      - run: cargo test --workspace --release --locked --no-fail-fast

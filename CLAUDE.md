@@ -27,7 +27,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
 | `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
-| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView`) | — |
+| `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
 
 Future: sandbox and plugin editors on Windows/macOS, native Wayland plugin GUIs.
 
@@ -458,8 +458,11 @@ Plugin state is captured explicitly (MCP `capture_plugin_state`, automatically o
 and after loading a plugin preset) from a fresh instance, then stored with `SetDeviceState`.
 MCP preset tools: `list_presets`/`load_preset`/`save_preset` (user presets in
 `$CADENZA_PRESET_DIR` or `$XDG_DATA_HOME/cadenza/presets/<device id>/<name>.json`); routing tools
-`set_sidechain`, `set_output_routes`. Plugin factory presets: CLAP preset-discovery + preset-load
-(VST3 program lists not yet). Descriptors carry `sidechain_channels` and `aux_outputs` (catalog
+`set_sidechain`, `set_output_routes`. Plugin factory presets: CLAP preset-discovery + preset-load;
+VST3 `IUnitInfo` program lists (phase 19a, `Vst3Plugin::program_lists`: each list with the
+`kIsProgramChange` parameter of the unit using it; keys `vst3-program:<param>:<i>:<count>`,
+category = list name; loading sets the controller's parameter and sends it to the processor
+in a zero-sample process call; lists no parameter selects are skipped). Descriptors carry `sidechain_channels` and `aux_outputs` (catalog
 cache v2: older caches are rescanned).
 Plugin editors (phase 11, `cadenza_plugin_host::editor`): the GUI lives in the process that owns
 the instance, on its `cadenza-plugin-main` thread, which is also the plugins' event loop (poll on

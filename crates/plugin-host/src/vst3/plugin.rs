@@ -8,9 +8,9 @@ use std::sync::Arc;
 use vst3::Steinberg::Vst::{
 	BusDirections_, BusInfo, BusTypes_, IAudioProcessor, IAudioProcessorTrait, IComponent,
 	IComponentHandler, IComponentTrait, IConnectionPoint, IConnectionPointTrait, IEditController,
-	IEditControllerTrait, IMidiMapping, IMidiMappingTrait, MediaTypes_, ParameterInfo,
-	ParameterInfo_, ProcessModes_, ProcessSetup, SpeakerArr, SpeakerArrangement,
-	SymbolicSampleSizes_,
+	IEditControllerTrait, IMidiMapping, IMidiMappingTrait, IUnitInfo, IUnitInfoTrait, MediaTypes_,
+	ParameterInfo, ParameterInfo_, ProcessModes_, ProcessSetup, ProgramListInfo, SpeakerArr,
+	SpeakerArrangement, String128, SymbolicSampleSizes_, UnitInfo,
 };
 use vst3::Steinberg::{FUnknown, IPluginBaseTrait, TUID};
 use vst3::Steinberg::{kResultOk, kResultTrue};
@@ -28,6 +28,18 @@ use crate::descriptor::{PluginParam, PluginRole};
 /// absurd buffers.
 const MAX_BUSES: i32 = 16;
 const MAX_CHANNELS: u32 = 64;
+
+/// A factory program list (`IUnitInfo`) and the program-change parameter that selects
+/// its programs (normalized value = index / (count - 1)).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ProgramList {
+	pub name: String,
+	pub param: u32,
+	pub programs: Vec<String>,
+}
+
+/// More programs than this in one list are not offered (a broken count).
+const MAX_PROGRAMS: i32 = 4096;
 
 /// Result of (re-)activating an instance.
 pub(crate) struct Activation {
@@ -470,6 +482,80 @@ impl Vst3Plugin {
 				(r == kResultOk || r == kResultTrue).then_some(id)
 			})
 			.collect()
+	}
+
+	/// Factory program lists the controller offers through `IUnitInfo`, each with the
+	/// program-change parameter of the unit using it. Lists no parameter can select
+	/// are skipped; empty without `IUnitInfo`.
+	pub fn program_lists(&self) -> Vec<ProgramList> {
+		let Some(c) = &self.controller else {
+			return Vec::new();
+		};
+		let Some(units) = c.cast::<IUnitInfo>() else {
+			return Vec::new();
+		};
+		use ParameterInfo_::ParameterFlags_ as F;
+		let mut out = Vec::new();
+		// SAFETY: plain controller queries with valid, zeroed out-parameters.
+		unsafe {
+			// Program-change parameters by unit.
+			let mut changers: Vec<(i32, u32, i32)> = Vec::new();
+			for i in 0..c.getParameterCount().max(0) {
+				let mut info: ParameterInfo = std::mem::zeroed();
+				if c.getParameterInfo(i, &mut info) == kResultOk
+					&& info.flags & F::kIsProgramChange != 0
+				{
+					changers.push((info.unitId, info.id, info.stepCount));
+				}
+			}
+			let mut unit_lists: Vec<(i32, i32)> = Vec::new();
+			for i in 0..units.getUnitCount().max(0) {
+				let mut info: UnitInfo = std::mem::zeroed();
+				if units.getUnitInfo(i, &mut info) == kResultOk && info.programListId >= 0 {
+					unit_lists.push((info.id, info.programListId));
+				}
+			}
+			for i in 0..units.getProgramListCount().max(0) {
+				let mut list: ProgramListInfo = std::mem::zeroed();
+				if units.getProgramListInfo(i, &mut list) != kResultOk
+					|| !(1..=MAX_PROGRAMS).contains(&list.programCount)
+				{
+					continue;
+				}
+				let param = unit_lists
+					.iter()
+					.filter(|(_, l)| *l == list.id)
+					.find_map(|(u, _)| changers.iter().find(|(cu, _, _)| cu == u))
+					.or_else(|| (changers.len() == 1).then(|| &changers[0]));
+				let Some(&(_, param, _)) = param else {
+					continue;
+				};
+				let programs = (0..list.programCount)
+					.map(|k| {
+						let mut name: String128 = [0; 128];
+						if units.getProgramName(list.id, k, &mut name) == kResultOk {
+							from_utf16(&name)
+						} else {
+							String::new()
+						}
+					})
+					.enumerate()
+					.map(|(k, n)| {
+						if n.is_empty() {
+							format!("Program {}", k + 1)
+						} else {
+							n
+						}
+					})
+					.collect();
+				out.push(ProgramList {
+					name: from_utf16(&list.name),
+					param,
+					programs,
+				});
+			}
+		}
+		out
 	}
 
 	/// Exact plain → normalized conversion through the controller.

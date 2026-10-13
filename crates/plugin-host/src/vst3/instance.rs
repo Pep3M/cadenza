@@ -642,6 +642,75 @@ impl Processor for Vst3Processor {
 			.flatten()
 	}
 
+	/// Factory programs (`IUnitInfo` program lists). Key: `vst3-program:<param>:<index>:
+	/// <count>`; category: the list's name.
+	fn presets(&mut self) -> Vec<cadenza_dsp::PresetInfo> {
+		let key = self.key;
+		let lists = run_on_main(move |main| {
+			main.vst3
+				.instances
+				.get(&key)
+				.map(|p| p.program_lists())
+				.unwrap_or_default()
+		})
+		.unwrap_or_default();
+		lists
+			.into_iter()
+			.flat_map(|list| {
+				let count = list.programs.len();
+				list.programs.into_iter().enumerate().map(move |(i, name)| {
+					cadenza_dsp::PresetInfo {
+						key: format!("{PROGRAM_KEY}{}:{i}:{count}", list.param),
+						name,
+						category: list.name.clone(),
+					}
+				})
+			})
+			.collect()
+	}
+
+	/// Selects a factory program: the program-change parameter goes to the controller
+	/// (which updates its parameters) and, in a zero-sample process call, to the
+	/// processor. Not real-time.
+	fn load_preset(&mut self, preset: &str) -> bool {
+		let Some((param, index, count)) = parse_program_key(preset) else {
+			return false;
+		};
+		let value = if count > 1 {
+			index as f64 / (count - 1) as f64
+		} else {
+			0.0
+		};
+		let key = self.key;
+		let known = run_on_main(move |main| {
+			let Some(plugin) = main.vst3.instances.get(&key) else {
+				return false;
+			};
+			let ok = plugin
+				.program_lists()
+				.iter()
+				.any(|l| l.param == param && l.programs.len() == count);
+			if ok && let Some(c) = plugin.controller() {
+				// SAFETY: plain controller call on the main thread.
+				unsafe {
+					vst3::Steinberg::Vst::IEditControllerTrait::setParamNormalized(c, param, value)
+				};
+			}
+			ok
+		})
+		.unwrap_or(false);
+		if !known || self.audio.is_none() || self.failed {
+			return false;
+		}
+		self.flush_params();
+		self.changes.clear();
+		self.changes.push(param, value);
+		self.events.clear();
+		self.call_process(0);
+		self.changes.clear();
+		true
+	}
+
 	fn load_state(&mut self, data: &[u8]) -> bool {
 		let key = self.key;
 		let data = data.to_vec();
@@ -667,6 +736,18 @@ impl Drop for Vst3Processor {
 			main.vst3.remove(key);
 		});
 	}
+}
+
+/// Prefix of the preset keys of VST3 factory programs.
+const PROGRAM_KEY: &str = "vst3-program:";
+
+/// `(param, index, count)` of a program key.
+fn parse_program_key(key: &str) -> Option<(u32, usize, usize)> {
+	let mut parts = key.strip_prefix(PROGRAM_KEY)?.split(':');
+	let param = parts.next()?.parse().ok()?;
+	let index: usize = parts.next()?.parse().ok()?;
+	let count: usize = parts.next()?.parse().ok()?;
+	(index < count && parts.next().is_none()).then_some((param, index, count))
 }
 
 /// `IMidiMapping` slot and normalized value of a controller event (`None` for notes).

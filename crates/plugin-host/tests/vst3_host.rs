@@ -104,6 +104,40 @@ fn processes_sets_params_and_round_trips_state() {
 }
 
 #[test]
+fn factory_programs_come_from_the_unit_info_program_list() {
+	let d = descriptor();
+	let mut p = instantiate(&d, SR, BLOCK, None).unwrap();
+	let presets = p.presets();
+	let names: Vec<(&str, &str)> = presets
+		.iter()
+		.map(|p| (p.name.as_str(), p.category.as_str()))
+		.collect();
+	assert_eq!(
+		names,
+		[
+			("Unity", "Factory"),
+			("Quiet", "Factory"),
+			("Whisper", "Factory")
+		]
+	);
+	// The hidden program-change parameter stays out of the AI-facing params.
+	assert_eq!(p.info().params.len(), 2);
+	assert!((level(p.as_mut()) - 0.5).abs() < 1e-6);
+	assert!(p.load_preset(&presets[1].key), "{}", presets[1].key);
+	let quiet = level(p.as_mut());
+	assert!(
+		(quiet - 0.5 * 10f32.powf(-12.0 / 20.0)).abs() < 1e-3,
+		"{quiet}"
+	);
+	// The program sticks in the saved state.
+	let state = p.save_state().unwrap();
+	let mut restored = instantiate(&d, SR, BLOCK, Some(&state)).unwrap();
+	assert!((level(restored.as_mut()) - quiet).abs() < 1e-4);
+	assert!(!p.load_preset("vst3-program:3:7:3"));
+	assert!(!p.load_preset("unknown"));
+}
+
+#[test]
 fn instances_survive_cross_thread_create_and_drop() {
 	let d = descriptor();
 	let handles: Vec<_> = (0..4)

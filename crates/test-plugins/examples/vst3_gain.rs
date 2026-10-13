@@ -5,7 +5,10 @@
 //! `IConnectionPoint`, reports 32 samples of latency, and exposes:
 //! - param 0 "Gain": -60..12 dB (normalized linearly), default 0 dB;
 //! - param 1 "Mute": stepped switch (stepCount 1);
-//! - param 2 "Meter": read-only, which hosts must not expose.
+//! - param 2 "Meter": read-only, which hosts must not expose;
+//! - param 3 "Program": hidden program-change parameter of the root unit, whose
+//!   `IUnitInfo` program list "Factory" (id 1) holds "Unity" (0 dB), "Quiet"
+//!   (-12 dB) and "Whisper" (-30 dB); selecting one sets the gain.
 //!
 //! Component state is the gain and mute values (normalized, f64 LE); the
 //! controller state is the 4 bytes `CTRL`.
@@ -31,6 +34,14 @@ use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComRef, ComWrapper, uid};
 
 const LATENCY: u32 = 32;
+
+/// Factory programs: name and gain (dB), selected through param 3.
+const PROGRAMS: [(&str, f64); 3] = [("Unity", 0.0), ("Quiet", -12.0), ("Whisper", -30.0)];
+
+/// The program a normalized program-change value selects.
+fn program_at(value: f64) -> usize {
+	((value.clamp(0.0, 1.0) * (PROGRAMS.len() - 1) as f64).round() as usize).min(PROGRAMS.len() - 1)
+}
 
 fn copy_cstring(src: &str, dst: &mut [c_char]) {
 	for (d, s) in dst.iter_mut().zip(src.bytes().chain([0])) {
@@ -256,6 +267,11 @@ impl IAudioProcessorTrait for GainProcessor {
 				match unsafe { queue.getParameterId() } {
 					0 => self.gain.store(value.to_bits(), Ordering::Relaxed),
 					1 => self.mute.store(value.to_bits(), Ordering::Relaxed),
+					3 => {
+						let db = PROGRAMS[program_at(value)].1;
+						self.gain
+							.store(db_to_normalized(db).to_bits(), Ordering::Relaxed);
+					}
 					_ => {}
 				}
 			}
@@ -449,7 +465,92 @@ impl IPlugViewTrait for GainView {
 }
 
 impl Class for GainController {
-	type Interfaces = (IEditController, IConnectionPoint);
+	type Interfaces = (IEditController, IConnectionPoint, IUnitInfo);
+}
+
+impl IUnitInfoTrait for GainController {
+	unsafe fn getUnitCount(&self) -> i32 {
+		1
+	}
+
+	unsafe fn getUnitInfo(&self, index: i32, info: *mut UnitInfo) -> tresult {
+		if index != 0 {
+			return kInvalidArgument;
+		}
+		let info = unsafe { &mut *info };
+		info.id = kRootUnitId;
+		info.parentUnitId = kNoParentUnitId;
+		copy_wstring("Root", &mut info.name);
+		info.programListId = 1;
+		kResultOk
+	}
+
+	unsafe fn getProgramListCount(&self) -> i32 {
+		1
+	}
+
+	unsafe fn getProgramListInfo(&self, index: i32, info: *mut ProgramListInfo) -> tresult {
+		if index != 0 {
+			return kInvalidArgument;
+		}
+		let info = unsafe { &mut *info };
+		info.id = 1;
+		copy_wstring("Factory", &mut info.name);
+		info.programCount = PROGRAMS.len() as i32;
+		kResultOk
+	}
+
+	unsafe fn getProgramName(&self, list: i32, index: i32, name: *mut String128) -> tresult {
+		match PROGRAMS.get(index as usize) {
+			Some((n, _)) if list == 1 => {
+				copy_wstring(n, unsafe { &mut *name });
+				kResultOk
+			}
+			_ => kInvalidArgument,
+		}
+	}
+
+	unsafe fn getProgramInfo(
+		&self,
+		_l: i32,
+		_i: i32,
+		_a: vst3::Steinberg::Vst::CString,
+		_v: *mut String128,
+	) -> tresult {
+		kNotImplemented
+	}
+
+	unsafe fn hasProgramPitchNames(&self, _l: i32, _i: i32) -> tresult {
+		kResultFalse
+	}
+
+	unsafe fn getProgramPitchName(&self, _l: i32, _i: i32, _p: i16, _n: *mut String128) -> tresult {
+		kNotImplemented
+	}
+
+	unsafe fn getSelectedUnit(&self) -> i32 {
+		kRootUnitId
+	}
+
+	unsafe fn selectUnit(&self, _unit: i32) -> tresult {
+		kResultOk
+	}
+
+	unsafe fn getUnitByBus(
+		&self,
+		_t: MediaType,
+		_d: BusDirection,
+		_b: i32,
+		_c: i32,
+		unit: *mut i32,
+	) -> tresult {
+		unsafe { *unit = kRootUnitId };
+		kResultOk
+	}
+
+	unsafe fn setUnitProgramData(&self, _l: i32, _i: i32, _d: *mut IBStream) -> tresult {
+		kNotImplemented
+	}
 }
 
 impl GainController {
@@ -511,7 +612,7 @@ impl IEditControllerTrait for GainController {
 	}
 
 	unsafe fn getParameterCount(&self) -> i32 {
-		3
+		4
 	}
 
 	unsafe fn getParameterInfo(&self, index: i32, info: *mut ParameterInfo) -> tresult {
@@ -521,6 +622,13 @@ impl IEditControllerTrait for GainController {
 			0 => ("Gain", "dB", 0, db_to_normalized(0.0), F::kCanAutomate),
 			1 => ("Mute", "", 1, 0.0, F::kCanAutomate),
 			2 => ("Meter", "dB", 0, 0.0, F::kIsReadOnly),
+			3 => (
+				"Program",
+				"",
+				PROGRAMS.len() as i32 - 1,
+				0.0,
+				F::kIsProgramChange | F::kIsHidden | F::kIsList,
+			),
 			_ => return kInvalidArgument,
 		};
 		info.id = index as u32;
@@ -568,6 +676,9 @@ impl IEditControllerTrait for GainController {
 		match id {
 			0 => self.gain.set(value),
 			1 => self.mute.set(value),
+			3 => self
+				.gain
+				.set(db_to_normalized(PROGRAMS[program_at(value)].1)),
 			_ => return kInvalidArgument,
 		}
 		kResultOk

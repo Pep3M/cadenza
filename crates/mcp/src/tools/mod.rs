@@ -7,6 +7,7 @@ pub mod clips;
 pub mod compose;
 pub mod controllers;
 pub mod devices;
+pub mod library;
 pub mod midi;
 pub mod playback;
 pub mod portable;

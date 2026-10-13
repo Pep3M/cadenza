@@ -27,8 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, controllers, devices, midi, playback, portable, presets,
-	project, render, samples, tracks,
+	arrange, audio, clips, compose, controllers, devices, library, midi, playback, portable,
+	presets, project, render, samples, tracks,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -50,6 +50,11 @@ like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_no
 `scale_info`/`snap_to_scale` to keep melodies in key, `quantize_notes`/`humanize_notes`/\
 `transpose_notes` to shape them. Add expression with `set_controller_events`/\
 `draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend).\n\
+Style library: for a genre request, `library_search` kind style for it and `library_get` \
+the guide before deciding the song (tempo, form, progressions, pattern ids per role and \
+section, sounds, mix, do/don't); prefer `apply_form` + `apply_pattern` from the guide over \
+writing grooves note by note; vary with `fill_every`/`vary`, then edit by hand only what \
+makes the song unique (melody, hook). Clips named `Name [pack/id]` came from the library.\n\
 4. Route tracks to reverb/delay buses with `create_track` (kind: bus) + `add_send`; shape \
 tone with `insert_device`/`set_device_params` on a track or the master.\n\
 Samples: the built-in `drum_sampler` (16 GM pads, starts with the factory 'Synth Kit') and \
@@ -891,9 +896,9 @@ impl CadenzaServer {
 	#[tool(
 		description = "Writes a drum pattern into a new MIDI clip from ASCII step grids, one per \
 			GM lane (kick, snare, clap, rim, closed_hat, pedal_hat, open_hat, low_tom, mid_tom, \
-			high_tom, crash, ride, tambourine, cowbell, or any note name/MIDI number); plays on \
-			drum_machine and drum_sampler alike (warnings name lanes a drum_sampler has no \
-			sample for). Steps: X accent, x normal, o ghost, '.'/'-' rest; \
+			high_tom, crash, ride, tambourine, cowbell, shaker, claves, hi_bongo, open_conga..., \
+			or any note name/MIDI number); plays on drum_machine and drum_sampler alike \
+			(warnings name lanes the kit cannot play). Steps: X accent, x normal, o ghost, '.'/'-' rest; \
 			spaces and '|' are ignored; the pattern repeats to fill the requested bars."
 	)]
 	fn write_drum_pattern(
@@ -921,6 +926,66 @@ impl CadenzaServer {
 		Parameters(args): Parameters<compose::SnapToScaleArgs>,
 	) -> Result<(), ErrorData> {
 		self.run_mut(|s| compose::snap_to_scale(s, args))
+	}
+
+	// -- style library -----------------------------------------------------------------
+
+	#[tool(
+		description = "Searches the style library: genre style guides (kind style), song forms, \
+			chord progressions, grooves and MIDI patterns by role (drums, perc, bass, comping, \
+			arp, pad, lead, fill). Ranks word matches over ids, names, genres and tags; filter \
+			by kind, genre, role, section, energy (1-5) and family. Returns cards {id, kind, \
+			summary, facts}; read the full item with library_get."
+	)]
+	fn library_search(
+		&self,
+		Parameters(args): Parameters<library::LibrarySearchArgs>,
+	) -> Result<Json<library::LibrarySearchOutput>, ErrorData> {
+		Ok(Json(library::library_search(&mut self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Reads 1-5 library items in full: a style guide is the song plan (tempo, \
+			feel, keys, progressions, forms, pattern ids per role and section, sounds, mix, \
+			do/don't); a form lists sections with bars, energy and roles; a pattern is step \
+			grids per lane (X accent, x normal, o ghost, = tie, . rest; lanes are drums, chord \
+			tones R 3 5 7, chord, bass, app/ant or scale degrees ^1..^7)."
+	)]
+	fn library_get(
+		&self,
+		Parameters(args): Parameters<library::LibraryGetArgs>,
+	) -> Result<Json<library::LibraryGetOutput>, ErrorData> {
+		Ok(Json(library::library_get(&mut self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Writes a library pattern into a new MIDI clip on an instrument track (one \
+			undo step). Chord patterns (bass, comping, arp, pad) need chords: symbols \
+			(\"Am F C G\"), roman numerals with key, or a progression id with key; lead/hook \
+			patterns need key. bars repeats the pattern; fill_every n puts the family's fill in \
+			the last bar of every n; vary alternates main and variation; groove, velocity and \
+			octave shape it. Returns the clip id and a one-line summary (no need to read the \
+			notes back) plus warnings (e.g. drum lanes the track's kit cannot play)."
+	)]
+	fn apply_pattern(
+		&self,
+		Parameters(args): Parameters<library::ApplyPatternArgs>,
+	) -> Result<Json<library::ApplyPatternOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| library::apply_pattern(s, args))?))
+	}
+
+	#[tool(
+		description = "Lays out a library song form: one marker per section from start_bar \
+			(replacing markers already there), optionally the tempo, and the song's style guide \
+			id (stored in the project, shown by get_project). One undo step. Returns the section \
+			table {name, start_beat, start_bar, bars, energy, roles, ending} to place patterns \
+			with apply_pattern."
+	)]
+	fn apply_form(
+		&self,
+		Parameters(args): Parameters<library::ApplyFormArgs>,
+	) -> Result<Json<library::ApplyFormOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| library::apply_form(s, args))?))
 	}
 
 	// -- arrangement -------------------------------------------------------------------

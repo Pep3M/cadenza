@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cadenza_engine::PluginHosting;
+use cadenza_library::Library;
 use cadenza_model::{Document, Project};
 use cadenza_plugin_host::{PluginCatalog, default_cache_path};
 
@@ -30,6 +31,8 @@ pub struct Session {
 	plugin_hosting: PluginHosting,
 	/// User presets (`<dir>/<device id>/<name>.json`).
 	preset_dir: PathBuf,
+	/// The style library (core pack + user packs), loaded on first use.
+	library: Option<Arc<Library>>,
 }
 
 impl Session {
@@ -49,6 +52,7 @@ impl Session {
 			plugins: None,
 			plugin_hosting: PluginHosting::default(),
 			preset_dir: crate::tools::presets::default_preset_dir(),
+			library: None,
 		}
 	}
 
@@ -123,6 +127,20 @@ impl Session {
 		self.plugins
 			.get_or_insert_with(|| Arc::new(PluginCatalog::load_or_default(&self.plugin_cache)))
 			.clone()
+	}
+
+	/// The style library: the embedded `core` pack plus the user packs of
+	/// [`cadenza_library::default_library_dir`], loaded on first use (invalid packs are
+	/// reported in `Library::reports`, never fatal).
+	pub fn library(&mut self) -> Arc<Library> {
+		self.library
+			.get_or_insert_with(|| Arc::new(Library::load_default()))
+			.clone()
+	}
+
+	/// Replaces the library (tests use `Library::core()`; the app shares its own).
+	pub fn set_library(&mut self, library: Arc<Library>) {
+		self.library = Some(library);
 	}
 
 	/// Where plugin devices run (default: sandboxed unless

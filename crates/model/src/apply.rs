@@ -1052,6 +1052,12 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			Ok(vec![Command::AddMarker { marker: removed }])
 		}
 
+		Command::SetProjectMeta { meta } => {
+			validate::meta(meta)?;
+			let old = std::mem::replace(&mut project.meta, meta.clone());
+			Ok(vec![Command::SetProjectMeta { meta: old }])
+		}
+
 		Command::Batch { label, commands } => {
 			if commands.is_empty() {
 				return Err(ModelError::EmptyBatch {

@@ -20,6 +20,10 @@ pub const SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, arranger
 2. Decide the song: tempo, key, meter and form. Convert the requested duration into bars at your tempo (seconds = bars x beats per bar x 60 / bpm). Create the project and mark the sections (Intro, Verse, Chorus, Bridge, Outro...) with add_marker.
 3. Create tracks with instruments that suit the brief; name and color them.
 4. Write the parts section by section. write_chord_progression and write_drum_pattern are quick for harmony and grooves; write melodies, bass lines, counter-lines and fills note by note with add_midi_clip and add_notes. scale_info and snap_to_scale keep lines in key.
+
+# Style library
+- For a genre request, library_search kind=style for it and library_get the guide before deciding the song: it gives tempo, form, progressions, pattern ids per role and section, sounds, mix targets and the genre's do/don't.
+- Prefer apply_form + apply_pattern from the guide over writing grooves note by note; vary with fill_every/vary, then edit by hand only what makes the song unique (melody, hook).
 5. Arrange: duplicate_clip and then vary the copy, so repeats are never identical. Change voicings, rhythm, register and density, add fills and transitions, drop instruments out and bring them back.
 6. Mix: gain staging, EQ, compression, reverb and delay buses fed by add_send, panning, and a master chain. Then run analyze_mix and act on its observations until it reads well.
 7. Save the project and render it to the file names given in the session settings, then reply with a short summary.
@@ -147,8 +151,9 @@ pub const LENGTH_TOOL_ERROR: &str = "Not executed: your reply hit the output lim
 pub const HANDOFF_REQUEST: &str = "Context checkpoint: this conversation is long and is about \
 	to be condensed. Do not call any tools in this reply. Write a hand-off note for yourself \
 	covering: the plan (form with beat ranges, tempo, key, progressions per section), what is \
-	done, what remains, every important id (tracks, buses, clips, devices) with its role, mix \
-	decisions so far and the latest analyze_mix readings.";
+	done, what remains, every important id (tracks, buses, clips, devices) with its role, the \
+	style library ids in use (style guide, form, patterns), mix decisions so far and the \
+	latest analyze_mix readings.";
 
 pub fn resumed_user_message(initial: &str, handoff: &str, project_state: &str) -> String {
 	format!(
@@ -181,6 +186,10 @@ pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, 
 # Musical craft
 - Voice-lead chords; give each part its own register; leave space. Melodies need a motif, repetition with variation and phrases that breathe; bass lines lock with the kick and outline the harmony.
 - Vary velocities and timing so parts feel played (humanize_notes, accents, ghost notes); quantize only what should be tight.
+
+# Style library
+- For a genre request, library_search kind=style and library_get the guide first (get_project's `style` names the song's guide when one was applied); prefer apply_form + apply_pattern from it over writing grooves note by note, varied with fill_every/vary.
+- A clip named "Name [pack/id]" came from the library: to change its feel ("more energy", "busier"), library_search the same family or role with another energy and apply that pattern instead of rewriting notes.
 
 # Working style
 - Start with a sentence on what you will do, then do it. Be economical: every turn and tool result costs time and money, so prefer fewer, well-formed calls and don't re-read state you already know.
@@ -293,7 +302,8 @@ pub const SESSION_HANDOFF_REQUEST: &str = "Context checkpoint: this conversation
 	is about to be condensed. Do not call any tools in this reply. Write a hand-off note for \
 	yourself covering: what the user asked for so far and what was done, preferences they \
 	expressed, the song's form (sections with beat ranges), tempo and key, important ids \
-	(tracks, buses, clips, devices) with their roles, and anything still open.";
+	(tracks, buses, clips, devices) with their roles, the style library ids in use (style \
+	guide, form, patterns), and anything still open.";
 
 /// The first message after condensing an in-app conversation.
 pub fn session_resumed_message(handoff: &str, project_state: &str) -> String {

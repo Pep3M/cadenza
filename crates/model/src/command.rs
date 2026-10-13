@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::project::{
-	AutomationPoint, Clip, ClipFade, Device, Marker, Note, Output, OutputRoute, Send,
+	AutomationPoint, Clip, ClipFade, Device, Marker, Note, Output, OutputRoute, ProjectMeta, Send,
 	SidechainSource, Take, Track, TrackInput,
 };
 use crate::sample::SampleZone;
@@ -229,6 +229,10 @@ pub enum Command {
 	RemoveMarker {
 		tick: Tick,
 	},
+	/// Replaces the song metadata (style guide id).
+	SetProjectMeta {
+		meta: ProjectMeta,
+	},
 	/// Applies all commands atomically: if one fails, nothing changes. Undone as one step.
 	Batch {
 		label: String,
@@ -373,6 +377,7 @@ impl Command {
 			Self::SetAutomation { .. } => "set_automation",
 			Self::AddMarker { .. } => "add_marker",
 			Self::RemoveMarker { .. } => "remove_marker",
+			Self::SetProjectMeta { .. } => "set_project_meta",
 			Self::Batch { .. } => "batch",
 		}
 	}
@@ -512,6 +517,10 @@ impl Command {
 			Self::SetAutomation { .. } => "Write automation".into(),
 			Self::AddMarker { marker } => format!("Add marker '{}'", marker.name),
 			Self::RemoveMarker { .. } => "Remove marker".into(),
+			Self::SetProjectMeta { meta } => match &meta.style {
+				Some(style) => format!("Set song style to '{style}'"),
+				None => "Clear song style".into(),
+			},
 			Self::Batch { label, .. } => label.clone(),
 		}
 	}

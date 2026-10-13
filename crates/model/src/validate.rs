@@ -9,7 +9,7 @@ use cadenza_core::{
 use crate::error::ModelError;
 use crate::project::{
 	AutomationPoint, Channel, Clip, ClipContent, Device, Note, Output, OutputRoute, Project,
-	SidechainSource, Track, TrackKind,
+	ProjectMeta, SidechainSource, Track, TrackKind,
 };
 
 /// Highest extra output port an instrument route may use.
@@ -161,6 +161,21 @@ pub(crate) fn name(what: &str, name: &str) -> Result<(), ModelError> {
 	} else {
 		Ok(())
 	}
+}
+
+pub(crate) fn meta(meta: &ProjectMeta) -> Result<(), ModelError> {
+	if let Some(style) = &meta.style {
+		let ok =
+			!style.trim().is_empty() && style.len() <= 200 && !style.chars().any(char::is_control);
+		if !ok {
+			return Err(ModelError::invalid(
+				"song style",
+				format!("{style:?}"),
+				"a library style id like \"core/latin_pop\" (1-200 chars)",
+			));
+		}
+	}
+	Ok(())
 }
 
 pub(crate) fn color(color: &str) -> Result<(), ModelError> {
@@ -885,6 +900,7 @@ pub(crate) fn location(track: Option<TrackId>) -> String {
 /// Full consistency check of a whole project (used when loading files).
 pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	name("project", &project.name)?;
+	meta(&project.meta)?;
 	time_signature(project.time_signature)?;
 	for t in &project.tracks {
 		if project.folders_of(t.id).contains(&t.id) {

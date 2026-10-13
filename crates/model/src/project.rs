@@ -38,6 +38,24 @@ pub struct Project {
 	/// Song sections (Intro, Verse 1, Chorus...). Kept sorted by tick, one per tick.
 	#[serde(default)]
 	pub markers: Vec<Marker>,
+	/// What the song is (its style guide); missing in older files.
+	#[serde(default, skip_serializing_if = "ProjectMeta::is_empty")]
+	pub meta: ProjectMeta,
+}
+
+/// Song-level metadata that has no effect on the sound.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectMeta {
+	/// Library style guide the song follows ("core/latin_pop"), so any session can re-read
+	/// the plan with `library_get`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub style: Option<String>,
+}
+
+impl ProjectMeta {
+	pub fn is_empty(&self) -> bool {
+		self.style.is_none()
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -404,6 +422,7 @@ impl Project {
 			master: Channel::default(),
 			automation: Vec::new(),
 			markers: Vec::new(),
+			meta: ProjectMeta::default(),
 		}
 	}
 

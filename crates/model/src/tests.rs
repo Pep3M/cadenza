@@ -2517,3 +2517,30 @@ fn folder_tracks_hold_tracks_and_reparent_on_removal() {
 	let json = p.to_json_string().unwrap();
 	assert_eq!(Project::from_json_str(&json).unwrap(), p);
 }
+
+#[test]
+fn project_meta_is_undoable_validated_and_optional_in_json() {
+	let project = Project::new("Song");
+	let after = round_trip(
+		&project,
+		Command::SetProjectMeta {
+			meta: crate::ProjectMeta {
+				style: Some("core/latin_pop".into()),
+			},
+		},
+	);
+	assert_eq!(after.meta.style.as_deref(), Some("core/latin_pop"));
+	assert_eq!(after.summary().style.as_deref(), Some("core/latin_pop"));
+	let json = serde_json::to_string(&after).unwrap();
+	assert!(json.contains("\"meta\":{\"style\":\"core/latin_pop\"}"));
+	assert!(!serde_json::to_string(&project).unwrap().contains("meta"));
+	let mut doc = Document::new(project);
+	assert!(
+		doc.execute(Command::SetProjectMeta {
+			meta: crate::ProjectMeta {
+				style: Some(" ".into())
+			}
+		})
+		.is_err()
+	);
+}

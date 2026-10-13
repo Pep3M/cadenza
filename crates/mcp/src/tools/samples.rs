@@ -14,26 +14,8 @@ use crate::error::McpError;
 use crate::session::Session;
 
 /// Drum lane / pad names accepted wherever a pad is expected (besides note names and
-/// numbers and the drum_sampler's own pad names).
-pub const DRUM_LANES: &[(&str, u8)] = &[
-	("kick", 36),
-	("kick2", 35),
-	("rim", 37),
-	("snare", 38),
-	("clap", 39),
-	("snare2", 40),
-	("low_tom", 41),
-	("closed_hat", 42),
-	("hat", 42),
-	("pedal_hat", 44),
-	("mid_tom", 45),
-	("open_hat", 46),
-	("high_tom", 48),
-	("crash", 49),
-	("ride", 51),
-	("tambourine", 54),
-	("cowbell", 56),
-];
+/// numbers and the drum_sampler's own pad names): the style library's GM table.
+pub use cadenza_library::DRUM_LANES;
 
 /// The note of a pad given as a lane name ("kick", "open_hat"), a drum_sampler pad name
 /// ("Closed Hat"), a note name ("C2") or a MIDI number ("36").
@@ -56,6 +38,7 @@ pub fn pad_note(name: &str) -> Result<u8, McpError> {
 		McpError::Invalid(format!(
 			"pad '{name}' is not a drum name or note; use kick, snare, clap, rim, closed_hat, \
 			 pedal_hat, open_hat, low_tom, mid_tom, high_tom, crash, ride, tambourine, cowbell, \
+			 shaker, claves, hi_bongo, low_bongo, open_conga, mute_conga, low_conga, guiro, \
 			 a note name (\"C2\") or a MIDI number (36)"
 		))
 	})

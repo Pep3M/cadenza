@@ -1,7 +1,8 @@
 # Style library: patterns, song forms and style guides
 
-Status: design draft (2026-10-12); **SL-1 shipped** (2026-10-13, phase 18a): the
-`cadenza-library` crate with the embedded `core` pack. See "What shipped" at the end.
+Status: design draft (2026-10-12); **SL-1 and SL-2 shipped** (2026-10-13, phase 18a): the
+`cadenza-library` crate with the embedded `core` pack and the four MCP tools. See "What
+shipped" at the end.
 
 This is a separate roadmap from the main build phases (phase 11, 12, 13, 13b... in
 `CLAUDE.md`). Its steps are numbered **SL-1 to SL-5** ("style library") so they never get
@@ -370,3 +371,8 @@ Independent of the main phases. Each step ships on its own and leaves the tree g
   - No on-disk `index.json`: packs are parsed once at startup (fast at this size) and the
     cards are built in memory.
   - Budgets also cover forms (2,000 chars), progressions (600) and grooves (1,200).
+- **SL-2** (`crates/mcp/src/tools/library.rs`): `library_search`, `library_get`,
+  `apply_pattern`, `apply_form` as designed, plus `Project.meta.style` (the open question:
+  answered yes; set by `apply_form`, shown in the project summary). `chords` also accepts a
+  progression id (read in `key`'s root with the progression's mode). Drum warnings also cover
+  the built-in `drum_machine` (notes it has no sound for, e.g. shaker or congas).

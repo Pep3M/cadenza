@@ -22,6 +22,7 @@ thiserror.workspace = true
 tracing.workspace = true
 zip.workspace = true
 sha2.workspace = true
+cadenza-library.workspace = true
 
 [dev-dependencies]
 rmcp = { version = "3.5", features = ["client"] }

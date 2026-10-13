@@ -205,6 +205,48 @@ fn lane_pitch(name: &str) -> Result<u8, McpError> {
 	crate::tools::samples::pad_note(name)
 }
 
+/// GM notes the built-in `drum_machine` has a sound for.
+const DRUM_MACHINE_NOTES: &[u8] = &[
+	35, 36, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 57, 59,
+];
+
+/// Lanes the track's drum instrument would leave silent: a drum_sampler pad with no sample,
+/// or a note the drum_machine has no sound for.
+pub(crate) fn drum_lane_warnings<'a>(
+	project: &cadenza_model::Project,
+	track: TrackId,
+	lanes: impl IntoIterator<Item = (&'a str, u8)>,
+) -> Vec<String> {
+	let Some(device) = project.track(track).and_then(|t| t.instrument.as_ref()) else {
+		return Vec::new();
+	};
+	let mut warnings = Vec::new();
+	for (lane, pitch) in lanes {
+		match device.builtin_id() {
+			Some("drum_sampler")
+				if !device
+					.zones
+					.iter()
+					.any(|z| z.matches(pitch, 1.0) || z.matches(pitch, 0.5)) =>
+			{
+				warnings.push(format!(
+					"lane '{lane}' ({pitch}) has no sample on '{}': load one with load_sample pad \
+					 \"{lane}\" or use another lane",
+					device.name
+				));
+			}
+			Some("drum_machine") if !DRUM_MACHINE_NOTES.contains(&pitch) => {
+				warnings.push(format!(
+					"lane '{lane}' ({pitch}) is silent on drum_machine (it plays kick, snare, clap, \
+					 hats, toms, crash and ride): use a drum_sampler with a sample on that pad"
+				));
+			}
+			_ => {}
+		}
+	}
+	warnings
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteDrumPatternArgs {
 	pub track_id: TrackId,
@@ -256,29 +298,17 @@ pub fn write_drum_pattern(
 	let total_steps = (total_beats * steps_per_beat as f64).round() as usize;
 	let step_beats = 1.0 / steps_per_beat as f64;
 
-	let drum_sampler = session
-		.document()
-		.project()
-		.track(args.track_id)
-		.and_then(|t| t.instrument.as_ref())
-		.filter(|d| d.builtin_id() == Some("drum_sampler"))
-		.cloned();
-	let mut warnings = Vec::new();
-	let mut notes = Vec::new();
+	let mut lanes = Vec::with_capacity(args.lanes.len());
 	for (lane, pattern) in &args.lanes {
-		let pitch = lane_pitch(lane)?;
-		if let Some(d) = &drum_sampler
-			&& !d
-				.zones
-				.iter()
-				.any(|z| z.matches(pitch, 1.0) || z.matches(pitch, 0.5))
-		{
-			warnings.push(format!(
-				"lane '{lane}' ({pitch}) has no sample on '{}': load one with load_sample pad \
-				 \"{lane}\" or use another lane",
-				d.name
-			));
-		}
+		lanes.push((lane.clone(), lane_pitch(lane)?, pattern));
+	}
+	let warnings = drum_lane_warnings(
+		session.document().project(),
+		args.track_id,
+		lanes.iter().map(|(l, p, _)| (l.as_str(), *p)),
+	);
+	let mut notes = Vec::new();
+	for (lane, pitch, pattern) in lanes {
 		let cleaned: Vec<char> = pattern
 			.chars()
 			.filter(|c| !matches!(c, ' ' | '|'))

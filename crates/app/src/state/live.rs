@@ -74,6 +74,8 @@ pub fn diff(old: &Project, new: &Project, live_state: LiveState) -> Option<LiveC
 		changes.automation = true;
 		normalized.automation = new.automation.clone();
 	}
+	// Song metadata does not sound.
+	normalized.meta = new.meta.clone();
 	(normalized == *new).then_some(changes)
 }
 

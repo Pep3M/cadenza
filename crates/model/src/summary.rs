@@ -16,6 +16,9 @@ use crate::sample::{LoopMode, SampleZone};
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ProjectSummary {
 	pub name: String,
+	/// Library style guide the song follows: `library_get` it to re-read the plan.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub style: Option<String>,
 	pub tempo: Vec<TempoSummary>,
 	/// Time signature of bar 1, e.g. "4/4".
 	pub time_signature: String,
@@ -173,6 +176,7 @@ impl Project {
 		let length = beats(self.end_tick());
 		ProjectSummary {
 			name: self.name.clone(),
+			style: self.meta.style.clone(),
 			tempo: self
 				.tempo
 				.points()

@@ -256,6 +256,23 @@ id/name/aliases/genres/tags/family/summary (accents folded, `section_name` maps 
 -> chorus, "Pre-chorus" -> pre; fills demoted unless asked); `card(item)` -> `{id, kind,
 name, summary, facts}`; `family_member(pattern, variant)`; `parse_chords` (symbols or roman
 numerals with a key, mixable).
+MCP (`tools::library`; `Session::library()` loads `Library::load_default` on first use,
+`set_library` for tests/the app): `library_search { query, kind, genre, role, section, energy,
+family, limit (8, max 25) }` -> `{cards: [{id, kind, summary, facts}], total}`; `library_get {
+ids (<= 5) }` -> items as stored + pack `license` (unknown ids suggest the closest);
+`apply_pattern { pattern, track_id, start_beat, bars, key, chords (symbols | roman + key |
+progression id + key), beats_per_chord, fill_every, vary, groove ("none" drops the
+default), velocity, octave }` -> one `AddClip` named `Name [pack/id]` + `{clip_id,
+length_beats, summary, warnings}` (drum lanes go through `compose::drum_lane_warnings`, shared
+with `write_drum_pattern`: drum_sampler pads without samples, notes drum_machine cannot play;
+meter mismatch; pitched pattern on a drum kit); `build_pattern_clip(project, library, args)`
+is the pure builder (the app's drag and drop uses it). `apply_form { form, start_bar, tempo,
+style }` -> one `Batch` "Apply form '<name>'" (markers replacing ones at the same tick,
+SetTempo, `SetProjectMeta` with the style: explicit or the one style listing the form) +
+section table; `build_form` is pure. `Project.meta: ProjectMeta { style }` (optional in
+JSON, format_version 1; `Command::SetProjectMeta`, no sound: `live::diff` ignores it) and
+`ProjectSummary.style`. Budget test: `search_and_get_outputs_stay_under_their_caps`. Agent
+prompts carry the library lines; hand-off notes keep the library ids.
 
 ### cadenza-dsp
 

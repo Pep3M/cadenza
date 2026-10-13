@@ -6,8 +6,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use cadenza_analysis::detail::{Detail, DetailAnalyzer};
 use cadenza_audio_io::{AudioBuffer, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
-use cadenza_core::Tick;
+use cadenza_core::{Tick, TrackId};
 use cadenza_model::{Project, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, ProcessMode};
 
@@ -214,17 +215,12 @@ pub(crate) fn render_analyzed_with(
 		.iter()
 		.zip(&tracks)
 		.map(|(node, a)| {
-			let kind = match node.source {
-				Source::Instrument { .. } => TrackKind::Instrument,
-				Source::Audio { .. } => TrackKind::Audio,
-				Source::Bus { .. } => TrackKind::Bus,
-			};
 			(
 				node.display_index,
 				TrackLevel {
 					track_id: node.track_id,
 					name: node.name.clone(),
-					kind,
+					kind: node_kind(&node.source),
 					stats: a.finish(),
 				},
 			)
@@ -243,6 +239,109 @@ pub(crate) fn render_analyzed_with(
 			.collect(),
 		master: master.finish(),
 		tracks: track_levels.into_iter().map(|(_, t)| t).collect(),
+	})
+}
+
+fn node_kind(source: &Source) -> TrackKind {
+	match source {
+		Source::Instrument { .. } => TrackKind::Instrument,
+		Source::Audio { .. } => TrackKind::Audio,
+		Source::Bus { .. } => TrackKind::Bus,
+	}
+}
+
+/// One channel of a [`DetailedMix`]: its post-fader output.
+#[derive(Debug, Clone)]
+pub struct TrackDetail {
+	pub track_id: TrackId,
+	pub name: String,
+	pub kind: TrackKind,
+	pub detail: Detail,
+}
+
+/// [`analyze_mix`] plus spectrum, stereo image and octave timeline of the master and of every
+/// channel (tracks and buses, display order): the input of the mix assistant's issues,
+/// masking and reference comparison.
+#[derive(Debug, Clone)]
+pub struct DetailedMix {
+	pub report: MixReport,
+	pub master: Detail,
+	pub tracks: Vec<TrackDetail>,
+}
+
+/// Renders and analyzes the mix in detail (offline, like an export). `progress` gets the
+/// rendered fraction now and then; returning `false` cancels ([`EngineError::Cancelled`]).
+pub fn analyze_mix_detailed(
+	project: &Project,
+	opts: &RenderOptions,
+	progress: &mut dyn FnMut(f32) -> bool,
+) -> Result<DetailedMix, EngineError> {
+	let (graph, len) = prepare(project, opts)?;
+	let sr = graph.sample_rate();
+	let start = graph.position_sample();
+	let meta: Vec<(usize, TrackId, String, TrackKind)> = graph
+		.nodes
+		.iter()
+		.map(|n| {
+			(
+				n.display_index,
+				n.track_id,
+				n.name.clone(),
+				node_kind(&n.source),
+			)
+		})
+		.collect();
+	let mut master = DetailAnalyzer::new(sr);
+	let mut channels: Vec<DetailAnalyzer> = meta.iter().map(|_| DetailAnalyzer::new(sr)).collect();
+	let mut last_report = 0usize;
+	let mut hook = |graph: &Graph, pos: i64, rendered: usize, total: usize| {
+		// Same alignment as the per-track level analyzers.
+		for (node, analyzer) in graph.nodes.iter().zip(&mut channels) {
+			let first = start + node.out_latency as i64 - pos;
+			let last = start + len as i64 + node.out_latency as i64 - pos;
+			let from = first.clamp(0, QUANTUM as i64) as usize;
+			let to = last.clamp(0, QUANTUM as i64) as usize;
+			if from < to {
+				analyzer.push(&node.buf.l[from..to], &node.buf.r[from..to]);
+			}
+		}
+		if rendered - last_report >= 16_384 || rendered == total {
+			last_report = rendered;
+			if !progress(rendered as f32 / total.max(1) as f32) {
+				return Err(EngineError::Cancelled);
+			}
+		}
+		Ok(())
+	};
+	let report = render_analyzed_with(
+		graph,
+		len,
+		|l, r| {
+			master.push(l, r);
+			Ok(())
+		},
+		&mut hook,
+	)?;
+	let mut tracks: Vec<(usize, TrackDetail)> = meta
+		.into_iter()
+		.zip(channels)
+		.map(|((index, track_id, name, kind), a)| {
+			(
+				index,
+				TrackDetail {
+					track_id,
+					name,
+					kind,
+					detail: a.finish(),
+				},
+			)
+		})
+		.collect();
+	tracks.sort_by_key(|(i, _)| *i);
+	Ok(DetailedMix {
+		report,
+		master: master.finish(),
+		tracks: tracks.into_iter().map(|(_, t)| t).collect(),
 	})
 }
 

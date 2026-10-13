@@ -745,6 +745,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadenza-analysis"
+version = "0.1.0"
+dependencies = [
+ "cadenza-core",
+ "realfft",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cadenza-app"
 version = "0.1.0"
 dependencies = [
@@ -832,6 +843,7 @@ version = "0.1.0"
 name = "cadenza-engine"
 version = "0.1.0"
 dependencies = [
+ "cadenza-analysis",
  "cadenza-audio-io",
  "cadenza-core",
  "cadenza-dsp",

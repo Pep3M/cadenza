@@ -104,7 +104,7 @@ impl BandMeter {
 			if self.samples == 0 {
 				crate::FLOOR_DB
 			} else {
-				crate::analysis::power_db(e / self.samples as f64)
+				crate::power_db(e / self.samples as f64)
 			}
 		})
 	}

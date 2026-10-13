@@ -30,6 +30,7 @@ mod schedule;
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
 pub use automation::AutomationBindings;
 pub use bounce::{BounceScope, bounce_project, render_track};
+pub use cadenza_analysis::detail::Detail;
 pub use cadenza_audio_io::Metadata;
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 pub use cadenza_midi_io::PortInfo as MidiPort;
@@ -57,8 +58,9 @@ pub use record::{
 	Recording, RecordingMonitor, record_commands,
 };
 pub use render::{
-	EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, analyze_mix,
-	export_options_for_path, render_offline, render_to_file, render_to_wav,
+	DetailedMix, EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, TrackDetail,
+	analyze_mix, analyze_mix_detailed, export_options_for_path, render_offline, render_to_file,
+	render_to_wav,
 };
 pub use samples::{auto_zone, detect_root};
 
@@ -76,7 +78,7 @@ pub const LIVE_EVENT_CAPACITY: usize = 512;
 pub const PREVIEW_RELEASE_SECONDS: f32 = 1.5;
 
 /// Finite stand-in for -inf dB (silence) so reports stay valid JSON.
-pub const FLOOR_DB: f32 = -144.0;
+pub const FLOOR_DB: f32 = cadenza_analysis::FLOOR_DB;
 
 /// Upper bound on the effect tail appended to renders with `end: None`.
 pub const MAX_TAIL_SECONDS: f32 = 10.0;

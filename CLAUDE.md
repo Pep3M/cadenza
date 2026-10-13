@@ -19,8 +19,9 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | theory |
+| `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
-| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis, realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io |
+| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
@@ -285,6 +286,32 @@ realizing the result over the same chords gives the quantized notes back. Writes
 `<library dir>/user`, created with `LicenseRef-user-imports`, not redistributable) and
 re-validates it. `cadenza library validate <pack or library folder>` exits 1 on problems;
 `list [--items] [--json]`. Nothing is downloaded.
+
+### cadenza-analysis (phase 18b)
+
+Pure, offline (allocates; never on the audio thread). The level meters moved here from the
+engine (`levels`, `loudness`, `bands`, `Analyzer -> LevelStats`; the engine re-exports them).
+`spectrum::SpectrumAnalyzer` (realfft, 8192-point Hann, 50 % hop): mean third-octave mid/side
+levels (`THIRD_OCTAVE_HZ`, 31 bands; band power = mean square, so a sine reads its RMS),
+`Stereo { width (side share), low_correlation, low_side_db }` below 120 Hz, and a `Timeline`
+of octave levels (`OCTAVE_HZ`, 10 bands) per hop. `detail::DetailAnalyzer -> Detail` = both.
+`roles::Role` (kick, drums, perc, bass, keys, guitar, pad, lead, vocal, strings, brass, fx,
+other; `infer_role(name, instrument, library hints)`, `balance_db`, `high_pass_hz`,
+`ownership(octave)`). `masking::masking` ranks pairs colliding in the same octave band at
+the same time (both within 10 dB of the band total and 6 dB of each other; best band per
+pair; `cut` = lower owner, else less energy share). `targets::MixTargets { lufs,
+true_peak_db, profile: ToneProfile (pop/electronic/hiphop/rock/acoustic/orchestral curves),
+roles, notes, source }` (`from_style`, default -14 LUFS / -1 dBTP / pop).
+`issues::find_issues(master, tracks, targets, masking, warnings) -> Vec<Issue { id "i1",
+severity, kind, track_id, message, moves }>` (clipping/true peak, loudness via limiter drive or
+fader, phase, narrow image, wide low end, tone balance vs curve, over-compression, hot
+channels, role balance vs median anchor, rumble -> high-pass, masking -> bell cut).
+`moves::MixMove` (tagged `move`: gain, pan, eq {kind bell|low_shelf|high_shelf|high_pass|
+low_pass}, compressor, limiter, send) is the fix vocabulary. `reference::compare(mix, ref)`:
+loudness/crest/width deltas, octave shape deltas after level matching, findings, master EQ
+moves. Engine: `analyze_mix_detailed(project, opts, progress) -> DetailedMix { report,
+master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
+(cancellable).
 
 ### cadenza-dsp
 

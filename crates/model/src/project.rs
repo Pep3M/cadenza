@@ -10,6 +10,7 @@ use cadenza_core::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::controller::{Controller, ControllerLane};
 use crate::sample::SampleZone;
 
 /// Current on-disk format version written by [`Project::save_json`].
@@ -257,8 +258,13 @@ pub struct Take {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClipContent {
-	/// Notes kept sorted by (start, pitch, id).
-	Midi { notes: Vec<Note> },
+	/// Notes kept sorted by (start, pitch, id); controller lanes (CC, pitch bend,
+	/// pressure) sorted by controller, one per controller, missing in older files.
+	Midi {
+		notes: Vec<Note>,
+		#[serde(default, skip_serializing_if = "Vec::is_empty")]
+		controllers: Vec<ControllerLane>,
+	},
 	Audio {
 		file: PathBuf,
 		offset_seconds: f64,
@@ -612,7 +618,10 @@ impl Clip {
 			name: name.into(),
 			start,
 			length,
-			content: ClipContent::Midi { notes: Vec::new() },
+			content: ClipContent::Midi {
+				notes: Vec::new(),
+				controllers: Vec::new(),
+			},
 			take: None,
 		}
 	}
@@ -642,7 +651,10 @@ impl Clip {
 
 	/// Adds notes keeping them sorted; intended for building a clip before it enters a project.
 	pub fn with_notes(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
-		if let ClipContent::Midi { notes: existing } = &mut self.content {
+		if let ClipContent::Midi {
+			notes: existing, ..
+		} = &mut self.content
+		{
 			existing.extend(notes);
 			sort_notes(existing);
 		}
@@ -656,9 +668,39 @@ impl Clip {
 	/// Notes of a MIDI clip; empty for audio clips.
 	pub fn notes(&self) -> &[Note] {
 		match &self.content {
-			ClipContent::Midi { notes } => notes,
+			ClipContent::Midi { notes, .. } => notes,
 			ClipContent::Audio { .. } => &[],
 		}
+	}
+
+	/// Controller lanes of a MIDI clip; empty for audio clips.
+	pub fn controllers(&self) -> &[ControllerLane] {
+		match &self.content {
+			ClipContent::Midi { controllers, .. } => controllers,
+			ClipContent::Audio { .. } => &[],
+		}
+	}
+
+	/// The lane of `controller`, if the clip has one.
+	pub fn controller(&self, controller: Controller) -> Option<&ControllerLane> {
+		self.controllers()
+			.iter()
+			.find(|l| l.controller == controller)
+	}
+
+	/// Adds controller lanes (replacing lanes of the same controller); intended for
+	/// building a clip before it enters a project.
+	pub fn with_controllers(mut self, lanes: impl IntoIterator<Item = ControllerLane>) -> Self {
+		if let ClipContent::Midi { controllers, .. } = &mut self.content {
+			for mut lane in lanes {
+				lane.points.sort_by_key(|p| p.tick);
+				lane.points.dedup_by_key(|p| p.tick);
+				controllers.retain(|l| l.controller != lane.controller);
+				controllers.push(lane);
+			}
+			controllers.sort_by_key(|l| l.controller);
+		}
+		self
 	}
 
 	/// Clip length in seconds under `tempo`.

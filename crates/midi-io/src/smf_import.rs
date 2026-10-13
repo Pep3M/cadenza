@@ -4,7 +4,10 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use cadenza_core::{Meter, MeterChange, Tick, TimeSignature};
-use cadenza_model::{Clip, ClipContent, Command, Device, DeviceKind, Note, Track, TrackKind};
+use cadenza_model::{
+	Clip, ClipContent, Command, Controller, ControllerLane, ControllerPoint, Device, DeviceKind,
+	Note, Track, TrackKind,
+};
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 
 use crate::error::{MidiIoError, Result};
@@ -161,8 +164,17 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 								},
 							});
 						}
-						MidiMessage::Aftertouch { .. } | MidiMessage::ChannelAftertouch { .. } => {
-							// No lane in the model and not AI-actionable yet; dropped.
+						MidiMessage::ChannelAftertouch { vel } => {
+							other_events.push(ParsedOtherEvent {
+								tick: Tick(abs_tick),
+								event: OtherEvent::ChannelPressure {
+									channel,
+									value: vel.as_int(),
+								},
+							});
+						}
+						MidiMessage::Aftertouch { .. } => {
+							// Polyphonic aftertouch has no lane in the model; dropped.
 						}
 					}
 				}
@@ -225,10 +237,14 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 		});
 	}
 
-	let other_event_count: usize = tracks.iter().map(|t| t.other_events.len()).sum();
-	if other_event_count > 0 {
+	let programs = tracks
+		.iter()
+		.flat_map(|t| &t.other_events)
+		.filter(|e| matches!(e.event, OtherEvent::ProgramChange { .. }))
+		.count();
+	if programs > 0 {
 		warnings.push(format!(
-			"{other_event_count} control-change/pitch-bend/program-change event(s) have no Cadenza model equivalent yet; kept in ParsedMidiFile::other_events"
+			"{programs} program-change event(s) have no Cadenza equivalent (pick the instrument or preset instead); kept in ParsedMidiFile::other_events"
 		));
 	}
 
@@ -277,6 +293,60 @@ struct NoteGroup {
 	name: String,
 	is_drum: bool,
 	notes: Vec<ParsedNote>,
+	controllers: Vec<ControllerLane>,
+}
+
+/// Controller lanes from parsed channel events (absolute ticks; `channel` = only that
+/// channel), CC/bend/pressure values normalized like the model.
+pub fn controller_lanes(events: &[ParsedOtherEvent], channel: Option<u8>) -> Vec<ControllerLane> {
+	let mut lanes: BTreeMap<Controller, Vec<ControllerPoint>> = BTreeMap::new();
+	for e in events
+		.iter()
+		.filter(|e| channel.is_none_or(|c| e.event.channel() == c))
+	{
+		let (controller, value) = match e.event {
+			OtherEvent::Controller {
+				controller, value, ..
+			} => (
+				Controller::Cc(controller.min(127)),
+				f32::from(value.min(127)) / 127.0,
+			),
+			OtherEvent::PitchBend { bend, .. } => {
+				let v = if bend < 0 {
+					f32::from(bend) / 8192.0
+				} else {
+					f32::from(bend) / 8191.0
+				};
+				(Controller::PitchBend, v.clamp(-1.0, 1.0))
+			}
+			OtherEvent::ChannelPressure { value, .. } => (
+				Controller::ChannelPressure,
+				f32::from(value.min(127)) / 127.0,
+			),
+			OtherEvent::ProgramChange { .. } => continue,
+		};
+		let points = lanes.entry(controller).or_default();
+		match points.last_mut() {
+			Some(last) if last.tick == e.tick => last.value = value,
+			_ => points.push(ControllerPoint::new(e.tick, value)),
+		}
+	}
+	lanes
+		.into_iter()
+		.map(|(controller, mut points)| {
+			points.sort_by_key(|p| p.tick);
+			ControllerLane { controller, points }
+		})
+		.collect()
+}
+
+fn lanes_end(lanes: &[ControllerLane]) -> Tick {
+	lanes
+		.iter()
+		.filter_map(|l| l.points.last())
+		.map(|p| p.tick + Tick(1))
+		.max()
+		.unwrap_or(Tick::ZERO)
 }
 
 fn note_groups(parsed: &ParsedMidiFile, split_by_channel: bool) -> Vec<NoteGroup> {
@@ -291,6 +361,7 @@ fn note_groups(parsed: &ParsedMidiFile, split_by_channel: bool) -> Vec<NoteGroup
 				name: track.name.clone().unwrap_or_else(default_name),
 				is_drum: track.is_drum,
 				notes: track.notes.clone(),
+				controllers: controller_lanes(&track.other_events, None),
 			});
 			continue;
 		}
@@ -313,6 +384,7 @@ fn note_groups(parsed: &ParsedMidiFile, split_by_channel: bool) -> Vec<NoteGroup
 				name,
 				is_drum: channel == GM_DRUM_CHANNEL,
 				notes,
+				controllers: controller_lanes(&track.other_events, Some(channel)),
 			});
 		}
 	}
@@ -456,8 +528,11 @@ pub fn build_import_command(
 					id: clip_id,
 					name: group.name.clone(),
 					start: Tick::ZERO,
-					length: clip_length(&group.notes),
-					content: ClipContent::Midi { notes },
+					length: clip_length(&group.notes).max(lanes_end(&group.controllers)),
+					content: ClipContent::Midi {
+						notes,
+						controllers: group.controllers,
+					},
 					take: None,
 				};
 				let track = Track {
@@ -492,12 +567,18 @@ pub fn build_import_command(
 					length: n.length,
 				})
 				.collect();
+			let all_events: Vec<ParsedOtherEvent> = parsed
+				.tracks
+				.iter()
+				.flat_map(|t| t.other_events.clone())
+				.collect();
+			let controllers = controller_lanes(&all_events, None);
 			let clip = Clip {
 				id: ids.clip_id(),
 				name: "Imported MIDI".to_string(),
 				start: *position,
-				length: clip_length(&all_notes),
-				content: ClipContent::Midi { notes },
+				length: clip_length(&all_notes).max(lanes_end(&controllers)),
+				content: ClipContent::Midi { notes, controllers },
 				take: None,
 			};
 			commands.push(Command::AddClip {

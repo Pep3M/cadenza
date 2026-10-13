@@ -1811,7 +1811,7 @@ mod tests {
 		played(&mut g, 100);
 		// Remove 64, keep 60.
 		let mut edited = p.tracks[0].clips.clone();
-		if let cadenza_model::ClipContent::Midi { notes } = &mut edited[0].content {
+		if let cadenza_model::ClipContent::Midi { notes, .. } = &mut edited[0].content {
 			notes.retain(|n| n.pitch == 60);
 		}
 		let mut swap = g.prepare_schedule(track, &edited, &p.tempo).unwrap();

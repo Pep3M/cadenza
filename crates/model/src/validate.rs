@@ -79,6 +79,45 @@ pub(crate) fn tempo(bpm: f64) -> Result<(), ModelError> {
 	}
 }
 
+/// Most events one controller lane holds.
+pub(crate) const MAX_CONTROLLER_POINTS: usize = 100_000;
+
+/// Controller lane points: ticks >= 0, values in the controller's range.
+pub(crate) fn controller_points(
+	controller: crate::controller::Controller,
+	points: &[crate::controller::ControllerPoint],
+) -> Result<(), ModelError> {
+	if points.len() > MAX_CONTROLLER_POINTS {
+		return Err(ModelError::invalid(
+			format!("{controller} points"),
+			points.len().to_string(),
+			"a controller lane holds at most 100000 events",
+		));
+	}
+	let (lo, hi) = controller.range();
+	for p in points {
+		if p.tick.0 < 0 {
+			return Err(ModelError::invalid(
+				format!("{controller} point tick"),
+				p.tick.0.to_string(),
+				"controller events are clip-relative and start at tick >= 0",
+			));
+		}
+		if !(lo..=hi).contains(&p.value) {
+			return Err(ModelError::invalid(
+				format!("{controller} value"),
+				p.value.to_string(),
+				if lo < 0.0 {
+					"pitch bend values are -1.0 (down) ..= 1.0 (up), 0 = center"
+				} else {
+					"controller values are 0.0..=1.0 (MIDI 0..127; sustain on >= 0.5)"
+				},
+			));
+		}
+	}
+	Ok(())
+}
+
 /// Most time signature changes a project holds.
 pub(crate) const MAX_METER_CHANGES: usize = 1024;
 /// Highest bar index a time signature change may start at.
@@ -255,7 +294,7 @@ pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
 		take(t)?;
 	}
 	match &clip.content {
-		ClipContent::Midi { notes } => {
+		ClipContent::Midi { notes, controllers } => {
 			let mut ids = HashSet::with_capacity(notes.len());
 			for n in notes {
 				if !ids.insert(n.id) {
@@ -265,6 +304,19 @@ pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
 					});
 				}
 				note(clip, n)?;
+			}
+			for (i, lane) in controllers.iter().enumerate() {
+				controller_points(lane.controller, &lane.points)?;
+				if controllers[..i]
+					.iter()
+					.any(|l| l.controller == lane.controller)
+				{
+					return Err(ModelError::invalid(
+						"controller lanes",
+						lane.controller.to_string(),
+						"a clip holds one lane per controller",
+					));
+				}
 			}
 		}
 		ClipContent::Audio {

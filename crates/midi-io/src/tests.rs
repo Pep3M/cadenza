@@ -202,7 +202,7 @@ fn splits_tracks_by_channel_when_requested() {
 }
 
 #[test]
-fn unsupported_cc_and_pitch_bend_are_kept_and_reported_as_warnings() {
+fn cc_and_pitch_bend_become_controller_lanes() {
 	let bytes = write_smf(
 		960,
 		vec![vec![
@@ -231,7 +231,13 @@ fn unsupported_cc_and_pitch_bend_are_kept_and_reported_as_warnings() {
 	);
 	let parsed = parse_smf(&bytes).unwrap();
 	assert_eq!(parsed.tracks[0].other_events.len(), 2);
-	assert!(parsed.warnings.iter().any(|w| w.contains("control-change")));
+	assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+	let lanes = crate::controller_lanes(&parsed.tracks[0].other_events, None);
+	assert_eq!(lanes.len(), 2);
+	assert_eq!(lanes[0].controller, cadenza_model::Controller::MOD_WHEEL);
+	assert_eq!(lanes[0].points[0].value, 64.0 / 127.0);
+	assert_eq!(lanes[1].controller, cadenza_model::Controller::PitchBend);
+	assert!((lanes[1].points[0].value - (1000.0 - 8192.0) / 8192.0).abs() < 1e-6);
 }
 
 #[test]
@@ -294,6 +300,22 @@ fn round_trips_project_export_and_import() {
 						length: Tick(cadenza_core::PPQ),
 					},
 				],
+				controllers: vec![
+					cadenza_model::ControllerLane {
+						controller: cadenza_model::Controller::SUSTAIN,
+						points: vec![
+							cadenza_model::ControllerPoint::new(Tick::ZERO, 1.0),
+							cadenza_model::ControllerPoint::new(Tick(cadenza_core::PPQ * 2), 0.0),
+						],
+					},
+					cadenza_model::ControllerLane {
+						controller: cadenza_model::Controller::PitchBend,
+						points: vec![cadenza_model::ControllerPoint::new(
+							Tick(cadenza_core::PPQ / 2),
+							-1.0,
+						)],
+					},
+				],
 			},
 			take: None,
 		}],
@@ -317,7 +339,7 @@ fn round_trips_project_export_and_import() {
 	let Some(clip) = imported_track.clips.first() else {
 		panic!("expected a clip")
 	};
-	let ClipContent::Midi { notes } = &clip.content else {
+	let ClipContent::Midi { notes, .. } = &clip.content else {
 		panic!("expected midi content")
 	};
 	assert_eq!(notes.len(), 2);
@@ -325,6 +347,13 @@ fn round_trips_project_export_and_import() {
 	assert_eq!(notes[0].start, Tick::ZERO);
 	assert_eq!(notes[1].pitch, 64);
 	assert_eq!(notes[1].start, Tick(cadenza_core::PPQ));
+	let sustain = clip.controller(cadenza_model::Controller::SUSTAIN).unwrap();
+	assert_eq!(sustain.points.len(), 2);
+	assert_eq!(sustain.points[1].tick, Tick(cadenza_core::PPQ * 2));
+	let bend = clip
+		.controller(cadenza_model::Controller::PitchBend)
+		.unwrap();
+	assert_eq!(bend.points[0].value, -1.0);
 
 	let tempo_set = commands
 		.iter()

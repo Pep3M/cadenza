@@ -2057,7 +2057,7 @@ fn paint_clip(
 	);
 	if content.height() > 4.0 {
 		match &clip.content {
-			ClipContent::Midi { notes } => {
+			ClipContent::Midi { notes, .. } => {
 				paint_notes(&p, clip, notes, content, area, color, &state.view.timeline)
 			}
 			ClipContent::Audio {

@@ -19,6 +19,7 @@ use cadenza_core::{MeterChange, ParamAddress, ParamTarget, Tick, TrackId};
 use crate::command::{
 	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
 };
+use crate::controller::ControllerLane;
 use crate::error::ModelError;
 use crate::project::{AutomationLane, ClipContent, Note, Output, Project, sort_notes};
 use crate::validate::{self, location};
@@ -34,7 +35,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			let mut track = track.clone();
 			track.sort_clips();
 			for clip in &mut track.clips {
-				if let ClipContent::Midi { notes } = &mut clip.content {
+				if let ClipContent::Midi { notes, .. } = &mut clip.content {
 					sort_notes(notes);
 				}
 			}
@@ -595,7 +596,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				return Err(ModelError::DuplicateClipId(clip.id));
 			}
 			let mut clip = clip.clone();
-			if let ClipContent::Midi { notes } = &mut clip.content {
+			if let ClipContent::Midi { notes, .. } = &mut clip.content {
 				sort_notes(notes);
 			}
 			let id = clip.id;
@@ -839,6 +840,46 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			Ok(vec![Command::UpdateNotes {
 				clip: *clip,
 				notes: inverse,
+			}])
+		}
+
+		Command::SetControllerLane {
+			clip,
+			controller,
+			points,
+		} => {
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			midi_notes(c)?;
+			validate::controller_points(*controller, points)?;
+			let mut points = points.clone();
+			points.sort_by_key(|p| p.tick);
+			points.dedup_by_key(|p| p.tick);
+			let Some(ClipContent::Midi { controllers, .. }) =
+				project.find_clip_mut(*clip).map(|c| &mut c.content)
+			else {
+				return Err(ModelError::NotAMidiClip(*clip));
+			};
+			let old = match controllers.binary_search_by_key(controller, |l| l.controller) {
+				Ok(i) if points.is_empty() => controllers.remove(i).points,
+				Ok(i) => std::mem::replace(&mut controllers[i].points, points),
+				Err(_) if points.is_empty() => Vec::new(),
+				Err(i) => {
+					controllers.insert(
+						i,
+						ControllerLane {
+							controller: *controller,
+							points,
+						},
+					);
+					Vec::new()
+				}
+			};
+			Ok(vec![Command::SetControllerLane {
+				clip: *clip,
+				controller: *controller,
+				points: old,
 			}])
 		}
 
@@ -1187,7 +1228,7 @@ fn insert_index(
 
 fn midi_notes(clip: &crate::Clip) -> Result<&[Note], ModelError> {
 	match &clip.content {
-		ClipContent::Midi { notes } => Ok(notes),
+		ClipContent::Midi { notes, .. } => Ok(notes),
 		ClipContent::Audio { .. } => Err(ModelError::NotAMidiClip(clip.id)),
 	}
 }
@@ -1201,7 +1242,7 @@ fn midi_notes_mut(
 		.ok_or(ModelError::ClipNotFound(clip))?
 		.content
 	{
-		ClipContent::Midi { notes } => Ok(notes),
+		ClipContent::Midi { notes, .. } => Ok(notes),
 		ClipContent::Audio { .. } => Err(ModelError::NotAMidiClip(clip)),
 	}
 }

@@ -92,8 +92,13 @@ impl Project {
 		for track in &mut self.tracks {
 			track.sort_clips();
 			for clip in &mut track.clips {
-				if let ClipContent::Midi { notes } = &mut clip.content {
+				if let ClipContent::Midi { notes, controllers } = &mut clip.content {
 					sort_notes(notes);
+					controllers.sort_by_key(|l| l.controller);
+					for lane in controllers.iter_mut() {
+						lane.points.sort_by_key(|p| p.tick);
+						lane.points.dedup_by_key(|p| p.tick);
+					}
 				}
 			}
 		}

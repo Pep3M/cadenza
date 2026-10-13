@@ -35,10 +35,10 @@ pub use parsed::{
 	ParsedTempoPoint, ParsedTrack,
 };
 pub use raw::{RawMessage, RunningStatusDecoder};
-pub use record::{RecordedNote, Recorder};
+pub use record::{RecordedControl, RecordedNote, Recorder, control_lanes};
 pub use smf_export::{export_clip, export_project};
 pub use smf_import::{
-	ImportOptions, ImportResult, ImportTarget, build_import_command, import_smf,
+	ImportOptions, ImportResult, ImportTarget, build_import_command, controller_lanes, import_smf,
 	import_smf_with_ids, meter_changes, parse_smf,
 };
 

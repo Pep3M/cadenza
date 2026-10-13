@@ -6,6 +6,7 @@ use cadenza_core::{
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::controller::{Controller, ControllerPoint};
 use crate::*;
 
 fn beats(b: f64) -> Tick {
@@ -2351,4 +2352,96 @@ fn time_signature_changes_round_trip_and_summarize() {
 	assert_eq!(Project::from_json_str(&json).unwrap(), p);
 	let plain = fx.project.to_json_string().unwrap();
 	assert!(!plain.contains("time_signature_changes"));
+}
+
+#[test]
+fn controller_lanes_round_trip_split_and_persist() {
+	let fx = fixture();
+	let point = |tick: i64, value: f32| ControllerPoint::new(Tick(tick), value);
+	let p = round_trip(
+		&fx.project,
+		Command::SetControllerLane {
+			clip: fx.riff,
+			controller: Controller::MOD_WHEEL,
+			points: vec![point(PPQ * 2, 1.0), point(0, 0.25)],
+		},
+	);
+	let (_, clip) = p.find_clip(fx.riff).unwrap();
+	let lane = clip.controller(Controller::MOD_WHEEL).unwrap();
+	assert_eq!(lane.points[0], point(0, 0.25), "sorted on apply");
+	let p = round_trip(
+		&p,
+		Command::SetControllerLane {
+			clip: fx.riff,
+			controller: Controller::MOD_WHEEL,
+			points: vec![],
+		},
+	);
+	assert!(p.find_clip(fx.riff).unwrap().1.controllers().is_empty());
+	assert!(
+		exec_err(
+			&p,
+			Command::SetControllerLane {
+				clip: fx.riff,
+				controller: Controller::PitchBend,
+				points: vec![point(0, 1.5)],
+			}
+		)
+		.to_string()
+		.contains("pitch bend values")
+	);
+	assert!(matches!(
+		exec_err(
+			&p,
+			Command::SetControllerLane {
+				clip: fx.vox,
+				controller: Controller::SUSTAIN,
+				points: vec![point(0, 1.0)],
+			}
+		),
+		ModelError::NotAMidiClip(_)
+	));
+
+	// Split: the right part starts with the value in effect at the cut.
+	let mut doc = Document::new(fx.project.clone());
+	doc.execute(Command::SetControllerLane {
+		clip: fx.riff,
+		controller: Controller::PitchBend,
+		points: vec![point(0, 0.0), point(PPQ, 0.5), point(PPQ * 3, -0.5)],
+	})
+	.unwrap();
+	let (_, riff) = doc.project().find_clip(fx.riff).unwrap();
+	let at = riff.start + Tick(PPQ * 2);
+	let right = ClipId::new();
+	let cmds = takes::split_clip(doc.project(), fx.riff, at, right, None).unwrap();
+	doc.execute(Command::Batch {
+		label: "Split".into(),
+		commands: cmds,
+	})
+	.unwrap();
+	let left = doc.project().find_clip(fx.riff).unwrap().1;
+	assert_eq!(
+		left.controller(Controller::PitchBend).unwrap().points.len(),
+		2,
+		"the left part keeps the points before the cut"
+	);
+	let r = doc.project().find_clip(right).unwrap().1;
+	assert_eq!(
+		r.controller(Controller::PitchBend).unwrap().points,
+		vec![point(0, 0.5), point(PPQ, -0.5)]
+	);
+	let summary = doc.project().summary();
+	let clip_summary = summary
+		.tracks
+		.iter()
+		.flat_map(|t| t.clips.iter())
+		.find(|c| c.id == right)
+		.unwrap();
+	assert_eq!(
+		clip_summary.controllers,
+		vec!["pitch_bend (2 events, -0.50..0.50)"]
+	);
+	let json = doc.project().to_json_string().unwrap();
+	assert!(json.contains("\"controller\": \"pitch_bend\""));
+	assert_eq!(&Project::from_json_str(&json).unwrap(), doc.project());
 }

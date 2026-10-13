@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use cadenza_core::{TempoMap, Tick};
-use cadenza_model::Note;
+use cadenza_model::{Controller, ControllerLane, ControllerPoint, Note};
 
 use crate::ids::IdAllocator;
 use crate::raw::RawMessage;
@@ -35,6 +35,16 @@ pub struct Recorder {
 	quantize: Option<Tick>,
 	open: BTreeMap<(u8, u8), VecDeque<(Tick, f32)>>,
 	closed: Vec<ClosedNote>,
+	/// Controller events (CC, pitch bend, channel pressure) in arrival order.
+	controls: Vec<RecordedControl>,
+}
+
+/// A recorded controller event (absolute tick, model controller, normalized value).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecordedControl {
+	pub tick: Tick,
+	pub controller: Controller,
+	pub value: f32,
 }
 
 impl Recorder {
@@ -44,6 +54,7 @@ impl Recorder {
 			quantize,
 			open: BTreeMap::new(),
 			closed: Vec::new(),
+			controls: Vec::new(),
 		}
 	}
 
@@ -60,6 +71,14 @@ impl Recorder {
 			None => return,
 		};
 
+		if let Some((controller, value)) = control(message) {
+			self.controls.push(RecordedControl {
+				tick,
+				controller,
+				value,
+			});
+			return;
+		}
 		if message.is_note_on() && message.bytes[2] > 0 {
 			let pitch = message.bytes[1];
 			let velocity = message.bytes[2] as f32 / 127.0;
@@ -134,6 +153,13 @@ impl Recorder {
 			.collect()
 	}
 
+	/// The controller events recorded so far (sorted by tick, not quantized).
+	pub fn take_controls(&mut self) -> Vec<RecordedControl> {
+		let mut c = std::mem::take(&mut self.controls);
+		c.sort_by_key(|e| e.tick);
+		c
+	}
+
 	/// What has been played so far, for drawing while recording: finished notes plus
 	/// held ones reaching `now` (not quantized).
 	pub fn preview(&self, now: Tick) -> Vec<RecordedNote> {
@@ -151,6 +177,50 @@ impl Recorder {
 		out.sort_by_key(|n| (n.start, n.pitch));
 		out
 	}
+}
+
+/// The model controller and value of a CC / pitch bend / channel pressure message.
+fn control(message: &RawMessage) -> Option<(Controller, f32)> {
+	message.channel()?;
+	let b = |i: usize| message.bytes[i] & 0x7f;
+	match message.status() & 0xF0 {
+		0xB0 if message.len == 3 && b(1) < 120 => {
+			Some((Controller::Cc(b(1)), f32::from(b(2)) / 127.0))
+		}
+		0xE0 if message.len == 3 => {
+			let v = i32::from(b(1)) | (i32::from(b(2)) << 7);
+			let v = v - 8192;
+			let norm = if v < 0 {
+				v as f32 / 8192.0
+			} else {
+				v as f32 / 8191.0
+			};
+			Some((Controller::PitchBend, norm.clamp(-1.0, 1.0)))
+		}
+		0xD0 if message.len >= 2 => Some((Controller::ChannelPressure, f32::from(b(1)) / 127.0)),
+		_ => None,
+	}
+}
+
+/// Recorded controller events as clip lanes relative to `origin` (events before it are
+/// dropped, one point per tick: the last wins).
+pub fn control_lanes(events: &[RecordedControl], origin: Tick) -> Vec<ControllerLane> {
+	let mut lanes: BTreeMap<Controller, Vec<ControllerPoint>> = BTreeMap::new();
+	for e in events.iter().filter(|e| e.tick >= origin) {
+		let points = lanes.entry(e.controller).or_default();
+		let tick = e.tick - origin;
+		match points.iter_mut().find(|p| p.tick == tick) {
+			Some(p) => p.value = e.value,
+			None => points.push(ControllerPoint::new(tick, e.value)),
+		}
+	}
+	lanes
+		.into_iter()
+		.map(|(controller, mut points)| {
+			points.sort_by_key(|p| p.tick);
+			ControllerLane { controller, points }
+		})
+		.collect()
 }
 
 fn quantize_tick(tick: Tick, grid: Tick) -> Tick {

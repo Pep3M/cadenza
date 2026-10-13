@@ -5,6 +5,7 @@
 
 mod apply;
 pub mod command;
+pub mod controller;
 pub mod document;
 pub mod error;
 pub mod files;
@@ -18,6 +19,7 @@ pub mod validate;
 pub use command::{
 	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
 };
+pub use controller::{Controller, ControllerLane, ControllerPoint};
 pub use document::Document;
 pub use error::ModelError;
 pub use files::{FileRef, FileUse, ProjectLayout};
@@ -30,7 +32,7 @@ pub use project::{
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{
 	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,
-	TempoSummary, TrackSummary, ZoneSummary, note_name, zone_summaries,
+	TempoSummary, TimeSignatureSummary, TrackSummary, ZoneSummary, note_name, zone_summaries,
 };
 
 #[cfg(test)]

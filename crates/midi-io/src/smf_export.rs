@@ -2,7 +2,7 @@
 //! tempo/meta track) or a single [`Clip`].
 
 use cadenza_core::{Meter, TempoMap, Tick, TimeSignature};
-use cadenza_model::{Clip, ClipContent, Project, TrackKind};
+use cadenza_model::{Clip, Controller, Project, TrackKind};
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
 	Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
@@ -10,67 +10,113 @@ use midly::{
 
 use crate::error::{MidiIoError, Result};
 
-/// One absolute-tick note-on or note-off, before delta-encoding.
-struct RawNoteEvent {
-	tick: i64,
-	is_on: bool,
-	pitch: u8,
-	velocity: u8,
+/// One absolute-tick MIDI event, before delta-encoding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RawEvent {
+	NoteOff { pitch: u8 },
+	Control { controller: Controller, value: f32 },
+	NoteOn { pitch: u8, velocity: u8 },
 }
 
-fn note_events(notes: &[(Tick, cadenza_model::Note)]) -> Vec<RawNoteEvent> {
-	let mut events = Vec::with_capacity(notes.len() * 2);
-	for (clip_start, note) in notes {
-		let start = (*clip_start + note.start).0;
-		let end = start + note.length.0.max(1);
-		let velocity = ((note.velocity * 127.0).round() as i32).clamp(1, 127) as u8;
-		events.push(RawNoteEvent {
-			tick: start,
-			is_on: true,
-			pitch: note.pitch,
-			velocity,
-		});
-		events.push(RawNoteEvent {
-			tick: end,
-			is_on: false,
-			pitch: note.pitch,
-			velocity: 0,
-		});
+impl RawEvent {
+	/// Note-offs, then controllers (a sustain pedal or bend applies to the notes starting
+	/// with it), then note-ons at the same tick.
+	fn order(&self) -> u8 {
+		match self {
+			RawEvent::NoteOff { .. } => 0,
+			RawEvent::Control { .. } => 1,
+			RawEvent::NoteOn { .. } => 2,
+		}
 	}
-	// Note-offs before note-ons at the same tick, so a note never appears to retrigger
-	// on top of itself.
-	events.sort_by_key(|e| (e.tick, e.is_on));
+
+	fn message(&self) -> MidiMessage {
+		let u7v = |v: f32| u7::new((v.clamp(0.0, 1.0) * 127.0).round() as u8);
+		match *self {
+			RawEvent::NoteOn { pitch, velocity } => MidiMessage::NoteOn {
+				key: u7::new(pitch.min(127)),
+				vel: u7::new(velocity),
+			},
+			RawEvent::NoteOff { pitch } => MidiMessage::NoteOff {
+				key: u7::new(pitch.min(127)),
+				vel: u7::new(0),
+			},
+			RawEvent::Control {
+				controller: Controller::Cc(n),
+				value,
+			} => MidiMessage::Controller {
+				controller: u7::new(n.min(127)),
+				value: u7v(value),
+			},
+			RawEvent::Control {
+				controller: Controller::PitchBend,
+				value,
+			} => {
+				let v = value.clamp(-1.0, 1.0);
+				let bend = if v < 0.0 { v * 8192.0 } else { v * 8191.0 }.round() as i16;
+				MidiMessage::PitchBend {
+					bend: midly::PitchBend::from_int(bend),
+				}
+			}
+			RawEvent::Control {
+				controller: Controller::ChannelPressure,
+				value,
+			} => MidiMessage::ChannelAftertouch { vel: u7v(value) },
+		}
+	}
+}
+
+/// The MIDI events of clips (`(clip start, clip)`): notes and controller lanes cut at
+/// the clip end, absolute ticks, sorted.
+fn clip_events(clips: &[&Clip], origin: Tick) -> Vec<(i64, RawEvent)> {
+	let mut events = Vec::new();
+	for clip in clips {
+		let base = clip.start - origin;
+		for note in clip.notes() {
+			let start = (base + note.start).0;
+			let end = start + note.length.0.max(1);
+			let velocity = ((note.velocity * 127.0).round() as i32).clamp(1, 127) as u8;
+			events.push((
+				start,
+				RawEvent::NoteOn {
+					pitch: note.pitch,
+					velocity,
+				},
+			));
+			events.push((end, RawEvent::NoteOff { pitch: note.pitch }));
+		}
+		for lane in clip.controllers() {
+			for p in lane.points.iter().filter(|p| p.tick < clip.length) {
+				events.push((
+					(base + p.tick).0,
+					RawEvent::Control {
+						controller: lane.controller,
+						value: p.value,
+					},
+				));
+			}
+		}
+	}
+	events.sort_by_key(|(tick, e)| (*tick, e.order()));
 	events
 }
 
 /// `name` must outlive the returned track; callers keep the owning `Vec<u8>` alive
 /// (an arena) until after `Smf::write_std` has run, so nothing needs to be leaked.
-fn to_midi_track<'a>(events: &[RawNoteEvent], name: &'a [u8]) -> Track<'a> {
+fn to_midi_track<'a>(events: &[(i64, RawEvent)], name: &'a [u8]) -> Track<'a> {
 	let mut track: Track<'a> = Vec::with_capacity(events.len() + 2);
 	track.push(TrackEvent {
 		delta: u28::new(0),
 		kind: TrackEventKind::Meta(MetaMessage::TrackName(name)),
 	});
 	let mut last_tick = 0i64;
-	for event in events {
-		let delta = (event.tick - last_tick).max(0) as u32;
-		last_tick = event.tick;
-		let message = if event.is_on {
-			MidiMessage::NoteOn {
-				key: u7::new(event.pitch),
-				vel: u7::new(event.velocity),
-			}
-		} else {
-			MidiMessage::NoteOff {
-				key: u7::new(event.pitch),
-				vel: u7::new(0),
-			}
-		};
+	for (tick, event) in events {
+		let delta = (tick - last_tick).max(0) as u32;
+		last_tick = *tick;
 		track.push(TrackEvent {
 			delta: u28::new(delta),
 			kind: TrackEventKind::Midi {
 				channel: u4::new(0),
-				message,
+				message: event.message(),
 			},
 		});
 	}
@@ -171,26 +217,21 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>> {
 		.iter()
 		.map(|t| t.name.clone().into_bytes())
 		.collect();
-	let mut notes_by_track: Vec<Vec<(Tick, cadenza_model::Note)>> =
-		Vec::with_capacity(project.tracks.len());
-	for track in &project.tracks {
-		let notes = if track.kind == TrackKind::Instrument {
-			track
+	let events_by_track: Vec<Vec<(i64, RawEvent)>> = project
+		.tracks
+		.iter()
+		.map(|track| {
+			if track.kind != TrackKind::Instrument {
+				return Vec::new();
+			}
+			let clips: Vec<&Clip> = track
 				.clips
 				.iter()
-				.filter_map(|clip| match &clip.content {
-					ClipContent::Midi { notes } => {
-						Some(notes.iter().map(|n| (clip.start, n.clone())))
-					}
-					ClipContent::Audio { .. } => None,
-				})
-				.flatten()
-				.collect()
-		} else {
-			Vec::new()
-		};
-		notes_by_track.push(notes);
-	}
+				.filter(|c| c.is_midi() && c.plays())
+				.collect();
+			clip_events(&clips, Tick::ZERO)
+		})
+		.collect();
 
 	let mut tracks = vec![meta_track(
 		&project.tempo,
@@ -199,11 +240,11 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>> {
 		&marker_names,
 	)];
 	for (index, track) in project.tracks.iter().enumerate() {
-		let notes = &notes_by_track[index];
-		if track.kind != TrackKind::Instrument || notes.is_empty() {
+		let events = &events_by_track[index];
+		if track.kind != TrackKind::Instrument || events.is_empty() {
 			continue;
 		}
-		tracks.push(to_midi_track(&note_events(notes), &track_names[index]));
+		tracks.push(to_midi_track(events, &track_names[index]));
 	}
 
 	write_smf(tracks)
@@ -216,15 +257,14 @@ pub fn export_clip(
 	tempo: &TempoMap,
 	time_signature: &TimeSignature,
 ) -> Result<Vec<u8>> {
-	let ClipContent::Midi { notes } = &clip.content else {
+	if !clip.is_midi() {
 		return Err(MidiIoError::Write("clip has no MIDI content".to_string()));
-	};
-	let notes: Vec<(Tick, cadenza_model::Note)> =
-		notes.iter().map(|n| (Tick::ZERO, n.clone())).collect();
+	}
 	let name_bytes = clip.name.clone().into_bytes();
+	let events = clip_events(&[clip], clip.start);
 	let tracks = vec![
 		meta_track(tempo, Meter::new(*time_signature, &[]), &[], &[]),
-		to_midi_track(&note_events(&notes), &name_bytes),
+		to_midi_track(&events, &name_bytes),
 	];
 	write_smf(tracks)
 }

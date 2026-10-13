@@ -35,9 +35,12 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use cadenza_core::{ClipId, Meter, MeterMap, TakeGroupId, TempoMap, Tick, TrackId};
-use cadenza_midi_io::{RandomIds, RawMessage, RecordedNote, Recorder};
+use cadenza_midi_io::{
+	RandomIds, RawMessage, RecordedControl, RecordedNote, Recorder, control_lanes,
+};
 use cadenza_model::{
-	Clip, ClipContent, ClipPatch, Command, Document, Note, Project, Take, TrackInput,
+	Clip, ClipContent, ClipPatch, Command, ControllerPoint, Document, Note, Project, Take,
+	TrackInput,
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -873,8 +876,8 @@ fn stack(doc: &mut Document, commands: &mut Vec<Command>, track: TrackId, clips:
 	}
 }
 
-/// MIDI passes: (start tick, end tick, notes with absolute starts).
-type MidiPass = (Tick, Tick, Vec<Note>);
+/// MIDI passes: (start tick, end tick, notes with absolute starts, controller events).
+type MidiPass = (Tick, Tick, Vec<Note>, Vec<RecordedControl>);
 
 fn midi_passes(rec: &Recording, tempo: &TempoMap, quantize: Option<Tick>) -> Vec<MidiPass> {
 	let sr = f64::from(rec.sample_rate.max(1));
@@ -893,6 +896,7 @@ fn midi_passes(rec: &Recording, tempo: &TempoMap, quantize: Option<Tick>) -> Vec
 					tick(pass_start),
 					tick(from),
 					recorder.take_notes(&mut RandomIds),
+					recorder.take_controls(),
 				));
 				pass_start = to;
 			}
@@ -904,6 +908,7 @@ fn midi_passes(rec: &Recording, tempo: &TempoMap, quantize: Option<Tick>) -> Vec
 		tick(pass_start),
 		tick(end),
 		recorder.take_notes(&mut RandomIds),
+		recorder.take_controls(),
 	));
 	passes
 }
@@ -940,28 +945,47 @@ fn midi_clips(
 	let Some(name) = doc.project().track(track).map(|t| t.name.clone()) else {
 		return;
 	};
-	let played: Vec<&MidiPass> = passes.iter().filter(|p| !p.2.is_empty()).collect();
+	let played: Vec<&MidiPass> = passes
+		.iter()
+		.filter(|p| !p.2.is_empty() || !p.3.is_empty())
+		.collect();
 	if played.is_empty() {
 		return;
 	}
 	if options.midi_takes && passes.len() > 1 {
 		let clips = played
 			.iter()
-			.filter_map(|(start, end, notes)| {
+			.filter_map(|(start, end, notes, controls)| {
 				let (s, e) = (*start, (*end).max(*start + Tick(1)));
 				let notes: Vec<Note> = relative(notes, s)
 					.into_iter()
 					.filter(|n| n.start < e - s)
 					.collect();
-				(!notes.is_empty()).then(|| Clip::midi(name.clone(), s, e - s).with_notes(notes))
+				let lanes = control_lanes(controls, s);
+				(!notes.is_empty() || !lanes.is_empty()).then(|| {
+					Clip::midi(name.clone(), s, e - s)
+						.with_notes(notes)
+						.with_controllers(lanes)
+				})
 			})
 			.collect();
 		stack(doc, commands, track, clips);
 		return;
 	}
 	let notes: Vec<Note> = played.iter().flat_map(|p| p.2.iter().cloned()).collect();
-	let first = notes.iter().map(|n| n.start).min().unwrap_or_default();
-	let last = notes.iter().map(Note::end).max().unwrap_or(first);
+	let controls: Vec<RecordedControl> = played.iter().flat_map(|p| p.3.iter().copied()).collect();
+	let first = notes
+		.iter()
+		.map(|n| n.start)
+		.chain(controls.iter().map(|c| c.tick))
+		.min()
+		.unwrap_or_default();
+	let last = notes
+		.iter()
+		.map(Note::end)
+		.chain(controls.iter().map(|c| c.tick + Tick(1)))
+		.max()
+		.unwrap_or(first);
 	let sr = f64::from(rec.sample_rate.max(1));
 	let rec_start = doc
 		.project()
@@ -991,7 +1015,9 @@ fn midi_clips(
 	let Some(target) = target else {
 		let start = bar_floor(first.min(rec_start.max(first)), meter);
 		let end = bar_ceil(last, meter).max(meter.bar_at(start).end());
-		let clip = Clip::midi(name, start, end - start).with_notes(relative(&notes, start));
+		let clip = Clip::midi(name, start, end - start)
+			.with_notes(relative(&notes, start))
+			.with_controllers(control_lanes(&controls, start));
 		run(doc, commands, Command::AddClip { track, clip });
 		return;
 	};
@@ -1042,6 +1068,41 @@ fn midi_clips(
 			Command::AddNotes {
 				clip: target,
 				notes,
+			},
+		);
+	}
+	// Controller lanes: replace mode clears the recorded range of each lane played;
+	// overdub keeps the other events (the new ones win at the same tick).
+	for lane in control_lanes(&controls, origin) {
+		let old: Vec<ControllerPoint> = doc
+			.project()
+			.find_clip(target)
+			.and_then(|(_, c)| c.controller(lane.controller))
+			.map(|l| l.points.clone())
+			.unwrap_or_default();
+		let points = if options.overdub {
+			let mut merged: Vec<ControllerPoint> = old
+				.into_iter()
+				.filter(|p| !lane.points.iter().any(|n| n.tick == p.tick))
+				.chain(lane.points.iter().copied())
+				.collect();
+			merged.sort_by_key(|p| p.tick);
+			merged
+		} else {
+			cadenza_model::controller::splice(
+				&old,
+				range.0 - origin,
+				range.1 - origin,
+				&lane.points,
+			)
+		};
+		run(
+			doc,
+			commands,
+			Command::SetControllerLane {
+				clip: target,
+				controller: lane.controller,
+				points,
 			},
 		);
 	}

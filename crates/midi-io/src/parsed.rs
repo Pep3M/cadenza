@@ -20,7 +20,8 @@ pub struct ParsedNote {
 	pub length: Tick,
 }
 
-/// A MIDI event this crate cannot turn into a [`cadenza_model::Command`] yet.
+/// A non-note channel event. Controllers, pitch bend and channel pressure become clip
+/// controller lanes on import; program changes are only reported.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OtherEvent {
 	Controller {
@@ -36,6 +37,21 @@ pub enum OtherEvent {
 		channel: u8,
 		program: u8,
 	},
+	ChannelPressure {
+		channel: u8,
+		value: u8,
+	},
+}
+
+impl OtherEvent {
+	pub fn channel(&self) -> u8 {
+		match *self {
+			OtherEvent::Controller { channel, .. }
+			| OtherEvent::PitchBend { channel, .. }
+			| OtherEvent::ProgramChange { channel, .. }
+			| OtherEvent::ChannelPressure { channel, .. } => channel,
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq)]

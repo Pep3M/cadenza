@@ -74,6 +74,25 @@ fn graph_process_does_not_allocate() {
 		],
 	)];
 	p.automation.extend(lanes.clone());
+	// MIDI controller lanes (sustain, mod wheel, bend, pressure) on the chords clip, so
+	// controller scheduling, chasing and delivery are covered too.
+	{
+		use cadenza_model::{Controller, ControllerLane, ControllerPoint};
+		let lane = |controller, values: &[(f64, f32)]| ControllerLane {
+			controller,
+			points: values
+				.iter()
+				.map(|&(b, v)| ControllerPoint::new(beats(b), v))
+				.collect(),
+		};
+		let clip = p.tracks[2].clips[0].clone().with_controllers([
+			lane(Controller::SUSTAIN, &[(0.0, 1.0), (1.5, 0.0), (2.0, 1.0)]),
+			lane(Controller::MOD_WHEEL, &[(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]),
+			lane(Controller::PitchBend, &[(0.25, -0.5), (0.75, 0.5)]),
+			lane(Controller::ChannelPressure, &[(0.1, 0.3)]),
+		]);
+		p.tracks[2].clips[0] = clip;
+	}
 	// Both samplers, with loops, choke groups and a pad on an extra output routed to a bus.
 	let wav = write_sine_wav(
 		"no-alloc-sample.wav",
@@ -257,7 +276,7 @@ fn looping_auditioning_and_rescheduling_do_not_allocate() {
 	// removed, then restored).
 	graph.set_audition(Some(&[chords]));
 	let mut edited = p.tracks[2].clips.clone();
-	if let cadenza_model::ClipContent::Midi { notes } = &mut edited[0].content {
+	if let cadenza_model::ClipContent::Midi { notes, .. } = &mut edited[0].content {
 		notes.retain(|n| n.start.0 % (4 * PPQ_I) != 0 || n.pitch % 2 == 0);
 	}
 	let mut swaps: Vec<_> = (0..4)

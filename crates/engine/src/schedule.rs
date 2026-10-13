@@ -9,14 +9,42 @@
 
 use cadenza_core::TempoMap;
 use cadenza_dsp::MidiEvent;
-use cadenza_model::{Clip, ClipContent};
+use cadenza_model::{Clip, ClipContent, Controller};
 
 use crate::QUANTUM;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EventKind {
 	NoteOff { pitch: u8 },
+	Control { controller: Controller, value: f32 },
 	NoteOn { pitch: u8, velocity: f32 },
+}
+
+/// The realtime event of a controller value.
+fn control_event(controller: Controller, value: f32, offset: u32) -> MidiEvent {
+	match controller {
+		Controller::Cc(n) => MidiEvent::ControlChange {
+			offset,
+			controller: n.min(127),
+			value: value.clamp(0.0, 1.0),
+		},
+		Controller::PitchBend => MidiEvent::PitchBend {
+			offset,
+			value: value.clamp(-1.0, 1.0),
+		},
+		Controller::ChannelPressure => MidiEvent::ChannelPressure {
+			offset,
+			value: value.clamp(0.0, 1.0),
+		},
+	}
+}
+
+/// One controller's values on the timeline (all clips of the track), for chasing.
+#[derive(Debug, Clone, PartialEq)]
+struct ControlLane {
+	controller: Controller,
+	/// (absolute sample, value), sorted.
+	points: Vec<(i64, f32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,11 +55,13 @@ pub(crate) struct ScheduledEvent {
 }
 
 impl ScheduledEvent {
-	/// Note-offs sort before note-ons at the same sample so back-to-back notes retrigger.
+	/// Note-offs sort before controllers before note-ons at the same sample, so
+	/// back-to-back notes retrigger and a pedal/bend applies to the notes starting with it.
 	fn sort_key(&self) -> (i64, u8, u8) {
 		match self.kind {
 			EventKind::NoteOff { pitch } => (self.sample, 0, pitch),
-			EventKind::NoteOn { pitch, .. } => (self.sample, 1, pitch),
+			EventKind::Control { .. } => (self.sample, 1, 0),
+			EventKind::NoteOn { pitch, .. } => (self.sample, 2, pitch),
 		}
 	}
 }
@@ -52,16 +82,69 @@ pub(crate) struct MidiSchedule {
 	cursor: usize,
 	/// Sorted by `start`; used only by [`Self::chase`] and [`Self::max_chase_notes`].
 	notes: Vec<NoteSpan>,
+	/// Controller values per controller, for chasing (sorted by controller).
+	controls: Vec<ControlLane>,
 }
 
 impl MidiSchedule {
 	pub fn from_clips(clips: &[Clip], tempo: &TempoMap, sample_rate: f64) -> Self {
 		let mut events = Vec::new();
 		let mut spans = Vec::new();
+		let mut controls: Vec<ControlLane> = Vec::new();
 		for clip in clips.iter().filter(|c| c.plays()) {
-			let ClipContent::Midi { notes } = &clip.content else {
+			let ClipContent::Midi { notes, controllers } = &clip.content else {
 				continue;
 			};
+			for lane in controllers {
+				let i = match controls.binary_search_by_key(&lane.controller, |l| l.controller) {
+					Ok(i) => i,
+					Err(i) => {
+						controls.insert(
+							i,
+							ControlLane {
+								controller: lane.controller,
+								points: Vec::new(),
+							},
+						);
+						i
+					}
+				};
+				let mut push = |sample: i64, value: f32| {
+					events.push(ScheduledEvent {
+						sample,
+						kind: EventKind::Control {
+							controller: lane.controller,
+							value,
+						},
+					});
+					controls[i].points.push((sample, value));
+				};
+				let mut last = None;
+				for p in lane
+					.points
+					.iter()
+					.filter(|p| p.tick.0 >= 0 && p.tick < clip.length)
+				{
+					push(
+						tempo.tick_to_sample(clip.start + p.tick, sample_rate) as i64,
+						p.value,
+					);
+					last = Some(p.value);
+				}
+				// A bend or a held pedal must not outlive its clip.
+				let neutral = lane.controller.default_value();
+				let stuck = match lane.controller {
+					Controller::PitchBend => last.is_some_and(|v| v != 0.0),
+					c if c.is_switch() => last.is_some_and(|v| v >= 0.5),
+					_ => false,
+				};
+				if stuck {
+					push(
+						tempo.tick_to_sample(clip.end(), sample_rate) as i64,
+						neutral,
+					);
+				}
+			}
 			for note in notes {
 				if note.start.0 < 0 || note.start >= clip.length {
 					continue;
@@ -92,10 +175,14 @@ impl MidiSchedule {
 		}
 		events.sort_by_key(ScheduledEvent::sort_key);
 		spans.sort_by_key(|s| s.start);
+		for lane in &mut controls {
+			lane.points.sort_by_key(|p| p.0);
+		}
 		Self {
 			events,
 			cursor: 0,
 			notes: spans,
+			controls,
 		}
 	}
 
@@ -123,9 +210,13 @@ impl MidiSchedule {
 		self.cursor = self.events.partition_point(|e| e.sample < sample);
 	}
 
-	/// Largest number of notes that can be simultaneously sounding at any instant, i.e. the
-	/// worst case for [`Self::chase`]'s output, so its caller can size its buffer once.
+	/// Worst case of [`Self::chase`]'s output (controllers + notes sounding at once), so
+	/// its caller can size its buffer once.
 	pub fn max_chase_notes(&self) -> usize {
+		self.controls.len() + self.max_sounding()
+	}
+
+	fn max_sounding(&self) -> usize {
 		let mut starts: Vec<i64> = self.notes.iter().map(|n| n.start).collect();
 		let mut ends: Vec<i64> = self.notes.iter().map(|n| n.end).collect();
 		starts.sort_unstable();
@@ -151,6 +242,18 @@ impl MidiSchedule {
 	/// it. `self.notes` is sorted by `start`, so the scan can stop as soon as it passes
 	/// `sample`; it never allocates.
 	pub fn chase(&self, sample: i64, offset: u32, out: &mut Vec<MidiEvent>) {
+		// Controllers first (their value before `sample`, or their resting value), so
+		// re-triggered notes start bent / pedalled like they would have.
+		for lane in &self.controls {
+			if out.len() == out.capacity() {
+				return;
+			}
+			let i = lane.points.partition_point(|p| p.0 < sample);
+			let value = i
+				.checked_sub(1)
+				.map_or(lane.controller.default_value(), |i| lane.points[i].1);
+			out.push(control_event(lane.controller, value, offset));
+		}
 		for n in &self.notes {
 			if n.start >= sample {
 				break;
@@ -224,6 +327,9 @@ impl MidiSchedule {
 					velocity,
 				},
 				EventKind::NoteOff { pitch } => MidiEvent::NoteOff { offset, pitch },
+				EventKind::Control { controller, value } => {
+					control_event(controller, value, offset)
+				}
 			});
 		}
 	}
@@ -419,5 +525,66 @@ mod tests {
 		);
 		let s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
 		assert_eq!(s.max_events_per_quantum(), 2);
+	}
+}
+
+#[cfg(test)]
+mod controller_tests {
+	use super::*;
+	use cadenza_core::{PPQ, Tick};
+	use cadenza_model::{ControllerLane, ControllerPoint};
+
+	#[test]
+	fn controller_lanes_play_chase_and_reset_at_the_clip_end() {
+		let tempo = TempoMap::constant(120.0);
+		// One beat = 24_000 samples. Bend up at beat 1, sustain down at 0 (clip of 4 beats).
+		let clip = Clip::midi("c", Tick(0), Tick(PPQ * 4)).with_controllers([
+			ControllerLane {
+				controller: Controller::PitchBend,
+				points: vec![ControllerPoint::new(Tick(PPQ), 0.5)],
+			},
+			ControllerLane {
+				controller: Controller::SUSTAIN,
+				points: vec![ControllerPoint::new(Tick(0), 1.0)],
+			},
+		]);
+		let mut s = MidiSchedule::from_clips(&[clip], &tempo, 48_000.0);
+		let kinds: Vec<(i64, EventKind)> = s.events().iter().map(|e| (e.sample, e.kind)).collect();
+		assert_eq!(
+			kinds.len(),
+			4,
+			"two values + bend and pedal reset at the end"
+		);
+		assert_eq!(kinds[3].0, 96_000);
+		let mut out = Vec::with_capacity(8);
+		s.seek(0);
+		s.collect(24_000, 32, 0, &mut out);
+		assert_eq!(
+			out,
+			vec![MidiEvent::PitchBend {
+				offset: 0,
+				value: 0.5
+			}]
+		);
+		// Starting at beat 2: the bend and the pedal are chased.
+		out.clear();
+		s.chase(48_000, 0, &mut out);
+		assert!(out.contains(&MidiEvent::PitchBend {
+			offset: 0,
+			value: 0.5
+		}));
+		assert!(out.contains(&MidiEvent::ControlChange {
+			offset: 0,
+			controller: 64,
+			value: 1.0
+		}));
+		// Before the first bend: the lane rests at center.
+		out.clear();
+		s.chase(10, 0, &mut out);
+		assert!(out.contains(&MidiEvent::PitchBend {
+			offset: 0,
+			value: 0.0
+		}));
+		assert!(s.max_chase_notes() >= 2);
 	}
 }

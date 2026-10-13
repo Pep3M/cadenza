@@ -88,7 +88,30 @@ pub fn split_clip(
 	// Note and fade edits first, so the left clip never holds notes past its new end.
 	let mut commands = Vec::new();
 	match (&c.content, &mut right.content) {
-		(ClipContent::Midi { notes }, ClipContent::Midi { notes: right_notes }) => {
+		(
+			ClipContent::Midi {
+				notes, controllers, ..
+			},
+			ClipContent::Midi {
+				notes: right_notes,
+				controllers: right_controllers,
+			},
+		) => {
+			*right_controllers = crate::controller::window(controllers, left_len, c.length);
+			for lane in controllers {
+				if lane.points.iter().any(|p| p.tick >= left_len) {
+					commands.push(Command::SetControllerLane {
+						clip,
+						controller: lane.controller,
+						points: lane
+							.points
+							.iter()
+							.filter(|p| p.tick < left_len)
+							.copied()
+							.collect(),
+					});
+				}
+			}
 			let moved: Vec<&Note> = notes.iter().filter(|n| n.start >= left_len).collect();
 			*right_notes = moved
 				.iter()

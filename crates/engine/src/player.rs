@@ -2335,7 +2335,7 @@ mod tests {
 		let (mut control, mut core) = channel_pair(48_000);
 		let graph = compile(&p, 48_000, 256).unwrap();
 		let mut edited = p.tracks[0].clips.clone();
-		if let cadenza_model::ClipContent::Midi { notes } = &mut edited[0].content {
+		if let cadenza_model::ClipContent::Midi { notes, .. } = &mut edited[0].content {
 			notes.clear();
 		}
 		let swap = graph.prepare_schedule(track, &edited, &p.tempo).unwrap();

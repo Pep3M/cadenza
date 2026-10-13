@@ -374,7 +374,7 @@ pub fn duplicate_clip(
 		source_clip.length,
 	);
 	match &source_clip.content {
-		cadenza_model::ClipContent::Midi { notes } => {
+		cadenza_model::ClipContent::Midi { notes, .. } => {
 			clip = clip.with_notes(
 				notes
 					.iter()

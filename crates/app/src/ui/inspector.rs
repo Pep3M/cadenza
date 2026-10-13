@@ -326,7 +326,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 			}
 			ui.end_row();
 			match &c.content {
-				ClipContent::Midi { notes } => {
+				ClipContent::Midi { notes, .. } => {
 					ui.label("Notes");
 					ui.label(format!("{}", notes.len()));
 					ui.end_row();

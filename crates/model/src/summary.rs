@@ -155,6 +155,10 @@ pub struct ClipSummary {
 	/// One of several alternative takes of a region; only the active take plays.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub take: Option<Take>,
+	/// MIDI controller lanes, e.g. "cc1 (12 events, 0.00..1.00)", "pitch_bend (8 events,
+	/// -1.00..0.50)".
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub controllers: Vec<String>,
 }
 
 impl Project {
@@ -341,7 +345,7 @@ fn zone_summary(index: usize, z: &SampleZone) -> ZoneSummary {
 
 fn clip_summary(clip: &Clip) -> ClipSummary {
 	let (kind, note_count, pitch_range, file) = match &clip.content {
-		ClipContent::Midi { notes } => {
+		ClipContent::Midi { notes, .. } => {
 			let low = notes.iter().map(|n| n.pitch).min();
 			let high = notes.iter().map(|n| n.pitch).max();
 			let range = low
@@ -379,6 +383,27 @@ fn clip_summary(clip: &Clip) -> ClipSummary {
 		file,
 		fades,
 		take: clip.take,
+		controllers: clip
+			.controllers()
+			.iter()
+			.map(|l| {
+				let lo = l
+					.points
+					.iter()
+					.map(|p| p.value)
+					.fold(f32::INFINITY, f32::min);
+				let hi = l
+					.points
+					.iter()
+					.map(|p| p.value)
+					.fold(f32::NEG_INFINITY, f32::max);
+				format!(
+					"{} ({} events, {lo:.2}..{hi:.2})",
+					l.controller,
+					l.points.len()
+				)
+			})
+			.collect(),
 	}
 }
 

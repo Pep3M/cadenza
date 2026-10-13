@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cadenza_core::{ClipId, DeviceId, NoteId, ParamAddress, Tick, TimeSignature, TrackId};
+
+use crate::controller::{Controller, ControllerPoint};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -178,6 +180,13 @@ pub enum Command {
 		clip: ClipId,
 		notes: Vec<NotePatch>,
 	},
+	/// Replaces the `controller` lane of a MIDI clip (clip-relative points, sorted on
+	/// apply); empty `points` removes the lane.
+	SetControllerLane {
+		clip: ClipId,
+		controller: Controller,
+		points: Vec<ControllerPoint>,
+	},
 	/// Sets the tempo from `tick` on (adds or replaces a tempo point).
 	SetTempo {
 		tick: Tick,
@@ -342,6 +351,7 @@ impl Command {
 			Self::AddNotes { .. } => "add_notes",
 			Self::RemoveNotes { .. } => "remove_notes",
 			Self::UpdateNotes { .. } => "update_notes",
+			Self::SetControllerLane { .. } => "set_controller_lane",
 			Self::SetTempo { .. } => "set_tempo",
 			Self::RemoveTempoPoint { .. } => "remove_tempo_point",
 			Self::SetTimeSignature { .. } => "set_time_signature",
@@ -453,6 +463,10 @@ impl Command {
 			Self::AddNotes { notes, .. } => plural("Add", notes.len(), "note"),
 			Self::RemoveNotes { notes, .. } => plural("Remove", notes.len(), "note"),
 			Self::UpdateNotes { notes, .. } => plural("Edit", notes.len(), "note"),
+			Self::SetControllerLane {
+				controller, points, ..
+			} if points.is_empty() => format!("Clear {}", controller.label()),
+			Self::SetControllerLane { controller, .. } => format!("Edit {}", controller.label()),
 			Self::SetTempo { bpm, tick } if *tick == Tick::ZERO => {
 				format!("Set tempo to {bpm} bpm")
 			}

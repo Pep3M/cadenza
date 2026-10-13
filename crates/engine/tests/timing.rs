@@ -9,7 +9,7 @@ use common::*;
 
 fn kick_project(at: Tick, tempo_change: bool) -> Project {
 	let mut t = instrument_track("drums", Device::builtin("drum_machine", "Drums"), &[], 64.0);
-	if let cadenza_model::ClipContent::Midi { notes } = &mut t.clips[0].content {
+	if let cadenza_model::ClipContent::Midi { notes, .. } = &mut t.clips[0].content {
 		notes.push(cadenza_model::Note::new(36, at, beats(1.0), 1.0));
 	}
 	let mut p = project(vec![t]);

@@ -1340,7 +1340,7 @@ mod tests {
 		// A ragged span widens to the snap grid.
 		let c = clip(&fx);
 		let mut short = c.clone();
-		if let cadenza_model::ClipContent::Midi { notes } = &mut short.content {
+		if let cadenza_model::ClipContent::Midi { notes, .. } = &mut short.content {
 			notes[0].start = b(0.1);
 			notes[0].length = b(0.5);
 		}

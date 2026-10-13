@@ -537,7 +537,7 @@ impl AppState {
 		let describe_clip = |id: cadenza_core::ClipId| {
 			p.find_clip(id).map(|(track, c)| {
 				let notes = match &c.content {
-					cadenza_model::ClipContent::Midi { notes } => {
+					cadenza_model::ClipContent::Midi { notes, .. } => {
 						format!(", {} notes", notes.len())
 					}
 					cadenza_model::ClipContent::Audio { .. } => ", audio".into(),

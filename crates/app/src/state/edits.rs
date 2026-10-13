@@ -115,7 +115,7 @@ pub fn copy_clips(
 			let mut copy = (*clip).clone();
 			copy.id = ClipId::new();
 			copy.start = clip.start + delta;
-			if let ClipContent::Midi { notes } = &mut copy.content {
+			if let ClipContent::Midi { notes, .. } = &mut copy.content {
 				for n in notes {
 					n.id = NoteId::new();
 				}
@@ -233,7 +233,7 @@ pub fn duplicate_clips(project: &Project, clips: &[ClipId]) -> Option<(Command, 
 			let mut copy = (*clip).clone();
 			copy.id = ClipId::new();
 			copy.start = clip.start + offset;
-			if let ClipContent::Midi { notes } = &mut copy.content {
+			if let ClipContent::Midi { notes, .. } = &mut copy.content {
 				for n in notes {
 					n.id = NoteId::new();
 				}
@@ -286,7 +286,7 @@ pub fn trim_start(project: &Project, clip: ClipId, start: Tick) -> Option<Comman
 	let mut start = Tick(start.0.clamp(0, end.0 - MIN_CLIP_LENGTH.0));
 	let mut commands = Vec::new();
 	match &c.content {
-		ClipContent::Midi { notes } => {
+		ClipContent::Midi { notes, .. } => {
 			let delta = start - c.start;
 			if delta.0 == 0 {
 				return None;

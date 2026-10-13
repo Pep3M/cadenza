@@ -1,0 +1,186 @@
+# Release artifacts per platform: Linux tar.gz + AppImage, Windows zip, macOS universal
+# .app in a dmg (unsigned). Tags `v*` also get a draft GitHub Release with every file;
+# manual runs only upload workflow artifacts unless `draft_release` names a tag.
+#
+# TODO(signing): macOS Developer ID signing + notarization and Windows Authenticode
+# signing need certificates stored as repository secrets; until then the macOS app is
+# ad-hoc signed (right-click > Open on first launch) and the Windows binaries unsigned.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Tag name for a draft GitHub Release (empty = artifacts only). A draft creates no tag."
+        type: string
+        default: ""
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.98.1"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  # Every binary a release ships: the CLI, the app and the plugin helpers that must sit
+  # next to them (scanner everywhere, sandbox on Unix).
+  PACKAGES: -p cadenza-cli -p cadenza-app -p cadenza-plugin-host
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            base=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+            version="${base}-dev.${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    # The oldest supported runner, so the binaries run on older glibc versions too.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      NAME: cadenza-${{ needs.version.outputs.version }}-linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends pkg-config libasound2-dev libfuse2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux
+      - run: cargo build --release --locked --bins $PACKAGES
+      - name: tar.gz
+        run: |
+          mkdir -p "dist/$NAME"
+          cp target/release/{cadenza,cadenza-app,cadenza-plugin-sandbox,cadenza-plugin-scanner} "dist/$NAME/"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+      - name: AppImage
+        run: |
+          app=dist/Cadenza.AppDir
+          mkdir -p "$app/usr/bin"
+          cp target/release/{cadenza,cadenza-app,cadenza-plugin-sandbox,cadenza-plugin-scanner} "$app/usr/bin/"
+          cp packaging/linux/cadenza.desktop packaging/linux/cadenza.svg "$app/"
+          printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/cadenza-app" "$@"\n' > "$app/AppRun"
+          chmod +x "$app/AppRun"
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool --no-appstream "$app" "dist/$NAME.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 75
+    env:
+      NAME: cadenza-${{ needs.version.outputs.version }}-windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows
+      - shell: bash
+        run: cargo build --release --locked --bins $PACKAGES
+      - name: zip
+        shell: pwsh
+        run: |
+          # No sandbox on Windows yet: plugins run in-process, so the sandbox binary stays out.
+          New-Item -ItemType Directory -Force "dist/$env:NAME" | Out-Null
+          foreach ($b in "cadenza", "cadenza-app", "cadenza-plugin-scanner") {
+            Copy-Item "target/release/$b.exe" "dist/$env:NAME/"
+          }
+          Compress-Archive -Path "dist/$env:NAME" -DestinationPath "dist/$env:NAME.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      NAME: cadenza-${{ needs.version.outputs.version }}-macos-universal
+      VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-macos
+      - run: |
+          cargo build --release --locked --bins $PACKAGES --target aarch64-apple-darwin
+          cargo build --release --locked --bins $PACKAGES --target x86_64-apple-darwin
+      - name: Universal .app and dmg
+        run: |
+          app="dist/$NAME/Cadenza.app"
+          mkdir -p "$app/Contents/MacOS"
+          for b in cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner; do
+            lipo -create -output "$app/Contents/MacOS/$b" \
+              "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+          done
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --force --deep --sign - "$app"
+          ln -s /Applications "dist/$NAME/Applications"
+          hdiutil create -volname Cadenza -srcfolder "dist/$NAME" -ov -format UDZO "dist/$NAME.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: [version, linux, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.draft_release != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.draft_release }}
+        run: |
+          ls -l dist
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+            --target "$GITHUB_SHA" --title "Cadenza $TAG" --generate-notes

@@ -412,7 +412,7 @@ pub struct Player; // new(), load(&Project) -> Result<Vec<String> /*warnings*/>,
 	// set_plugins, set_hosting, plugin_crashes() / take_plugin_crashes() -> Vec<PluginCrash>,
 	// set_midi_input(Option<&MidiPort>), set_monitor_track(Option<TrackId>), dropped_midi_events(),
 	// set_loop(Option<(Tick, Tick)>), set_audition(Option<AuditionScope { tracks }>),
-	// set_track_clips(track, &clips, &tempo) -> Result<bool> (false: reload)
+	// set_track_clips(track, &clips, &tempo) -> Result<bool> (false: reload), device_xruns()
 pub fn midi_input_ports() -> Result<Vec<MidiPort>, EngineError>; pub fn find_midi_input(index_or_name) -> Result<MidiPort, _>;
 pub fn compile_hosted(project, sample_rate, max_block, plugins, &PluginHosting) -> Result<Graph, EngineError>; // Graph::plugin_crashes()
 pub fn capture_state(&Device, plugins, &PluginHosting) -> Result<Option<String>, EngineError>; // fresh instance: state + params
@@ -780,6 +780,11 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   blocking the UI: requests are fire-and-forget, a burst of loads is coalesced into the newest,
   results come back as polled `AudioEvent`s; position via `PlayerClock`, levels via `MeterBank`,
   plugin crashes polled every 500 ms and shown as toasts. No device = app works without sound.
+- Dropouts (phase 19a, `state::xruns`): the player thread sends `AudioEvent::Xruns { device:
+  Player::device_xruns() (cpal `Xrun` errors counted in the stream's error callback), plugins:
+  plugin_xruns() }` when they change (500 ms poll); the transport shows "⚠ n" left of the audio
+  status only when there are dropouts since the last reset (amber fill for 3 s after a new
+  one), tooltip per source, click resets. `VirtualDevice::report_xrun` for tests.
 - `jobs`: waveform peaks (decoded + `WaveformPeaks` on a worker, cached by path), plugin
   rescans, exports, file copies and file dialogs (files and folders) run off the UI thread.
 - Project files (phase 14; `state::safety`, `state::export`, `state::project_io`,

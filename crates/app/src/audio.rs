@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_engine::{
 	AudioConfig, AudioDevices, AuditionScope, EditorState, EditorUpdate, InputInfo, InputStats,
-	MeterBank, MetronomeSettings, Player, PlayerClock, PluginCrash, PluginHosting, RecordSetup,
-	Recording, RecordingMonitor,
+	MeterBank, MetronomeSettings, Player, PlayerClock, PluginCrash, PluginHosting, PluginXruns,
+	RecordSetup, Recording, RecordingMonitor,
 };
 use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
@@ -153,6 +153,12 @@ pub enum AudioEvent {
 		error: String,
 	},
 	PluginCrashes(Vec<PluginCrash>),
+	/// Dropout totals, sent when they change: device under/overruns since the device
+	/// opened, and the sandboxed plugins of the loaded graph that were late.
+	Xruns {
+		device: u64,
+		plugins: Vec<PluginXruns>,
+	},
 	/// What happened in open plugin editors.
 	Editor(Vec<EditorUpdate>),
 	/// Live plugin states to store in the project (captured, or carried over by a load).
@@ -497,6 +503,7 @@ fn run(
 		status: status(&player, &kept),
 	});
 	let mut next_crash_poll = Instant::now() + CRASH_POLL;
+	let mut last_xruns: (u64, Vec<PluginXruns>) = (0, Vec::new());
 	let mut next_editor_poll = Instant::now() + EDITOR_POLL;
 	loop {
 		let now = Instant::now();
@@ -505,6 +512,14 @@ fn run(
 			let crashes = player.take_plugin_crashes();
 			if !crashes.is_empty() {
 				emit(AudioEvent::PluginCrashes(crashes));
+			}
+			let xruns = (player.device_xruns(), player.plugin_xruns());
+			if xruns != last_xruns {
+				emit(AudioEvent::Xruns {
+					device: xruns.0,
+					plugins: xruns.1.clone(),
+				});
+				last_xruns = xruns;
 			}
 		}
 		let editors = !player.open_editors().is_empty();

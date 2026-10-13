@@ -3,7 +3,8 @@
 
 use cadenza_core::{Tick, TimeSignature};
 use egui::{
-	Align, Align2, CornerRadius, Id, Layout, RichText, Sense, Shape, Stroke, Ui, pos2, vec2,
+	Align, Align2, CornerRadius, Id, Layout, RichText, Sense, Shape, Stroke, StrokeKind, Ui, pos2,
+	vec2,
 };
 
 use crate::state::timeline::{format_bbt, format_time};
@@ -81,8 +82,53 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			if let AudioStatus::Unavailable(e) = &state.audio_status {
 				r.on_hover_text(e);
 			}
+			xrun_indicator(ui, state);
 		});
 	});
+}
+
+/// Dropouts since the last reset (audio device under/overruns, late plugin blocks):
+/// hidden while there are none, amber for a few seconds after a new one; the tooltip
+/// says what dropped out, a click resets the count.
+fn xrun_indicator(ui: &mut Ui, state: &mut AppState) {
+	let count = state.xruns.count();
+	if count == 0 {
+		return;
+	}
+	ui.add_space(6.0);
+	let now = std::time::Instant::now();
+	let recent = state.xruns.recent(now);
+	let text = format!("⚠ {count}");
+	let galley = ui.painter().layout_no_wrap(
+		text.clone(),
+		theme::mono(10.0),
+		if recent {
+			theme::BG_DEEP
+		} else {
+			theme::WARNING
+		},
+	);
+	let size = vec2(galley.size().x + 10.0, 16.0);
+	let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Dropouts"));
+	let p = ui.painter();
+	if recent {
+		p.rect_filled(r, CornerRadius::same(3), theme::WARNING);
+		ui.ctx().request_repaint_after(crate::state::xruns::RECENT);
+	} else {
+		p.rect_stroke(
+			r,
+			CornerRadius::same(3),
+			Stroke::new(1.0, theme::WARNING.gamma_multiply(0.7)),
+			StrokeKind::Inside,
+		);
+	}
+	p.galley(r.center() - galley.size() * 0.5, galley, theme::WARNING);
+	let mut tip = state.xruns.lines().join("\n");
+	tip.push_str("\nClick to reset the count");
+	if resp.on_hover_text(tip).clicked() {
+		state.xruns.reset();
+	}
 }
 
 /// FL Studio-like "PAT | SONG" switch (L).

@@ -38,6 +38,7 @@ pub mod samples;
 pub mod selection;
 pub mod timeline;
 pub mod transport;
+pub mod xruns;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -295,6 +296,8 @@ pub struct AppState {
 	pub view: ViewState,
 	pub notices: Notices,
 	pub meters: Meters,
+	/// Audio device and plugin dropouts (transport indicator).
+	pub xruns: xruns::Xruns,
 	pub previews: Previews,
 	pub audio_status: AudioStatus,
 	/// Warnings of the last player load (missing files, unknown devices...).
@@ -403,6 +406,7 @@ impl AppState {
 			view: ViewState::default(),
 			notices: Notices::default(),
 			meters: Meters::default(),
+			xruns: xruns::Xruns::default(),
 			previews: Previews::default(),
 			audio_status: AudioStatus::Off,
 			load_warnings: Vec::new(),
@@ -3153,6 +3157,9 @@ impl AppState {
 					self.notices.error(format!("Playback engine: {error}"));
 				}
 				AudioEvent::ReloadNeeded => self.schedule_reload(),
+				AudioEvent::Xruns { device, plugins } => {
+					self.xruns.update(device, plugins, Instant::now());
+				}
 				AudioEvent::PluginCrashes(crashes) => {
 					for c in crashes {
 						self.notices.error(c.message);

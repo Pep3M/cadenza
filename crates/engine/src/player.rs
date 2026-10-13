@@ -175,6 +175,8 @@ pub struct AuditionScope {
 struct Shared {
 	position: AtomicI64,
 	playing: AtomicBool,
+	/// Buffer under/overruns the audio device reported (cpal `Xrun` errors).
+	device_xruns: AtomicU64,
 }
 
 /// Audio-thread side: owns the current graph.
@@ -827,6 +829,14 @@ pub struct VirtualDevice {
 }
 
 impl VirtualDevice {
+	/// The device reports a buffer under/overrun, like cpal's `Xrun` error (tests).
+	pub fn report_xrun(&self) {
+		self.core
+			.shared
+			.device_xruns
+			.fetch_add(1, Ordering::Relaxed);
+	}
+
 	/// One callback: `input` (interleaved, the device's input channels) arrives, then
 	/// `output` (interleaved stereo) is rendered. Never allocates.
 	pub fn process(&mut self, output: &mut [f32], input: &[f32]) {
@@ -943,12 +953,13 @@ impl Player {
 		let (control, core) = channel_pair(config_out.sample_rate);
 		let output_latency = Arc::new(AtomicU64::new(0));
 		let lat = output_latency.clone();
+		let shared = control.shared.clone();
 		let stream = match format {
-			SampleFormat::F32 => build::<f32>(&device, config_out, channels, core, lat),
-			SampleFormat::F64 => build::<f64>(&device, config_out, channels, core, lat),
-			SampleFormat::I16 => build::<i16>(&device, config_out, channels, core, lat),
-			SampleFormat::I32 => build::<i32>(&device, config_out, channels, core, lat),
-			SampleFormat::U16 => build::<u16>(&device, config_out, channels, core, lat),
+			SampleFormat::F32 => build::<f32>(&device, config_out, channels, core, lat, shared),
+			SampleFormat::F64 => build::<f64>(&device, config_out, channels, core, lat, shared),
+			SampleFormat::I16 => build::<i16>(&device, config_out, channels, core, lat, shared),
+			SampleFormat::I32 => build::<i32>(&device, config_out, channels, core, lat, shared),
+			SampleFormat::U16 => build::<u16>(&device, config_out, channels, core, lat, shared),
 			other => Err(EngineError::Audio(format!(
 				"unsupported output sample format {other}"
 			))),
@@ -1111,6 +1122,12 @@ impl Player {
 	/// Input levels and dropout counters (lock-free; poll from any thread).
 	pub fn input_stats(&self) -> Arc<InputStats> {
 		self.input_stats.clone()
+	}
+
+	/// Buffer under/overruns the output device reported since it was opened (audible
+	/// clicks: the callback was late; a larger buffer helps).
+	pub fn device_xruns(&self) -> u64 {
+		self.control.shared.device_xruns.load(Ordering::Relaxed)
 	}
 
 	/// Measured output latency (callback to playback), frames (0 when unknown).
@@ -1863,6 +1880,7 @@ fn build<T: SizedSample + FromSample<f32>>(
 	channels: usize,
 	mut core: AudioCore,
 	output_latency: Arc<AtomicU64>,
+	shared: Arc<Shared>,
 ) -> Result<cpal::Stream, EngineError> {
 	let rate = f64::from(config.sample_rate);
 	device
@@ -1878,7 +1896,12 @@ fn build<T: SizedSample + FromSample<f32>>(
 				}
 				core.fill_interleaved(data, channels)
 			},
-			|_err| {},
+			move |err: cpal::Error| {
+				// Counted for the UI's xrun indicator; recovery is cpal's job.
+				if err.kind() == cpal::ErrorKind::Xrun {
+					shared.device_xruns.fetch_add(1, Ordering::Relaxed);
+				}
+			},
 			None,
 		)
 		.map_err(|e| EngineError::Audio(e.to_string()))
@@ -1937,6 +1960,15 @@ mod tests {
 		assert_eq!(control.garbage.slots(), 1);
 		control.collect_garbage();
 		assert!(core.graph.as_ref().unwrap().is_playing());
+	}
+
+	#[test]
+	fn device_xruns_are_counted_for_the_ui() {
+		let (player, dev) = Player::virtual_device(48_000, 0);
+		assert_eq!(player.device_xruns(), 0);
+		dev.report_xrun();
+		dev.report_xrun();
+		assert_eq!(player.device_xruns(), 2);
 	}
 
 	#[test]

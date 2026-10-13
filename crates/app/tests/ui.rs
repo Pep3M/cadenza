@@ -2642,6 +2642,26 @@ fn a_frozen_track_edited_afterwards_offers_a_one_click_refreeze() {
 }
 
 #[test]
+fn the_xrun_indicator_shows_dropouts_and_resets_on_click() {
+	let mut h = harness(app());
+	h.run_steps(2);
+	assert!(
+		h.query_by_label("Dropouts").is_none(),
+		"hidden without dropouts"
+	);
+	h.state_mut()
+		.state
+		.xruns
+		.update(3, Vec::new(), std::time::Instant::now());
+	h.run_steps(2);
+	assert_eq!(h.state().state.xruns.count(), 3);
+	h.get_by_label("Dropouts").click();
+	h.run_steps(2);
+	assert_eq!(h.state().state.xruns.count(), 0);
+	assert!(h.query_by_label("Dropouts").is_none());
+}
+
+#[test]
 fn folders_group_tracks_and_fold_in_the_arrange() {
 	let mut a = app();
 	let ids: Vec<_> = a
@@ -2940,4 +2960,39 @@ fn render_mix_screens() {
 	// The browser's Files tab (its ◆ bookmarks glyph comes from the fallback font).
 	h.get_by_label("Files").click();
 	shot(&mut h, &dir, "files_tab_glyphs");
+}
+
+#[test]
+#[ignore]
+fn render_phase19_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let mut h = screenshot_harness(app());
+	h.run_steps(2);
+	// A frozen track edited afterwards (amber FRZ! on its header and mixer strip), a frozen
+	// one that is current, and the xrun indicator after a few dropouts.
+	{
+		let s = &mut h.state_mut().state;
+		let p = s.project().clone();
+		for name in ["Keys", "Bass"] {
+			let t = p.tracks.iter().find(|t| t.name == name).unwrap();
+			let source = p.freeze_source(t.id);
+			assert!(s.apply(cadenza_model::Command::SetTrackFreeze {
+				track: t.id,
+				freeze: Some(cadenza_model::Freeze {
+					file: "/nonexistent/freeze.wav".into(),
+					source,
+				}),
+			}));
+		}
+		let keys = p.tracks.iter().find(|t| t.name == "Keys").unwrap();
+		assert!(s.apply(cadenza_model::Command::AddNotes {
+			clip: keys.clips[0].id,
+			notes: vec![cadenza_model::Note::new(72, Tick(0), Tick(PPQ), 0.7)],
+		}));
+		s.xruns.update(4, Vec::new(), std::time::Instant::now());
+	}
+	shot(&mut h, &dir, "freeze_stale_and_xruns");
 }

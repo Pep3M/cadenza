@@ -1021,6 +1021,41 @@ impl CadenzaServer {
 	// -- rendering / analysis --------------------------------------------------------
 
 	#[tool(
+		description = "Freezes a track: renders its instrument, clips and inserts (before the fader) into the project's .cadenza/freeze/ and plays that render instead, unloading its devices to save CPU. Fader, pan, sends and mute still work. unfreeze_track restores it; freeze again after editing it."
+	)]
+	async fn freeze_track(
+		&self,
+		Parameters(args): Parameters<render::FreezeTrackArgs>,
+	) -> Result<Json<render::FreezeTrackOutput>, ErrorData> {
+		let (project, plugins, hosting) = self.project_and_plugins();
+		let path = self.session().path().map(std::path::Path::to_path_buf);
+		let (cmd, out) =
+			render::freeze_render(project, path, plugins, hosting, args.track_id).await?;
+		self.run_mut(|s| {
+			s.document_mut().execute(cmd)?;
+			Ok(())
+		})?;
+		Ok(Json(out))
+	}
+
+	#[tool(
+		description = "Unfreezes a frozen track: its devices and clips play again (the render file stays)."
+	)]
+	fn unfreeze_track(
+		&self,
+		Parameters(args): Parameters<render::FreezeTrackArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| {
+			s.document_mut()
+				.execute(cadenza_model::Command::SetTrackFreeze {
+					track: args.track_id,
+					freeze: None,
+				})?;
+			Ok(())
+		})
+	}
+
+	#[tool(
 		description = "Renders the project to a stereo audio file and returns the mix report \
 			(levels, loudness, band energy, per track) plus the written file's levels. The path \
 			extension picks the format: .wav (32-bit float, or bit_depth 16/24), .flac (24-bit, \

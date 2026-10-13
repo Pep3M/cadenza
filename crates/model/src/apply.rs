@@ -856,6 +856,35 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetTrackFreeze { track, freeze } => {
+			let t = project
+				.track_mut(*track)
+				.ok_or(ModelError::TrackNotFound(*track))?;
+			if freeze.is_some()
+				&& matches!(t.kind, crate::TrackKind::Bus | crate::TrackKind::Folder)
+			{
+				return Err(ModelError::invalid(
+					"freeze",
+					t.name.clone(),
+					"only instrument and audio tracks can be frozen",
+				));
+			}
+			if let Some(f) = freeze
+				&& f.file.as_os_str().is_empty()
+			{
+				return Err(ModelError::invalid(
+					"freeze file",
+					"\"\"",
+					"must be the path of the rendered audio file",
+				));
+			}
+			let old = std::mem::replace(&mut t.freeze, freeze.clone());
+			Ok(vec![Command::SetTrackFreeze {
+				track: *track,
+				freeze: old,
+			}])
+		}
+
 		Command::SetTrackFolder { track, folder } => {
 			validate::track_folder(project, *track, *folder)?;
 			let t = project

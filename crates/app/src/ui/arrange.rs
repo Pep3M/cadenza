@@ -900,6 +900,22 @@ impl ArrangeUi {
 				);
 			}
 		}
+		if track.freeze.is_some() {
+			let badge =
+				Rect::from_min_size(pos2(name_rect.right() - 30.0, row1 + 2.0), vec2(28.0, 12.0));
+			p.rect_filled(badge, CornerRadius::same(2), theme::FROZEN);
+			p.text(
+				badge.center(),
+				Align2::CENTER_CENTER,
+				"FRZ",
+				FontId::monospace(8.5),
+				theme::BG_DEEP,
+			);
+			ui.interact(badge, id.with("frozen"), Sense::hover())
+				.on_hover_text(
+					"Frozen: the track plays its render; its devices are unloaded (track menu: Unfreeze)",
+				);
+		}
 		let ch = &track.channel;
 		{
 			let open = state.view.automation.is_open(Some(track.id));
@@ -1825,6 +1841,30 @@ fn track_menu(
 		*rename = Some((track.id, track.name.clone()));
 		ui.close();
 	}
+	if crate::state::bounce::can_freeze(track) {
+		let busy = state.bounce_busy();
+		if track.freeze.is_some() {
+			if ui.button("Unfreeze").clicked() {
+				state.unfreeze_track(track.id);
+				ui.close();
+			}
+		} else if ui
+			.add_enabled(!busy, egui::Button::new("Freeze (render, unload devices)"))
+			.clicked()
+		{
+			state.freeze_track(track.id);
+			ui.close();
+		}
+		if ui
+			.add_enabled(!busy, egui::Button::new("Bounce in place"))
+			.on_hover_text("Render the track to a new audio track and mute this one")
+			.clicked()
+		{
+			state.bounce_in_place(track.id);
+			ui.close();
+		}
+		ui.separator();
+	}
 	if ui.button("Group into new folder").clicked() {
 		state.group_into_folder(&[track.id]);
 		ui.close();
@@ -1939,6 +1979,17 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 	}
 	if ui.button("Split at playhead   S").clicked() {
 		super::split_at_playhead(state);
+		ui.close();
+	}
+	if ui
+		.add_enabled(
+			state.selection.clips.len() > 1,
+			egui::Button::new("Consolidate selected clips"),
+		)
+		.on_disabled_hover_text("Select two or more clips of one track")
+		.clicked()
+	{
+		state.consolidate_selection();
 		ui.close();
 	}
 	if ui.button("Delete            Del").clicked() {

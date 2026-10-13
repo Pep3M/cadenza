@@ -545,6 +545,7 @@ pub fn build_import_command(
 					channel: Default::default(),
 					input: None,
 					folder: None,
+					freeze: None,
 				};
 				commands.push(Command::AddTrack { track, index: None });
 			}

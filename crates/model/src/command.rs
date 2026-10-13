@@ -180,6 +180,12 @@ pub enum Command {
 		clip: ClipId,
 		notes: Vec<NotePatch>,
 	},
+	/// Freezes a track (its render plays instead of its devices and clips) or, with
+	/// `None`, unfreezes it.
+	SetTrackFreeze {
+		track: TrackId,
+		freeze: Option<crate::project::Freeze>,
+	},
 	/// Puts a track into a folder track (`None`: back to the top level). Display order is
 	/// unchanged (pair it with MoveTrack to place it under the folder).
 	SetTrackFolder {
@@ -359,6 +365,7 @@ impl Command {
 			Self::UpdateNotes { .. } => "update_notes",
 			Self::SetControllerLane { .. } => "set_controller_lane",
 			Self::SetTrackFolder { .. } => "set_track_folder",
+			Self::SetTrackFreeze { .. } => "set_track_freeze",
 			Self::SetTempo { .. } => "set_tempo",
 			Self::RemoveTempoPoint { .. } => "remove_tempo_point",
 			Self::SetTimeSignature { .. } => "set_time_signature",
@@ -470,6 +477,8 @@ impl Command {
 			Self::AddNotes { notes, .. } => plural("Add", notes.len(), "note"),
 			Self::RemoveNotes { notes, .. } => plural("Remove", notes.len(), "note"),
 			Self::UpdateNotes { notes, .. } => plural("Edit", notes.len(), "note"),
+			Self::SetTrackFreeze { freeze: None, .. } => "Unfreeze track".into(),
+			Self::SetTrackFreeze { .. } => "Freeze track".into(),
 			Self::SetTrackFolder { folder: None, .. } => "Take track out of folder".into(),
 			Self::SetTrackFolder { .. } => "Move track into folder".into(),
 			Self::SetControllerLane {

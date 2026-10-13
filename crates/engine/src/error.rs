@@ -23,4 +23,6 @@ pub enum EngineError {
 	Midi(String),
 	#[error("recording: {0}")]
 	Record(String),
+	#[error("track render: {0}")]
+	Bounce(String),
 }

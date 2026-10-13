@@ -9,6 +9,7 @@
 pub mod analysis;
 mod audio_clip;
 mod automation;
+pub mod bounce;
 mod compile;
 mod devices;
 mod error;
@@ -28,6 +29,7 @@ mod schedule;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
 pub use automation::AutomationBindings;
+pub use bounce::{BounceScope, bounce_project, render_track};
 pub use cadenza_audio_io::Metadata;
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
 pub use cadenza_midi_io::PortInfo as MidiPort;

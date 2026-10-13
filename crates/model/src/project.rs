@@ -73,6 +73,16 @@ pub struct Track {
 	/// The folder track this track is in (missing = top level).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub folder: Option<TrackId>,
+	/// Frozen: the track plays this render (instrument, clips and inserts, before the
+	/// fader) instead of computing them; its devices are not loaded.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub freeze: Option<Freeze>,
+}
+
+/// A frozen track's render: a stereo file that starts at the song start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Freeze {
+	pub file: PathBuf,
 }
 
 /// Which channels of the audio input device an audio track records, and when the track
@@ -549,6 +559,7 @@ impl Track {
 			channel: Channel::default(),
 			input: None,
 			folder: None,
+			freeze: None,
 		}
 	}
 

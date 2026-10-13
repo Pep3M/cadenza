@@ -96,6 +96,7 @@ pub enum TrackKind { Instrument, Audio, Bus, Folder }
 pub struct Track { id: TrackId, name, kind, color: Option<String /* #RRGGBB */>,
 	instrument: Option<Device>, clips: Vec<Clip>, channel: Channel,
 	folder: Option<TrackId> /* the folder track holding it; optional */,
+	freeze: Option<Freeze { file: PathBuf /* stereo render from tick 0 */ }> /* optional */,
 	input: Option<TrackInput { channel: u16 /* 0-based */, stereo: bool /* channel+1 */, monitor: MonitorMode /* off|auto (default)|on */ }> /* audio tracks */ }
 pub struct Channel { volume_db: f32, pan: f32 /* -1..1 */, mute: bool, solo: bool,
 	inserts: Vec<Device>, sends: Vec<Send>, output: Output }
@@ -134,7 +135,7 @@ master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature { time_signature, bar /* 0-based index, 0 = bar 1, omitted when 0 */ },
-RemoveTimeSignature { bar }, SetTrackFolder { track, folder: Option }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
+RemoveTimeSignature { bar }, SetTrackFreeze { track, freeze: Option<Freeze> } (instrument/audio only), SetTrackFolder { track, folder: Option }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
@@ -397,6 +398,15 @@ pad C2-C5, mono 48 kHz WAV) in `$CADENZA_FACTORY_SAMPLES` or
 versioned), `list_factory_samples`, `preset_zones`, `default_content(id)` (a new sampler starts
 with "Sine Pad", a drum_sampler with "Synth Kit"). `auto_zone(path)`/`detect_root`: name, else
 pitch, else C4.
+Freeze / bounce (phase 17, `engine::bounce`): `render_track(project, opts, track, &BounceScope::
+Track | Clips(ids), start, path)` renders a synthetic one-track project (the track at 0 dB,
+centered, no sends/folder/freeze, keys and extra-output buses dropped, its device-param lanes
+kept; `Clips` keeps only those clips and no inserts) to a 32f WAV: what the track's fader
+receives, so playing it back through the fader matches the original (test: frozen render ==
+live render). A frozen track compiles to one audio clip of its render from 0 with no devices
+loaded (instrument, inserts unloaded: CPU saved); fader/pan/sends/mute still apply; a missing
+render plays the track unfrozen with a warning. Freeze files live in `.cadenza/freeze/` (paths
+relativized like clips).
 Folders: folder tracks get no node; each node's fader is `own_db + folder_db` (sum of its
 folders' volumes), `set_channel_volume(folder)` moves every node inside (`Graph::folders`,
 realtime safe) and folder volume lanes bind to `AutoTarget::FolderVolume`; a folder's mute
@@ -617,6 +627,14 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   `SetAutomation`, each stretch replacing the points inside it, thinned by Ramer-Douglas-Peucker
   at 1 % of its range; a loop wrap starts a new stretch so the later pass wins). Nothing of
   this runs on the audio thread.
+- Freeze / bounce / consolidate (phase 17, `state::bounce` builders, renders on a worker
+  `jobs.bounce`, one undo step when done): track menu Freeze / Unfreeze (FRZ badge on the
+  header), Bounce in place (new audio track "<name> (bounce)" below with the render from the
+  bar of the first clip, same volume/pan/output/folder, original muted); clip menu
+  "Consolidate selected clips" (two or more clips of one track: MIDI merged at once with notes
+  and controller lanes, audio rendered without inserts into one clip). Renders go to
+  `.cadenza/freeze/` (freeze) or `Audio/` (state folder before the first save). MCP:
+  `freeze_track`, `unfreeze_track`; summaries show `frozen`.
 - Folder tracks (phase 17, `state::folders` pure builders): "+ Folder" track button, track
   menu "Group into new folder" / "Take out of folder"; headers indent with a guide line per
   folder level, folders have a disclosure triangle (`view.collapsed`, `toggle_folder`) and a

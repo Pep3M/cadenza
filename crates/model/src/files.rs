@@ -276,6 +276,11 @@ impl Project {
 			zones(d);
 		}
 		for track in &mut self.tracks {
+			if let Some(fz) = &mut track.freeze
+				&& let Some(p) = f(&fz.file)
+			{
+				fz.file = p;
+			}
 			for clip in &mut track.clips {
 				if let ClipContent::Audio { file, .. } = &mut clip.content
 					&& let Some(p) = f(file)

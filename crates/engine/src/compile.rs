@@ -460,6 +460,30 @@ impl<'a> Compiler<'a> {
 			.collect()
 	}
 
+	/// A frozen track's render as its only clip (`None`: not frozen, or the render is
+	/// missing, in which case the track plays normally with a warning).
+	fn frozen_source(&mut self, track: &Track, owner: &str) -> Option<Source> {
+		let f = track.freeze.as_ref()?;
+		let Ok(source) = audio_clip::load(&f.file, self.sample_rate) else {
+			self.warnings.push(format!(
+				"{owner} is frozen but its render '{}' cannot be read; playing it unfrozen (freeze it again)",
+				f.file.display()
+			));
+			return None;
+		};
+		let region = cadenza_audio_io::ClipRegion::whole(&source);
+		Some(Source::Audio {
+			clips: vec![ClipPlayback {
+				source,
+				start: 0,
+				region,
+				crossfaded_in: false,
+				crossfaded_out: false,
+			}],
+			fade_in: 0,
+		})
+	}
+
 	fn source(&mut self, track: &Track, owner: &str) -> (Source, bool) {
 		let sr = self.sample_rate as f64;
 		match track.kind {
@@ -643,7 +667,12 @@ impl<'a> Compiler<'a> {
 			let track = &project.tracks[ti];
 			let owner = format!("track '{}'", track.name);
 			self.current_track = Some(track.id);
-			let (mut source, mono) = self.source(track, &owner);
+			let frozen = self.frozen_source(track, &owner);
+			let is_frozen = frozen.is_some();
+			let (mut source, mono) = match frozen {
+				Some(s) => (s, false),
+				None => self.source(track, &owner),
+			};
 			let input = (track.kind == TrackKind::Audio)
 				.then_some(track.input)
 				.flatten()
@@ -668,7 +697,12 @@ impl<'a> Compiler<'a> {
 			if let Source::Bus { accumulator } = &mut source {
 				*accumulator = bus_acc[&track.id];
 			}
-			let mut inserts = self.inserts(&track.channel.inserts, &owner);
+			// A frozen track's inserts are in its render: none are loaded.
+			let mut inserts = if is_frozen {
+				Vec::new()
+			} else {
+				self.inserts(&track.channel.inserts, &owner)
+			};
 			let mut stages = Vec::new();
 			if let Source::Instrument {
 				device: Some(d), ..

@@ -26,8 +26,8 @@ pub use files::{FileRef, FileUse, ProjectLayout};
 pub use persist::{backup_path, write_atomic};
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
-	FORMAT_VERSION, FadeCurve, Marker, MonitorMode, Note, Output, OutputRoute, PointShape, Project,
-	Send, SidechainSource, Take, Track, TrackInput, TrackKind, automation_value,
+	FORMAT_VERSION, FadeCurve, Freeze, Marker, MonitorMode, Note, Output, OutputRoute, PointShape,
+	Project, Send, SidechainSource, Take, Track, TrackInput, TrackKind, automation_value,
 };
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{

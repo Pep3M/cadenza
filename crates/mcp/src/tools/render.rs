@@ -10,7 +10,7 @@ use cadenza_engine::{
 	PluginHosting, RenderOptions, StemSet, analyze_mix as engine_analyze_mix,
 	export_options_for_path, export_project,
 };
-use cadenza_model::{Project, TrackKind};
+use cadenza_model::{Command, Project, TrackKind};
 use cadenza_plugin_host::PluginCatalog;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -950,5 +950,113 @@ mod tests {
 			notes.iter().any(|n| n.contains("very dynamic")),
 			"{notes:?}"
 		);
+	}
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FreezeTrackArgs {
+	pub track_id: TrackId,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FreezeTrackOutput {
+	/// The render the frozen track now plays.
+	pub file: String,
+	pub duration_seconds: f64,
+}
+
+/// Where `freeze_track` writes: the project's `.cadenza/freeze/`, or a temp folder for an
+/// unsaved project.
+fn freeze_dir(project_path: Option<&std::path::Path>) -> PathBuf {
+	match project_path {
+		Some(p) => cadenza_model::ProjectLayout::new(p)
+			.cache_dir()
+			.join("freeze"),
+		None => std::env::temp_dir().join(format!("cadenza-freeze-{}", std::process::id())),
+	}
+}
+
+/// Renders the track (instrument, clips, inserts, before its fader) and returns the
+/// command that freezes it.
+pub async fn freeze_render(
+	project: Project,
+	project_path: Option<PathBuf>,
+	plugins: Option<Arc<PluginCatalog>>,
+	hosting: PluginHosting,
+	track: TrackId,
+) -> Result<(Command, FreezeTrackOutput), McpError> {
+	let t = project
+		.track(track)
+		.ok_or(cadenza_model::ModelError::TrackNotFound(track))?;
+	if !matches!(t.kind, TrackKind::Instrument | TrackKind::Audio) {
+		return Err(McpError::Invalid(
+			"only instrument and audio tracks can be frozen".into(),
+		));
+	}
+	let dir = freeze_dir(project_path.as_deref());
+	let stem = cadenza_model::files::sanitize_file_name(&format!("{} freeze", t.name));
+	let file = (1..)
+		.map(|n| dir.join(format!("{stem} {n}.wav")))
+		.find(|p| !p.exists())
+		.expect("a free file name");
+	let mut source = project.clone();
+	if let Some(t) = source.tracks.iter_mut().find(|t| t.id == track) {
+		t.freeze = None;
+	}
+	let opts = build_options(None, None, None, plugins, hosting);
+	let out = file.clone();
+	let report = tokio::task::spawn_blocking(move || {
+		cadenza_engine::render_track(
+			&source,
+			&opts,
+			track,
+			&cadenza_engine::BounceScope::Track,
+			cadenza_core::Tick::ZERO,
+			&out,
+		)
+	})
+	.await
+	.map_err(|e| McpError::Invalid(format!("the render task failed: {e}")))??;
+	Ok((
+		Command::SetTrackFreeze {
+			track,
+			freeze: Some(cadenza_model::Freeze { file: file.clone() }),
+		},
+		FreezeTrackOutput {
+			file: file.display().to_string(),
+			duration_seconds: report.duration_seconds,
+		},
+	))
+}
+
+#[cfg(test)]
+mod freeze_tests {
+	use super::*;
+	use cadenza_model::{Clip, Device, Document, Note, Track};
+
+	#[tokio::test]
+	async fn freezing_renders_and_points_the_track_at_the_render() {
+		let mut p = Project::new("f");
+		let mut t = Track::new("Lead", TrackKind::Instrument)
+			.with_instrument(Device::builtin("poly_synth", "Synth"));
+		t.clips.push(
+			Clip::midi("A", Tick(0), Tick(960 * 4)).with_notes([Note::new(
+				60,
+				Tick(0),
+				Tick(960),
+				0.8,
+			)]),
+		);
+		let id = t.id;
+		p.tracks.push(t);
+		let (cmd, out) = freeze_render(p.clone(), None, None, PluginHosting::in_process(), id)
+			.await
+			.unwrap();
+		assert!(out.duration_seconds >= 2.0);
+		assert!(std::path::Path::new(&out.file).exists());
+		let mut doc = Document::new(p);
+		doc.execute(cmd).unwrap();
+		assert!(doc.project().summary().tracks[0].frozen);
+		let _ = std::fs::remove_file(&out.file);
 	}
 }

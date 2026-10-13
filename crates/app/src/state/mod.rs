@@ -14,6 +14,7 @@ pub mod ai;
 pub mod audio_edit;
 pub mod automation;
 pub mod autowrite;
+pub mod bounce;
 pub mod browser;
 pub mod dnd;
 pub mod editors;
@@ -174,6 +175,8 @@ pub struct Jobs {
 	/// An audio editor operation rendering a processed copy.
 	pub process: Option<Job<Result<audio_edit::Rendered, String>>>,
 	pub dialog: Option<(FileAction, Job<Option<PathBuf>>)>,
+	/// A freeze / bounce / consolidation render: the job and its length (seconds).
+	pub bounce: Option<(bounce::BounceJob, Job<Result<f64, String>>)>,
 }
 
 /// Values being dragged (faders, knobs, send levels): heard live and drawn, committed
@@ -948,6 +951,193 @@ impl AppState {
 			},
 			pan,
 		);
+	}
+
+	// --- Freeze / bounce / consolidate ---------------------------------------------
+
+	/// Where track renders go: `.cadenza/freeze/` (freeze) or `Audio/` of the project, or
+	/// a state folder before the first save.
+	fn bounce_dir(&self, kind: bounce::BounceKind) -> PathBuf {
+		match (self.path(), kind) {
+			(Some(p), bounce::BounceKind::Freeze) => cadenza_model::ProjectLayout::new(p)
+				.cache_dir()
+				.join("freeze"),
+			(Some(p), _) => cadenza_model::ProjectLayout::new(p).audio_dir(),
+			(None, _) => self
+				.safety
+				.state_dir
+				.join("renders")
+				.join(format!("untitled-{}", std::process::id())),
+		}
+	}
+
+	/// Renders a track (or clips) on a worker; the result lands as one undo step.
+	fn start_bounce(
+		&mut self,
+		kind: bounce::BounceKind,
+		track: TrackId,
+		clips: Vec<ClipId>,
+		start: Tick,
+	) {
+		if self.jobs.bounce.is_some() {
+			self.notices.warn("A track render is already running");
+			return;
+		}
+		let Some(t) = self.project().track(track) else {
+			return;
+		};
+		let stem = match kind {
+			bounce::BounceKind::Freeze => format!("{} freeze", t.name),
+			bounce::BounceKind::InPlace => format!("{} bounce", t.name),
+			bounce::BounceKind::Consolidate => format!("{} consolidated", t.name),
+		};
+		let file = bounce::render_path(&self.bounce_dir(kind), &stem);
+		let job = bounce::BounceJob {
+			kind,
+			track,
+			clips: clips.clone(),
+			start,
+			file: file.clone(),
+			new_track: TrackId::new(),
+			new_clip: ClipId::new(),
+		};
+		let mut project = self.project().clone();
+		// Render what the track computes, not a previous freeze.
+		if let Some(t) = project.tracks.iter_mut().find(|t| t.id == track) {
+			t.freeze = None;
+		}
+		let (plugins, hosting) = {
+			let mut session = self.session();
+			(
+				session.plugins_for_project(),
+				session.plugin_hosting().clone(),
+			)
+		};
+		let opts = cadenza_engine::RenderOptions {
+			sample_rate: match self.audio_status {
+				AudioStatus::Ready { sample_rate } => sample_rate,
+				_ => cadenza_engine::RenderOptions::default().sample_rate,
+			},
+			plugins,
+			hosting,
+			..cadenza_engine::RenderOptions::default()
+		};
+		let scope = match kind {
+			bounce::BounceKind::Consolidate => cadenza_engine::BounceScope::Clips(clips),
+			_ => cadenza_engine::BounceScope::Track,
+		};
+		self.notices.info(match kind {
+			bounce::BounceKind::Freeze => "Freezing…",
+			bounce::BounceKind::InPlace => "Bouncing…",
+			bounce::BounceKind::Consolidate => "Consolidating…",
+		});
+		let work = Job::spawn("bounce", self.waker.clone(), move || {
+			cadenza_engine::render_track(&project, &opts, track, &scope, start, &file)
+				.map(|r| r.duration_seconds)
+				.map_err(|e| e.to_string())
+		});
+		self.jobs.bounce = Some((job, work));
+	}
+
+	/// Freezes a track: renders it (devices, clips, inserts) and plays the render instead,
+	/// unloading its devices. Unfreeze with [`AppState::unfreeze_track`].
+	pub fn freeze_track(&mut self, track: TrackId) {
+		if self.project().track(track).is_some_and(bounce::can_freeze) {
+			self.start_bounce(bounce::BounceKind::Freeze, track, Vec::new(), Tick::ZERO);
+		}
+	}
+
+	pub fn unfreeze_track(&mut self, track: TrackId) {
+		if self
+			.project()
+			.track(track)
+			.is_some_and(|t| t.freeze.is_some())
+		{
+			self.apply(Command::SetTrackFreeze {
+				track,
+				freeze: None,
+			});
+		}
+	}
+
+	/// Renders a track to a new audio track below it (from the bar of its first clip) and
+	/// mutes the original: one undo step when done.
+	pub fn bounce_in_place(&mut self, track: TrackId) {
+		let Some(t) = self.project().track(track) else {
+			return;
+		};
+		if !bounce::can_freeze(t) {
+			return;
+		}
+		let first = t.clips.iter().filter(|c| c.plays()).map(|c| c.start).min();
+		let Some(first) = first else {
+			self.notices.info("The track has no clips to bounce");
+			return;
+		};
+		let start = self.project().meter().bar_floor(first);
+		self.start_bounce(bounce::BounceKind::InPlace, track, Vec::new(), start);
+	}
+
+	/// Merges the selected clips of one track into one clip (MIDI at once, audio
+	/// rendered): one undo step.
+	pub fn consolidate_selection(&mut self) {
+		let clips: Vec<ClipId> = self.selection.clips.iter().copied().collect();
+		let (track, start, _) = match bounce::consolidation(self.project(), &clips) {
+			Ok(v) => v,
+			Err(e) => {
+				self.notices.info(e);
+				return;
+			}
+		};
+		let midi = clips.iter().all(|c| {
+			self.project()
+				.find_clip(*c)
+				.is_some_and(|(_, c)| c.is_midi())
+		});
+		if midi {
+			let new = ClipId::new();
+			if let Some(cmd) = bounce::consolidate_midi(self.project(), &clips, new)
+				&& self.apply(cmd)
+			{
+				self.selection.click_clip(track, new, false);
+			}
+			return;
+		}
+		self.start_bounce(bounce::BounceKind::Consolidate, track, clips, start);
+	}
+
+	fn poll_bounce(&mut self) {
+		let Some(r) = self.jobs.bounce.as_ref().and_then(|(_, j)| j.poll()) else {
+			return;
+		};
+		let (job, _) = self.jobs.bounce.take().expect("bounce job");
+		match r {
+			Some(Ok(seconds)) => match bounce::finish(self.project(), &job, seconds) {
+				Ok(cmd) => {
+					if self.apply_or_queue(cmd) {
+						self.notices.info(match job.kind {
+							bounce::BounceKind::Freeze => {
+								"Frozen: the track plays its render (Unfreeze to edit)".to_owned()
+							}
+							bounce::BounceKind::InPlace => {
+								format!("Bounced to a new track: {}", job.file.display())
+							}
+							bounce::BounceKind::Consolidate => "Clips consolidated".to_owned(),
+						});
+					}
+				}
+				Err(e) => self.notices.warn(e),
+			},
+			Some(Err(e)) => self.notices.error(format!("Track render failed: {e}")),
+			None => self
+				.notices
+				.error("Track render failed: the worker thread stopped"),
+		}
+	}
+
+	/// A track render is running.
+	pub fn bounce_busy(&self) -> bool {
+		self.jobs.bounce.is_some()
 	}
 
 	// --- Folders --------------------------------------------------------------------
@@ -2708,6 +2898,7 @@ impl AppState {
 			|| self.export.running.is_some()
 			|| self.files_jobs.busy()
 			|| self.jobs.process.is_some()
+			|| self.jobs.bounce.is_some()
 			|| self.ai.busy()
 			|| self.record_animating()
 	}
@@ -2790,6 +2981,7 @@ impl AppState {
 	}
 
 	fn poll_jobs(&mut self) {
+		self.poll_bounce();
 		if let Some(r) = self.jobs.dialog.as_ref().and_then(|(_, j)| j.poll()) {
 			let (action, _) = self.jobs.dialog.take().expect("dialog job");
 			self.finish_dialog(action, r.flatten());

@@ -58,6 +58,8 @@ pub const AUTOMATION: Color32 = Color32::from_rgb(0x5c, 0xd6, 0xc4);
 pub const MONITOR: Color32 = Color32::from_rgb(0xf2, 0x8c, 0x28);
 /// Automation write mode (Touch / Latch).
 pub const AUTOMATION_WRITE: Color32 = Color32::from_rgb(0xe8, 0x5d, 0x4f);
+/// Frozen track badge.
+pub const FROZEN: Color32 = Color32::from_rgb(0x8c, 0xc8, 0xf0);
 pub const TEMPO: Color32 = Color32::from_rgb(0xf0, 0x9a, 0x5a);
 /// Background of automation/tempo lanes (a step darker than clip lanes).
 pub const AUTO_LANE: Color32 = Color32::from_rgb(0x15, 0x18, 0x1c);

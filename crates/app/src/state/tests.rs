@@ -1392,3 +1392,59 @@ fn moving_controls_while_playing_writes_automation_in_one_step() {
 	s.undo();
 	assert!(s.project().automation.is_empty());
 }
+
+fn wait_bounce(s: &mut AppState) {
+	let deadline = Instant::now() + Duration::from_secs(30);
+	while s.bounce_busy() {
+		assert!(Instant::now() < deadline, "render timed out");
+		std::thread::sleep(Duration::from_millis(10));
+		s.tick(Instant::now());
+	}
+}
+
+#[test]
+fn freeze_bounce_and_consolidate_are_single_undo_steps() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, keys) = state_with_song();
+	s.safety.state_dir = tmp.path().to_path_buf();
+	let depth = s.document().history_labels().len();
+
+	s.freeze_track(keys);
+	wait_bounce(&mut s);
+	assert_eq!(s.undo_label(), Some("Freeze track"));
+	let file = s
+		.project()
+		.track(keys)
+		.unwrap()
+		.freeze
+		.clone()
+		.unwrap()
+		.file;
+	assert!(file.exists() && file.starts_with(tmp.path()));
+	s.unfreeze_track(keys);
+	assert!(s.project().track(keys).unwrap().freeze.is_none());
+
+	s.bounce_in_place(keys);
+	wait_bounce(&mut s);
+	assert_eq!(s.undo_label(), Some("Bounce 'Keys' in place"));
+	let p = s.project();
+	assert_eq!(p.tracks.len(), 2);
+	assert!(p.tracks[0].channel.mute);
+	assert_eq!(p.tracks[1].kind, TrackKind::Audio);
+	assert_eq!(p.tracks[1].clips.len(), 1);
+	assert_eq!(s.document().history_labels().len(), depth + 3);
+
+	// Two audio clips consolidate into one rendered clip.
+	let bounced = s.project().tracks[1].id;
+	let first = s.project().tracks[1].clips[0].clone();
+	let (cmd, _) = edits::split_clip(s.project(), first.id, first.start + Tick(PPQ)).unwrap();
+	assert!(s.apply(cmd));
+	s.selection.clear_clips();
+	for c in s.project().track(bounced).unwrap().clips.clone() {
+		s.selection.click_clip(bounced, c.id, true);
+	}
+	s.consolidate_selection();
+	wait_bounce(&mut s);
+	assert_eq!(s.undo_label(), Some("Consolidate clips"));
+	assert_eq!(s.project().track(bounced).unwrap().clips.len(), 1);
+}

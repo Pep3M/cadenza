@@ -75,8 +75,12 @@ pub struct ArrangeUi {
 	pan: bool,
 	/// Rubber band on empty lane area: press and current pointer (screen), Shift adds.
 	band: Option<(Pos2, Pos2, bool)>,
-	/// Audio clip overlaps to mark this frame.
+	/// Audio clip overlaps to mark this frame (nested clips that sum).
 	overlaps: Vec<Rect>,
+	/// Automatic crossfades of this frame (lane rect of the crossfade, the crossfade).
+	xfades: Vec<(Rect, edits::Crossfade)>,
+	/// Crossfade length handle being dragged: the crossfade and its new end.
+	xfade_drag: Option<(edits::Crossfade, Tick)>,
 	/// Overview viewport drag: beats between the grab point and the view start.
 	overview_grab: Option<f64>,
 	/// Loop region drag on the ruler: the song position where it started.
@@ -1137,17 +1141,27 @@ impl ArrangeUi {
 			}
 		}
 
-		// Overlapping audio clips sum: mark the overlap like a crossfade.
+		// Overlapping audio clips: automatic crossfades (drawn as fade curves with a length
+		// handle); clips nested in another just sum (marked with an X).
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
 			if y > area.bottom() || y + h < area.top() {
 				continue;
 			}
+			let xfs = edits::crossfades(state.project(), t);
+			let row = |s0: Tick, s1: Tick| {
+				Rect::from_min_max(
+					pos2(area.left() + tl.tick_to_x(s0), y + 1.0),
+					pos2(area.left() + tl.tick_to_x(s1), y + h - 1.0),
+				)
+			};
 			for (s0, s1) in edits::overlaps(t) {
-				let x0 = area.left() + tl.tick_to_x(s0);
-				let x1 = area.left() + tl.tick_to_x(s1);
-				self.overlaps
-					.push(Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + h - 1.0)));
+				if !xfs.iter().any(|x| x.start == s0 && x.overlap_end == s1) {
+					self.overlaps.push(row(s0, s1));
+				}
+			}
+			for xf in xfs {
+				self.xfades.push((row(xf.start, xf.overlap_end), xf));
 			}
 		}
 
@@ -1172,6 +1186,7 @@ impl ArrangeUi {
 			painter.line_segment([r.left_bottom(), r.right_top()], stroke);
 			painter.line_segment([r.left_top(), r.right_bottom()], stroke);
 		}
+		self.crossfades(ui, state, &painter, area);
 		// The clip being recorded, and take badges.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
@@ -1182,6 +1197,93 @@ impl ArrangeUi {
 			super::record::paint_track_overlay(&painter, state, t, lane, &tl);
 		}
 		self.rubber_band(ui, state, layout);
+	}
+
+	/// Crossfades: the fade-out / fade-in curves over the crossfade, the rest of the overlap
+	/// (the earlier clip is cut) shaded, and a handle at the crossfade end that sets its
+	/// length (drag; double-click: the whole overlap). One command on release.
+	fn crossfades(&mut self, ui: &mut Ui, state: &mut AppState, painter: &Painter, area: Rect) {
+		let tl = state.view.timeline;
+		let xfades = std::mem::take(&mut self.xfades);
+		for (r, xf) in xfades {
+			if !r.intersects(area) {
+				continue;
+			}
+			let dragged = self
+				.xfade_drag
+				.filter(|(d, _)| d.later == xf.later)
+				.map(|(_, end)| end);
+			let end = dragged.unwrap_or(xf.end);
+			let x_end = (area.left() + tl.tick_to_x(end)).clamp(r.left(), r.right());
+			let fade = Rect::from_min_max(r.min, pos2(x_end, r.bottom()));
+			painter.rect_filled(fade, 0.0, Color32::from_black_alpha(55));
+			if x_end < r.right() {
+				painter.rect_filled(
+					Rect::from_min_max(pos2(x_end, r.top()), r.max),
+					0.0,
+					Color32::from_black_alpha(35),
+				);
+			}
+			let curve = crate::state::audio_edit::fade_curve(xf.curve);
+			let steps = 24;
+			let pts = |out: bool| -> Vec<Pos2> {
+				(0..=steps)
+					.map(|k| {
+						let t = k as f32 / steps as f32;
+						let g = if out {
+							curve.fade_out(t)
+						} else {
+							curve.fade_in(t)
+						};
+						pos2(
+							fade.left() + fade.width() * t,
+							fade.bottom() - 2.0 - g * (fade.height() - 4.0),
+						)
+					})
+					.collect()
+			};
+			let stroke = Stroke::new(1.3, Color32::from_white_alpha(190));
+			painter.add(Shape::line(pts(true), stroke));
+			painter.add(Shape::line(pts(false), stroke));
+			// Length handle.
+			let handle = Rect::from_center_size(pos2(x_end, r.top() + 6.0), vec2(9.0, 9.0));
+			let id = Id::new(("xfade", xf.later));
+			let resp = ui
+				.interact(handle.expand(2.0), id, Sense::click_and_drag())
+				.on_hover_cursor(CursorIcon::ResizeHorizontal)
+				.on_hover_text("Crossfade length (drag; double-click: the whole overlap)");
+			painter.rect_filled(
+				handle,
+				CornerRadius::same(2),
+				if resp.hovered() || resp.dragged() {
+					Color32::WHITE
+				} else {
+					theme::TEXT_DIM
+				},
+			);
+			if resp.dragged()
+				&& let Some(pos) = resp.interact_pointer_pos()
+			{
+				let t = tl.x_to_tick(pos.x - area.left());
+				let t = if state.view.snap && !ui.input(|i| i.modifiers.alt) {
+					tl.snap(t, state.project().meter())
+				} else {
+					t
+				};
+				self.xfade_drag = Some((xf, t.clamp(xf.start + Tick(1), xf.overlap_end)));
+			}
+			if resp.drag_stopped()
+				&& let Some((d, end)) = self.xfade_drag.take()
+				&& let Some(cmd) = edits::set_crossfade(state.project(), &d, Some(end))
+			{
+				state.apply(cmd);
+			}
+			if resp.double_clicked()
+				&& xf.custom && let Some(cmd) = edits::set_crossfade(state.project(), &xf, None)
+			{
+				state.apply(cmd);
+			}
+		}
 	}
 
 	/// Rubber band over empty lane area: selects the clips it touches (Shift adds).

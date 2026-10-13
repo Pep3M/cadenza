@@ -267,7 +267,34 @@ fn stopped_note_preview_does_not_allocate() {
 
 #[test]
 fn looping_auditioning_and_rescheduling_do_not_allocate() {
-	let p = mini_song();
+	let mut p = mini_song();
+	// Overlapping audio clips across the loop (automatic crossfade, micro-fades at the
+	// clip edges and at every loop wrap).
+	{
+		let wav = write_sine_wav(
+			"no-alloc-xfade.wav",
+			48_000,
+			1,
+			(hound::SampleFormat::Float, 32),
+			220.0,
+			0.5,
+			4.0,
+		);
+		let mut t = cadenza_model::Track::new("Loop audio", cadenza_model::TrackKind::Audio);
+		t.clips.push(cadenza_model::Clip::audio(
+			"a",
+			beats(3.0),
+			beats(3.0),
+			&wav,
+		));
+		t.clips.push(cadenza_model::Clip::audio(
+			"b",
+			beats(5.5),
+			beats(3.0),
+			&wav,
+		));
+		p.tracks.push(t);
+	}
 	let chords = p.tracks[2].id;
 	let mut graph = compile(&p, 48_000, 1024).unwrap();
 	let mut left = vec![0.0f32; 1024];

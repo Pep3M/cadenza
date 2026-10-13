@@ -54,9 +54,11 @@ fn mono_44k_clip_is_resampled_positioned_and_panned() {
 	let expected = 0.5 * cadenza_core::db_to_gain(-6.0) * std::f32::consts::FRAC_1_SQRT_2;
 	assert!((peak(body) - expected).abs() < 0.01, "peak {}", peak(body));
 	assert_eq!(out.left, out.right);
-	// offset 0.25 s = 11025 source samples: the sine phase at the clip start is sin(2*pi*441*0.25).
-	let phase = (2.0 * std::f64::consts::PI * 441.0 * 0.25).sin() as f32 * expected;
-	assert!((out.left[24_000] - phase).abs() < 0.01);
+	// offset 0.25 s = 11025 source samples: the sine phase just after the 1 ms de-click
+	// fade-in (48 samples) is sin(2*pi*441*(0.25 + 0.001)).
+	let phase = (2.0 * std::f64::consts::PI * 441.0 * 0.251).sin() as f32 * expected;
+	assert!((out.left[24_048] - phase).abs() < 0.01);
+	assert!(out.left[24_000].abs() < 0.01, "the bare clip edge fades in");
 }
 
 #[test]

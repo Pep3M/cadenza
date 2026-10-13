@@ -332,6 +332,16 @@ pub fn set_gain(project: &Project, clip: ClipId, db: f32) -> Option<Command> {
 }
 
 /// All fade curves, for the curve pickers.
+/// The DSP curve of a model fade curve (for drawing).
+pub fn fade_curve(c: FadeCurve) -> cadenza_audio_io::FadeCurve {
+	match c {
+		FadeCurve::Linear => cadenza_audio_io::FadeCurve::Linear,
+		FadeCurve::EqualPower => cadenza_audio_io::FadeCurve::EqualPower,
+		FadeCurve::Exponential => cadenza_audio_io::FadeCurve::Exponential,
+		FadeCurve::SCurve => cadenza_audio_io::FadeCurve::SCurve,
+	}
+}
+
 pub const FADE_CURVES: [(FadeCurve, &str); 4] = [
 	(FadeCurve::Linear, "Linear"),
 	(FadeCurve::EqualPower, "Equal power"),

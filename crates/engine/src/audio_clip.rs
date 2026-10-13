@@ -56,6 +56,72 @@ pub(crate) struct ClipPlayback {
 	/// Timeline sample of the clip's first frame.
 	pub start: i64,
 	pub region: ClipRegion,
+	/// The clip's fade-in is a crossfade from the clip before it (micro-fades skip it).
+	pub crossfaded_in: bool,
+	/// The clip is cut and faded out under the next one.
+	pub crossfaded_out: bool,
+}
+
+/// Longest automatic micro-fade at clip edges and loop wraps, seconds (de-click).
+pub(crate) const MICRO_FADE_SECONDS: f64 = 0.001;
+
+/// Automatic crossfades: where a clip starts inside the previous one and ends after it,
+/// the earlier clip fades out and the later one fades in over the crossfade, then the
+/// earlier one stops. The crossfade is the later clip's fade-in when it has one (its
+/// length, clamped to the overlap, and its curve: the editable handle), else the whole
+/// overlap, equal power (uncorrelated material keeps its loudness). Clips nested inside
+/// another still sum. `clips` must be in timeline order.
+pub(crate) fn crossfade_overlaps(clips: &mut [ClipPlayback]) {
+	clips.sort_by_key(|c| c.start);
+	for i in 1..clips.len() {
+		let (before, rest) = clips.split_at_mut(i);
+		let b = &mut rest[0];
+		// The latest-ending earlier clip that b overlaps partially.
+		let Some(a) = before
+			.iter_mut()
+			.filter(|a| {
+				let a_end = a.start + a.region.length as i64;
+				a.start < b.start && b.start < a_end && a_end < b.start + b.region.length as i64
+			})
+			.max_by_key(|a| a.start + a.region.length as i64)
+		else {
+			continue;
+		};
+		let overlap = (a.start + a.region.length as i64 - b.start).max(0) as u64;
+		if overlap == 0 {
+			continue;
+		}
+		let (frames, curve) = if b.region.fade_in.frames > 0 {
+			(b.region.fade_in.frames.min(overlap), b.region.fade_in.curve)
+		} else {
+			(overlap, cadenza_audio_io::FadeCurve::EqualPower)
+		};
+		b.region.fade_in = Fade::new(frames, curve);
+		b.crossfaded_in = true;
+		// a stops where the crossfade ends.
+		a.region.length = (b.start - a.start) as u64 + frames;
+		a.region.fade_out = Fade::new(frames, curve);
+		a.crossfaded_out = true;
+	}
+}
+
+/// Short fades at clip edges that have no fade (de-click where a clip starts or ends in
+/// the middle of a waveform).
+pub(crate) fn micro_fades(clips: &mut [ClipPlayback], sample_rate: f64) {
+	let micro = (MICRO_FADE_SECONDS * sample_rate).round() as u64;
+	for c in clips {
+		let len = c.region.length;
+		let edge = micro.min(len / 4);
+		if edge == 0 {
+			continue;
+		}
+		if !c.crossfaded_in && c.region.fade_in.frames < edge {
+			c.region.fade_in = Fade::new(edge, cadenza_audio_io::FadeCurve::Linear);
+		}
+		if !c.crossfaded_out && c.region.fade_out.frames < edge {
+			c.region.fade_out = Fade::new(edge, cadenza_audio_io::FadeCurve::Linear);
+		}
+	}
 }
 
 impl ClipPlayback {
@@ -90,6 +156,8 @@ mod tests {
 			region: region(&source),
 			source,
 			start,
+			crossfaded_in: false,
+			crossfaded_out: false,
 		}
 	}
 
@@ -139,5 +207,107 @@ mod tests {
 		assert_eq!(l[7], 0.0);
 		assert!(l[100] > 0.49);
 		assert_eq!(l[160], 0.0);
+	}
+}
+
+/// Frames of the micro-fade at a loop wrap / a start in the middle of the song.
+pub(crate) fn micro_frames(sample_rate: u32) -> u32 {
+	((MICRO_FADE_SECONDS * f64::from(sample_rate)).round() as u32).clamp(1, crate::QUANTUM as u32)
+}
+
+/// Fades `l`/`r` out over their last `frames` samples (ending at silence).
+pub(crate) fn fade_out_tail(l: &mut [f32], r: &mut [f32], frames: usize) {
+	let n = l.len();
+	let k = frames.min(n);
+	for j in 0..k {
+		let g = (k - j) as f32 / (k + 1) as f32;
+		l[n - k + j] *= g;
+		r[n - k + j] *= g;
+	}
+}
+
+/// Continues a micro fade-in (`left` samples still to fade out of `total`) over `l`/`r`.
+pub(crate) fn fade_in_head(l: &mut [f32], r: &mut [f32], left: &mut u32, total: u32) {
+	for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+		if *left == 0 {
+			return;
+		}
+		let g = 1.0 - *left as f32 / (total + 1) as f32;
+		*a *= g;
+		*b *= g;
+		*left -= 1;
+	}
+}
+
+#[cfg(test)]
+mod crossfade_tests {
+	use super::*;
+
+	fn clip(frames: usize, start: i64) -> ClipPlayback {
+		let source = Arc::new(AudioBuffer::from_planar(48_000, vec![vec![1.0; frames]]).unwrap());
+		ClipPlayback {
+			region: ClipRegion::whole(&source),
+			source,
+			start,
+			crossfaded_in: false,
+			crossfaded_out: false,
+		}
+	}
+
+	#[test]
+	fn overlaps_crossfade_with_equal_power_and_the_earlier_clip_stops() {
+		let mut clips = vec![clip(1000, 0), clip(1000, 600)];
+		crossfade_overlaps(&mut clips);
+		assert_eq!(
+			clips[0].region.length, 1000,
+			"a crossfade over the whole overlap"
+		);
+		assert_eq!(clips[0].region.fade_out.frames, 400);
+		assert_eq!(clips[1].region.fade_in.frames, 400);
+		let mut l = vec![0.0f32; 1700];
+		let mut r = vec![0.0f32; 1700];
+		for c in &clips {
+			c.mix(0, &mut l, &mut r);
+		}
+		// Equal power: amplitudes sum above 1 mid-fade (power is constant), ends at 1.
+		assert!(
+			(l[800] - std::f32::consts::SQRT_2).abs() < 0.01,
+			"{}",
+			l[800]
+		);
+		assert!((l[500] - 1.0).abs() < 1e-6);
+		assert!((l[1100] - 1.0).abs() < 1e-6);
+		// A shorter fade-in on the later clip is the crossfade length (the handle).
+		let mut clips = vec![clip(1000, 0), clip(1000, 600)];
+		clips[1].region.fade_in = Fade::new(100, cadenza_audio_io::FadeCurve::Linear);
+		crossfade_overlaps(&mut clips);
+		assert_eq!(
+			clips[0].region.length, 700,
+			"the earlier clip stops after it"
+		);
+		assert_eq!(clips[0].region.fade_out.frames, 100);
+		// Nested clips still sum.
+		let mut clips = vec![clip(1000, 0), clip(100, 300)];
+		crossfade_overlaps(&mut clips);
+		assert_eq!(clips[0].region.length, 1000);
+		assert_eq!(clips[1].region.fade_in, Fade::NONE);
+	}
+
+	#[test]
+	fn micro_fades_soften_bare_edges_only() {
+		let mut clips = vec![clip(1000, 0), clip(1000, 600)];
+		crossfade_overlaps(&mut clips);
+		micro_fades(&mut clips, 48_000.0);
+		assert_eq!(clips[0].region.fade_in.frames, 48);
+		assert_eq!(clips[0].region.fade_out.frames, 400, "crossfade kept");
+		assert_eq!(clips[1].region.fade_out.frames, 48);
+		let (mut l, mut r) = ([1.0f32; 32], [1.0f32; 32]);
+		fade_out_tail(&mut l, &mut r, 8);
+		assert!(l[31] < 0.2 && l[23] == 1.0);
+		let mut left = 48;
+		let (mut l, mut r) = ([1.0f32; 32], [1.0f32; 32]);
+		fade_in_head(&mut l, &mut r, &mut left, 48);
+		assert!(l[0] < 0.05 && l[31] < 1.0);
+		assert_eq!(left, 16);
 	}
 }

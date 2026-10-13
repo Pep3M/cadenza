@@ -10,7 +10,7 @@ use cadenza_dsp::{MidiEvent, Processor, Transport};
 use cadenza_model::{AutomationLane, MonitorMode};
 
 use crate::QUANTUM;
-use crate::audio_clip::ClipPlayback;
+use crate::audio_clip::{self, ClipPlayback};
 use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Resolver};
 use crate::hosting::{PluginCrash, PluginEditorSlot, PluginWatch, PluginXruns};
 use crate::input::{InputFifo, MAX_INPUT_CHANNELS};
@@ -416,6 +416,9 @@ pub(crate) enum Source {
 	},
 	Audio {
 		clips: Vec<ClipPlayback>,
+		/// Samples of micro fade-in still to apply (after a loop wrap or a start in the
+		/// middle of the song: de-click).
+		fade_in: u32,
 	},
 	Bus {
 		accumulator: usize,
@@ -1215,6 +1218,7 @@ impl Graph {
 	/// that smoothed parameters start at their automated value instead of ramping to it.
 	fn reset_state(&mut self) {
 		let pos = self.engine_pos;
+		let micro = audio_clip::micro_frames(self.sample_rate);
 		for b in &mut self.automation {
 			b.last = f32::NAN;
 		}
@@ -1231,6 +1235,10 @@ impl Graph {
 					d.reset();
 				}
 				schedule.seek(pos - i64::from(*midi_delay));
+			}
+			// Starting in the middle of the song: fade audio in (de-click).
+			if let Source::Audio { fade_in, .. } = &mut node.source {
+				*fade_in = if pos > 0 { micro } else { 0 };
 			}
 			for d in &mut node.inserts {
 				d.reset();
@@ -1330,6 +1338,7 @@ impl Graph {
 		self.apply_automation();
 		let wrap = if preview { None } else { self.take_wrap() };
 		let pos = self.engine_pos;
+		let micro = audio_clip::micro_frames(self.sample_rate);
 		let click_on = !preview && self.metronome.enabled(self.recording);
 		let (clicks, click_count) = if click_on {
 			self.clicks(pos, wrap)
@@ -1460,11 +1469,12 @@ impl Graph {
 						buf.r.copy_from_slice(&input_block[i.right]);
 					}
 				}
-				Source::Audio { clips } if !preview => match wrap {
+				Source::Audio { clips, fade_in } if !preview => match wrap {
 					None => {
 						for c in clips.iter() {
 							c.mix(pos, &mut buf.l, &mut buf.r);
 						}
+						audio_clip::fade_in_head(&mut buf.l, &mut buf.r, fade_in, micro);
 					}
 					Some(w) => {
 						let (l0, l1) = buf.l.split_at_mut(w.at);
@@ -1475,6 +1485,11 @@ impl Graph {
 							}
 							c.mix(w.to, l1, r1);
 						}
+						// Micro-fades around the jump (de-click the loop seam).
+						audio_clip::fade_in_head(l0, r0, fade_in, micro);
+						audio_clip::fade_out_tail(l0, r0, micro as usize);
+						*fade_in = micro;
+						audio_clip::fade_in_head(l1, r1, fade_in, micro);
 					}
 				},
 				Source::Audio { .. } => {}

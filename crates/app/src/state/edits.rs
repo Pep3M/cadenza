@@ -420,6 +420,80 @@ pub fn overlaps(track: &Track) -> Vec<(Tick, Tick)> {
 	out
 }
 
+/// An automatic crossfade between two overlapping audio clips (the engine's rule: the
+/// later clip starts inside the earlier one and ends after it).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Crossfade {
+	pub earlier: ClipId,
+	pub later: ClipId,
+	/// Where the crossfade starts (the later clip's start) and ends.
+	pub start: Tick,
+	pub end: Tick,
+	/// End of the overlap (the longest the crossfade can be).
+	pub overlap_end: Tick,
+	pub curve: cadenza_model::FadeCurve,
+	/// The length comes from the later clip's fade-in (else the whole overlap).
+	pub custom: bool,
+}
+
+/// The crossfades of a track's playing audio clips.
+pub fn crossfades(project: &Project, track: &Track) -> Vec<Crossfade> {
+	let mut audio: Vec<&Clip> = track
+		.clips
+		.iter()
+		.filter(|c| !c.is_midi() && c.plays())
+		.collect();
+	audio.sort_by_key(|c| c.start);
+	let tempo = &project.tempo;
+	let mut out = Vec::new();
+	for (i, b) in audio.iter().enumerate() {
+		let Some(a) = audio[..i]
+			.iter()
+			.filter(|a| a.start < b.start && b.start < a.end() && a.end() < b.end())
+			.max_by_key(|a| a.end())
+		else {
+			continue;
+		};
+		let overlap_end = a.end();
+		let (fade_in, _) = b.fades();
+		let (end, curve, custom) = match fade_in {
+			Some(f) => {
+				let secs = tempo.tick_to_seconds(b.start) + f.seconds;
+				(tempo.seconds_to_tick(secs).min(overlap_end), f.curve, true)
+			}
+			None => (overlap_end, cadenza_model::FadeCurve::EqualPower, false),
+		};
+		out.push(Crossfade {
+			earlier: a.id,
+			later: b.id,
+			start: b.start,
+			end,
+			overlap_end,
+			curve,
+			custom,
+		});
+	}
+	out
+}
+
+/// Sets a crossfade to end at `end` (clamped to the overlap) through the later clip's
+/// fade-in; `None` resets it to the whole overlap.
+pub fn set_crossfade(project: &Project, xf: &Crossfade, end: Option<Tick>) -> Option<Command> {
+	let (_, later) = project.find_clip(xf.later)?;
+	let (fade_in, fade_out) = later.fades();
+	let tempo = &project.tempo;
+	let fade_in_new = end.map(|end| {
+		let end = end.clamp(xf.start + Tick(1), xf.overlap_end);
+		let secs = tempo.tick_to_seconds(end) - tempo.tick_to_seconds(xf.start);
+		cadenza_model::ClipFade::new(secs.max(0.0005), xf.curve)
+	});
+	(fade_in_new != fade_in).then_some(Command::SetClipFades {
+		clip: xf.later,
+		fade_in: fade_in_new,
+		fade_out,
+	})
+}
+
 /// An empty one-bar (at least) MIDI clip on an instrument track.
 pub fn new_midi_clip(
 	project: &Project,
@@ -819,5 +893,36 @@ mod trim_tests {
 			panic!()
 		};
 		assert!(offset_seconds.abs() < 1e-9);
+	}
+
+	#[test]
+	fn crossfades_follow_overlaps_and_the_later_fade_in() {
+		let mut p = Project::new("x");
+		let mut t = Track::new("Vox", TrackKind::Audio);
+		let a = Clip::audio("a", beats(0.0), beats(4.0), "/a.wav");
+		let b = Clip::audio("b", beats(3.0), beats(4.0), "/b.wav");
+		let inner = Clip::audio("i", beats(4.5), beats(1.0), "/i.wav");
+		let (a_id, b_id) = (a.id, b.id);
+		t.clips = vec![a, b, inner];
+		p.tracks.push(t);
+		let xfs = crossfades(&p, &p.tracks[0]);
+		assert_eq!(xfs.len(), 1, "the nested clip sums");
+		let xf = xfs[0];
+		assert_eq!((xf.earlier, xf.later), (a_id, b_id));
+		assert_eq!((xf.start, xf.end), (beats(3.0), beats(4.0)));
+		assert!(!xf.custom);
+		// Shorten to half a beat through the later clip's fade-in (one command).
+		let cmd = set_crossfade(&p, &xf, Some(beats(3.5))).unwrap();
+		let p2 = exec(&p, cmd);
+		let xf2 = crossfades(&p2, &p2.tracks[0])[0];
+		assert_eq!(xf2.end, beats(3.5));
+		assert!(xf2.custom);
+		// Past the overlap is clamped; None resets.
+		let cmd = set_crossfade(&p2, &xf2, Some(beats(9.0))).unwrap();
+		let p3 = exec(&p2, cmd);
+		assert_eq!(crossfades(&p3, &p3.tracks[0])[0].end, beats(4.0));
+		let reset = set_crossfade(&p2, &xf2, None).unwrap();
+		let p4 = exec(&p2, reset);
+		assert!(!crossfades(&p4, &p4.tracks[0])[0].custom);
 	}
 }

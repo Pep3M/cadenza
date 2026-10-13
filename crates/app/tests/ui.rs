@@ -2393,6 +2393,23 @@ fn render_phase17_screens() {
 	h.state_mut().state.view.piano.event_lane =
 		cadenza_app::state::piano::EventLane::Controller(cadenza_model::Controller::PitchBend);
 	shot(&mut h, &dir, "controller_lane_pitch_bend");
+
+	// Overlapping audio clips: an automatic crossfade with its length handle.
+	{
+		let wav = tone_wav(&dir);
+		let s = &mut h.state_mut().state;
+		let mut t = cadenza_model::Track::new("Vox", cadenza_model::TrackKind::Audio);
+		let a = cadenza_model::Clip::audio("Take A", Tick(0), Tick(PPQ * 6), &wav);
+		let b = cadenza_model::Clip::audio("Take B", Tick(PPQ * 4), Tick(PPQ * 6), &wav);
+		t.clips = vec![a, b];
+		assert!(s.apply(cadenza_model::Command::AddTrack {
+			track: t,
+			index: Some(0)
+		}));
+		s.close_piano_roll();
+		s.view.timeline.px_per_beat = 60.0;
+	}
+	shot(&mut h, &dir, "crossfade");
 }
 
 #[test]

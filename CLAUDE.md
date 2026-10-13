@@ -392,7 +392,14 @@ with "Sine Pad", a drum_sampler with "Synth Kit"). `auto_zone(path)`/`detect_roo
 pitch, else C4.
 Audio clips: files are decoded + resampled to the engine rate at compile time through
 `AudioCache::global()` (any format symphonia reads) and played with `render_clip` (realtime
-safe); overlapping clips on a track sum. An unreadable file is a `MixReport`/`Player::load`
+safe). Crossfades (phase 17, `audio_clip::crossfade_overlaps`): where a playing clip starts
+inside an earlier one and ends after it, the earlier fades out and the later fades in over the
+crossfade, then the earlier stops; the crossfade is the later clip's fade-in when set (length
+clamped to the overlap, its curve = the editable handle), else the whole overlap, equal power;
+clips nested inside another still sum. Micro-fades (1 ms, linear, `micro_fades`) soften bare
+clip edges (no fade, no crossfade); a loop wrap fades audio sources out before the jump and in
+after it (`Source::Audio::fade_in`, also after a start/seek past 0). All realtime safe
+(`no_alloc` loops over crossfaded clips). An unreadable file is a `MixReport`/`Player::load`
 warning (clip silent), never a hard error.
 Controller lanes play through `MidiSchedule` (`EventKind::Control`; note-offs, then
 controllers, then note-ons at a sample): chase sends every lane's value before the position (or
@@ -606,8 +613,11 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   with split / trim / delete range (clip commands). Normalize/reverse/gain (and time-stretch/
   pitch with the app's `stretch` feature) render a processed copy on a worker into
   `<project dir>/<project> audio/` (user cache when unsaved) and swap it in with one undoable
-  `UpdateAudioClip` batch; the original file is never modified. Overlapping audio clips on a
-  track are marked like crossfades (they sum; no automatic crossfade yet).
+  `UpdateAudioClip` batch; the original file is never modified. Overlapping audio clips crossfade
+  automatically (`edits::crossfades` mirrors the engine rule): the arrange draws the fade-out/
+  fade-in curves, shades the cut rest of the overlap and puts a length handle at the crossfade
+  end (drag, snapped unless Alt; double-click resets to the whole overlap; one `SetClipFades`
+  on the later clip, `edits::set_crossfade`); nested clips that sum keep the X mark.
 - `audio::AudioEngine`: the `Player` on its own thread (like MCP `PlayerHandle`) but never
   blocking the UI: requests are fire-and-forget, a burst of loads is coalesced into the newest,
   results come back as polled `AudioEvent`s; position via `PlayerClock`, levels via `MeterBank`,

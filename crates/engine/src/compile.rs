@@ -525,10 +525,14 @@ impl<'a> Compiler<'a> {
 							fade_in,
 							fade_out,
 						},
+						crossfaded_in: false,
+						crossfaded_out: false,
 					});
 				}
+				audio_clip::crossfade_overlaps(&mut clips);
+				audio_clip::micro_fades(&mut clips, sr);
 				let mono = !clips.is_empty() && clips.iter().all(ClipPlayback::is_mono);
-				(Source::Audio { clips }, mono)
+				(Source::Audio { clips, fade_in: 0 }, mono)
 			}
 			TrackKind::Bus => (Source::Bus { accumulator: 0 }, false),
 		}

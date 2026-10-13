@@ -102,7 +102,11 @@ enum Request {
 	/// List audio devices and MIDI inputs (reported as `Devices`).
 	ListDevices,
 	StartRecording(Box<RecordSetup>),
-	StopRecording,
+	/// Stops capturing; `keep_playing` leaves the transport running (record toggled off
+	/// while playing).
+	StopRecording {
+		keep_playing: bool,
+	},
 	Shutdown,
 }
 
@@ -226,8 +230,8 @@ impl AudioEngine {
 		self.send(Request::StartRecording(Box::new(setup)));
 	}
 
-	pub fn stop_recording(&self) {
-		self.send(Request::StopRecording);
+	pub fn stop_recording(&self, keep_playing: bool) {
+		self.send(Request::StopRecording { keep_playing });
 	}
 
 	pub fn load(
@@ -720,9 +724,14 @@ fn run(
 					}
 					Ok(())
 				}
-				Request::StopRecording => {
+				Request::StopRecording { keep_playing } => {
 					if player.is_recording() {
-						match player.stop_recording() {
+						let rec = if keep_playing {
+							player.end_recording()
+						} else {
+							player.stop_recording()
+						};
+						match rec {
 							Ok(rec) => emit(AudioEvent::Recorded(Box::new(rec))),
 							Err(e) => emit(AudioEvent::RecordFailed(e.to_string())),
 						}

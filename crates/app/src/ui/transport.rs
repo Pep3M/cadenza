@@ -234,17 +234,18 @@ fn record_button(ui: &mut Ui, state: &mut AppState) {
 /// Metronome toggle, count-in and punch, and the recording options menu.
 fn record_controls(ui: &mut Ui, state: &mut AppState) {
 	let mut s = state.record.settings;
-	// Metronome: the button is "click while playing"; recording has its own switch.
+	// Metronome: the button switches the click on/off for playing and recording alike
+	// (the menu can still limit it to one of them).
 	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
 	resp.widget_info(|| {
 		egui::WidgetInfo::selected(
 			egui::WidgetType::Checkbox,
 			true,
-			s.metronome.on_play,
+			s.metronome.on_play || s.metronome.on_record,
 			"Metronome",
 		)
 	});
-	let on = s.metronome.on_play;
+	let on = s.metronome.on_play || s.metronome.on_record;
 	let p = ui.painter();
 	let bg = if on {
 		theme::mix(theme::ACCENT, theme::BG_DEEP, 0.55)
@@ -267,10 +268,11 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 		[pos2(c.x, c.y + 5.0), pos2(c.x + 5.0, c.y - 6.0)],
 		Stroke::new(1.3, fg),
 	);
-	let resp = resp
-		.on_hover_text("Metronome while playing (right-click: level, while recording, count-in)");
+	let resp =
+		resp.on_hover_text("Metronome on/off (right-click: only while playing / recording, level)");
 	if resp.clicked() {
-		s.metronome.on_play = !s.metronome.on_play;
+		s.metronome.on_play = !on;
+		s.metronome.on_record = !on;
 	}
 	resp.context_menu(|ui| {
 		ui.checkbox(&mut s.metronome.on_play, "Click while playing");

@@ -54,6 +54,8 @@ pub const MARKER: Color32 = Color32::from_rgb(0xc7, 0x8b, 0xf0);
 /// Automation curves and points.
 pub const AUTOMATION: Color32 = Color32::from_rgb(0x5c, 0xd6, 0xc4);
 /// Tempo lane.
+/// Input monitoring (speaker button).
+pub const MONITOR: Color32 = Color32::from_rgb(0xf2, 0x8c, 0x28);
 pub const TEMPO: Color32 = Color32::from_rgb(0xf0, 0x9a, 0x5a);
 /// Background of automation/tempo lanes (a step darker than clip lanes).
 pub const AUTO_LANE: Color32 = Color32::from_rgb(0x15, 0x18, 0x1c);

@@ -422,3 +422,59 @@ fn input_monitoring_follows_the_mode() {
 		"auto: playing back (not recording) plays the clips"
 	);
 }
+
+#[test]
+fn punching_in_and_out_while_playing_keeps_the_transport_running() {
+	let dir = folder("on-the-fly");
+	let (p, track) = vox_project(MonitorMode::Off);
+	let (mut player, mut dev) = Player::virtual_device(SR, 2);
+	player.load(&p).unwrap();
+	player
+		.set_metronome(MetronomeSettings {
+			on_play: false,
+			on_record: false,
+			level_db: 0.0,
+		})
+		.unwrap();
+	player.play().unwrap();
+	let mut stream = 0;
+	run(&mut dev, &mut stream, BEAT / BLOCK, &|_| 0.0);
+	let at = player.position();
+	assert!(at > Tick::ZERO);
+	// Record on mid-playback: capture from here, even with a count-in configured.
+	let mut setup = audio_setup(&dir, track, 0);
+	setup.start = at;
+	setup.count_in_bars = 2;
+	player.start_recording(&setup).unwrap();
+	let out = run(&mut dev, &mut stream, BEAT / BLOCK, &|j| j as f32);
+	assert!(
+		player.position() > at,
+		"no count-in: the transport keeps moving"
+	);
+	assert!(
+		out.iter().all(|v| *v == 0.0),
+		"no metronome while it is off"
+	);
+	// Record off: capturing stops, playback goes on.
+	let rec = {
+		player.request_end_recording().unwrap();
+		run(&mut dev, &mut stream, 1, &|_| 0.0);
+		player
+			.finish_recording(std::time::Duration::from_secs(5))
+			.unwrap()
+	};
+	assert!(player.is_playing(), "still playing after record off");
+	let before = player.position();
+	run(&mut dev, &mut stream, 8, &|_| 0.0);
+	assert!(player.position() > before);
+	assert_eq!(rec.passes.len(), 1);
+	let doc = apply(&p, &rec, &RecordOptions::default());
+	let clip = &doc.project().tracks[0].clips[0];
+	assert!(
+		(clip.start.0 - at.0).abs() <= 12,
+		"the clip starts where record was pressed: {:?} vs {:?}",
+		clip.start,
+		at
+	);
+	let _ = std::fs::remove_dir_all(&dir);
+}

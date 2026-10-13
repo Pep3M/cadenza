@@ -1212,8 +1212,11 @@ impl Player {
 		let monitor = session.monitor.clone();
 		self.recording = Some(session);
 		self.control.send(Cmd::StartRecord)?;
-		self.control.shared.playing.store(true, Ordering::Relaxed);
-		self.control.send(Cmd::PlayCountIn(setup.count_in_bars))?;
+		// Already playing: punch in on the fly (capture starts now, no count-in, the
+		// transport keeps going).
+		if !self.control.shared.playing.swap(true, Ordering::Relaxed) {
+			self.control.send(Cmd::PlayCountIn(setup.count_in_bars))?;
+		}
 		Ok(monitor)
 	}
 
@@ -1289,6 +1292,18 @@ impl Player {
 			dropouts,
 			warnings,
 		})
+	}
+
+	/// Stops capturing but keeps the transport playing (punch out on the fly); finish
+	/// with [`Player::finish_recording`].
+	pub fn request_end_recording(&mut self) -> Result<(), EngineError> {
+		self.control.send(Cmd::EndRecord)
+	}
+
+	/// [`Player::request_end_recording`] + [`Player::finish_recording`].
+	pub fn end_recording(&mut self) -> Result<Recording, EngineError> {
+		self.request_end_recording()?;
+		self.finish_recording(crate::record::FINISH_TIMEOUT)
 	}
 
 	/// [`Player::request_stop_recording`] + [`Player::finish_recording`].

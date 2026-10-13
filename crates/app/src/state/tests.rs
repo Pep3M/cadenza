@@ -1159,6 +1159,8 @@ fn autosave_runs_off_thread_after_the_interval_and_a_crash_offers_recovery() {
 		None,
 	);
 	assert!(s.apply(cmd));
+	// File times can be coarse (a few ms): keep the autosave strictly newer than the save.
+	std::thread::sleep(Duration::from_millis(30));
 	let t0 = Instant::now();
 	s.tick_autosave(t0);
 	assert!(s.files_jobs.autosave.is_none(), "not due yet");

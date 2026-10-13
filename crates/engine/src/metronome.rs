@@ -29,7 +29,7 @@ impl Default for MetronomeSettings {
 	fn default() -> Self {
 		Self {
 			on_play: false,
-			on_record: true,
+			on_record: false,
 			level_db: -6.0,
 		}
 	}

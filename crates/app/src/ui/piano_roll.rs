@@ -4,7 +4,8 @@
 //! and a velocity lane.
 //!
 //! FL Studio-like editing: the draw tool does nearly everything (click adds a note and
-//! keeps dragging it, notes move/resize, right-drag sweeps delete, Ctrl+drag selects,
+//! keeps dragging it, notes move/resize, right-drag sweeps delete (a right-click on empty
+//! space deselects all), Ctrl+drag selects,
 //! Shift+drag duplicates); paint (B) and slice (C) tools; Ctrl+B clones the selection.
 //! Every gesture is previewed locally and committed as one command (see
 //! [`crate::state::piano`]); notes are auditioned through the track's instrument, also
@@ -99,6 +100,10 @@ enum Gesture {
 struct Erase {
 	hits: BTreeSet<NoteId>,
 	last: Pos2,
+	/// Where the right button went down (a click without hits deselects all).
+	start: Pos2,
+	/// The pointer left the press point (a sweep, not a click).
+	moved: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -943,6 +948,8 @@ impl PianoUi {
 			self.erase = Some(Erase {
 				hits: piano::sweep_hits(clip, &v, a, a),
 				last: pos,
+				start: pos,
+				moved: false,
 			});
 		}
 		if let Some(e) = self.erase.as_mut() {
@@ -953,10 +960,16 @@ impl PianoUi {
 					e.hits.extend(piano::sweep_hits(clip, &v, a, b));
 				}
 				e.last = pos;
+				e.moved |= pos.distance(e.start) > 4.0;
 			}
 			if !r_down {
 				let hits = std::mem::take(&mut e.hits);
+				let click = !e.moved;
 				self.erase = None;
+				// FL Studio: a right-click on empty space deselects everything.
+				if hits.is_empty() && click {
+					state.view.piano.selected.clear();
+				}
 				state.view.piano.selected.retain(|id| !hits.contains(id));
 				if let Some(cmd) = piano::delete_notes(state.project(), clip.id, &hits) {
 					state.apply(cmd);

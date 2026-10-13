@@ -1401,7 +1401,7 @@ impl AppState {
 
 	/// Stops; pattern mode goes back to the pattern start (FL Studio).
 	pub fn stop(&mut self) {
-		self.stop_recording();
+		self.end_recording(false);
 		self.play_intent = false;
 		self.cued = false;
 		if let Some(a) = &self.audio {
@@ -2346,7 +2346,7 @@ impl AppState {
 		if self.files.dir.is_none() {
 			self.files.dir = v.bookmarks.first().cloned();
 		}
-		self.record.settings = p.record;
+		self.record.settings = p.record.migrated();
 		self.apply_audio_settings(p.audio);
 	}
 

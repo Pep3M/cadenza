@@ -87,18 +87,39 @@ pub struct RecordSettings {
 	/// MIDI loop recording: each pass becomes a take (else passes merge, FL-style).
 	pub midi_takes: bool,
 	pub quantize: InputQuantize,
+	/// Settings revision (missing in older prefs = 0, see [`RecordSettings::migrated`]).
+	#[serde(default)]
+	pub revision: u32,
+}
+
+/// Current [`RecordSettings::revision`].
+const RECORD_SETTINGS_REVISION: u32 = 2;
+
+impl RecordSettings {
+	/// Prefs saved before revision 2 defaulted to a count-in and a click while recording
+	/// that the user never asked for: both now follow the metronome toggle (off unless it
+	/// is on) and no count-in.
+	pub fn migrated(mut self) -> Self {
+		if self.revision < RECORD_SETTINGS_REVISION {
+			self.count_in_bars = 0;
+			self.metronome.on_record = self.metronome.on_play;
+			self.revision = RECORD_SETTINGS_REVISION;
+		}
+		self
+	}
 }
 
 impl Default for RecordSettings {
 	fn default() -> Self {
 		Self {
 			metronome: MetronomeSettings::default(),
-			count_in_bars: 1,
+			count_in_bars: 0,
 			punch: false,
 			midi_merge: true,
 			midi_overdub: true,
 			midi_takes: false,
 			quantize: InputQuantize::Off,
+			revision: RECORD_SETTINGS_REVISION,
 		}
 	}
 }
@@ -260,6 +281,30 @@ impl AppState {
 		self.set_track_input(track, Some(TrackInput { monitor, ..input }));
 	}
 
+	/// The monitor button: on <-> off (Auto counts as on and goes off).
+	pub fn toggle_monitor(&mut self, track: TrackId) {
+		let Some(input) = self.project().track(track).and_then(|t| t.input) else {
+			self.notices
+				.info("Choose an input for the track first (its In button)");
+			return;
+		};
+		let mode = if input.monitor == MonitorMode::Off {
+			MonitorMode::On
+		} else {
+			MonitorMode::Off
+		};
+		self.set_monitor(track, mode);
+	}
+
+	/// Sets the input monitor mode of an audio track with an input (one undo step).
+	pub fn set_monitor(&mut self, track: TrackId, monitor: MonitorMode) {
+		if let Some(input) = self.project().track(track).and_then(|t| t.input)
+			&& input.monitor != monitor
+		{
+			self.set_track_input(track, Some(TrackInput { monitor, ..input }));
+		}
+	}
+
 	/// A recording is starting, running or being finished.
 	pub fn is_recording(&self) -> bool {
 		!matches!(self.record.phase, Phase::Idle)
@@ -398,26 +443,39 @@ impl AppState {
 		if self.reload_since.is_some() {
 			self.send_reload();
 		}
-		self.play_intent = true;
-		let (config, _) = self.transport_config();
-		self.locate(plan.play_from);
-		self.send_config(config);
-		self.send_record_settings();
+		let mut setup = plan.setup;
+		if self.is_playing() {
+			// Punch in on the fly: capture from here, no count-in, no restart.
+			setup.count_in_bars = 0;
+			self.send_record_settings();
+		} else {
+			self.play_intent = true;
+			let (config, _) = self.transport_config();
+			self.locate(plan.play_from);
+			self.send_config(config);
+			self.send_record_settings();
+		}
 		if let Some(a) = &self.audio {
-			a.start_recording(plan.setup);
+			a.start_recording(setup);
 		}
 		self.record.pattern = plan.pattern;
 		self.record.passes_sent = 0;
 		self.record.phase = Phase::Starting;
 	}
 
-	/// Stops the recording; its clips arrive as one undo step when the files are done.
+	/// Stops capturing (the record button / Ctrl+R): the transport keeps playing. The
+	/// clips arrive as one undo step when the files are done.
 	pub fn stop_recording(&mut self) {
+		self.end_recording(true);
+	}
+
+	/// Stops capturing; `keep_playing: false` also stops the transport (Stop).
+	pub(crate) fn end_recording(&mut self, keep_playing: bool) {
 		if !matches!(self.record.phase, Phase::Starting | Phase::Recording(_)) {
 			return;
 		}
 		if let Some(a) = &self.audio {
-			a.stop_recording();
+			a.stop_recording(keep_playing);
 		}
 		self.record.phase = Phase::Stopping;
 	}
@@ -815,7 +873,7 @@ mod tests {
 		let plan = s.record_plan().unwrap();
 		assert_eq!(plan.setup.start, Tick(PPQ * 4));
 		assert_eq!(plan.play_from, Tick(PPQ * 4));
-		assert_eq!(plan.setup.count_in_bars, 1);
+		assert_eq!(plan.setup.count_in_bars, 0);
 		assert_eq!(
 			plan.setup.tracks[0].input,
 			Some(TrackInput {
@@ -906,5 +964,27 @@ mod tests {
 		s.undo();
 		s.flatten_takes(group);
 		assert_eq!(s.project().track(vox).unwrap().clips.len(), 1);
+	}
+
+	#[test]
+	fn old_prefs_lose_the_unrequested_count_in_and_recording_click() {
+		let fresh = RecordSettings::default();
+		assert_eq!(fresh.count_in_bars, 0);
+		assert!(!fresh.metronome.on_record && !fresh.metronome.on_play);
+		assert_eq!(fresh.migrated(), fresh);
+		let old: RecordSettings = serde_json::from_str(
+			r#"{"count_in_bars":1,"metronome":{"on_play":false,"on_record":true,"level_db":-6.0}}"#,
+		)
+		.unwrap();
+		let m = old.migrated();
+		assert_eq!(m.count_in_bars, 0);
+		assert!(!m.metronome.on_record, "follows the (off) metronome toggle");
+		// Settings saved after the change are kept as they are.
+		let mut chosen = RecordSettings {
+			count_in_bars: 2,
+			..RecordSettings::default()
+		};
+		chosen.metronome.on_record = true;
+		assert_eq!(chosen.migrated(), chosen);
 	}
 }

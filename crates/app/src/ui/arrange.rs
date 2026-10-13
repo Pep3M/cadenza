@@ -793,6 +793,9 @@ impl ArrangeUi {
 			rect.bottom() - 0.5,
 			Stroke::new(1.0, theme::BORDER),
 		);
+		if track.kind == TrackKind::Audio {
+			super::record::header_input_meter(&p, state, track, rect);
+		}
 
 		let left = rect.left() + 12.0;
 		let meter_w = 8.0;

@@ -692,10 +692,16 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   are session state (`RecordState.armed`, mirrored to the player, kept across device reopen);
   ● on track headers and mixer strips (arming an audio track without an input gives it In 1,
   one undo step; armed instrument tracks get the live MIDI). Audio headers: input selector (mono
-  / stereo pairs of the open input, or none), monitor toggle off/auto/on, input level meter.
-  Transport: red record button (Ctrl+R start/stop; R = record mode, Play records the armed
-  tracks, nothing armed = plays), metronome toggle (click while playing; right-click: while
-  recording, level), count-in 0/1/2/4 bars, PUNCH (record only inside the loop region; with the
+  / stereo pairs of the open input, or none), speaker monitor button (`ui::record::
+  monitor_button`: click on/off, orange when on, Auto = dimmer outlined speaker with an "A",
+  right-click Off/Auto/On), input level as a thin vertical meter on the header's left edge
+  next to the color strip. Transport: red record button (Ctrl+R start/stop; R = record mode,
+  Play records the armed tracks, nothing armed = plays). Toggling record while playing never
+  stops the transport: off = stop capturing (`Player::end_recording`), on = punch in on the
+  fly from the playhead (no count-in, no relocate; `Player::start_recording` while playing
+  skips the count-in). The metronome toggle switches the click for playing and recording
+  alike (right-click: only one of them, level); defaults are no click and no count-in
+  (`RecordSettings::revision` 2 migrates older prefs), count-in 0/1/2/4 bars, PUNCH (record only inside the loop region; with the
   loop on: loop recording, a take per pass), "MIDI rec" menu (merge / overdub / takes per pass /
   input quantize); position display turns red while recording. `record_plan()` picks start,
   punch-out and pre-roll (pattern mode: the pattern loop, MIDI into the pattern clip, its track

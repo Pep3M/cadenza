@@ -344,6 +344,19 @@ fn piano_roll_right_button_sweep_deletes_every_note_passed_in_one_step() {
 	h.run_steps(2);
 	let left: Vec<u8> = clip_notes(&h, clip).iter().map(|n| n.pitch).collect();
 	assert_eq!(left, vec![60, 64]);
+
+	// A right-click on empty space deselects everything (and deletes nothing).
+	let ids: Vec<_> = clip_notes(&h, clip).iter().map(|n| n.id).collect();
+	h.state_mut().state.view.piano.select(ids, false);
+	let empty = note_pos(&h, clip, 3.5, 70);
+	h.hover_at(empty);
+	h.run_steps(1);
+	right_button(&h, empty, true);
+	h.run_steps(1);
+	right_button(&h, empty, false);
+	h.run_steps(2);
+	assert!(h.state().state.view.piano.selected.is_empty());
+	assert_eq!(clip_notes(&h, clip).len(), 2);
 }
 
 #[test]

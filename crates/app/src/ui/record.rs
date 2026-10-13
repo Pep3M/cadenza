@@ -139,42 +139,148 @@ pub fn input_controls(ui: &mut Ui, state: &mut AppState, track: &Track, id: Id, 
 	};
 	let mon_rect = Rect::from_min_size(
 		pos2(in_rect.right() + 4.0, rect.top()),
-		vec2(30.0, rect.height()),
+		vec2(22.0, rect.height()),
 	);
-	let resp = ui.interact(mon_rect, id.with("monitor"), Sense::click());
-	let (text, on) = match input.monitor {
-		MonitorMode::Off => ("off", false),
-		MonitorMode::Auto => ("auto", true),
-		MonitorMode::On => ("on", true),
-	};
-	widgets::paint_toggle(&p, mon_rect, on, text, theme::PLAYING, resp.hovered());
-	if resp
-		.on_hover_text(
-			"Input monitoring: off / auto (armed, while stopped or recording) / on (always; \
-			 the input replaces the clips)",
+	monitor_button(ui, state, track.id, input.monitor, id, mon_rect);
+}
+
+/// The input monitor button (Cubase / Studio One style speaker): click switches
+/// monitoring on/off, right-click picks Off / Auto / On. Orange when on; Auto shows a
+/// dimmer speaker with an "A".
+pub fn monitor_button(
+	ui: &mut Ui,
+	state: &mut AppState,
+	track: TrackId,
+	mode: MonitorMode,
+	id: Id,
+	rect: Rect,
+) {
+	let resp = ui.interact(rect, id.with("monitor"), Sense::click());
+	resp.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::Checkbox,
+			true,
+			mode != MonitorMode::Off,
+			"Input monitoring",
 		)
-		.clicked()
-	{
-		state.cycle_monitor(track.id);
+	});
+	paint_speaker(ui.painter(), rect, mode, resp.hovered());
+	let resp = resp.on_hover_text(match mode {
+		MonitorMode::Off => "Input monitoring off (click: on; right-click: auto)",
+		MonitorMode::Auto => {
+			"Input monitoring auto: while armed and stopped or recording (click: off)"
+		}
+		MonitorMode::On => "Input monitoring on: the input replaces the clips (click: off)",
+	});
+	if resp.clicked() {
+		state.toggle_monitor(track);
 	}
-	// Input level, before the track's inserts and fader.
+	resp.context_menu(|ui| {
+		for (m, label) in [
+			(MonitorMode::Off, "Off"),
+			(MonitorMode::Auto, "Auto (armed: stopped or recording)"),
+			(MonitorMode::On, "On (always)"),
+		] {
+			if ui.selectable_label(mode == m, label).clicked() {
+				state.set_monitor(track, m);
+				ui.close();
+			}
+		}
+	});
+}
+
+/// A speaker glyph: waves when monitoring, a cross when off.
+pub fn paint_speaker(p: &Painter, rect: Rect, mode: MonitorMode, hovered: bool) {
+	let on = mode != MonitorMode::Off;
+	let accent = if mode == MonitorMode::Auto {
+		theme::MONITOR.gamma_multiply(0.75)
+	} else {
+		theme::MONITOR
+	};
+	let bg = if mode == MonitorMode::On {
+		theme::mix(theme::MONITOR, theme::BG_DEEP, 0.35)
+	} else if hovered {
+		theme::BG_HOVER
+	} else {
+		theme::BG_WIDGET
+	};
+	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
+	if mode == MonitorMode::Auto {
+		p.rect_stroke(
+			rect.shrink(0.5),
+			CornerRadius::same(theme::RADIUS),
+			Stroke::new(1.0, accent),
+			egui::StrokeKind::Inside,
+		);
+	}
+	let fg = if mode == MonitorMode::On {
+		Color32::WHITE
+	} else if on {
+		accent
+	} else {
+		theme::TEXT_DIM
+	};
+	let s = (rect.height() / 16.0).clamp(0.6, 1.4);
+	let c = rect.center() + vec2(-3.0 * s, 0.0);
+	let body = [
+		c + vec2(-4.0, -2.0) * s,
+		c + vec2(-1.5, -2.0) * s,
+		c + vec2(2.0, -5.0) * s,
+		c + vec2(2.0, 5.0) * s,
+		c + vec2(-1.5, 2.0) * s,
+		c + vec2(-4.0, 2.0) * s,
+	];
+	p.add(egui::Shape::convex_polygon(body.to_vec(), fg, Stroke::NONE));
+	if on {
+		for r in [3.5f32, 6.0] {
+			let pts: Vec<egui::Pos2> = (0..=8)
+				.map(|i| {
+					let a = (-0.8 + 1.6 * i as f32 / 8.0) * 1.0;
+					c + vec2(2.5 + r * a.cos(), r * a.sin()) * s
+				})
+				.collect();
+			p.add(egui::Shape::line(pts, Stroke::new(1.2, fg)));
+		}
+		if mode == MonitorMode::Auto {
+			p.text(
+				rect.right_bottom() + vec2(-2.0, -1.0),
+				Align2::RIGHT_BOTTOM,
+				"A",
+				FontId::proportional(7.5),
+				fg,
+			);
+		}
+	} else {
+		let x = c + vec2(6.0, 0.0) * s;
+		let d = 2.5 * s;
+		p.line_segment([x + vec2(-d, -d), x + vec2(d, d)], Stroke::new(1.2, fg));
+		p.line_segment([x + vec2(-d, d), x + vec2(d, -d)], Stroke::new(1.2, fg));
+	}
+}
+
+/// The input level of an audio track with an input, as a thin vertical meter along the
+/// left edge of its header (next to the color strip), before inserts and fader.
+pub fn header_input_meter(p: &Painter, state: &AppState, track: &Track, header: Rect) {
+	let Some(input) = track.input else {
+		return;
+	};
 	let meter = Rect::from_min_max(
-		pos2(mon_rect.right() + 4.0, rect.center().y - 2.0),
-		pos2(rect.right(), rect.center().y + 2.0),
+		pos2(header.left() + 5.0, header.top() + 2.0),
+		pos2(header.left() + 8.0, header.bottom() - 2.0),
 	);
-	if meter.width() > 6.0 {
-		p.rect_filled(meter, 1.0, theme::METER_BG);
-		let level = state.input_level(&input);
-		let db = cadenza_core::gain_to_db(level.max(1e-9));
-		let w = widgets::db_to_meter(db) * meter.width();
+	p.rect_filled(meter, 0.0, theme::METER_BG);
+	let level = state.input_level(&input);
+	let db = cadenza_core::gain_to_db(level.max(1e-9));
+	let h = widgets::db_to_meter(db) * meter.height();
+	if h > 0.5 {
 		let color = if db > -3.0 {
 			theme::METER_HIGH
 		} else {
 			theme::METER_LOW
 		};
 		p.rect_filled(
-			Rect::from_min_size(meter.min, vec2(w, meter.height())),
-			1.0,
+			Rect::from_min_max(pos2(meter.left(), meter.bottom() - h), meter.max),
+			0.0,
 			color,
 		);
 	}

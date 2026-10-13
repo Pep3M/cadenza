@@ -329,7 +329,9 @@ async fn stop_ends_at_the_next_tool_boundary_and_keeps_one_undo_step() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stop_during_the_model_call_aborts_it() {
 	let server = MockServer::start(|_, _| {
-		std::thread::sleep(std::time::Duration::from_millis(1500));
+		// The handler runs on a runtime worker: hand its duties (timers, the stopper task)
+		// to another thread while it sleeps, or the stop can be delayed past the deadline.
+		tokio::task::block_in_place(|| std::thread::sleep(std::time::Duration::from_millis(1500)));
 		streamed(None, Some("late"), &[], "stop", usage(10, 1, 0, 0.0))
 	})
 	.await;

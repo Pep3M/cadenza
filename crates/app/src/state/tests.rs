@@ -1421,6 +1421,30 @@ fn freeze_bounce_and_consolidate_are_single_undo_steps() {
 		.unwrap()
 		.file;
 	assert!(file.exists() && file.starts_with(tmp.path()));
+	// Editing the frozen track's notes makes the render stale; refreezing makes it current.
+	assert!(!s.document().freeze_stale(keys));
+	let clip = s.project().track(keys).unwrap().clips[0].id;
+	assert!(s.apply(Command::AddNotes {
+		clip,
+		notes: vec![cadenza_model::Note::new(72, Tick(0), Tick(PPQ), 0.7)],
+	}));
+	assert!(s.document().freeze_stale(keys));
+	assert!(s.project().summary().tracks[0].freeze_stale);
+	s.freeze_track(keys);
+	wait_bounce(&mut s);
+	assert!(!s.document().freeze_stale(keys), "refrozen");
+	assert_ne!(
+		s.project()
+			.track(keys)
+			.unwrap()
+			.freeze
+			.as_ref()
+			.unwrap()
+			.file,
+		file
+	);
+	s.undo();
+	s.undo();
 	s.unfreeze_track(keys);
 	assert!(s.project().track(keys).unwrap().freeze.is_none());
 

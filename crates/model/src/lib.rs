@@ -9,6 +9,7 @@ pub mod controller;
 pub mod document;
 pub mod error;
 pub mod files;
+mod freeze;
 mod persist;
 pub mod project;
 pub mod sample;

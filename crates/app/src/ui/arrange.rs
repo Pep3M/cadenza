@@ -940,18 +940,7 @@ impl ArrangeUi {
 		if track.freeze.is_some() {
 			let badge =
 				Rect::from_min_size(pos2(name_rect.right() - 30.0, row1 + 2.0), vec2(28.0, 12.0));
-			p.rect_filled(badge, CornerRadius::same(2), theme::FROZEN);
-			p.text(
-				badge.center(),
-				Align2::CENTER_CENTER,
-				"FRZ",
-				FontId::monospace(8.5),
-				theme::BG_DEEP,
-			);
-			ui.interact(badge, id.with("frozen"), Sense::hover())
-				.on_hover_text(
-					"Frozen: the track plays its render; its devices are unloaded (track menu: Unfreeze)",
-				);
+			freeze_badge(ui, &p, badge, state, track, id.with("frozen"));
 		}
 		let ch = &track.channel;
 		{
@@ -1708,6 +1697,67 @@ impl ArrangeUi {
 	}
 }
 
+/// The FRZ badge of a frozen track (header and mixer strip). Out of date (the clips or
+/// devices changed after freezing) it turns amber and a click freezes the track again.
+pub(super) fn freeze_badge(
+	ui: &mut Ui,
+	p: &Painter,
+	badge: Rect,
+	state: &mut AppState,
+	track: &Track,
+	id: Id,
+) {
+	let stale = state.document().freeze_stale(track.id);
+	let busy = state.bounce_busy();
+	let resp = ui.interact(
+		badge,
+		id,
+		if stale && !busy {
+			Sense::click()
+		} else {
+			Sense::hover()
+		},
+	);
+	let label = if stale {
+		format!("Refreeze {}", track.name)
+	} else {
+		format!("{} is frozen", track.name)
+	};
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, &label));
+	let fill = if stale { theme::WARNING } else { theme::FROZEN };
+	p.rect_filled(
+		badge,
+		CornerRadius::same(2),
+		if resp.hovered() && stale {
+			theme::mix(fill, Color32::WHITE, 0.25)
+		} else {
+			fill
+		},
+	);
+	p.text(
+		badge.center(),
+		Align2::CENTER_CENTER,
+		if stale { "FRZ!" } else { "FRZ" },
+		FontId::monospace(8.5),
+		theme::BG_DEEP,
+	);
+	if stale {
+		if resp
+			.on_hover_text(
+				"Frozen render out of date: the clips or devices changed after freezing. \
+				 Click to refreeze (track menu: Unfreeze)",
+			)
+			.clicked()
+		{
+			state.freeze_track(track.id);
+		}
+	} else {
+		resp.on_hover_text(
+			"Frozen: the track plays its render; its devices are unloaded (track menu: Unfreeze)",
+		);
+	}
+}
+
 /// Zooms (and scrolls) the arrange view to the whole song.
 pub fn zoom_to_fit(state: &mut AppState, width: f32) {
 	let end = state.song_end().beats();
@@ -1888,6 +1938,14 @@ fn track_menu(
 	if crate::state::bounce::can_freeze(track) {
 		let busy = state.bounce_busy();
 		if track.freeze.is_some() {
+			if state.document().freeze_stale(track.id)
+				&& ui
+					.add_enabled(!busy, egui::Button::new("Refreeze (render is out of date)"))
+					.clicked()
+			{
+				state.freeze_track(track.id);
+				ui.close();
+			}
 			if ui.button("Unfreeze").clicked() {
 				state.unfreeze_track(track.id);
 				ui.close();

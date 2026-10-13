@@ -104,7 +104,7 @@ pub enum TrackKind { Instrument, Audio, Bus, Folder }
 pub struct Track { id: TrackId, name, kind, color: Option<String /* #RRGGBB */>,
 	instrument: Option<Device>, clips: Vec<Clip>, channel: Channel,
 	folder: Option<TrackId> /* the folder track holding it; optional */,
-	freeze: Option<Freeze { file: PathBuf /* stereo render from tick 0 */ }> /* optional */,
+	freeze: Option<Box<Freeze { file: PathBuf /* stereo render from tick 0 */, source: Option<String> /* fingerprint */ }>> /* optional */,
 	input: Option<TrackInput { channel: u16 /* 0-based */, stereo: bool /* channel+1 */, monitor: MonitorMode /* off|auto (default)|on */ }> /* audio tracks */ }
 pub struct Channel { volume_db: f32, pan: f32 /* -1..1 */, mute: bool, solo: bool,
 	inserts: Vec<Device>, sends: Vec<Send>, output: Output }
@@ -745,7 +745,12 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   "Consolidate selected clips" (two or more clips of one track: MIDI merged at once with notes
   and controller lanes, audio rendered without inserts into one clip). Renders go to
   `.cadenza/freeze/` (freeze) or `Audio/` (state folder before the first save). MCP:
-  `freeze_track`, `unfreeze_track`; summaries show `frozen`.
+  `freeze_track`, `unfreeze_track`; summaries show `frozen` and `freeze_stale`. Stale freezes
+  (phase 19a, `model::freeze`): `Freeze.source` = `Project::freeze_source(track)` (FNV-1a of
+  clips, instrument, inserts, their device lanes and tempo; file names only, fader/sends left
+  out) taken when the render starts; `freeze_is_stale` compares it (no fingerprint = never
+  stale). `DocView::freeze_stale` caches it per change; the FRZ badge (header + mixer strip,
+  `arrange::freeze_badge`) turns amber "FRZ!" and a click refreezes; track menu "Refreeze".
 - Folder tracks (phase 17, `state::folders` pure builders): "+ Folder" track button, track
   menu "Group into new folder" / "Take out of folder"; headers indent with a guide line per
   folder level, folders have a disclosure triangle (`view.collapsed`, `toggle_folder`) and a

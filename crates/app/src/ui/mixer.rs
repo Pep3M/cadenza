@@ -181,6 +181,13 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 			theme::small(),
 			theme::TEXT_DIM,
 		);
+		if let Some(t) = track.filter(|t| t.freeze.is_some()) {
+			let badge = Rect::from_min_size(
+				pos2(what_r.right() - 26.0, what_r.center().y - 6.0),
+				vec2(24.0, 12.0),
+			);
+			super::arrange::freeze_badge(ui, &p, badge, state, t, Id::new(("strip-frozen", id)));
+		}
 		if let Some(f) = folder {
 			let open = !state.view.collapsed.contains(&f);
 			super::widgets::paint_disclosure(

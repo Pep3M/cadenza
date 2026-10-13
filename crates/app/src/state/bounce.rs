@@ -33,6 +33,8 @@ pub struct BounceJob {
 	/// The new track / clip, created by the caller so redo is deterministic.
 	pub new_track: TrackId,
 	pub new_clip: ClipId,
+	/// Freeze fingerprint of the project the render was made from.
+	pub source: Option<String>,
 }
 
 /// A free file name `<dir>/<stem> <n>.wav`.
@@ -62,6 +64,7 @@ pub fn finish(project: &Project, job: &BounceJob, seconds: f64) -> Result<Comman
 			track: job.track,
 			freeze: Some(Freeze {
 				file: job.file.clone(),
+				source: job.source.clone(),
 			}),
 		}),
 		BounceKind::InPlace => {
@@ -257,6 +260,7 @@ mod tests {
 			file: PathBuf::from("/tmp/x.wav"),
 			new_track: TrackId::new(),
 			new_clip: ClipId::new(),
+			source: None,
 		};
 		let mut doc = Document::new(p);
 		doc.execute(finish(doc.project(), &job, 2.0).unwrap())

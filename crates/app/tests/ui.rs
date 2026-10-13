@@ -2520,6 +2520,63 @@ fn the_automation_mode_button_cycles_read_touch_latch() {
 }
 
 #[test]
+fn a_frozen_track_edited_afterwards_offers_a_one_click_refreeze() {
+	// An unsaved copy of the demo: the refreeze render goes to a temporary state folder.
+	let tmp = tempfile::tempdir().unwrap();
+	let mut state = AppState::headless();
+	let project = cadenza_model::Project::load_json(example()).unwrap();
+	state.load_document(cadenza_model::Document::new(project), None);
+	state.safety.state_dir = tmp.path().to_path_buf();
+	let mut h = harness(CadenzaApp::with_state(state));
+	h.run_steps(2);
+	let (keys, clip) = {
+		let p = h.state().state.project();
+		let t = p.tracks.iter().find(|t| t.name == "Keys").unwrap();
+		(t.id, t.clips[0].id)
+	};
+	{
+		let s = &mut h.state_mut().state;
+		let source = s.project().freeze_source(keys);
+		assert!(s.apply(cadenza_model::Command::SetTrackFreeze {
+			track: keys,
+			freeze: Some(cadenza_model::Freeze {
+				file: "/nonexistent/Keys freeze 1.wav".into(),
+				source,
+			}),
+		}));
+	}
+	h.run_steps(2);
+	assert!(
+		h.query_all_by_label("Keys is frozen").count() >= 2,
+		"header and mixer"
+	);
+	assert!(h.query_by_label("Refreeze Keys").is_none());
+	assert!(h.state_mut().state.apply(cadenza_model::Command::AddNotes {
+		clip,
+		notes: vec![cadenza_model::Note::new(72, Tick(0), Tick(PPQ), 0.7)],
+	}));
+	h.run_steps(2);
+	assert!(h.state().state.document().freeze_stale(keys));
+	h.query_all_by_label("Refreeze Keys")
+		.next()
+		.unwrap()
+		.click();
+	h.run_steps(2);
+	assert!(
+		h.state().state.bounce_busy(),
+		"the click renders the track again"
+	);
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+	while h.state().state.bounce_busy() {
+		assert!(std::time::Instant::now() < deadline, "render timed out");
+		std::thread::sleep(std::time::Duration::from_millis(20));
+		h.run_steps(1);
+	}
+	assert!(!h.state().state.document().freeze_stale(keys));
+	assert!(h.query_all_by_label("Keys is frozen").count() >= 2);
+}
+
+#[test]
 fn folders_group_tracks_and_fold_in_the_arrange() {
 	let mut a = app();
 	let ids: Vec<_> = a

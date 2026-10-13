@@ -198,12 +198,21 @@ pub struct DocView {
 	project: Project,
 	undo: Vec<String>,
 	redo: Vec<String>,
+	/// Frozen tracks edited since they were frozen (computed once per change).
+	stale_freezes: Vec<TrackId>,
 }
 
 impl DocView {
 	fn of(document: &Document) -> Self {
+		let project = document.project();
 		Self {
-			project: document.project().clone(),
+			stale_freezes: project
+				.tracks
+				.iter()
+				.filter(|t| t.freeze.is_some() && project.freeze_is_stale(t.id))
+				.map(|t| t.id)
+				.collect(),
+			project: project.clone(),
 			undo: document
 				.history_labels()
 				.into_iter()
@@ -237,6 +246,11 @@ impl DocView {
 
 	pub fn can_redo(&self) -> bool {
 		!self.redo.is_empty()
+	}
+
+	/// A frozen track whose clips or devices changed after it was frozen.
+	pub fn freeze_stale(&self, track: TrackId) -> bool {
+		self.stale_freezes.contains(&track)
 	}
 }
 
@@ -1023,6 +1037,7 @@ impl AppState {
 			file: file.clone(),
 			new_track: TrackId::new(),
 			new_clip: ClipId::new(),
+			source: self.project().freeze_source(track),
 		};
 		let mut project = self.project().clone();
 		// Render what the track computes, not a previous freeze.

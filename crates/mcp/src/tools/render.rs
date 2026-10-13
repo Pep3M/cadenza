@@ -562,6 +562,7 @@ pub async fn freeze_render(
 		.map(|n| dir.join(format!("{stem} {n}.wav")))
 		.find(|p| !p.exists())
 		.expect("a free file name");
+	let fingerprint = project.freeze_source(track);
 	let mut source = project.clone();
 	if let Some(t) = source.tracks.iter_mut().find(|t| t.id == track) {
 		t.freeze = None;
@@ -583,7 +584,10 @@ pub async fn freeze_render(
 	Ok((
 		Command::SetTrackFreeze {
 			track,
-			freeze: Some(cadenza_model::Freeze { file: file.clone() }),
+			freeze: Some(cadenza_model::Freeze {
+				file: file.clone(),
+				source: fingerprint,
+			}),
 		},
 		FreezeTrackOutput {
 			file: file.display().to_string(),

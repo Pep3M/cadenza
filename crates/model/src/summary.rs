@@ -87,6 +87,10 @@ pub struct TrackSummary {
 	/// Frozen: the track plays a render of itself (its devices are unloaded).
 	#[serde(skip_serializing_if = "std::ops::Not::not")]
 	pub frozen: bool,
+	/// Frozen, but its clips/devices changed after freezing: the render is out of date
+	/// (freeze it again).
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub freeze_stale: bool,
 	/// The folder track this track is in.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub folder: Option<TrackId>,
@@ -263,6 +267,7 @@ impl Project {
 			input: track.input,
 			folder: track.folder,
 			frozen: track.freeze.is_some(),
+			freeze_stale: self.freeze_is_stale(track.id),
 		}
 	}
 

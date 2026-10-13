@@ -878,10 +878,10 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					"must be the path of the rendered audio file",
 				));
 			}
-			let old = std::mem::replace(&mut t.freeze, freeze.clone());
+			let old = std::mem::replace(&mut t.freeze, freeze.clone().map(Box::new));
 			Ok(vec![Command::SetTrackFreeze {
 				track: *track,
-				freeze: old,
+				freeze: old.map(|f| *f),
 			}])
 		}
 

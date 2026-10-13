@@ -32,7 +32,10 @@ fn a_frozen_track_sounds_like_the_original() {
 	.unwrap();
 	assert!(report.master.peak_db > -40.0, "the render has the track");
 	let mut frozen = p.clone();
-	frozen.tracks[0].freeze = Some(Freeze { file: file.clone() });
+	frozen.tracks[0].freeze = Some(Box::new(Freeze {
+		file: file.clone(),
+		source: None,
+	}));
 	let played = render_offline(&frozen, &opts(6.0)).unwrap();
 	let diff = max_diff(&original, &played);
 	assert!(diff < 1e-3, "frozen playback differs by {diff}");

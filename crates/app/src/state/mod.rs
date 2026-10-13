@@ -27,6 +27,7 @@ pub mod library;
 pub mod live;
 pub mod meter;
 pub mod meters;
+pub mod mix;
 pub mod notices;
 pub mod piano;
 pub mod project_io;
@@ -300,6 +301,8 @@ pub struct AppState {
 	pub record: record::RecordState,
 	/// The AI producer chat (see [`ai`] for how edits are locked while it works).
 	pub ai: ai::AiChat,
+	/// The mix assistant (the AI panel's Mix tab).
+	pub mix: mix::MixAssistant,
 	/// Plugin editor values and finished background edits that arrived while the AI was
 	/// editing: applied once it is done.
 	ai_queue: Vec<Command>,
@@ -405,6 +408,7 @@ impl AppState {
 				std::env::current_dir().unwrap_or_default(),
 				waker.clone(),
 			),
+			mix: mix::MixAssistant::default(),
 			ai_queue: Vec::new(),
 			after_save: None,
 			export: export::ExportDialog::default(),
@@ -649,6 +653,9 @@ impl AppState {
 	fn poll_ai(&mut self) {
 		for finished in self.ai.poll() {
 			self.sync_session(true);
+			if finished.undo_label == cadenza_agent::ENGINEER_UNDO_LABEL {
+				self.mix_pass_finished(&finished);
+			}
 			if finished.edited {
 				self.notices
 					.info(format!("{} — one undo step (Ctrl+Z)", finished.undo_label));
@@ -2984,6 +2991,7 @@ impl AppState {
 				}
 			}
 			FileAction::ImportAudio => self.import_audio(&path),
+			FileAction::MixReference => self.mix.reference = Some(path),
 			FileAction::ImportMidi => self.import_midi(&path),
 			FileAction::ExportFolder
 			| FileAction::UnpackFolder
@@ -3049,6 +3057,7 @@ impl AppState {
 		let actions = self.editors.flush(&self.doc.project, now, false);
 		self.editor_actions(actions);
 		self.poll_jobs();
+		self.poll_mix();
 		self.poll_file_jobs();
 		self.tick_autosave(now);
 		self.sync_transport();
@@ -3070,6 +3079,7 @@ impl AppState {
 			|| self.jobs.process.is_some()
 			|| self.jobs.bounce.is_some()
 			|| self.ai.busy()
+			|| self.mix.busy()
 			|| self.record_animating()
 	}
 

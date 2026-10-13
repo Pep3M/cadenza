@@ -13,6 +13,7 @@ pub mod dnd;
 pub mod inspector;
 pub mod instrument_editor;
 pub mod library;
+pub mod mix_assistant;
 pub mod mixer;
 pub mod piano_roll;
 pub mod project_dialogs;
@@ -960,8 +961,23 @@ fn menu_bar(ui: &mut Ui, state: &mut AppState) {
 		ui.menu_button("AI", |ui| {
 			ui.set_min_width(220.0);
 			let on = state.view.panels.visible(PanelKind::Chat);
-			if check_item(ui, on, "AI producer chat", "F10") {
-				toggle_panel(state, PanelKind::Chat);
+			if check_item(ui, on && !state.mix.open, "AI producer chat", "F10") {
+				if on && state.mix.open {
+					state.mix.open = false;
+				} else {
+					state.mix.open = false;
+					toggle_panel(state, PanelKind::Chat);
+				}
+			}
+			if check_item(ui, on && state.mix.open, "Mix assistant", "") {
+				if on && state.mix.open {
+					toggle_panel(state, PanelKind::Chat);
+				} else {
+					state.mix.open = true;
+					if !on {
+						toggle_panel(state, PanelKind::Chat);
+					}
+				}
 			}
 			if shortcut_button(ui, "AI settings…", "") {
 				state.ai.settings_open = true;

@@ -177,6 +177,8 @@ pub enum FileAction {
 	RelinkFolder,
 	/// Project archive to write.
 	PackArchive,
+	/// A reference track for the mix assistant.
+	MixReference,
 }
 
 impl FileAction {
@@ -190,6 +192,7 @@ impl FileAction {
 			Self::UnpackFolder => "Extract the project archive into",
 			Self::RelinkFolder => "Search for missing files in",
 			Self::PackArchive => "Export project archive",
+			Self::MixReference => "Choose a reference track",
 		}
 	}
 }
@@ -217,7 +220,7 @@ pub fn file_dialog(
 				.add_filter("Cadenza project", &["json"])
 				.set_file_name(suggested_name)
 				.save_file(),
-			FileAction::ImportAudio => dialog
+			FileAction::ImportAudio | FileAction::MixReference => dialog
 				.add_filter("Audio", crate::state::AUDIO_EXTENSIONS)
 				.pick_file(),
 			FileAction::ImportMidi => dialog.add_filter("MIDI", &["mid", "midi"]).pick_file(),

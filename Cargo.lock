@@ -760,6 +760,7 @@ name = "cadenza-app"
 version = "0.1.0"
 dependencies = [
  "cadenza-agent",
+ "cadenza-analysis",
  "cadenza-audio-io",
  "cadenza-core",
  "cadenza-dsp",

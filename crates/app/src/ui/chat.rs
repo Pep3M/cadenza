@@ -30,6 +30,11 @@ impl ChatUi {
 		ui.spacing_mut().item_spacing.y = 5.0;
 		header(ui, state);
 		ui.separator();
+		if state.mix.open {
+			crate::ui::mix_assistant::show(ui, state);
+			self.settings_dialog(ui.ctx(), state);
+			return;
+		}
 		let busy = state.ai.busy();
 		// Bottom-up: input, chips, status; the conversation takes the rest.
 		egui::Panel::bottom("ai-chat-bottom")
@@ -285,12 +290,27 @@ fn key_section(ui: &mut Ui, state: &mut AppState) {
 
 fn header(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal(|ui| {
-		ui.label(
-			RichText::new("AI PRODUCER")
+		for (mix, label, hint) in [
+			(false, "AI PRODUCER", "Chat with the AI producer"),
+			(
+				true,
+				"MIX",
+				"Mix assistant: analysis, fixes and the AI mix pass",
+			),
+		] {
+			let on = state.mix.open == mix;
+			let text = RichText::new(label)
 				.font(theme::small())
 				.strong()
-				.color(theme::ACCENT),
-		);
+				.color(if on { theme::ACCENT } else { theme::TEXT_FAINT });
+			if ui
+				.add(egui::Label::new(text).sense(egui::Sense::click()))
+				.on_hover_text(hint)
+				.clicked()
+			{
+				state.mix.open = mix;
+			}
+		}
 		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 			ui.menu_button("☰", |ui| {
 				ui.set_min_width(260.0);

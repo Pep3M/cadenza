@@ -589,8 +589,23 @@ fn style_doc(ui: &mut Ui, state: &mut AppState, library: &Library, s: &Style) {
 			ui.add(egui::Label::new(caption(format!("{k}: {text}"))).wrap());
 		}
 	}
-	heading(ui, &format!("Mix · {:.0} LUFS", s.mix.lufs));
+	let profile = s
+		.mix
+		.profile
+		.as_deref()
+		.map(|p| format!(" · {p} tone"))
+		.unwrap_or_default();
+	heading(ui, &format!("Mix · {:.0} LUFS{profile}", s.mix.lufs));
 	ui.add(egui::Label::new(caption(&s.mix.notes)).wrap());
+	if !s.mix.levels.is_empty() {
+		let levels: Vec<String> = s
+			.mix
+			.levels
+			.iter()
+			.map(|(role, db)| format!("{role} {db:+.0}"))
+			.collect();
+		ui.add(egui::Label::new(faint(format!("Balance (dB): {}", levels.join(" · ")))).wrap());
+	}
 	for (title, list, color) in [
 		("Do", &s.dos, theme::PLAYING),
 		("Don't", &s.dont, theme::ERROR),

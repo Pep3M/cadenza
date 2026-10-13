@@ -776,7 +776,7 @@ fn edits_by_another_owner_of_the_session_go_through_the_same_bookkeeping() {
 	assert_eq!(s.path(), Some(path.as_path()));
 }
 
-mod ai_chat {
+pub(crate) mod ai_chat {
 	use super::*;
 	use crate::state::ai::secrets::{MemorySecretStore, SecretStore};
 	use crate::state::ai::settings::ProviderKind;

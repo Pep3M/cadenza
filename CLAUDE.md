@@ -897,6 +897,17 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   with draggable/previewable pattern chips, sounds, mix, do/don't; form = Apply form +
   section table with energy blocks. "Credits" lists every pack (license, attribution,
   links, not-redistributable flag, location) and load problems.
+- Mix assistant (phase 18b; `state::mix` logic + `ui::mix_assistant`): the AI panel (F10)
+  has PRODUCER | MIX tabs (`mix.open`; AI menu "Mix assistant"). Analyze = `run_analysis` on a
+  `cadenza-mix-analysis` thread (progress, Cancel, waker), report card: master LUFS vs target
+  (style or override), true peak/crest/width/low-end mono, octave spectrum bars, tone vs the
+  profile curve, per-channel loudness bars + peak tick, masking pairs, issues with Fix (the
+  issue's moves via `mix_pass_command`, one undo step "Mix fix: ...") and Fix all ("Mix
+  fixes"); a stale report (document changed) offers Analyze again. "AI mix pass": measure
+  (reuses a fresh report), `AiChat::send_mix_pass` -> `SessionAgent::run_engineer_pass`
+  (reference track via File dialog `FileAction::MixReference`, notes), measure again,
+  `compare_passes` table with Keep / Revert (undo, only while "AI mix pass" is the last step).
+  Library style documents show the mix profile and role levels.
 - Fonts: `theme::fonts()` appends egui's bundled Hack to the proportional family (arrows,
   geometric shapes, block elements: `← → ◆ ● ⊘ ▍`); `proportional_fonts_cover_the_app_symbols`
   scans the sources for non-ASCII symbols and checks each against the faces' charmaps.
@@ -908,7 +919,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   tracks with take lanes, a recording in progress (fed by the engine's virtual device) and the
   audio settings dialog, and (`render_phase17_screens`) time signature changes + the signature
   lane, controller lanes (mod wheel, pitch bend), an automatic crossfade and a folder (open,
-  folded), and (`render_library_screens`) the Library tab (list, filters, preview, pattern
+  folded), (`render_mix_screens`) the Mix tab (empty, analyzing, report, issues, pass running, review) and the Files tab glyphs, and (`render_library_screens`) the Library tab (list, filters, preview, pattern
   tooltip, style and form documents, credits, a pattern dragged over a lane).
 - Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
   30 ms): Edit button in the inspector (device and track instrument), double-click a plugin

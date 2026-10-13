@@ -2696,3 +2696,126 @@ fn render_library_screens() {
 	egui::DragAndDrop::clear_payload(&h.ctx);
 	h.remove_cursor();
 }
+
+/// Runs frames until the mix assistant and the AI are idle.
+fn settle_mix(h: &mut Harness<'_, CadenzaApp>) {
+	for _ in 0..3000 {
+		h.run_steps(1);
+		let s = &h.state().state;
+		if !s.mix.busy() && !s.ai.busy() {
+			break;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(10));
+	}
+	h.run_steps(3);
+	assert!(
+		!h.state().state.mix.busy(),
+		"the mix assistant did not finish"
+	);
+}
+
+#[test]
+fn the_mix_tab_analyzes_the_song_and_fixes_an_issue() {
+	let mut h = harness(app());
+	h.run_steps(2);
+	h.key_press(Key::F10);
+	h.run_steps(2);
+	h.get_by_label("MIX").click();
+	h.run_steps(2);
+	assert!(h.state().state.mix.open);
+	assert!(h.query_by_label("AI mix pass").is_some());
+	// A far target makes sure there is a loudness issue to fix.
+	h.state_mut().state.mix.target_lufs = Some(-30.0);
+	h.get_by_label("Analyze").click();
+	h.run_steps(1);
+	settle_mix(&mut h);
+	assert!(h.state().state.mix.report.is_some());
+	assert!(h.query_by_label("lows mono").is_some());
+	assert!(h.query_by_label("CHANNELS").is_some());
+	assert!(h.query_by_label_contains("ISSUES (").is_some());
+	let undo = h.state().state.document().history_labels().len();
+	h.get_all_by_label("Fix")
+		.next()
+		.expect("a fixable issue")
+		.scroll_to_me();
+	h.run_steps(2);
+	// Toasts sit in the bottom-right corner: bring the button up above them.
+	h.hover_at(pos2(1450.0, 500.0));
+	for _ in 0..6 {
+		h.event(egui::Event::MouseWheel {
+			unit: egui::MouseWheelUnit::Point,
+			delta: vec2(0.0, -60.0),
+			phase: egui::TouchPhase::Move,
+			modifiers: Modifiers::NONE,
+		});
+		h.run_steps(1);
+	}
+	h.get_all_by_label("Fix").next().unwrap().click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert_eq!(s.document().history_labels().len(), undo + 1);
+	assert!(s.undo_label().unwrap().starts_with("Mix fix"));
+	assert!(
+		h.query_by_label("The project changed since this analysis")
+			.is_some()
+	);
+	h.get_by_label("AI PRODUCER").click();
+	h.run_steps(2);
+	assert!(!h.state().state.mix.open);
+}
+
+/// `CADENZA_SCREENSHOT_DIR=/tmp/shots cargo test -p cadenza-app --test ui -- --ignored`.
+#[test]
+#[ignore]
+fn render_mix_screens() {
+	use cadenza_agent::scripted::ScriptedTurn;
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	let turns = vec![
+		ScriptedTurn::tools(
+			Some("Gain staging and a master limiter."),
+			&[(
+				"apply_mix_moves",
+				r#"{"moves":[{"move":"limiter","ceiling_db":-1.5,"input_gain_db":3},{"move":"eq","kind":"high_shelf","freq_hz":8000,"gain_db":2}]}"#,
+			)],
+		),
+		ScriptedTurn::text("Done: louder, peaks under the ceiling, a touch more air."),
+	];
+	let mut a = chat_app(turns, 30, tmp.path());
+	a.state.view.panels.focus = Some(PanelKind::Arrange);
+	let mut h = screenshot_harness(a);
+	h.run_steps(2);
+	h.key_press(Key::F10);
+	h.run_steps(2);
+	h.get_by_label("MIX").click();
+	shot(&mut h, &dir, "mix_empty");
+	h.get_by_label("Analyze").click();
+	h.run_steps(2);
+	shot(&mut h, &dir, "mix_analyzing");
+	settle_mix(&mut h);
+	shot(&mut h, &dir, "mix_report");
+	// Scroll to the issues.
+	h.hover_at(pos2(1450.0, 600.0));
+	for _ in 0..20 {
+		h.event(egui::Event::MouseWheel {
+			unit: egui::MouseWheelUnit::Point,
+			delta: vec2(0.0, -60.0),
+			phase: egui::TouchPhase::Move,
+			modifiers: Modifiers::NONE,
+		});
+		h.run_steps(1);
+	}
+	shot(&mut h, &dir, "mix_issues");
+	h.remove_cursor();
+	h.get_by_label("AI mix pass").click();
+	h.run_steps(3);
+	shot(&mut h, &dir, "mix_pass_running");
+	settle_mix(&mut h);
+	shot(&mut h, &dir, "mix_pass_review");
+	// The browser's Files tab (its ◆ bookmarks glyph comes from the fallback font).
+	h.get_by_label("Files").click();
+	shot(&mut h, &dir, "files_tab_glyphs");
+}

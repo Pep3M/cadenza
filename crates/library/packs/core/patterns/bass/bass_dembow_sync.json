@@ -1,0 +1,29 @@
+{
+	"id": "bass_dembow_sync",
+	"kind": "pattern",
+	"name": "Dembow synth bass",
+	"summary": "Synth bass locked to kick and snare of the dembow: short roots on 1, the a of 1, the & of 2 (both halves).",
+	"role": "bass",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"harmony": "chord",
+	"lanes": {
+		"R": "x=.x =.x= x=.x =.x."
+	},
+	"pairs_with": [
+		"core/dembow_variation"
+	]
+}

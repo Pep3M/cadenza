@@ -1,0 +1,29 @@
+{
+	"id": "pop_halftime",
+	"kind": "pattern",
+	"name": "Pop half-time",
+	"summary": "Half-time feel for verses and bridges: kick on 1 and the & of 3, one snare on beat 3, 8th hats.",
+	"role": "drums",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"ballad"
+	],
+	"sections": [
+		"verse",
+		"bridge",
+		"intro"
+	],
+	"energy": 2,
+	"bars": 1,
+	"tempo": [
+		80,
+		130
+	],
+	"family": "pop_halftime",
+	"lanes": {
+		"kick": "x... .... ..x. ....",
+		"snare": ".... .... x... ....",
+		"closed_hat": "x.x. x.x. x.x. x.x."
+	}
+}

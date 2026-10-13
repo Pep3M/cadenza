@@ -1,0 +1,128 @@
+{
+	"id": "latin_pop",
+	"kind": "style",
+	"name": "Latin pop (reggaeton-pop)",
+	"aliases": [
+		"pop latino",
+		"reggaeton pop",
+		"urbano pop",
+		"reggaeton",
+		"dembow pop",
+		"reguetón"
+	],
+	"summary": "Mid-tempo dembow pop: minor keys, 4-chord loops, nylon guitar and plucks over an 808 tresillo bass.",
+	"genres": [
+		"latin_pop",
+		"reggaeton",
+		"urbano"
+	],
+	"tempo": {
+		"min": 88,
+		"max": 102,
+		"typical": 94
+	},
+	"feel": "straight",
+	"meter": "4/4",
+	"keys": [
+		"minor (most): A, B, C#, F# minor",
+		"major for brighter songs"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_i_VI_III_VII",
+			"core/prog_vi_IV_I_V",
+			"core/prog_i_iv_VII_III"
+		],
+		"harmonic_rhythm_beats": 4,
+		"notes": "One loop for the whole song is idiomatic; contrast comes from arrangement, not new chords. The bridge may switch to a iv- or VI-led loop."
+	},
+	"forms": [
+		"core/form_latin_pop_radio",
+		"core/form_latin_pop_short"
+	],
+	"roles": {
+		"drums": {
+			"intro": [],
+			"verse": [
+				"core/dembow_minimal"
+			],
+			"pre": [
+				"core/dembow_minimal",
+				"core/fill_snare_build"
+			],
+			"chorus": [
+				"core/dembow_basic",
+				"core/dembow_variation"
+			],
+			"fill": "fill_every 8 swaps in core/dembow_fill"
+		},
+		"perc": {
+			"any": [
+				"core/perc_shaker_16ths",
+				"core/perc_guiro_cha"
+			],
+			"chorus": [
+				"core/perc_conga_tumbao"
+			]
+		},
+		"bass": {
+			"verse": [
+				"core/bass_tresillo_808"
+			],
+			"chorus": [
+				"core/bass_tresillo_808",
+				"core/bass_dembow_sync"
+			],
+			"register": "808 sub, roots C1-B1; vary=true adds core/bass_tresillo_808_variation"
+		},
+		"guitar": {
+			"intro": [
+				"core/nylon_arp_tresillo"
+			],
+			"verse": [
+				"core/nylon_arp_tresillo"
+			],
+			"chorus": [
+				"core/guitar_strum_reggaeton"
+			],
+			"sound": "nylon guitar or bright pluck"
+		},
+		"keys": {
+			"pre": [
+				"core/pad_long_chords"
+			],
+			"chorus": [
+				"core/pad_long_chords"
+			],
+			"sound": "warm pad or soft piano, low in the mix"
+		},
+		"hook": {
+			"post_chorus": [
+				"core/hook_pluck_minor"
+			],
+			"notes": "2-bar motif, repeated with a variation"
+		}
+	},
+	"sounds": {
+		"kit": "drum_machine (Boomy 808) or drum_sampler; shaker, guiro and congas need samples",
+		"bass": "poly_synth: Sub Bass",
+		"guitar": "poly_synth: Pluck Lead or a nylon guitar plugin",
+		"keys": "poly_synth: Warm Pad"
+	},
+	"mix": {
+		"lufs": -9,
+		"notes": "Kick and 808 own the lows (sidechain the 808 lightly to the kick); guitar panned slightly; keep 1-4 kHz for the vocal; short plate reverb."
+	},
+	"do": [
+		"Drop the kick in the last bar of the pre-chorus",
+		"Thin out the verses (half the roles)",
+		"Add a fill or riser into every chorus",
+		"Keep the dembow; vary hats and perc instead"
+	],
+	"dont": [
+		"Block chords on every beat",
+		"Whole-note bass under a dembow",
+		"Same drum pattern in every section",
+		"Swing the dembow"
+	]
+}

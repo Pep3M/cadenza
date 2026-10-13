@@ -1,0 +1,28 @@
+{
+	"id": "bass_walk_chord_tones",
+	"kind": "pattern",
+	"name": "Walking chord tones",
+	"summary": "Quarter-note walk: root, third, fifth, then a chromatic approach into the next chord.",
+	"role": "bass",
+	"genres": [
+		"jazz",
+		"lofi",
+		"neo_soul"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"feel": "swing:0.5",
+	"bars": 1,
+	"harmony": "chord",
+	"lanes": {
+		"R": "x=== .... .... ....",
+		"3": ".... x=== .... ....",
+		"5": ".... .... x=== ....",
+		"app": ".... .... .... x==="
+	},
+	"pairs_with": [
+		"core/lofi_boom_bap"
+	]
+}

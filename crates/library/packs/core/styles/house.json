@@ -1,0 +1,102 @@
+{
+	"id": "house",
+	"kind": "style",
+	"name": "House",
+	"aliases": [
+		"deep house",
+		"club house",
+		"dance",
+		"four on the floor"
+	],
+	"summary": "Four-on-the-floor house at 118-128 bpm: offbeat bass and hats, chord stabs, builds and drops in 8/16-bar blocks.",
+	"genres": [
+		"house",
+		"deep_house",
+		"edm"
+	],
+	"tempo": {
+		"min": 118,
+		"max": 128,
+		"typical": 124
+	},
+	"feel": "straight",
+	"meter": "4/4",
+	"keys": [
+		"minor or dorian: A, F, G minor"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_vi_IV_I_V",
+			"core/prog_i_VII_VI_VII",
+			"core/prog_dorian_i_IV"
+		],
+		"harmonic_rhythm_beats": 4,
+		"notes": "Loops of 1, 2 or 4 chords; change sections every 8 or 16 bars."
+	},
+	"forms": [
+		"core/form_house_club"
+	],
+	"roles": {
+		"drums": {
+			"intro": [
+				"core/house_minimal"
+			],
+			"pre": [
+				"core/house_four_floor",
+				"core/fill_snare_build"
+			],
+			"drop": [
+				"core/house_four_floor",
+				"core/house_variation"
+			],
+			"break": [
+				"core/house_minimal"
+			],
+			"fill": "fill_every 8 swaps in core/house_fill"
+		},
+		"perc": {
+			"drop": [
+				"core/perc_shaker_16ths"
+			]
+		},
+		"bass": {
+			"drop": [
+				"core/bass_house_offbeat"
+			]
+		},
+		"keys": {
+			"drop": [
+				"core/house_chord_stabs"
+			],
+			"break": [
+				"core/pad_long_chords"
+			],
+			"sound": "organ or piano stabs, short"
+		},
+		"arp": {
+			"pre": [
+				"core/arp_up_16ths"
+			]
+		}
+	},
+	"sounds": {
+		"kit": "drum_machine: Tight Kit",
+		"bass": "poly_synth: Sub Bass",
+		"keys": "electric_piano: Classic Tine",
+		"pad": "poly_synth: Warm Pad"
+	},
+	"mix": {
+		"lufs": -8,
+		"notes": "Kick is king: sidechain bass and pads to it; mono lows; open hats bright; long reverb only in the breakdown."
+	},
+	"do": [
+		"Change something every 8 bars",
+		"Remove the kick in breakdowns",
+		"Snare build + filter rise into each drop"
+	],
+	"dont": [
+		"Kick-less drops",
+		"Busy chords under the stabs",
+		"Sections that are not 8 or 16 bars"
+	]
+}

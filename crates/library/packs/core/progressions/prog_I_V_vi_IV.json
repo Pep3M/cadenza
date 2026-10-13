@@ -1,0 +1,17 @@
+{
+	"id": "prog_I_V_vi_IV",
+	"kind": "progression",
+	"name": "I-V-vi-IV",
+	"summary": "The four-chord pop loop (C G Am F).",
+	"mode": "major",
+	"numerals": "I V vi IV",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"latin_pop",
+		"country"
+	],
+	"sections": [
+		"any"
+	]
+}

@@ -1,0 +1,82 @@
+{
+	"id": "form_trap",
+	"kind": "form",
+	"name": "Trap form",
+	"summary": "Intro-Hook-Verse-Hook-Verse-Hook-Outro with 16-bar verses, about 3:00 at 140 bpm.",
+	"genres": [
+		"trap",
+		"hip_hop",
+		"drill"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"melody",
+				"pad"
+			]
+		},
+		{
+			"name": "Hook 1",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"melody"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 16,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"melody"
+			]
+		},
+		{
+			"name": "Hook 2",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"melody"
+			],
+			"ending": "fill"
+		},
+		{
+			"name": "Verse 2",
+			"bars": 16,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"melody"
+			]
+		},
+		{
+			"name": "Hook 3",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"bass",
+				"melody",
+				"pad"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"melody"
+			]
+		}
+	]
+}

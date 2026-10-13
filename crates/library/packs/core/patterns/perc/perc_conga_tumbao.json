@@ -1,0 +1,33 @@
+{
+	"id": "perc_conga_tumbao",
+	"kind": "pattern",
+	"name": "Conga tumbao",
+	"summary": "Conga tumbao: heel-toe ghosts, slap on 2, two open tones on 4 and the & of 4.",
+	"role": "perc",
+	"genres": [
+		"salsa",
+		"son",
+		"latin",
+		"latin_pop",
+		"reggaeton"
+	],
+	"sections": [
+		"chorus",
+		"montuno",
+		"verse"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		80,
+		210
+	],
+	"lanes": {
+		"mute_conga": "o.o. X.o. o.o. ....",
+		"open_conga": ".... .... .... x.x."
+	},
+	"tags": [
+		"tumbao",
+		"conga"
+	]
+}

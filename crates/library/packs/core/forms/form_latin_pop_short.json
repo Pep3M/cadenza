@@ -1,0 +1,98 @@
+{
+	"id": "form_latin_pop_short",
+	"kind": "form",
+	"name": "Latin pop short form",
+	"summary": "Intro-V-Pre-C-Post-V-C-Outro, about 2:30 at 94 bpm: streaming-friendly.",
+	"genres": [
+		"latin_pop",
+		"reggaeton"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"guitar",
+				"perc"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"guitar"
+			]
+		},
+		{
+			"name": "Pre",
+			"bars": 4,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			],
+			"ending": "drop"
+		},
+		{
+			"name": "Chorus 1",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar",
+				"keys"
+			]
+		},
+		{
+			"name": "Post-chorus",
+			"bars": 4,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"hook"
+			]
+		},
+		{
+			"name": "Verse 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar"
+			],
+			"ending": "fill"
+		},
+		{
+			"name": "Chorus 2",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar",
+				"keys",
+				"hook"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"guitar",
+				"perc"
+			]
+		}
+	]
+}

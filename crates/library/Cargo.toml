@@ -1,0 +1,15 @@
+[package]
+name = "cadenza-library"
+description = "Cadenza's style library: genre style guides, song forms, progressions, grooves and MIDI patterns by role"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cadenza-theory.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

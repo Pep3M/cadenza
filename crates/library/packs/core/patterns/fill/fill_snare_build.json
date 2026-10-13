@@ -1,0 +1,27 @@
+{
+	"id": "fill_snare_build",
+	"kind": "pattern",
+	"name": "Snare build",
+	"summary": "Two-bar snare build: quarters, then 8ths, then 16ths into the drop or chorus.",
+	"role": "fill",
+	"genres": [
+		"pop",
+		"house",
+		"latin_pop",
+		"reggaeton",
+		"edm"
+	],
+	"sections": [
+		"pre"
+	],
+	"energy": 4,
+	"bars": 2,
+	"family": "build",
+	"lanes": {
+		"snare": "x... x... x... x... x.x. x.x. xxxx XXXX"
+	},
+	"tags": [
+		"riser",
+		"build"
+	]
+}

@@ -1,0 +1,33 @@
+{
+	"id": "neosoul_drums",
+	"kind": "pattern",
+	"name": "Neo-soul pocket",
+	"summary": "Behind-the-beat neo-soul: syncopated kick, snare on 2 and 4 with ghost notes, heavily swung hats.",
+	"role": "drums",
+	"genres": [
+		"neo_soul",
+		"rnb",
+		"lofi"
+	],
+	"sections": [
+		"verse",
+		"chorus"
+	],
+	"energy": 3,
+	"feel": "swing:0.6",
+	"bars": 1,
+	"tempo": [
+		70,
+		96
+	],
+	"family": "neosoul",
+	"lanes": {
+		"kick": "x..x ..x. .... ..x.",
+		"snare": ".o.. x..o .o.. x.o.",
+		"closed_hat": "x.x. x.x. x.x. x.x."
+	},
+	"pairs_with": [
+		"core/bass_neosoul",
+		"core/neosoul_comp"
+	]
+}

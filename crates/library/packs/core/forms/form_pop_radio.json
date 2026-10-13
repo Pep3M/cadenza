@@ -1,0 +1,121 @@
+{
+	"id": "form_pop_radio",
+	"kind": "form",
+	"name": "Pop radio form",
+	"summary": "Intro-V-Pre-C-V-Pre-C-Bridge-C-Outro, about 3:20 at 110 bpm.",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"dance_pop"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"keys",
+				"drums"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Pre",
+			"bars": 4,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"arp"
+			],
+			"ending": "fill"
+		},
+		{
+			"name": "Chorus 1",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"guitar",
+				"hook"
+			]
+		},
+		{
+			"name": "Verse 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"guitar"
+			]
+		},
+		{
+			"name": "Pre",
+			"bars": 4,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"arp"
+			],
+			"ending": "fill"
+		},
+		{
+			"name": "Chorus 2",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"guitar",
+				"hook"
+			]
+		},
+		{
+			"name": "Bridge",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"keys",
+				"bass"
+			],
+			"ending": "riser"
+		},
+		{
+			"name": "Chorus 3",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"guitar",
+				"hook"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"keys"
+			]
+		}
+	]
+}

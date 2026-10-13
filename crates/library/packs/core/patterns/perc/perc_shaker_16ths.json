@@ -1,0 +1,24 @@
+{
+	"id": "perc_shaker_16ths",
+	"kind": "pattern",
+	"name": "Shaker 16ths",
+	"summary": "Steady 16th shaker with the & of each beat accented: glue for dembow, pop and house grooves.",
+	"role": "perc",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"pop",
+		"house"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"bars": 1,
+	"lanes": {
+		"shaker": "oxXx oxXx oxXx oxXx"
+	},
+	"tags": [
+		"shaker"
+	]
+}

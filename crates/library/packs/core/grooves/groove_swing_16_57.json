@@ -1,0 +1,20 @@
+{
+	"id": "groove_swing_16_57",
+	"kind": "groove",
+	"name": "16th swing 57%",
+	"summary": "MPC-style 16th swing (57%): every second 16th late by 0.14 of a step, softer.",
+	"steps_per_beat": 4,
+	"timing": [
+		0.0,
+		0.14
+	],
+	"velocity": [
+		1.0,
+		0.85
+	],
+	"genres": [
+		"hip_hop",
+		"lofi",
+		"house"
+	]
+}

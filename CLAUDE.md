@@ -18,6 +18,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-theory` | notes, scales, chord symbols, roman numerals, voicings | core |
 | `cadenza-dsp` | real-time `Processor` trait + built-in instruments/effects registry | — |
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
+| `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | theory |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis, realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
@@ -229,6 +230,32 @@ existing ids, bus outputs must target Bus tracks with no cycles, instruments onl
 The cycle check covers outputs, sends, instrument output routes and sidechains (source -> keyed
 track); a device cannot be keyed by its own track; only instruments have `aux_outputs`. Removing
 a track disconnects sidechains keyed by it and drops output routes to it (undo restores).
+
+### cadenza-library (phase 18a, design `docs/design/style-library.md`)
+
+Packs = folders of JSON (`pack.json` manifest with SPDX `license`/`attribution`/
+`redistributable` + `styles/ forms/ progressions/ grooves/ patterns/<role>/`); item ids
+`<pack>/<slug>`. The hand-written `core` pack (`crates/library/packs/core`, CC0) is compiled
+in by `build.rs`; user packs load from `$CADENZA_LIBRARY_DIR` or
+`$XDG_DATA_HOME/cadenza/library/<pack>/` (`Library::load_default`). Invalid packs/items are
+reported in `Library::reports()` (`PackReport { issues }`) and skipped, never fatal;
+`check_references` reports dangling ids. `validate` enforces the budgets (summary <= 120
+chars; compact JSON: pattern 1,200, style 3,500, form 2,000, progression 600, groove 1,200),
+lane keys, step strings (`X x o = . -`, length divides the pattern), license fields.
+Patterns: `role`, `harmony` (none | chord | scale | absolute + key), `steps_per_beat`,
+`bars`, `meter`, `feel`, `family` + `variant` (main | variation | fill | intro | ending),
+`lanes` (ordered): drum names (`DRUM_LANES`, GM superset of `write_drum_pattern`'s, e.g.
+shaker 70, claves 75, hi_bongo 60, open_conga 63), chord tones `R 3 5 7 9 11 13` (+/-n
+octaves), `chord` (voiced with `voicing`, voice-led), `bass`, `app` (semitone below the next
+root), `ant` (next root, anticipated), scale degrees `^1..^7` (`^b3`), absolute notes.
+`realize(pattern, &RealizeOptions { bars, key, chords, beats_per_chord, fill_every, vary,
+fill, variation, groove, velocity, octave })` is pure -> `Realized { notes: Vec<NoteSpec>
+(beats), length_beats, warnings }`; `RealizeError` texts are actionable. `Library::search(
+&Query { text, kind, genre, role, section, energy, family })` ranks token matches over
+id/name/aliases/genres/tags/family/summary (accents folded, `section_name` maps "Chorus 2"
+-> chorus, "Pre-chorus" -> pre; fills demoted unless asked); `card(item)` -> `{id, kind,
+name, summary, facts}`; `family_member(pattern, variant)`; `parse_chords` (symbols or roman
+numerals with a key, mixable).
 
 ### cadenza-dsp
 

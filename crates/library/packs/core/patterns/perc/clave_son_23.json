@@ -1,0 +1,26 @@
+{
+	"id": "clave_son_23",
+	"kind": "pattern",
+	"name": "Son clave 2-3",
+	"summary": "Son clave, 2-3: two side (2, 3) then three side (1, the & of 2, 4).",
+	"role": "perc",
+	"genres": [
+		"salsa",
+		"son",
+		"latin",
+		"latin_pop",
+		"cha_cha"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"bars": 2,
+	"family": "clave",
+	"lanes": {
+		"claves": ".... x... x... .... x... ..x. .... x..."
+	},
+	"tags": [
+		"clave"
+	]
+}

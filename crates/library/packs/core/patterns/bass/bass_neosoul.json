@@ -1,0 +1,28 @@
+{
+	"id": "bass_neosoul",
+	"kind": "pattern",
+	"name": "Neo-soul bass",
+	"summary": "Laid-back neo-soul bass: root, low fifth, octave ghost and an approach note tied into the next chord.",
+	"role": "bass",
+	"genres": [
+		"neo_soul",
+		"rnb",
+		"lofi"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"feel": "swing:0.6",
+	"bars": 1,
+	"harmony": "chord",
+	"lanes": {
+		"R": "x==. .... x=.. ....",
+		"5-1": ".... ..x. .... ....",
+		"R+1": ".... .... ...o ....",
+		"app": ".... .... .... ..x="
+	},
+	"pairs_with": [
+		"core/neosoul_drums"
+	]
+}

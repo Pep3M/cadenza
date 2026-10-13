@@ -1,0 +1,24 @@
+{
+	"id": "pad_long_chords",
+	"kind": "pattern",
+	"name": "Long pad chords",
+	"summary": "Whole-bar pad chords in open voicing: one chord per bar (pass beats_per_chord 4).",
+	"role": "pad",
+	"genres": [
+		"pop",
+		"latin_pop",
+		"house",
+		"trap",
+		"lofi"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "open",
+	"lanes": {
+		"chord": "x=== ==== ==== ===="
+	}
+}

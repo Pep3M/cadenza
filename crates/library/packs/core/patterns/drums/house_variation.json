@@ -1,0 +1,31 @@
+{
+	"id": "house_variation",
+	"kind": "pattern",
+	"name": "House peak groove",
+	"summary": "Peak-time house: four-on-the-floor with clap, snare ghosts, offbeat open hats and a 16th shaker.",
+	"role": "drums",
+	"genres": [
+		"house",
+		"deep_house",
+		"dance"
+	],
+	"sections": [
+		"drop",
+		"chorus"
+	],
+	"energy": 5,
+	"bars": 1,
+	"tempo": [
+		118,
+		128
+	],
+	"family": "house",
+	"variant": "variation",
+	"lanes": {
+		"kick": "x... x... x... x...",
+		"clap": ".... x... .... x...",
+		"snare": ".... .... ..o. ...o",
+		"open_hat": "..x. ..x. ..x. ..x.",
+		"shaker": "xoxo xoxo xoxo xoxo"
+	}
+}

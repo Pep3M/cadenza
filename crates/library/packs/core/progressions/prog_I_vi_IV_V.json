@@ -1,0 +1,17 @@
+{
+	"id": "prog_I_vi_IV_V",
+	"kind": "progression",
+	"name": "I-vi-IV-V",
+	"summary": "The 50s/doo-wop loop (C Am F G): retro pop and ballads.",
+	"mode": "major",
+	"numerals": "I vi IV V",
+	"genres": [
+		"pop",
+		"doo_wop",
+		"ballad"
+	],
+	"sections": [
+		"verse",
+		"chorus"
+	]
+}

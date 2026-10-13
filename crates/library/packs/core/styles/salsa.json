@@ -1,0 +1,89 @@
+{
+	"id": "salsa",
+	"kind": "style",
+	"name": "Salsa / son",
+	"aliases": [
+		"son montuno",
+		"son cubano",
+		"salsa dura",
+		"cha cha",
+		"musica cubana"
+	],
+	"summary": "Clave-driven salsa and son: tumbao bass, piano montuno, bongo martillo and congas over son clave.",
+	"genres": [
+		"salsa",
+		"son",
+		"latin"
+	],
+	"tempo": {
+		"min": 90,
+		"max": 210,
+		"typical": 180
+	},
+	"feel": "straight",
+	"meter": "4/4",
+	"keys": [
+		"major or minor; the montuno vamps on I-IV-V-IV or i-iv-V-iv"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_I_IV_V_IV",
+			"core/prog_i_iv_V_iv"
+		],
+		"harmonic_rhythm_beats": 2,
+		"notes": "Montuno vamps change chords every 2 beats (beats_per_chord 2)."
+	},
+	"forms": [
+		"core/form_salsa"
+	],
+	"roles": {
+		"clave": {
+			"any": [
+				"core/clave_son_23",
+				"core/clave_son_32"
+			],
+			"notes": "pick one direction; every part is felt against it"
+		},
+		"perc": {
+			"verse": [
+				"core/perc_bongo_martillo",
+				"core/perc_guiro_cha"
+			],
+			"montuno": [
+				"core/perc_conga_tumbao",
+				"core/perc_cha_cha_bell"
+			]
+		},
+		"bass": {
+			"any": [
+				"core/bass_tumbao"
+			],
+			"register": "baby bass, roots E1-E2"
+		},
+		"piano": {
+			"any": [
+				"core/piano_montuno"
+			],
+			"sound": "acoustic piano, octaves"
+		}
+	},
+	"sounds": {
+		"piano": "electric_piano: Classic Tine or a piano plugin",
+		"bass": "poly_synth: Sub Bass (short)",
+		"perc": "drum_sampler with bongo, conga, guiro, cowbell and claves samples"
+	},
+	"mix": {
+		"lufs": -11,
+		"notes": "Natural and wide: piano and bass forward, percussion panned like a stage (bongos left, congas right), no sidechain."
+	},
+	"do": [
+		"Keep the clave direction for the whole section",
+		"Bass anticipates: nothing on beat 1",
+		"Mambo: add a riff (hook) and full percussion"
+	],
+	"dont": [
+		"Four-on-the-floor kick",
+		"Switching clave direction mid-section",
+		"Chords hit on every downbeat"
+	]
+}

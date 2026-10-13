@@ -21,6 +21,7 @@ cadenza-agent = { path = "crates/agent" }
 cadenza-audio-io = { path = "crates/audio-io" }
 cadenza-midi-io = { path = "crates/midi-io" }
 cadenza-app = { path = "crates/app" }
+cadenza-library = { path = "crates/library" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

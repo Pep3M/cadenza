@@ -1,0 +1,30 @@
+{
+	"id": "bass_house_offbeat",
+	"kind": "pattern",
+	"name": "House offbeat bass",
+	"summary": "House bass on the offbeats between the kicks, octave pop on the last & of the bar.",
+	"role": "bass",
+	"genres": [
+		"house",
+		"deep_house",
+		"dance"
+	],
+	"sections": [
+		"drop",
+		"chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		118,
+		128
+	],
+	"harmony": "chord",
+	"lanes": {
+		"R": "..x. ..x. ..x. ....",
+		"R+1": ".... .... .... ..x."
+	},
+	"pairs_with": [
+		"core/house_four_floor"
+	]
+}

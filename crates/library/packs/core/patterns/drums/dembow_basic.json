@@ -1,0 +1,38 @@
+{
+	"id": "dembow_basic",
+	"kind": "pattern",
+	"name": "Dembow basic",
+	"summary": "Classic dembow: four-on-the-floor kick, snare on the a of 1 and the & of 2 (3+3+2) in each half, 8th hats.",
+	"role": "drums",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"verse",
+		"chorus",
+		"post_chorus"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"family": "dembow",
+	"variant": "main",
+	"lanes": {
+		"kick": "x... x... x... x...",
+		"snare": "...x ..x. ...x ..x.",
+		"closed_hat": "x.x. x.x. x.x. x.x."
+	},
+	"pairs_with": [
+		"core/bass_tresillo_808",
+		"core/perc_shaker_16ths"
+	],
+	"tags": [
+		"tresillo"
+	]
+}

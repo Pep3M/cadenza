@@ -1,0 +1,23 @@
+{
+	"id": "guitar_pop_strum",
+	"kind": "pattern",
+	"name": "Pop guitar strum",
+	"summary": "Classic down, down-up, up-down-up strum: accents on the downbeats.",
+	"role": "comping",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"folk"
+	],
+	"sections": [
+		"chorus",
+		"verse"
+	],
+	"energy": 3,
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "close",
+	"lanes": {
+		"chord": "X... x.o. ..o. x.o."
+	}
+}

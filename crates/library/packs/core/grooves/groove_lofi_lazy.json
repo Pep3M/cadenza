@@ -1,0 +1,48 @@
+{
+	"id": "groove_lofi_lazy",
+	"kind": "groove",
+	"name": "Lo-fi lazy",
+	"summary": "Behind-the-beat lo-fi feel: swung 16ths, snare on 2 and 4 late, softer offbeats.",
+	"steps_per_beat": 4,
+	"timing": [
+		0.0,
+		0.16,
+		0.04,
+		0.16,
+		0.12,
+		0.16,
+		0.04,
+		0.16,
+		0.0,
+		0.16,
+		0.04,
+		0.16,
+		0.12,
+		0.16,
+		0.04,
+		0.16
+	],
+	"velocity": [
+		1.0,
+		0.75,
+		0.9,
+		0.7,
+		1.05,
+		0.75,
+		0.9,
+		0.7,
+		1.0,
+		0.75,
+		0.9,
+		0.7,
+		1.05,
+		0.75,
+		0.9,
+		0.7
+	],
+	"genres": [
+		"lofi",
+		"neo_soul",
+		"hip_hop"
+	]
+}

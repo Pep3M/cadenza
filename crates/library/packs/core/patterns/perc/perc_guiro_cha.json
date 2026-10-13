@@ -1,0 +1,26 @@
+{
+	"id": "perc_guiro_cha",
+	"kind": "pattern",
+	"name": "Guiro long-short-short",
+	"summary": "Guiro: long scrape on 1 and 3, short strokes on 2 and the & of 2 (and 4, the & of 4).",
+	"role": "perc",
+	"genres": [
+		"cha_cha",
+		"son",
+		"salsa",
+		"latin_pop",
+		"bolero"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"bars": 1,
+	"lanes": {
+		"guiro": "x... .... x... ....",
+		"short_guiro": ".... x.x. .... x.x."
+	},
+	"tags": [
+		"guiro"
+	]
+}

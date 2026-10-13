@@ -1,0 +1,91 @@
+{
+	"id": "lofi",
+	"kind": "style",
+	"name": "Lo-fi hip hop",
+	"aliases": [
+		"lofi",
+		"lo-fi",
+		"chillhop",
+		"study beats",
+		"jazzhop"
+	],
+	"summary": "Dusty swung boom bap at 70-90 bpm: jazzy seventh chords on Rhodes, walking bass, sparse melody.",
+	"genres": [
+		"lofi",
+		"hip_hop",
+		"jazz"
+	],
+	"tempo": {
+		"min": 70,
+		"max": 92,
+		"typical": 80
+	},
+	"feel": "swing:0.5",
+	"meter": "4/4",
+	"keys": [
+		"major with 7th chords, dorian"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_ii_V_I_vi_7ths",
+			"core/prog_IV_iii_ii_I_maj7",
+			"core/prog_dorian_i_IV"
+		],
+		"harmonic_rhythm_beats": 4,
+		"notes": "Seventh and ninth chords everywhere; one loop for the whole piece."
+	},
+	"forms": [
+		"core/form_lofi_loop"
+	],
+	"roles": {
+		"drums": {
+			"verse": [
+				"core/lofi_boom_bap"
+			],
+			"chorus": [
+				"core/lofi_boom_bap_variation"
+			],
+			"fill": "fill_every 8 swaps in core/lofi_fill"
+		},
+		"bass": {
+			"any": [
+				"core/bass_walk_chord_tones",
+				"core/bass_neosoul"
+			]
+		},
+		"keys": {
+			"any": [
+				"core/rhodes_lofi_comp"
+			],
+			"sound": "electric_piano: Dreamy Tremolo"
+		},
+		"melody": {
+			"chorus": [
+				"core/lofi_counter_line"
+			],
+			"outro": [
+				"core/lofi_counter_line"
+			]
+		}
+	},
+	"sounds": {
+		"kit": "drum_machine: Tight Kit (low tone)",
+		"keys": "electric_piano: Dreamy Tremolo",
+		"bass": "poly_synth: Sub Bass",
+		"melody": "sampler: Sine Pluck"
+	},
+	"mix": {
+		"lufs": -14,
+		"notes": "Soft and warm: roll off highs above 10 kHz, saturate lightly, quiet drums; groove core/groove_lofi_lazy makes it lazier."
+	},
+	"do": [
+		"Keep it quiet and loopable",
+		"Velocity variation on every part",
+		"Leave space between melody phrases"
+	],
+	"dont": [
+		"Hard-quantized drums",
+		"Bright, loud masters",
+		"Busy melodies"
+	]
+}

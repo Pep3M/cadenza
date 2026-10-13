@@ -1,0 +1,29 @@
+{
+	"id": "perc_cha_cha_bell",
+	"kind": "pattern",
+	"name": "Cha-cha bell",
+	"summary": "Cha-cha-cha cowbell: quarter notes, accented on 1 and 3.",
+	"role": "perc",
+	"genres": [
+		"cha_cha",
+		"son",
+		"salsa"
+	],
+	"sections": [
+		"chorus",
+		"montuno"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		100,
+		130
+	],
+	"lanes": {
+		"cowbell": "X... x... X... x..."
+	},
+	"tags": [
+		"cowbell",
+		"campana"
+	]
+}

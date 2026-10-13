@@ -1,0 +1,32 @@
+{
+	"id": "trap_basic",
+	"kind": "pattern",
+	"name": "Trap basic",
+	"summary": "Half-time trap: clap on beat 3, syncopated kicks, 8th hats with a 16th double. Two bars.",
+	"role": "drums",
+	"genres": [
+		"trap",
+		"hip_hop",
+		"drill"
+	],
+	"sections": [
+		"verse",
+		"intro"
+	],
+	"energy": 3,
+	"bars": 2,
+	"tempo": [
+		130,
+		160
+	],
+	"family": "trap",
+	"variant": "main",
+	"lanes": {
+		"kick": "x... ...x ..x. .... x... .... ..x. ..x.",
+		"clap": ".... .... x... .... .... .... x... ....",
+		"closed_hat": "x.x. x.x. x.x. x.x. x.x. x.x. x.xx x.x."
+	},
+	"pairs_with": [
+		"core/bass_808_trap"
+	]
+}

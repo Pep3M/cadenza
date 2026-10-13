@@ -1,0 +1,17 @@
+{
+	"id": "prog_i_iv",
+	"kind": "progression",
+	"name": "i-iv",
+	"summary": "Two-chord minor vamp (Am Dm): moody trap and reggaeton.",
+	"mode": "minor",
+	"numerals": "i iv",
+	"genres": [
+		"trap",
+		"reggaeton",
+		"hip_hop"
+	],
+	"sections": [
+		"verse",
+		"any"
+	]
+}

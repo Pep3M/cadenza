@@ -1,0 +1,40 @@
+{
+	"id": "piano_montuno",
+	"kind": "pattern",
+	"name": "Piano montuno",
+	"summary": "Salsa/son montuno: octave anticipations of the next root with fifth and third between. Chords every 2 beats.",
+	"role": "comping",
+	"genres": [
+		"salsa",
+		"son",
+		"latin",
+		"latin_pop"
+	],
+	"sections": [
+		"montuno",
+		"verse",
+		"chorus"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		90,
+		210
+	],
+	"harmony": "chord",
+	"lanes": {
+		"ant": "==.. ..x= ==.. ..x=",
+		"ant+1": "==.. ..x= ==.. ..x=",
+		"5": "..x. .... ..x. ....",
+		"3": ".... x... .... x..."
+	},
+	"pairs_with": [
+		"core/bass_tumbao",
+		"core/clave_son_23"
+	],
+	"tags": [
+		"montuno",
+		"guajeo",
+		"anticipation"
+	]
+}

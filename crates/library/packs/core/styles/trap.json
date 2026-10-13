@@ -1,0 +1,93 @@
+{
+	"id": "trap",
+	"kind": "style",
+	"name": "Trap",
+	"aliases": [
+		"trap beat",
+		"hip hop trap",
+		"drill",
+		"trap latino"
+	],
+	"summary": "Dark half-time trap at 130-160 bpm: long 808s, clap on 3, rolling hats and a minor bell loop.",
+	"genres": [
+		"trap",
+		"hip_hop",
+		"drill"
+	],
+	"tempo": {
+		"min": 130,
+		"max": 160,
+		"typical": 140
+	},
+	"feel": "straight",
+	"meter": "4/4",
+	"keys": [
+		"minor (natural or harmonic): C, F, G, A minor"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_i_VI",
+			"core/prog_i_iv",
+			"core/prog_i_VI_iv_V",
+			"core/prog_i_VII_VI_VII"
+		],
+		"harmonic_rhythm_beats": 8,
+		"notes": "Two-bar chords (beats_per_chord 8); the bell loop carries the harmony, chords are often implied."
+	},
+	"forms": [
+		"core/form_trap"
+	],
+	"roles": {
+		"drums": {
+			"intro": [],
+			"verse": [
+				"core/trap_basic"
+			],
+			"chorus": [
+				"core/trap_hat_rolls"
+			],
+			"fill": "fill_every 8 swaps in core/trap_fill"
+		},
+		"bass": {
+			"any": [
+				"core/bass_808_trap"
+			],
+			"register": "808 roots C1-B1, long notes that follow the kick"
+		},
+		"melody": {
+			"any": [
+				"core/trap_bell_melody"
+			],
+			"sound": "bell, pluck or dark piano"
+		},
+		"pad": {
+			"intro": [
+				"core/pad_long_chords"
+			],
+			"chorus": [
+				"core/pad_long_chords"
+			],
+			"sound": "dark pad or choir, filtered"
+		}
+	},
+	"sounds": {
+		"kit": "drum_machine: Boomy 808",
+		"808": "poly_synth: Sub Bass (long release)",
+		"melody": "poly_synth: Pluck Lead or sampler: Sine Pluck",
+		"pad": "poly_synth: Warm Pad"
+	},
+	"mix": {
+		"lufs": -8,
+		"notes": "808 and kick never fight: sidechain or shorten the 808 at kicks; saturate the 808 for small speakers; hats bright, panned slightly."
+	},
+	"do": [
+		"Leave the intro without drums",
+		"Hat rolls and 808 slides as transitions",
+		"Mute the 808 for a bar before the hook"
+	],
+	"dont": [
+		"Swing the hats",
+		"Busy chords over the 808",
+		"Snare on 2 and 4 (it is half time: clap on 3)"
+	]
+}

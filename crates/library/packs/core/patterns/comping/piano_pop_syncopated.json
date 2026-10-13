@@ -1,0 +1,23 @@
+{
+	"id": "piano_pop_syncopated",
+	"kind": "pattern",
+	"name": "Syncopated pop piano",
+	"summary": "Ballad/pop piano: sustained hits on 1, the & of 2 and 4, leaving space for the vocal.",
+	"role": "comping",
+	"genres": [
+		"pop",
+		"ballad",
+		"latin_pop"
+	],
+	"sections": [
+		"verse",
+		"bridge"
+	],
+	"energy": 2,
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "open",
+	"lanes": {
+		"chord": "x==. ..x= ==.. x=.."
+	}
+}

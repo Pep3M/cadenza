@@ -1,0 +1,31 @@
+{
+	"id": "lofi_boom_bap_variation",
+	"kind": "pattern",
+	"name": "Lo-fi boom bap variation",
+	"summary": "Boom bap variation: extra kick on the e of 4 and rim ghosts on the & of 1 and 3.",
+	"role": "drums",
+	"genres": [
+		"lofi",
+		"hip_hop",
+		"boom_bap"
+	],
+	"sections": [
+		"chorus",
+		"verse"
+	],
+	"energy": 3,
+	"feel": "swing:0.5",
+	"bars": 1,
+	"tempo": [
+		70,
+		92
+	],
+	"family": "lofi",
+	"variant": "variation",
+	"lanes": {
+		"kick": "x... ...x ..x. .x..",
+		"snare": ".... x... .... x...",
+		"rim": "..o. .... ..o. ....",
+		"closed_hat": "x.x. x.x. x.x. x.x."
+	}
+}

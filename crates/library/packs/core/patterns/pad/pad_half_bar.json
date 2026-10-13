@@ -1,0 +1,22 @@
+{
+	"id": "pad_half_bar",
+	"kind": "pattern",
+	"name": "Half-bar pad chords",
+	"summary": "Pad chords re-attacked every half bar: for two chords per bar (beats_per_chord 2).",
+	"role": "pad",
+	"genres": [
+		"pop",
+		"latin_pop",
+		"house"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "open",
+	"lanes": {
+		"chord": "x=== ==== x=== ===="
+	}
+}

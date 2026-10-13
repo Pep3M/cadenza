@@ -1,0 +1,17 @@
+{
+	"id": "prog_i_VI",
+	"kind": "progression",
+	"name": "i-VI",
+	"summary": "Two-chord minor vamp (Am F): trap, drill and dark reggaeton verses.",
+	"mode": "minor",
+	"numerals": "i VI",
+	"genres": [
+		"trap",
+		"drill",
+		"reggaeton"
+	],
+	"sections": [
+		"verse",
+		"any"
+	]
+}

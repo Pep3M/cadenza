@@ -1,0 +1,17 @@
+{
+	"id": "prog_vi_IV_I_V",
+	"kind": "progression",
+	"name": "vi-IV-I-V",
+	"summary": "Minor-feeling pop loop (Am F C G in C major): pop, latin pop, house.",
+	"mode": "major",
+	"numerals": "vi IV I V",
+	"genres": [
+		"pop",
+		"latin_pop",
+		"house",
+		"edm"
+	],
+	"sections": [
+		"any"
+	]
+}

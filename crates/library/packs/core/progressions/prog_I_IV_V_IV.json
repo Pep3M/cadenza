@@ -1,0 +1,19 @@
+{
+	"id": "prog_I_IV_V_IV",
+	"kind": "progression",
+	"name": "I-IV-V-IV",
+	"summary": "Son montuno vamp (C F G F), two beats per chord: salsa, son, cha-cha.",
+	"mode": "major",
+	"numerals": "I IV V IV",
+	"beats_per_chord": 2,
+	"genres": [
+		"salsa",
+		"son",
+		"cha_cha",
+		"latin"
+	],
+	"sections": [
+		"montuno",
+		"any"
+	]
+}

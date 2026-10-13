@@ -1,0 +1,71 @@
+{
+	"id": "form_lofi_loop",
+	"kind": "form",
+	"name": "Lo-fi loop form",
+	"summary": "Intro-A-B-A-B-Outro built on one loop: about 2:00 at 80 bpm.",
+	"genres": [
+		"lofi",
+		"hip_hop"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 1,
+			"roles": [
+				"keys"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Chorus 1",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"melody"
+			]
+		},
+		{
+			"name": "Verse 2",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Chorus 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"melody"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 1,
+			"roles": [
+				"keys",
+				"melody"
+			]
+		}
+	]
+}

@@ -1,0 +1,30 @@
+{
+	"id": "dembow_fill",
+	"kind": "pattern",
+	"name": "Dembow fill",
+	"summary": "One-bar dembow fill: timbal-like toms on beat 3, snare run into the next bar; kick drops on beat 4.",
+	"role": "drums",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"family": "dembow",
+	"variant": "fill",
+	"lanes": {
+		"kick": "x... x... x... ....",
+		"snare": "...x ..x. .... xoxX",
+		"high_tom": ".... .... x.x. ....",
+		"low_tom": ".... .... .x.x ...."
+	}
+}

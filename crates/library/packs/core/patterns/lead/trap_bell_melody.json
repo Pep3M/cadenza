@@ -1,0 +1,33 @@
+{
+	"id": "trap_bell_melody",
+	"kind": "pattern",
+	"name": "Trap bell melody",
+	"summary": "Dark two-bar bell loop in the minor key: tonic, minor third, fifth, sixth, flat seventh.",
+	"role": "lead",
+	"genres": [
+		"trap",
+		"hip_hop",
+		"drill"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 3,
+	"bars": 2,
+	"tempo": [
+		130,
+		160
+	],
+	"harmony": "scale",
+	"lanes": {
+		"^1": "x=.. .... .... .... x=.. .... .... ....",
+		"^3": "...x .... .x.. .... ...x .... .... ....",
+		"^5": ".... ..x= .... ..x= .... ..x= .... x===",
+		"^6": ".... .... .... x=.. .... .... .... ....",
+		"^7": ".... .... .... .... .... .... .x== ...."
+	},
+	"tags": [
+		"bell",
+		"melody"
+	]
+}

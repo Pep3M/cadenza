@@ -1,0 +1,32 @@
+{
+	"id": "bass_808_trap",
+	"kind": "pattern",
+	"name": "Trap 808",
+	"summary": "Long trap 808s retriggered with the kick pattern of core/trap_basic. Two bars.",
+	"role": "bass",
+	"genres": [
+		"trap",
+		"hip_hop",
+		"drill"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 3,
+	"bars": 2,
+	"tempo": [
+		130,
+		160
+	],
+	"harmony": "chord",
+	"octave": -1,
+	"lanes": {
+		"R": "x=== ===x ==x= ==== x=== ==== ==x= ==x="
+	},
+	"pairs_with": [
+		"core/trap_basic"
+	],
+	"tags": [
+		"808"
+	]
+}

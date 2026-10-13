@@ -1,0 +1,124 @@
+{
+	"id": "pop",
+	"kind": "style",
+	"name": "Pop",
+	"aliases": [
+		"mainstream pop",
+		"radio pop",
+		"pop rock",
+		"dance pop"
+	],
+	"summary": "Verse-chorus pop at 90-128 bpm: four-chord major loops, backbeat drums, piano or guitar comping, a sung hook.",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"dance_pop"
+	],
+	"tempo": {
+		"min": 88,
+		"max": 128,
+		"typical": 108
+	},
+	"feel": "straight",
+	"meter": "4/4",
+	"keys": [
+		"major (most): C, D, E, G, A",
+		"relative minor loops for darker songs"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_I_V_vi_IV",
+			"core/prog_vi_IV_I_V",
+			"core/prog_I_vi_IV_V"
+		],
+		"harmonic_rhythm_beats": 4,
+		"notes": "Verse and chorus may share the loop; a pre-chorus starting on IV or vi builds tension. Bridge: start on vi or IV."
+	},
+	"forms": [
+		"core/form_pop_radio",
+		"core/form_pop_short"
+	],
+	"roles": {
+		"drums": {
+			"intro": [
+				"core/pop_halftime"
+			],
+			"verse": [
+				"core/pop_halftime",
+				"core/pop_backbeat"
+			],
+			"pre": [
+				"core/pop_backbeat",
+				"core/fill_snare_build"
+			],
+			"chorus": [
+				"core/pop_backbeat_variation",
+				"core/pop_four_floor"
+			],
+			"bridge": [
+				"core/pop_halftime"
+			],
+			"fill": "fill_every 8 swaps in core/pop_fill"
+		},
+		"bass": {
+			"verse": [
+				"core/bass_root_eighths"
+			],
+			"chorus": [
+				"core/bass_pop_syncopated",
+				"core/bass_root_eighths"
+			]
+		},
+		"keys": {
+			"verse": [
+				"core/piano_pop_syncopated"
+			],
+			"chorus": [
+				"core/piano_pop_eighths",
+				"core/pad_long_chords"
+			],
+			"sound": "piano or electric piano; pad under the chorus"
+		},
+		"guitar": {
+			"chorus": [
+				"core/guitar_pop_strum"
+			],
+			"sound": "acoustic or clean electric strum"
+		},
+		"arp": {
+			"pre": [
+				"core/arp_up_16ths"
+			],
+			"intro": [
+				"core/arp_updown_8ths"
+			]
+		},
+		"hook": {
+			"chorus": [
+				"core/hook_pop_major"
+			],
+			"notes": "the vocal melody's echo; keep it simple and repeat it"
+		}
+	},
+	"sounds": {
+		"kit": "drum_machine: Tight Kit",
+		"bass": "poly_synth: Sub Bass",
+		"keys": "electric_piano: Classic Tine",
+		"pad": "poly_synth: Warm Pad",
+		"lead": "poly_synth: Pluck Lead"
+	},
+	"mix": {
+		"lufs": -10,
+		"notes": "Vocal space first: carve 2-5 kHz in guitars/keys; kick and bass share the lows (EQ them apart); bright but not harsh master."
+	},
+	"do": [
+		"Lift each chorus (more roles, higher register, open hats)",
+		"Bring the bridge down to half the roles",
+		"Use fills or a snare build into choruses"
+	],
+	"dont": [
+		"Same density all song",
+		"Busy comping under the vocal",
+		"More than 4 chords in a loop"
+	]
+}

@@ -1,0 +1,74 @@
+{
+	"id": "form_pop_short",
+	"kind": "form",
+	"name": "Pop short form",
+	"summary": "Intro-V-C-V-C-Outro: compact pop song, about 2:20 at 110 bpm.",
+	"genres": [
+		"pop",
+		"dance_pop",
+		"latin_pop"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"keys"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Chorus 1",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"hook"
+			],
+			"ending": "fill"
+		},
+		{
+			"name": "Verse 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"guitar"
+			]
+		},
+		{
+			"name": "Chorus 2",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"guitar",
+				"hook"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"keys"
+			]
+		}
+	]
+}

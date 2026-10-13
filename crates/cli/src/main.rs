@@ -17,6 +17,7 @@ mod compose;
 mod export;
 mod library;
 mod midi_files;
+mod mix;
 mod portable;
 
 const PLUGIN_HOSTING_HELP: &str = "\
@@ -212,6 +213,11 @@ enum Command {
 	/// unless --out or --no-save
 	#[command(after_long_help = compose::presets_help())]
 	Chat(chat::ChatArgs),
+	/// Let the AI sound engineer mix an existing project: analyze, gain staging, masking EQ,
+	/// dynamics, space, pan and master loudness, then analyze again and print what changed.
+	/// One undo step "AI mix pass"; saves in place unless --out or --dry-run
+	#[command(after_long_help = compose::presets_help())]
+	Mix(mix::MixArgs),
 }
 
 /// Finds a track by id or (case-insensitive) name.
@@ -382,6 +388,10 @@ fn main() -> Result<()> {
 		Command::Chat(args) => {
 			set_in_process_env(cli.in_process_plugins);
 			chat::run(args)
+		}
+		Command::Mix(args) => {
+			set_in_process_env(cli.in_process_plugins);
+			mix::run(args)
 		}
 		Command::ScanPlugins { paths, json } => scan_plugins(paths, json),
 		Command::Monitor {

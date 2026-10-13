@@ -221,6 +221,98 @@ fn chat_applies_one_request_and_saves_the_project() {
 }
 
 #[test]
+fn mix_runs_an_engineer_pass_and_prints_what_changed() {
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("song.cadenza.json");
+	song(&path);
+	let reference = dir.path().join("ref.wav");
+	let tone = cadenza_audio_io::AudioBuffer::from_planar(
+		48_000,
+		vec![
+			(0..96_000)
+				.map(|n| (n as f32 * 0.05).sin() * 0.5)
+				.collect::<Vec<f32>>();
+			2
+		],
+	)
+	.unwrap();
+	cadenza_audio_io::export(
+		&tone,
+		&reference,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	let reply = |content: &str, calls: Option<serde_json::Value>| {
+		let mut message = serde_json::json!({"role": "assistant", "content": content});
+		if let Some(calls) = calls {
+			message["tool_calls"] = calls;
+		}
+		serde_json::json!({
+			"id": "x", "model": "local",
+			"choices": [{"index": 0, "finish_reason": "stop", "message": message}],
+			"usage": {"prompt_tokens": 100, "completion_tokens": 10}
+		})
+		.to_string()
+	};
+	let limiter = serde_json::json!([{"id": "c1", "type": "function", "function": {
+		"name": "apply_mix_moves",
+		"arguments": "{\"moves\":[{\"move\":\"limiter\",\"ceiling_db\":-1.5,\"input_gain_db\":6}]}"}}]);
+	let mix = |url: &str, extra: &[&str]| {
+		let mut args = vec![
+			"mix",
+			s(&path),
+			"--target-lufs",
+			"-12",
+			"--reference",
+			s(&reference),
+			"--provider",
+			"openai-compatible",
+			"--base-url",
+			url,
+			"--model",
+			"local",
+			"--reasoning-effort",
+			"none",
+		];
+		args.extend(extra);
+		Command::new(env!("CARGO_BIN_EXE_cadenza"))
+			.args(&args)
+			.env("XDG_STATE_HOME", dir.path().join("state"))
+			.env("CADENZA_LIBRARY_DIR", dir.path().join("library"))
+			.env_remove("OPENAI_API_KEY")
+			.output()
+			.unwrap()
+	};
+
+	// A dry run changes nothing on disk.
+	let before = std::fs::read_to_string(&path).unwrap();
+	let url = mock_completions(vec![
+		reply("Limiting the master.", Some(limiter.clone())),
+		reply("Done: louder, peaks under control.", None),
+	]);
+	let out = mix(&url, &["--dry-run"]);
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(out.status.success(), "{stderr}");
+	for needle in ["before:", "after:", "changes:", "Loudness", "dry run"] {
+		assert!(stderr.contains(needle), "missing {needle}: {stderr}");
+	}
+	assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+	let url = mock_completions(vec![
+		reply("Limiting the master.", Some(limiter)),
+		reply("Done.", None),
+	]);
+	let out = mix(&url, &[]);
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(out.status.success(), "{stderr}");
+	assert!(stderr.contains("saved:"), "{stderr}");
+	assert!(!stderr.contains("API_KEY="), "never print secrets");
+	let saved = Project::load_json(&path).unwrap();
+	assert_eq!(saved.master.inserts[0].builtin_id(), Some("limiter"));
+	assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Done.");
+}
+
+#[test]
 fn collect_pack_and_unpack_make_a_portable_project() {
 	let dir = tempfile::tempdir().unwrap();
 	let take = dir.path().join("external").join("take.wav");

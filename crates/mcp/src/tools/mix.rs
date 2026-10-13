@@ -738,7 +738,12 @@ pub fn compare_passes(before: &MixAnalysis, after: &MixAnalysis) -> Vec<MetricCh
 			"LUFS",
 		),
 		m("True peak", r1(b.true_peak_db), r1(a.true_peak_db), "dBTP"),
-		m("Crest factor", r1(b.crest_factor_db), r1(a.crest_factor_db), "dB"),
+		m(
+			"Crest factor",
+			r1(b.crest_factor_db),
+			r1(a.crest_factor_db),
+			"dB",
+		),
 		m(
 			"Width",
 			f64::from(pct(before.master.stereo.width)),

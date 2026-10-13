@@ -1,7 +1,7 @@
 //! `cadenza chat`: one request to the in-app AI producer, from the command line, on an
 //! existing project (the same incremental session mode the desktop app's chat uses).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use cadenza_agent::config::{
@@ -10,7 +10,8 @@ use cadenza_agent::config::{
 };
 use cadenza_agent::session::{DEFAULT_SESSION_MAX_COST_USD, actionable_error};
 use cadenza_agent::{
-	AppContext, CancelToken, OpenRouterConfig, RequestStatus, SessionAgent, SessionConfig,
+	AppContext, CancelToken, OpenRouterConfig, RequestOutcome, RequestStatus, SessionAgent,
+	SessionConfig,
 };
 use cadenza_mcp::Session;
 use cadenza_model::{Document, Project};
@@ -32,6 +33,19 @@ pub struct ChatArgs {
 	pub project: PathBuf,
 	/// What to do, e.g. "add a bridge after the second chorus"
 	pub request: String,
+	#[command(flatten)]
+	pub ai: ProviderArgs,
+	/// Write the result to this file instead of saving the project in place
+	#[arg(short, long)]
+	pub out: Option<PathBuf>,
+	/// Do not save the result
+	#[arg(long, conflicts_with = "out")]
+	pub no_save: bool,
+}
+
+/// The model and spending settings shared by `chat` and `mix`.
+#[derive(Args, Debug)]
+pub struct ProviderArgs {
 	#[arg(long, value_enum, default_value_t = ChatProvider::Openrouter)]
 	pub provider: ChatProvider,
 	/// Model id
@@ -49,95 +63,88 @@ pub struct ChatArgs {
 	/// Allow installed third-party plugins
 	#[arg(long)]
 	pub plugins: bool,
-	/// Write the result to this file instead of saving the project in place
-	#[arg(short, long)]
-	pub out: Option<PathBuf>,
-	/// Do not save the result
-	#[arg(long, conflicts_with = "out")]
-	pub no_save: bool,
 }
 
-pub fn run(args: ChatArgs) -> Result<()> {
-	if args.max_cost_usd.is_nan() || args.max_cost_usd <= 0.0 {
-		bail!("--max-cost-usd must be positive");
+impl ProviderArgs {
+	/// The session settings (key from the environment or the nearest .env, never printed).
+	pub fn session_config(&self) -> Result<SessionConfig> {
+		if self.max_cost_usd.is_nan() || self.max_cost_usd <= 0.0 {
+			bail!("--max-cost-usd must be positive");
+		}
+		let cwd = std::env::current_dir().unwrap_or_default();
+		let effort = match self.reasoning_effort.to_ascii_lowercase().as_str() {
+			"none" | "off" | "" => None,
+			e @ ("minimal" | "low" | "medium" | "high" | "xhigh") => Some(e.to_owned()),
+			other => bail!("unknown --reasoning-effort '{other}' (low, medium, high, none)"),
+		};
+		let provider = match self.provider {
+			ChatProvider::Openrouter => {
+				let mut c =
+					OpenRouterConfig::new(&self.model, resolve_secret(OPENROUTER_KEY_ENV, &cwd));
+				c.reasoning_effort = effort;
+				ProviderConfig::OpenRouter(c)
+			}
+			ChatProvider::OpenaiCompatible => {
+				let Some(url) = &self.base_url else {
+					bail!("--base-url is required with --provider openai-compatible");
+				};
+				let mut c = OpenRouterConfig::openai_compatible(
+					url,
+					&self.model,
+					resolve_secret(OPENAI_KEY_ENV, &cwd),
+				);
+				c.reasoning_effort = effort;
+				ProviderConfig::OpenAiCompatible(c)
+			}
+		};
+		let stamp = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_secs())
+			.unwrap_or_default();
+		let state_dir = std::env::var_os("XDG_STATE_HOME")
+			.map(PathBuf::from)
+			.filter(|p| p.is_absolute())
+			.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+			.unwrap_or_else(std::env::temp_dir);
+		let transcript = state_dir
+			.join("cadenza/sessions")
+			.join(format!("cli-{stamp}-{}", std::process::id()))
+			.join("transcript.jsonl");
+		let mut config = SessionConfig::new(provider, &transcript);
+		config.max_cost_usd = self.max_cost_usd;
+		config.allow_plugins = self.plugins;
+		Ok(config)
 	}
-	let project = Project::load_json(&args.project)
-		.with_context(|| format!("opening {}", args.project.display()))?;
-	let cwd = std::env::current_dir().unwrap_or_default();
-	let effort = match args.reasoning_effort.to_ascii_lowercase().as_str() {
-		"none" | "off" | "" => None,
-		e @ ("minimal" | "low" | "medium" | "high" | "xhigh") => Some(e.to_owned()),
-		other => bail!("unknown --reasoning-effort '{other}' (low, medium, high, none)"),
-	};
-	let provider = match args.provider {
-		ChatProvider::Openrouter => {
-			let mut c =
-				OpenRouterConfig::new(&args.model, resolve_secret(OPENROUTER_KEY_ENV, &cwd));
-			c.reasoning_effort = effort;
-			ProviderConfig::OpenRouter(c)
-		}
-		ChatProvider::OpenaiCompatible => {
-			let Some(url) = &args.base_url else {
-				bail!("--base-url is required with --provider openai-compatible");
-			};
-			let mut c = OpenRouterConfig::openai_compatible(
-				url,
-				&args.model,
-				resolve_secret(OPENAI_KEY_ENV, &cwd),
-			);
-			c.reasoning_effort = effort;
-			ProviderConfig::OpenAiCompatible(c)
-		}
-	};
-	let stamp = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs())
-		.unwrap_or_default();
-	let state_dir = std::env::var_os("XDG_STATE_HOME")
-		.map(PathBuf::from)
-		.filter(|p| p.is_absolute())
-		.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-		.unwrap_or_else(std::env::temp_dir);
-	let transcript = state_dir
-		.join("cadenza/sessions")
-		.join(format!("cli-{stamp}-{}", std::process::id()))
-		.join("transcript.jsonl");
-	let mut config = SessionConfig::new(provider, &transcript);
-	config.max_cost_usd = args.max_cost_usd;
-	config.allow_plugins = args.plugins;
+}
 
-	let mut session = Session::new();
-	session.reset(Document::new(project), Some(args.project.clone()));
-	let shared = session.into_shared();
-	let mut agent =
-		SessionAgent::new(config, shared.clone()).context("setting up the AI session")?;
-	let files_root = args
-		.project
+/// The app context of a project opened from the command line.
+pub fn cli_context(project: &Path) -> AppContext {
+	let files_root = project
 		.canonicalize()
 		.ok()
 		.and_then(|p| p.parent().map(|d| d.to_path_buf()))
-		.unwrap_or(cwd);
-	let context = AppContext {
-		project_path: Some(args.project.display().to_string()),
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+	AppContext {
+		project_path: Some(project.display().to_string()),
 		files_root: files_root.display().to_string(),
 		..AppContext::default()
-	};
-	eprintln!(
-		"asking {} via {} (budget ${:.2})",
-		agent.provider().model(),
-		agent.provider().name(),
-		args.max_cost_usd
-	);
+	}
+}
+
+/// Runs `request` (Ctrl+C stops it at the next tool boundary).
+pub fn run_with_ctrl_c<F, T>(request: impl FnOnce(CancelToken) -> F) -> Result<T>
+where
+	F: std::future::Future<Output = Result<T, cadenza_agent::AgentError>>,
+{
 	let runtime = tokio::runtime::Builder::new_multi_thread()
 		.enable_all()
 		.build()
 		.context("building the async runtime")?;
 	let cancel = CancelToken::new();
 	let stopper = cancel.clone();
-	let observer = Printer::default();
 	let outcome = runtime.block_on(async {
 		tokio::select! {
-			r = agent.run_request(&args.request, &context, &observer, &cancel) => r,
+			r = request(cancel) => r,
 			_ = async {
 				let _ = tokio::signal::ctrl_c().await;
 				stopper.cancel();
@@ -145,20 +152,14 @@ pub fn run(args: ChatArgs) -> Result<()> {
 			} => unreachable!(),
 		}
 	})?;
-	eprintln!();
+	Ok(outcome)
+}
+
+/// Prints how a request ended (status, cost, transcript) to stderr.
+pub fn report_outcome(outcome: &RequestOutcome, agent: &SessionAgent, summary: &str) {
 	if let Some(err) = &outcome.error {
 		eprintln!("{}", actionable_error(err));
 	}
-	let summary = {
-		let session = shared.lock().unwrap_or_else(|p| p.into_inner());
-		let p = session.document().project();
-		format!(
-			"{} tracks, {} clips, {} markers",
-			p.tracks.len(),
-			p.tracks.iter().map(|t| t.clips.len()).sum::<usize>(),
-			p.markers.len()
-		)
-	};
 	eprintln!(
 		"{:?} after {} turns; ${:.4}{} ({} requests, {} in / {} out tokens, {} cache-read); {}",
 		outcome.status,
@@ -176,6 +177,43 @@ pub fn run(args: ChatArgs) -> Result<()> {
 		summary
 	);
 	eprintln!("transcript: {}", agent.transcript_path().display());
+}
+
+pub fn run(args: ChatArgs) -> Result<()> {
+	let config = args.ai.session_config()?;
+	let project = Project::load_json(&args.project)
+		.with_context(|| format!("opening {}", args.project.display()))?;
+	let mut session = Session::new();
+	session.reset(Document::new(project), Some(args.project.clone()));
+	let shared = session.into_shared();
+	let mut agent =
+		SessionAgent::new(config, shared.clone()).context("setting up the AI session")?;
+	let context = cli_context(&args.project);
+	eprintln!(
+		"asking {} via {} (budget ${:.2})",
+		agent.provider().model(),
+		agent.provider().name(),
+		args.ai.max_cost_usd
+	);
+	let observer = Printer::default();
+	let outcome = {
+		let (agent, context, observer, request) = (&mut agent, &context, &observer, &args.request);
+		run_with_ctrl_c(|cancel| async move {
+			agent.run_request(request, context, observer, &cancel).await
+		})?
+	};
+	eprintln!();
+	let summary = {
+		let session = shared.lock().unwrap_or_else(|p| p.into_inner());
+		let p = session.document().project();
+		format!(
+			"{} tracks, {} clips, {} markers",
+			p.tracks.len(),
+			p.tracks.iter().map(|t| t.clips.len()).sum::<usize>(),
+			p.markers.len()
+		)
+	};
+	report_outcome(&outcome, &agent, &summary);
 	if outcome.edited && !args.no_save {
 		let path = args.out.clone().unwrap_or_else(|| args.project.clone());
 		shared

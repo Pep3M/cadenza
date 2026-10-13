@@ -274,13 +274,16 @@ async fn renders_song_with_plugin_instrument_and_effect() {
 	std::fs::remove_file(&path).ok();
 
 	// Without the catalog the plugins are bypassed with warnings, never an error.
-	let out = render::analyze_mix(
-		s.document().project().clone(),
-		None,
-		plugin_support::sandboxed(),
+	let out = cadenza_mcp::tools::mix::analyze_mix(
+		cadenza_mcp::tools::mix::AnalysisInput {
+			project: s.document().project().clone(),
+			library: std::sync::Arc::new(cadenza_library::Library::core()),
+			plugins: None,
+			hosting: plugin_support::sandboxed(),
+		},
 		args(json!({ "end_beat": 4.0 })),
 	)
 	.await
 	.unwrap();
-	assert_eq!(out.report.warnings.len(), 3, "{:?}", out.report.warnings);
+	assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
 }

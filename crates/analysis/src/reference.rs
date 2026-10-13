@@ -14,13 +14,18 @@ const SHAPE_TOLERANCE_DB: f32 = 3.0;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReferenceComparison {
 	/// Mix minus reference, LU.
+	#[serde(serialize_with = "crate::short::f32")]
 	pub lufs_delta: f32,
+	#[serde(serialize_with = "crate::short::f32")]
 	pub true_peak_delta_db: f32,
 	/// Mix minus reference crest factor: negative = the mix is more compressed.
+	#[serde(serialize_with = "crate::short::f32")]
 	pub crest_delta_db: f32,
 	/// Mix minus reference stereo width, percentage points.
+	#[serde(serialize_with = "crate::short::f32")]
 	pub width_delta_pct: f32,
 	/// Mix minus reference per octave band ([`OCTAVE_HZ`]) after matching total levels.
+	#[serde(serialize_with = "crate::short::vec_f32")]
 	pub octave_delta_db: Vec<f32>,
 	/// Plain findings, biggest first.
 	pub findings: Vec<String>,

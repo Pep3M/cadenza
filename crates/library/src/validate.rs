@@ -276,6 +276,24 @@ fn style(s: &Style, out: &mut Vec<String>) {
 	if parse_meter(&s.meter).is_none() {
 		out.push(format!("meter '{}' must look like \"4/4\"", s.meter));
 	}
+	if let Some(tp) = s.mix.true_peak
+		&& !(-6.0..=0.0).contains(&tp)
+	{
+		out.push(format!("mix.true_peak {tp} must be -6..=0"));
+	}
+	if let Some(p) = &s.mix.profile
+		&& !crate::format::TONE_PROFILES.contains(&p.as_str())
+	{
+		out.push(format!(
+			"mix.profile '{p}' is not one of {}",
+			crate::format::TONE_PROFILES.join(", ")
+		));
+	}
+	for (role, db) in s.mix.levels.iter() {
+		if !(-30.0..=6.0).contains(db) {
+			out.push(format!("mix.levels.{role} {db} must be -30..=6"));
+		}
+	}
 	if !(-30.0..=0.0).contains(&s.mix.lufs) {
 		out.push(format!("mix.lufs {} must be -30..=0", s.mix.lufs));
 	}

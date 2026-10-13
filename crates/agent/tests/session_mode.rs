@@ -493,3 +493,56 @@ async fn the_openai_compatible_flavor_speaks_plain_chat_completions() {
 	assert_eq!(request.body["stream_options"]["include_usage"], true);
 	assert_eq!(request.body["model"], "local/model");
 }
+
+#[tokio::test]
+async fn an_engineer_pass_mixes_as_one_undo_step() {
+	let server = MockServer::start(|_, index| match index {
+		0 => streamed(
+			None,
+			Some("Limiting the master."),
+			&[(
+				"c1",
+				"apply_mix_moves",
+				r#"{"moves":[{"move":"limiter","ceiling_db":-1.5,"input_gain_db":3}]}"#,
+			)],
+			"tool_calls",
+			usage(3000, 60, 0, 0.002),
+		),
+		_ => streamed(
+			None,
+			Some("-16.0 -> -13.1 LUFS, true peak -1.5 dBTP."),
+			&[],
+			"stop",
+			usage(3200, 20, 2900, 0.001),
+		),
+	})
+	.await;
+	let mut f = fixture(&server, |_| {});
+	let reference = f.dir.path().join("ref.wav");
+	std::fs::write(&reference, b"x").unwrap();
+	let mut ctx = context(&f);
+	ctx.reference_file = Some(reference.display().to_string());
+	let brief = cadenza_agent::EngineerBrief {
+		target_lufs: Some(-13.0),
+		reference: ctx.reference_file.clone(),
+		notes: None,
+	};
+	let outcome = f
+		.agent
+		.run_engineer_pass(&brief, &ctx, &Recorder::default(), &CancelToken::new())
+		.await
+		.unwrap();
+	assert_eq!(outcome.status, RequestStatus::Completed);
+	assert_eq!(outcome.undo_label, cadenza_agent::ENGINEER_UNDO_LABEL);
+	{
+		let session = f.session.lock().unwrap();
+		let doc = session.document();
+		assert_eq!(doc.history_labels(), vec!["AI mix pass"]);
+		let limiter = &doc.project().master.inserts[0];
+		assert_eq!(limiter.builtin_id(), Some("limiter"));
+	}
+	let message = first_user_text(&server.requests()[0]);
+	assert!(message.starts_with("Request: Mix pass:"), "{message}");
+	assert!(message.contains("target_lufs -13.0"), "{message}");
+	assert!(message.contains("Reference track:"), "{message}");
+}

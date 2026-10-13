@@ -9,6 +9,7 @@ pub mod controllers;
 pub mod devices;
 pub mod library;
 pub mod midi;
+pub mod mix;
 pub mod playback;
 pub mod portable;
 pub mod presets;

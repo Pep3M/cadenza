@@ -46,12 +46,16 @@ pub struct MaskingPair {
 	pub a: usize,
 	pub b: usize,
 	/// Center of the octave band, Hz.
+	#[serde(serialize_with = "crate::short::f32")]
 	pub band_hz: f32,
 	/// Share of the time both play in that band where they collide (0..1).
+	#[serde(serialize_with = "crate::short::f32")]
 	pub overlap: f32,
 	/// Mean level of `a` minus `b` in the band while colliding, dB.
+	#[serde(serialize_with = "crate::short::f32")]
 	pub level_diff_db: f32,
 	/// Ranking score (overlap x how often both play there x band weight).
+	#[serde(serialize_with = "crate::short::f32")]
 	pub score: f32,
 	pub cut: usize,
 }

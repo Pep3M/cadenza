@@ -5,8 +5,17 @@ use std::collections::BTreeMap;
 
 use cadenza_mcp::Session;
 use cadenza_mcp::convert::{DeviceSpec, PitchInput};
-use cadenza_mcp::tools::{clips, render, tracks};
+use cadenza_mcp::tools::{clips, mix, render, tracks};
 use cadenza_model::TrackKind;
+
+fn analysis_input(project: cadenza_model::Project) -> mix::AnalysisInput {
+	mix::AnalysisInput {
+		project,
+		library: std::sync::Arc::new(cadenza_library::Library::core()),
+		plugins: None,
+		hosting: cadenza_engine::PluginHosting::default(),
+	}
+}
 
 fn instrument_track_with_synth(session: &mut Session) -> cadenza_core::TrackId {
 	tracks::create_track(
@@ -190,31 +199,25 @@ async fn analyze_mix_flags_a_deliberately_hot_mix() {
 	.unwrap();
 	let project = session.document().project().clone();
 
-	let out = render::analyze_mix(
-		project,
-		None,
-		cadenza_engine::PluginHosting::default(),
-		render::AnalyzeMixArgs {
-			start_beat: None,
-			end_beat: Some(2.0),
-			sample_rate: Some(48_000),
-			target_lufs: Some(-23.0),
-			genre_profile: None,
-		},
+	let out = mix::analyze_mix(
+		analysis_input(project),
+		serde_json::from_value(serde_json::json!({
+			"end_beat": 2.0,
+			"sample_rate": 48_000,
+			"target_lufs": -23.0,
+		}))
+		.unwrap(),
 	)
 	.await
 	.expect("analyze_mix should succeed");
 
+	assert_eq!(out.targets.lufs, -23.0);
 	assert!(
-		!out.observations.is_empty(),
-		"a +12 dB master with a -23 LUFS target must trigger at least one observation"
-	);
-	assert!(
-		out.observations
+		out.issues
 			.iter()
-			.any(|o| o.contains("LUFS") || o.contains("louder")),
-		"{:?}",
-		out.observations
+			.any(|i| i.message.contains("LUFS") || i.message.contains("louder")),
+		"a +12 dB master with a -23 LUFS target must be flagged: {:?}",
+		out.issues
 	);
 }
 
@@ -223,21 +226,18 @@ async fn analyze_mix_on_silence_has_no_loudness_observations() {
 	let mut session = Session::new();
 	instrument_track_with_synth(&mut session);
 	let project = session.document().project().clone();
-	let out = render::analyze_mix(
-		project,
-		None,
-		cadenza_engine::PluginHosting::default(),
-		render::AnalyzeMixArgs {
-			start_beat: None,
-			end_beat: Some(1.0),
-			sample_rate: Some(48_000),
-			target_lufs: None,
-			genre_profile: None,
-		},
+	let out = mix::analyze_mix(
+		analysis_input(project),
+		serde_json::from_value(serde_json::json!({ "end_beat": 1.0 })).unwrap(),
 	)
 	.await
 	.unwrap();
-	assert_eq!(out.report.master.clipped_samples, 0);
+	assert_eq!(out.master.clipped_samples, 0);
+	assert!(
+		!out.issues.iter().any(|i| i.message.contains("LUFS")),
+		"silence is not judged: {:?}",
+		out.issues
+	);
 }
 
 #[tokio::test]

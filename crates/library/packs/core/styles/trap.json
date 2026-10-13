@@ -78,6 +78,13 @@
 	},
 	"mix": {
 		"lufs": -8,
+		"profile": "hiphop",
+		"levels": {
+			"drums": 0,
+			"bass": 0,
+			"melody": -4,
+			"pad": -10
+		},
 		"notes": "808 and kick never fight: sidechain or shorten the 808 at kicks; saturate the 808 for small speakers; hats bright, panned slightly."
 	},
 	"do": [

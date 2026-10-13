@@ -36,6 +36,8 @@ use crate::transcript::{TeeObserver, Transcript};
 use crate::types::{AssistantTurn, Message, ToolResult, ToolSpec};
 
 pub const DEFAULT_SESSION_MAX_COST_USD: f64 = 0.25;
+/// Undo step of a [`SessionAgent::run_engineer_pass`].
+pub const ENGINEER_UNDO_LABEL: &str = "AI mix pass";
 pub const DEFAULT_SESSION_MAX_TURNS: u32 = 40;
 /// Condense the conversation once a request's input reaches this many tokens.
 pub const DEFAULT_SESSION_COMPACT_AT: u64 = 60_000;
@@ -280,8 +282,11 @@ impl SessionAgent {
 			.or_else(|| project_file.strip_suffix(".json"))
 			.unwrap_or(&project_file)
 			.to_owned();
-		let policy = PathPolicy::new(&root, &project_file, &format!("{stem}.wav"))
+		let mut policy = PathPolicy::new(&root, &project_file, &format!("{stem}.wav"))
 			.map_err(|e| AgentError::io(&root, e))?;
+		if let Some(reference) = &context.reference_file {
+			policy.allow_read(Path::new(reference));
+		}
 		self.tools.set_policy(policy);
 		Ok(())
 	}
@@ -296,11 +301,45 @@ impl SessionAgent {
 		observer: &dyn AgentObserver,
 		cancel: &CancelToken,
 	) -> Result<RequestOutcome, AgentError> {
+		let label = format!("AI: {}", clip(request.trim(), 60));
+		self.run_labeled(request, label, context, observer, cancel)
+			.await
+	}
+
+	/// A mix pass by the sound engineer (`cadenza mix`, the app's "AI mix pass"): the
+	/// request is [`prompt::engineer_request`] and the whole pass is ONE undo step
+	/// [`ENGINEER_UNDO_LABEL`].
+	pub async fn run_engineer_pass(
+		&mut self,
+		brief: &prompt::EngineerBrief,
+		context: &AppContext,
+		observer: &dyn AgentObserver,
+		cancel: &CancelToken,
+	) -> Result<RequestOutcome, AgentError> {
+		let request = prompt::engineer_request(brief);
+		self.run_labeled(
+			&request,
+			ENGINEER_UNDO_LABEL.to_owned(),
+			context,
+			observer,
+			cancel,
+		)
+		.await
+	}
+
+	async fn run_labeled(
+		&mut self,
+		request: &str,
+		undo_label: String,
+		context: &AppContext,
+		observer: &dyn AgentObserver,
+		cancel: &CancelToken,
+	) -> Result<RequestOutcome, AgentError> {
 		self.update_policy(context)?;
 		self.transcript()?;
 		let transcript = self.transcript.take().expect("created above");
 		let result = self
-			.run_request_inner(request, context, observer, cancel, &transcript)
+			.run_request_inner(request, undo_label, context, observer, cancel, &transcript)
 			.await;
 		self.transcript = Some(transcript);
 		Ok(result)
@@ -309,6 +348,7 @@ impl SessionAgent {
 	async fn run_request_inner(
 		&mut self,
 		request: &str,
+		undo_label: String,
 		context: &AppContext,
 		observer: &dyn AgentObserver,
 		cancel: &CancelToken,
@@ -319,7 +359,6 @@ impl SessionAgent {
 			transcript,
 		};
 		self.requests += 1;
-		let undo_label = format!("AI: {}", clip(request.trim(), 60));
 		transcript.record(
 			"request_start",
 			json!({

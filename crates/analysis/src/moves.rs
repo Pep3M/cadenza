@@ -28,25 +28,42 @@ pub enum MixMove {
 	Gain {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		track_id: Option<TrackId>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		delta_db: Option<f32>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		db: Option<f32>,
 	},
 	/// Pan position -1 (left) .. 1 (right).
-	Pan { track_id: TrackId, pan: f32 },
+	Pan {
+		track_id: TrackId,
+		#[serde(serialize_with = "crate::short::f32")]
+		pan: f32,
+	},
 	/// One band of the channel's built-in Parametric EQ (inserted first in the chain when
 	/// the channel has none; a bell reuses the band nearest in frequency or a free one).
 	Eq {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		track_id: Option<TrackId>,
 		kind: EqKind,
+		#[serde(serialize_with = "crate::short::f32")]
 		freq_hz: f32,
 		/// Bells and shelves; cuts of 2-4 dB are usually enough.
-		#[serde(default)]
+		#[serde(default, serialize_with = "crate::short::f32")]
 		gain_db: f32,
 		/// Bells only; default 1.
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		q: Option<f32>,
 	},
 	/// Settings of the channel's built-in compressor (inserted when missing); unset fields
@@ -54,15 +71,35 @@ pub enum MixMove {
 	Compressor {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		track_id: Option<TrackId>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		threshold_db: Option<f32>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		ratio: Option<f32>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		attack_ms: Option<f32>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		release_ms: Option<f32>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		makeup_db: Option<f32>,
 	},
 	/// Settings of the channel's built-in limiter (inserted last in the chain when missing;
@@ -70,16 +107,25 @@ pub enum MixMove {
 	Limiter {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		track_id: Option<TrackId>,
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		ceiling_db: Option<f32>,
 		/// Drive into the limiter (0..24 dB): raises loudness.
-		#[serde(default, skip_serializing_if = "Option::is_none")]
+		#[serde(
+			default,
+			skip_serializing_if = "Option::is_none",
+			serialize_with = "crate::short::opt_f32"
+		)]
 		input_gain_db: Option<f32>,
 	},
 	/// Send level from a track to a bus (adds the send when missing).
 	Send {
 		track_id: TrackId,
 		bus_id: TrackId,
+		#[serde(serialize_with = "crate::short::f32")]
 		level_db: f32,
 	},
 }

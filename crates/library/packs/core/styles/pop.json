@@ -109,6 +109,15 @@
 	},
 	"mix": {
 		"lufs": -10,
+		"profile": "pop",
+		"levels": {
+			"drums": 0,
+			"hook": 0,
+			"bass": -1,
+			"keys": -5,
+			"guitar": -5,
+			"arp": -8
+		},
 		"notes": "Vocal space first: carve 2-5 kHz in guitars/keys; kick and bass share the lows (EQ them apart); bright but not harsh master."
 	},
 	"do": [

@@ -39,6 +39,12 @@ AI agent rule: never depend on a single LLM vendor's API — new AI features go 
 `LlmProvider`. Secrets come from the environment, an ignored `.env` or the OS keyring (app);
 never log or commit them.
 
+Sound engineer (phase 18b): both system prompts carry a "Sound engineer" section (analyze ->
+gain staging -> masking EQ -> dynamics -> space -> pan -> master loudness; one apply_mix_moves
+per step; re-analyze and report before -> after). `SessionAgent::run_engineer_pass(&
+EngineerBrief { target_lufs, reference, notes }, ...)` sends `prompt::engineer_request` as ONE
+undo step `ENGINEER_UNDO_LABEL` ("AI mix pass"); `AppContext.reference_file` is readable by
+`compare_to_reference` through `PathPolicy::allow_read` even outside the project folder.
 Agent modes (`cadenza-agent`): `Agent::run(brief)` composes a whole song into a folder
 (`cadenza compose`). `SessionAgent::run_request(request, &AppContext, observer, &CancelToken)`
 works on a `SharedSession` (app chat, `cadenza chat`): `SESSION_SYSTEM_PROMPT` (incremental
@@ -531,6 +537,23 @@ track in the same batch); `build_device` fills default content; presets (factory
 zones; `set_output_routes` accepts built-in extra outputs; `write_drum_pattern` knows rim/pedal_hat/
 tambourine/cowbell lanes and warns about lanes a drum_sampler has no sample for. The agent's
 `PathPolicy::resolve_sample` allows the session folder or the factory folder.
+MCP mix tools (phase 18b, `tools::mix`; shared with the app and `cadenza mix`): targets come
+from `Project.meta.style` -> the style's `mix { lufs, true_peak?, profile?, levels {role: dB},
+notes }` (`resolve_targets`, overrides `target_lufs`/`genre_profile`/`true_peak_db`, default
+-14 LUFS); `run_analysis` = `analyze_mix_detailed` + `assess` (roles via `track_role`: name,
+instrument, library clip ids; master limiter state; masking; issues) -> `MixAnalysis`.
+`analyze_mix { range, targets..., max_issues (8) }` -> compact summary (targets, master with
+tone vs target + octave shape, per-channel role/LUFS/peak/crest/width, top 5 masking pairs,
+issues with `moves`, `more_issues`, render `warnings`); `analyze_track { track_id }` (third-
+octave spectrum, low-end check, its masking/issues, role defaults); `compare_to_reference {
+file, reference_start_seconds, reference_seconds, range }`; `mix_targets` (targets + per-track
+role defaults); `apply_mix_moves { moves, label? }` -> `mix_move_commands` (built on a scratch
+`Document`, so later moves see earlier ones; EQ inserted first, compressor before a limiter,
+limiter last, bell slot = nearby band or free one; params clamped to the device ranges; all or
+nothing, errors name the move index) executed as ONE `Batch` "AI mix pass". `compare_passes`
+lists before -> after numbers. Floats go out as rounded `f64` / `cadenza_analysis::short`
+(no `-9.100000381` noise). Budget test: `outputs_stay_within_their_token_budgets` (24 channels:
+analyze_mix < 9k chars, analyze_track < 3k, mix_targets < 5k).
 MCP controllers (`tools::controllers`): `set_controller_events { clip_id, controller, events:
 [{beat, value}], replace? }`, `draw_controller_curve { clip_id, controller, start_beat, end_beat,
 from, to, shape: linear|exponential|logarithmic|sine, cycles?, resolution_beats? }` (replaces

@@ -27,7 +27,7 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, controllers, devices, library, midi, playback, portable,
+	arrange, audio, clips, compose, controllers, devices, library, midi, mix, playback, portable,
 	presets, project, render, samples, tracks,
 };
 
@@ -67,8 +67,9 @@ their own buses with `set_output_routes`.\n\
 5. Balance the mix with `set_channel` (volume/pan/mute/solo) and mark song sections with \
 `add_marker`; group tracks into folder tracks (`create_track` kind folder + \
 `set_track_folder`: the folder's volume offsets them all); `freeze_track` heavy plugin \
-tracks to save CPU. Odd meters: `set_time_signature` with `at_bar` adds changes. Use `analyze_mix` to get loudness/peak/band readings plus plain-language \
-mix observations before committing to a `render`. `play`/`stop` audition on the default \
+tracks to save CPU. Odd meters: `set_time_signature` with `at_bar` adds changes. Mixing: `analyze_mix` measures the mix against the style's targets and lists issues \
+with ready-made `moves`; apply them (or your own) with `apply_mix_moves` as one undo step, \
+then analyze again; `analyze_track`, `compare_to_reference` and `mix_targets` go deeper. `play`/`stop` audition on the default \
 output device; edits made while playing are pushed to the player automatically.\n\n\
 Third-party plugins run in crash-isolated sandbox processes: a plugin that crashes or \
 hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in \
@@ -1164,19 +1165,80 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Renders and measures the mix (no audio written) and returns the report \
-			plus plain-language observations (e.g. peaks too hot, loudness off target, a track \
-			much louder than the rest, clipping, mono/phase issues, muddy or harsh bands) to \
-			guide the next mix move."
+		description = "The sound engineer's ears: renders the mix offline (nothing written) and \
+			returns the targets (from the song's style guide, else -14 LUFS / -1 dBTP; override \
+			with target_lufs, genre_profile, true_peak_db), the master (loudness, peaks, crest, \
+			width, low-end mono, tone vs the target profile, octave shape), every channel's \
+			role and levels, masking pairs (parts fighting for the same band) and issues, most \
+			severe first. Each issue carries `moves`: pass them to apply_mix_moves to fix it."
 	)]
 	async fn analyze_mix(
 		&self,
-		Parameters(args): Parameters<render::AnalyzeMixArgs>,
-	) -> Result<Json<render::AnalyzeMixOutput>, ErrorData> {
-		let (project, plugins, hosting) = self.project_and_plugins();
-		Ok(Json(
-			render::analyze_mix(project, plugins, hosting, args).await?,
-		))
+		Parameters(args): Parameters<mix::AnalyzeMixArgs>,
+	) -> Result<Json<mix::AnalyzeMixOutput>, ErrorData> {
+		let input = mix::AnalysisInput::from_session(&mut self.session());
+		Ok(Json(mix::analyze_mix(input, args).await?))
+	}
+
+	#[tool(
+		description = "One channel in depth (renders the whole mix for context): levels, \
+			third-octave spectrum, stereo image and low-end mono check, its masking pairs and \
+			issues, and its role's defaults (balance, high-pass)."
+	)]
+	async fn analyze_track(
+		&self,
+		Parameters(args): Parameters<mix::AnalyzeTrackArgs>,
+	) -> Result<Json<mix::AnalyzeTrackOutput>, ErrorData> {
+		let input = mix::AnalysisInput::from_session(&mut self.session());
+		Ok(Json(mix::analyze_track(input, args).await?))
+	}
+
+	#[tool(
+		description = "Compares the mix with a reference track (an audio file, optionally a \
+			part of it such as its chorus): loudness, true peak, crest factor and width deltas, \
+			octave-band shape after level matching, findings and master EQ moves toward it."
+	)]
+	async fn compare_to_reference(
+		&self,
+		Parameters(args): Parameters<mix::CompareToReferenceArgs>,
+	) -> Result<Json<mix::CompareToReferenceOutput>, ErrorData> {
+		let raw = std::path::PathBuf::from(args.file.trim());
+		let file = raw.canonicalize().map_err(|e| {
+			crate::McpError::Invalid(format!(
+				"cannot access reference file '{}': {e}; pass an existing audio file",
+				raw.display()
+			))
+		})?;
+		let input = mix::AnalysisInput::from_session(&mut self.session());
+		Ok(Json(mix::compare_to_reference(input, args, file).await?))
+	}
+
+	#[tool(
+		description = "The mix targets of this song: loudness, true-peak ceiling and tonal \
+			profile from the style guide in get_project's `style` (else defaults), the style's \
+			mix notes, and per track its role with the role's balance level and high-pass."
+	)]
+	fn mix_targets(
+		&self,
+		Parameters(args): Parameters<mix::MixTargetsArgs>,
+	) -> Result<Json<mix::MixTargetsOutput>, ErrorData> {
+		Ok(Json(mix::mix_targets(&mut self.session(), args)))
+	}
+
+	#[tool(
+		description = "Applies a list of mix moves as ONE undo step (default \"AI mix pass\"): \
+			gain {track_id?, delta_db | db}, pan {track_id, pan}, eq {track_id?, kind: \
+			bell|low_shelf|high_shelf|high_pass|low_pass, freq_hz, gain_db, q} on the built-in \
+			Parametric EQ (inserted first when missing), compressor {track_id?, threshold_db, \
+			ratio, attack_ms, release_ms, makeup_db}, limiter {track_id? (master), ceiling_db, \
+			input_gain_db}, send {track_id, bus_id, level_db}. Omitted track_id = master. \
+			All or nothing: an invalid move names its index."
+	)]
+	fn apply_mix_moves(
+		&self,
+		Parameters(args): Parameters<mix::ApplyMixMovesArgs>,
+	) -> Result<Json<mix::ApplyMixMovesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| mix::apply_mix_moves(s, args))?))
 	}
 
 	// -- transport -----------------------------------------------------------------

@@ -25,7 +25,7 @@ pub const SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, arranger
 - For a genre request, library_search kind=style for it and library_get the guide before deciding the song: it gives tempo, form, progressions, pattern ids per role and section, sounds, mix targets and the genre's do/don't.
 - Prefer apply_form + apply_pattern from the guide over writing grooves note by note; vary with fill_every/vary, then edit by hand only what makes the song unique (melody, hook).
 5. Arrange: duplicate_clip and then vary the copy, so repeats are never identical. Change voicings, rhythm, register and density, add fills and transitions, drop instruments out and bring them back.
-6. Mix: gain staging, EQ, compression, reverb and delay buses fed by add_send, panning, and a master chain. Then run analyze_mix and act on its observations until it reads well.
+6. Mix like a sound engineer (see Mix craft): analyze_mix, apply_mix_moves, analyze again until it reads well.
 7. Save the project and render it to the file names given in the session settings, then reply with a short summary.
 
 # Musical craft
@@ -40,7 +40,7 @@ pub const SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, arranger
 - EQ by role: high-pass parts that don't need low end, keep the lows for kick and bass, and carve room in the mids for the lead.
 - Share reverb and delay through bus tracks (create_track with kind "bus", then add_send) instead of a reverb on every track; keep low end out of the returns.
 - Master chain: gentle glue compression, then a limiter with its ceiling around -1 dB. Aim for the loudness target in the session settings with true peak at or below -1 dBTP and no clipping.
-- analyze_mix reports loudness, peaks, band balance, stereo correlation and per-track levels with plain-language observations. Treat it as your ears.
+- analyze_mix is your ears: loudness, peaks, tone vs the style's target, width, per-channel roles and levels, masking pairs and issues, each with ready `moves` for apply_mix_moves (one undo step per pass). Re-analyze after every pass.
 
 # Working style
 - Before your first tool call, say in a sentence or two what you are going to make. Between steps keep notes brief: what you decided or finished and what comes next.
@@ -179,9 +179,15 @@ pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, 
 - "Selected", "this", "here" and "the current clip" refer to the app context. Resolve section names ("the second chorus") with the markers; if there are none, infer sections from the clips and say what you assumed.
 - To add or move a section, shift what follows with move_clip and move the markers, keep parts continuous across the seam, and add transitions where they help.
 - Match what is there: key, scale, tempo, groove, register and sound palette. Check the clip's notes (get_clip_notes) before writing a part that must fit it.
-- Mixing: gain-stage, EQ by role, compress for control and punch, share reverb and delay through buses, and keep the master's true peak at or below -1 dBTP. analyze_mix reports loudness, peaks, band balance and per-track levels with plain-language observations; use it to check mix work.
+- Mixing: work as the sound engineer below.
 - Do not save the project, render or export unless the user asks; the user saves when they are happy. Playback and recording belong to the user's transport: you cannot record (no access to the audio or MIDI hardware), so ask the user to arm tracks and press Record (Ctrl+R) when a part should be played in. Recorded takes are clips with a `take` (group + lane); only the active take of a group plays.
 - If a request is genuinely ambiguous or impossible with the tools, ask one short question or say what you can do instead, without editing.
+
+# Sound engineer
+- Start with analyze_mix: it measures against the song's targets (style guide mix section; mix_targets explains them) and lists issues most severe first, each with `moves` you can pass to apply_mix_moves as they are or adjusted.
+- Work in this order: gain staging (no channel peaking above -6 dBFS, levels by role), masking (EQ cuts of 2-4 dB on the part that owns the band less, high-pass parts that don't need lows), dynamics (compressor for control and punch), space (reverb/delay buses via sends, lows kept out of the returns), pan layout (kick, bass, lead and vocal centered; supporting parts spread), then master loudness to the target with the limiter, true peak at or below the ceiling.
+- One apply_mix_moves call per step (one undo step each, a few dB per move at most). analyze_track looks at one channel; compare_to_reference compares with a reference track when there is one.
+- Always analyze_mix again after a pass and report what changed in numbers: LUFS, true peak, issues and masking pairs before -> after.
 
 # Musical craft
 - Voice-lead chords; give each part its own register; leave space. Melodies need a motif, repetition with variation and phrases that breathe; bass lines lock with the kick and outline the harmony.
@@ -220,6 +226,9 @@ pub struct AppContext {
 	/// Armed tracks, metronome and count-in ("Vox (audio, In 1, monitor auto); metronome
 	/// on while recording; count-in 1 bar"), when anything is armed or recording.
 	pub recording: Option<String>,
+	/// A reference track the user chose (readable by compare_to_reference even outside the
+	/// project folder).
+	pub reference_file: Option<String>,
 }
 
 impl AppContext {
@@ -263,6 +272,11 @@ impl AppContext {
 		}
 		if let Some(recording) = &self.recording {
 			out.push_str(&format!("- Recording setup: {recording}\n"));
+		}
+		if let Some(reference) = &self.reference_file {
+			out.push_str(&format!(
+				"- Reference track: {reference} (compare_to_reference file)\n"
+			));
 		}
 		out
 	}
@@ -313,6 +327,47 @@ pub fn session_resumed_message(handoff: &str, project_state: &str) -> String {
 	)
 }
 
+/// What a mix pass ([`engineer_request`]) aims at.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EngineerBrief {
+	/// Integrated loudness target (None: the style's, else -14 LUFS).
+	pub target_lufs: Option<f32>,
+	/// Reference track to compare with (also put in [`AppContext::reference_file`]).
+	pub reference: Option<String>,
+	/// Extra wishes ("more punch", "vocal forward").
+	pub notes: Option<String>,
+}
+
+/// The request of a mix pass: the sound-engineer workflow on the open project.
+pub fn engineer_request(brief: &EngineerBrief) -> String {
+	let mut out = String::from(
+		"Mix pass: act as the sound engineer on this project. Keep the arrangement, parts and \
+		 sounds; change only the mix (apply_mix_moves, set_channel, EQ/compressor/limiter \
+		 settings, sends to reverb/delay buses).",
+	);
+	match brief.target_lufs {
+		Some(lufs) => out.push_str(&format!(
+			" Loudness target: {lufs:.1} LUFS integrated (pass target_lufs {lufs:.1} to \
+			 analyze_mix)."
+		)),
+		None => out.push_str(" Loudness target: the style's (analyze_mix reports it)."),
+	}
+	if let Some(reference) = &brief.reference {
+		out.push_str(&format!(
+			" Reference track: \"{reference}\": run compare_to_reference with it first and \
+			 steer the tone and loudness toward it."
+		));
+	}
+	if let Some(notes) = brief.notes.as_deref().filter(|n| !n.trim().is_empty()) {
+		out.push_str(&format!(" Also: {}.", notes.trim().trim_end_matches('.')));
+	}
+	out.push_str(
+		" Follow the sound-engineer order, re-run analyze_mix after the last pass, and finish \
+		 with a short before -> after list of the key numbers (LUFS, true peak, issues).",
+	);
+	out
+}
+
 /// Shown to the model when it is asked to continue after the user stopped a request.
 pub const STOPPED_BY_USER: &str = "(stopped by the user)";
 
@@ -347,6 +402,28 @@ mod tests {
 		let without = session_request_message("again", &context, 0.25, None);
 		assert!(without.contains("unchanged since your last reply"));
 		assert!(!SESSION_SYSTEM_PROMPT.contains("song.cadenza.json"));
+	}
+
+	#[test]
+	fn engineer_requests_carry_target_reference_and_notes() {
+		let r = engineer_request(&EngineerBrief {
+			target_lufs: Some(-9.0),
+			reference: Some("/refs/hit.wav".into()),
+			notes: Some("vocal forward.".into()),
+		});
+		assert!(r.starts_with("Mix pass:"));
+		assert!(r.contains("target_lufs -9.0"));
+		assert!(r.contains("\"/refs/hit.wav\": run compare_to_reference"));
+		assert!(r.contains("Also: vocal forward."));
+		let plain = engineer_request(&EngineerBrief::default());
+		assert!(plain.contains("the style's"));
+		assert!(!plain.contains("Reference"));
+		assert!(SESSION_SYSTEM_PROMPT.contains("# Sound engineer"));
+		let context = AppContext {
+			reference_file: Some("/refs/hit.wav".into()),
+			..AppContext::default()
+		};
+		assert!(context.render().contains("Reference track: /refs/hit.wav"));
 	}
 
 	#[test]

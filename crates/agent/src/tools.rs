@@ -27,6 +27,9 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"scan_plugins",
 	"scale_info",
 	"analyze_mix",
+	"analyze_track",
+	"compare_to_reference",
+	"mix_targets",
 	"render",
 	"save_project",
 	"get_audio_info",
@@ -50,6 +53,8 @@ pub struct PathPolicy {
 	root: PathBuf,
 	default_project: PathBuf,
 	default_wav: PathBuf,
+	/// Files outside the root the session may read (the user's reference track).
+	extra_reads: Vec<PathBuf>,
 }
 
 impl PathPolicy {
@@ -60,6 +65,7 @@ impl PathPolicy {
 			default_project: root.join(project_file),
 			default_wav: root.join(wav_file),
 			root,
+			extra_reads: Vec::new(),
 		})
 	}
 
@@ -182,6 +188,25 @@ impl PathPolicy {
 			std::fs::create_dir_all(&joined).map_err(|e| format!("cannot create folder: {e}"))?;
 		}
 		self.resolve_dir(raw)
+	}
+
+	/// Lets the session read `path` although it lies outside the root (a reference track
+	/// the user chose). Ignored when it does not exist.
+	pub fn allow_read(&mut self, path: &Path) {
+		if let Ok(real) = path.canonicalize() {
+			self.extra_reads.push(real);
+		}
+	}
+
+	/// An existing file to read: one allowed with [`PathPolicy::allow_read`], else a file in
+	/// the session folder with one of `extensions`.
+	pub fn resolve_read(&self, raw: &str, extensions: &[&str]) -> Result<PathBuf, String> {
+		if let Ok(real) = Path::new(raw.trim()).canonicalize()
+			&& self.extra_reads.contains(&real)
+		{
+			return Ok(real);
+		}
+		self.resolve_any(raw, extensions)
 	}
 
 	/// A sample for `load_sample`: an audio file in the session folder, or one of the
@@ -416,6 +441,16 @@ impl ToolBridge {
 					None => return Err("missing 'path'".into()),
 				}
 			}
+			"compare_to_reference" => {
+				let raw = obj
+					.get("file")
+					.and_then(Value::as_str)
+					.ok_or("missing 'file'")?;
+				let path = self
+					.policy
+					.resolve_read(raw, cadenza_mcp::tools::audio::AUDIO_EXTENSIONS)?;
+				obj.insert("file".into(), path_value(&path));
+			}
 			"relink_files" => {
 				let raw = obj
 					.get("search_folder")
@@ -645,6 +680,30 @@ mod tests {
 				.resolve_sample_in("notes.txt", factory.path())
 				.is_err()
 		);
+	}
+
+	#[test]
+	fn a_reference_track_outside_the_folder_is_readable_once_allowed() {
+		let (mut policy, _dir) = policy();
+		let outside = tempfile::tempdir().unwrap();
+		let reference = outside.path().join("hit.wav");
+		let other = outside.path().join("other.wav");
+		std::fs::write(&reference, b"x").unwrap();
+		std::fs::write(&other, b"x").unwrap();
+		let exts = cadenza_mcp::tools::audio::AUDIO_EXTENSIONS;
+		assert!(
+			policy
+				.resolve_read(reference.to_str().unwrap(), exts)
+				.is_err()
+		);
+		policy.allow_read(&reference);
+		assert_eq!(
+			policy
+				.resolve_read(reference.to_str().unwrap(), exts)
+				.unwrap(),
+			reference.canonicalize().unwrap()
+		);
+		assert!(policy.resolve_read(other.to_str().unwrap(), exts).is_err());
 	}
 
 	#[test]

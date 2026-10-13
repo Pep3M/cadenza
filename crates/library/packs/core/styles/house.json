@@ -87,6 +87,14 @@
 	},
 	"mix": {
 		"lufs": -8,
+		"profile": "electronic",
+		"levels": {
+			"drums": 0,
+			"bass": -2,
+			"keys": -6,
+			"arp": -8,
+			"perc": -9
+		},
 		"notes": "Kick is king: sidechain bass and pads to it; mono lows; open hats bright; long reverb only in the breakdown."
 	},
 	"do": [

@@ -34,6 +34,8 @@ pub use config::{AgentConfig, ProviderConfig};
 pub use error::AgentError;
 pub use observer::{AgentEvent, AgentObserver};
 pub use openrouter::{OpenRouterConfig, OpenRouterProvider};
-pub use prompt::AppContext;
+pub use prompt::{AppContext, EngineerBrief};
 pub use provider::LlmProvider;
-pub use session::{RequestOutcome, RequestStatus, SessionAgent, SessionConfig};
+pub use session::{
+	ENGINEER_UNDO_LABEL, RequestOutcome, RequestStatus, SessionAgent, SessionConfig,
+};

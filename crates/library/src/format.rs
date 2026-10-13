@@ -491,9 +491,29 @@ fn four() -> f64 {
 #[serde(deny_unknown_fields)]
 pub struct StyleMix {
 	pub lufs: f64,
+	/// True-peak ceiling, dBTP (default -1).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub true_peak: Option<f64>,
+	/// Tonal balance reference: one of [`TONE_PROFILES`] (default: guessed from the genres).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub profile: Option<String>,
+	/// Role -> level in dB relative to the loudest parts (0 = up front, -9 = background):
+	/// the mix assistant's balance targets ("drums": 0, "bass": -1, "pad": -10).
+	#[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
+	pub levels: OrderedMap<f64>,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub notes: String,
 }
+
+/// Tonal balance profiles a style's mix section may name.
+pub const TONE_PROFILES: &[&str] = &[
+	"pop",
+	"electronic",
+	"hiphop",
+	"rock",
+	"acoustic",
+	"orchestral",
+];
 
 /// A genre style guide: everything needed to plan a song in one document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

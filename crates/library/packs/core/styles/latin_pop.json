@@ -111,6 +111,15 @@
 	},
 	"mix": {
 		"lufs": -9,
+		"profile": "pop",
+		"levels": {
+			"drums": 0,
+			"bass": -1,
+			"hook": -2,
+			"guitar": -6,
+			"keys": -7,
+			"perc": -9
+		},
 		"notes": "Kick and 808 own the lows (sidechain the 808 lightly to the kick); guitar panned slightly; keep 1-4 kHz for the vocal; short plate reverb."
 	},
 	"do": [

@@ -76,6 +76,13 @@
 	},
 	"mix": {
 		"lufs": -14,
+		"profile": "hiphop",
+		"levels": {
+			"keys": 0,
+			"drums": -1,
+			"bass": -2,
+			"melody": -4
+		},
 		"notes": "Soft and warm: roll off highs above 10 kHz, saturate lightly, quiet drums; groove core/groove_lofi_lazy makes it lazier."
 	},
 	"do": [

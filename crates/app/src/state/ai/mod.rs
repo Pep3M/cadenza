@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use cadenza_agent::{AppContext, CancelToken, RequestStatus};
+use cadenza_agent::{AppContext, CancelToken, EngineerBrief, RequestStatus};
 use cadenza_mcp::SharedSession;
 
 use crate::audio::Waker;
@@ -186,6 +186,28 @@ impl AiChat {
 
 	/// Sends a request (ignored while one runs or when empty). Returns whether it was sent.
 	pub fn send(&mut self, request: &str, context: AppContext, session: &SharedSession) -> bool {
+		self.send_with(request, None, context, session)
+	}
+
+	/// Runs a sound-engineer mix pass (one undo step "AI mix pass"); shown in the chat as
+	/// `label`. Returns whether it was sent.
+	pub fn send_mix_pass(
+		&mut self,
+		label: &str,
+		brief: EngineerBrief,
+		context: AppContext,
+		session: &SharedSession,
+	) -> bool {
+		self.send_with(label, Some(brief), context, session)
+	}
+
+	fn send_with(
+		&mut self,
+		request: &str,
+		engineer: Option<EngineerBrief>,
+		context: AppContext,
+		session: &SharedSession,
+	) -> bool {
 		let request = request.trim().to_owned();
 		if request.is_empty() || self.busy() {
 			return false;
@@ -202,7 +224,8 @@ impl AiChat {
 		let settings = self.settings.clone();
 		let sent = self.worker(session).send(worker::Command::Run {
 			request,
-			context,
+			engineer,
+			context: Box::new(context),
 			settings,
 		});
 		if !sent {

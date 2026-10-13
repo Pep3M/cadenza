@@ -764,6 +764,34 @@ mod tests {
 	}
 
 	#[test]
+	fn bus_returns_and_silent_tracks_stay_out_of_the_balance() {
+		let m = pop_master(-14.0, -1.5);
+		let (a, b) = (detail(-16.0, -6.0, MID), detail(-16.5, -6.0, MID));
+		let (verb, silent) = (detail(-45.0, -30.0, MID), detail(-144.0, -144.0, MID));
+		let mut tracks = [
+			track("Keys", Role::Keys, &a),
+			track("Guitar", Role::Guitar, &b),
+			track("Reverb", Role::Other, &verb),
+			track("Unused", Role::Lead, &silent),
+		];
+		tracks[2].is_bus = true;
+		let issues = find_issues(
+			&MasterInput {
+				detail: &m,
+				limiter: None,
+			},
+			&tracks,
+			&MixTargets::default(),
+			&[],
+			&[],
+		);
+		assert!(
+			!issues.iter().any(|i| i.kind == IssueKind::Balance),
+			"{issues:#?}"
+		);
+	}
+
+	#[test]
 	fn too_loud_backs_off_the_limiter_then_the_fader() {
 		let m = pop_master(-6.0, -1.2);
 		let master = MasterInput {

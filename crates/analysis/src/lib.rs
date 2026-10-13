@@ -19,6 +19,7 @@ pub mod masking;
 pub mod moves;
 pub mod reference;
 pub mod roles;
+pub mod short;
 pub mod spectrum;
 pub mod targets;
 

@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use cadenza_agent::observer::{AgentEvent, AgentObserver};
 use cadenza_agent::provider::ProviderError;
 use cadenza_agent::session::{RequestStatus, actionable_error};
-use cadenza_agent::{AppContext, CancelToken, LlmProvider, SessionAgent};
+use cadenza_agent::{AppContext, CancelToken, EngineerBrief, LlmProvider, SessionAgent};
 use cadenza_mcp::SharedSession;
 
 use super::secrets::{KeySource, SecretStore, resolve_key};
@@ -36,7 +36,9 @@ pub fn default_factory() -> ProviderFactory {
 pub enum Command {
 	Run {
 		request: String,
-		context: AppContext,
+		/// A mix pass by the sound engineer instead of a chat request.
+		engineer: Option<EngineerBrief>,
+		context: Box<AppContext>,
 		settings: AiSettings,
 	},
 	/// Starts a new conversation.
@@ -200,6 +202,7 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 		match command {
 			Command::Run {
 				request,
+				engineer,
 				context,
 				settings,
 			} => {
@@ -237,8 +240,18 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 					continue;
 				}
 				let a = agent.as_mut().expect("set above");
-				let result =
-					runtime.block_on(a.run_request(&request, &context, &forward, &setup.cancel));
+				let result = runtime.block_on(async {
+					match &engineer {
+						Some(brief) => {
+							a.run_engineer_pass(brief, &context, &forward, &setup.cancel)
+								.await
+						}
+						None => {
+							a.run_request(&request, &context, &forward, &setup.cancel)
+								.await
+						}
+					}
+				});
 				let finished = match result {
 					Ok(outcome) => {
 						let needs_settings = matches!(

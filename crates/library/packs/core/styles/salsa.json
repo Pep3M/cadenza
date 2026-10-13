@@ -74,6 +74,13 @@
 	},
 	"mix": {
 		"lufs": -11,
+		"profile": "acoustic",
+		"levels": {
+			"piano": -1,
+			"bass": -1,
+			"perc": -5,
+			"clave": -8
+		},
 		"notes": "Natural and wide: piano and bass forward, percussion panned like a stage (bongos left, congas right), no sidechain."
 	},
 	"do": [

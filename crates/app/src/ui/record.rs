@@ -431,9 +431,12 @@ pub fn take_lane(
 	}
 	let id = Id::new(("take-lane", track.id, lane));
 	let resp = ui.interact(r, id, Sense::click_and_drag());
-	let ts = state.project().time_signature;
 	let snap = |state: &AppState, t: Tick| {
-		if state.view.snap { tl.snap(t, ts) } else { t }
+		if state.view.snap {
+			tl.snap(t, state.project().meter())
+		} else {
+			t
+		}
 	};
 	let clip_at = |px: f32| {
 		let t = tl.x_to_tick(px - area.left());

@@ -19,6 +19,13 @@ pub const LANE_SELECTED: Color32 = Color32::from_rgb(0x22, 0x28, 0x30);
 pub const GRID_BAR: Color32 = Color32::from_rgb(0x34, 0x3a, 0x43);
 pub const GRID_BEAT: Color32 = Color32::from_rgb(0x26, 0x2b, 0x31);
 pub const GRID_FINE: Color32 = Color32::from_rgb(0x21, 0x25, 0x2a);
+/// Piano roll grid: every other bar is shaded; lines by weight (bar > beat > step).
+pub const PIANO_ZEBRA: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 52);
+pub const PIANO_GRID_BAR: Color32 = Color32::from_rgb(0x4a, 0x52, 0x5e);
+pub const PIANO_GRID_BEAT: Color32 = Color32::from_rgb(0x30, 0x36, 0x3e);
+pub const PIANO_GRID_STEP: Color32 = Color32::from_rgba_premultiplied(0x1c, 0x1f, 0x24, 0x90);
+/// Time signature tags and the signature lane.
+pub const SIGNATURE: Color32 = Color32::from_rgb(0x8f, 0xb8, 0xde);
 
 // Text.
 pub const TEXT: Color32 = Color32::from_rgb(0xd8, 0xdc, 0xe2);

@@ -2,7 +2,6 @@
 //! count-in and punch, position, tempo, time signature, master meter and audio status.
 
 use cadenza_core::{Tick, TimeSignature};
-use cadenza_model::Command;
 use egui::{
 	Align, Align2, CornerRadius, Id, Layout, RichText, Sense, Shape, Stroke, Ui, pos2, vec2,
 };
@@ -395,7 +394,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, active: bool) -> egui::Response {
 fn position_display(ui: &mut Ui, state: &mut AppState) {
 	let pos = state.position();
 	let project = state.project();
-	let bbt = format_bbt(pos, project.time_signature);
+	let bbt = format_bbt(pos, project.meter());
 	let time = format_time(pos, &project.tempo);
 	let (rect, _) = ui.allocate_exact_size(vec2(210.0, 34.0), Sense::hover());
 	let p = ui.painter();
@@ -454,15 +453,17 @@ fn tempo(ui: &mut Ui, state: &mut AppState) {
 	let tempo_lane = state.view.automation.tempo;
 	if ui
 		.selectable_label(tempo_lane, "♩")
-		.on_hover_text("Show the tempo lane (tempo changes)")
+		.on_hover_text("Show the tempo and time signature lanes")
 		.clicked()
 	{
 		state.view.automation.tempo = !tempo_lane;
 	}
 }
 
+/// The time signature in effect at the playhead; editing it changes that segment (the
+/// song's first signature, or the change governing the playhead).
 fn time_signature(ui: &mut Ui, state: &mut AppState) {
-	let ts = state.project().time_signature;
+	let ts = state.project().meter().signature_at(state.position());
 	ui.label(
 		RichText::new("TIME")
 			.font(theme::small())
@@ -503,11 +504,9 @@ fn time_signature(ui: &mut Ui, state: &mut AppState) {
 		});
 	if let Some(n) = next
 		&& n != ts
+		&& let Some(cmd) = crate::state::meter::set_at(state.project(), state.position(), n)
 	{
-		state.apply(Command::SetTimeSignature {
-			time_signature: n,
-			bar: 0,
-		});
+		state.apply(cmd);
 	}
 }
 

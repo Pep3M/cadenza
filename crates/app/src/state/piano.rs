@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use cadenza_core::{ClipId, NoteId, PPQ, Tick, TimeSignature, TrackId};
+use cadenza_core::{ClipId, Meter, NoteId, PPQ, Tick, TimeSignature, TrackId};
 use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project, TrackKind};
 use cadenza_theory::Scale;
 use serde::{Deserialize, Serialize};
@@ -340,18 +340,18 @@ pub fn new_clip(project: &Project, track: TrackId, at: Tick) -> Option<(Command,
 	if t.kind != TrackKind::Instrument {
 		return None;
 	}
-	let bar = project.time_signature.ticks_per_bar();
-	let mut start = Tick(at.0.max(0) / bar.0 * bar.0);
+	let meter = project.meter();
+	let mut start = meter.bar_floor(Tick(at.0.max(0)));
 	while let Some(end) = t
 		.clips
 		.iter()
-		.filter(|c| c.start < start + bar && start < c.end())
+		.filter(|c| c.start < meter.bar_at(start).end() && start < c.end())
 		.map(|c| c.end())
 		.max()
 	{
-		start = Tick((end.0 + bar.0 - 1) / bar.0 * bar.0);
+		start = meter.bar_ceil(end);
 	}
-	let clip = Clip::midi(t.name.clone(), start, bar);
+	let clip = Clip::midi(t.name.clone(), start, meter.bar_at(start).length);
 	let id = clip.id;
 	Some((Command::AddClip { track, clip }, id))
 }
@@ -377,18 +377,15 @@ pub fn snap_floor(tick: Tick, step: Option<Tick>) -> Tick {
 
 /// The clip length needed for notes ending at `end` (relative): unchanged when they fit,
 /// else grown to the next bar line (absolute bars, so the clip end lands on the grid).
-pub fn grown_length(clip: &Clip, end: Tick, ts: TimeSignature) -> Option<Tick> {
+pub fn grown_length(clip: &Clip, end: Tick, meter: Meter<'_>) -> Option<Tick> {
 	if end <= clip.length {
 		return None;
 	}
-	let bar = ts.ticks_per_bar().0.max(1);
-	let abs_end = clip.start.0 + end.0;
-	let rounded = (abs_end + bar - 1).div_euclid(bar) * bar;
-	Some(Tick(rounded - clip.start.0))
+	Some(meter.bar_ceil(clip.start + end) - clip.start)
 }
 
-fn grow(clip: &Clip, end: Tick, ts: TimeSignature) -> Option<Command> {
-	grown_length(clip, end, ts).map(|length| Command::UpdateClip {
+fn grow(clip: &Clip, end: Tick, meter: Meter<'_>) -> Option<Command> {
+	grown_length(clip, end, meter).map(|length| Command::UpdateClip {
 		clip: clip.id,
 		patch: ClipPatch {
 			length: Some(length),
@@ -438,9 +435,7 @@ pub fn add_note(
 		velocity.clamp(0.0, 1.0),
 	);
 	let id = note.id;
-	let mut commands: Vec<Command> = grow(c, note.end(), project.time_signature)
-		.into_iter()
-		.collect();
+	let mut commands: Vec<Command> = grow(c, note.end(), project.meter()).into_iter().collect();
 	commands.push(Command::AddNotes {
 		clip,
 		notes: vec![note],
@@ -479,7 +474,7 @@ pub fn move_notes(
 	}
 	let notes = selected(c, ids);
 	let end = notes.iter().map(|n| n.end() + dt).max()?;
-	let mut commands: Vec<Command> = grow(c, end, project.time_signature).into_iter().collect();
+	let mut commands: Vec<Command> = grow(c, end, project.meter()).into_iter().collect();
 	commands.push(Command::UpdateNotes {
 		clip,
 		notes: notes
@@ -531,7 +526,7 @@ pub fn resize_notes(
 		})
 		.collect();
 	let end = patches.iter().map(|(_, end)| *end).max()?;
-	let mut commands: Vec<Command> = grow(c, end, project.time_signature).into_iter().collect();
+	let mut commands: Vec<Command> = grow(c, end, project.meter()).into_iter().collect();
 	commands.push(Command::UpdateNotes {
 		clip,
 		notes: patches.into_iter().map(|(p, _)| p).collect(),
@@ -574,7 +569,7 @@ fn insert_notes(
 ) -> Option<(Command, Vec<NoteId>)> {
 	let end = notes.iter().map(Note::end).max()?;
 	let ids = notes.iter().map(|n| n.id).collect();
-	let mut commands: Vec<Command> = grow(c, end, project.time_signature).into_iter().collect();
+	let mut commands: Vec<Command> = grow(c, end, project.meter()).into_iter().collect();
 	commands.push(Command::AddNotes { clip: c.id, notes });
 	Some((labelled(label, commands)?, ids))
 }
@@ -633,7 +628,7 @@ pub fn quantize_notes(
 			Some(p.start? + n.length)
 		})
 		.max()?;
-	let mut commands: Vec<Command> = grow(c, end, project.time_signature).into_iter().collect();
+	let mut commands: Vec<Command> = grow(c, end, project.meter()).into_iter().collect();
 	commands.push(Command::UpdateNotes {
 		clip,
 		notes: patches,
@@ -732,7 +727,7 @@ pub fn clone_notes(
 	step: Option<Tick>,
 ) -> Option<(Command, Vec<NoteId>)> {
 	let c = midi_clip(project, clip)?;
-	let offset = clone_offset(c, ids, step, project.time_signature)?;
+	let offset = clone_offset(c, ids, step, project.meter().signature_at(c.start))?;
 	let copies: Vec<Note> = selected(c, ids)
 		.iter()
 		.map(|n| Note {
@@ -1036,7 +1031,7 @@ pub fn set_note(project: &Project, clip: ClipId, note: &Note) -> Option<Command>
 	{
 		return None;
 	}
-	let mut commands: Vec<Command> = grow(c, start + length, project.time_signature)
+	let mut commands: Vec<Command> = grow(c, start + length, project.meter())
 		.into_iter()
 		.collect();
 	commands.push(Command::UpdateNotes {

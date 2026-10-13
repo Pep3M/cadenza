@@ -6,7 +6,7 @@
 //! auditioning only that track (the project's mute/solo is not touched). [`config`]
 //! turns the view state into what the player needs; `AppState` sends it.
 
-use cadenza_core::{ClipId, Tick, TimeSignature, TrackId};
+use cadenza_core::{ClipId, Meter, Tick, TrackId};
 use cadenza_model::{Clip, Project};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -54,10 +54,13 @@ pub struct PlayConfig {
 /// The span pattern mode loops for `clip` (FL Studio pattern length): its notes rounded
 /// up to the next bar (at least one bar), or the clip's own length when that is longer.
 /// Notes drawn past the end grow the clip, and the loop follows on the next tick.
-pub fn pattern_range(clip: &Clip, ts: TimeSignature) -> (Tick, Tick) {
-	let bar = ts.ticks_per_bar().0.max(1);
+pub fn pattern_range(clip: &Clip, meter: Meter<'_>) -> (Tick, Tick) {
 	let content = clip.notes().iter().map(|n| n.end().0).max().unwrap_or(0);
-	let rounded = Tick(((content.max(0) + bar - 1) / bar).max(1) * bar);
+	// Bars counted from the clip start, in the time signatures they fall in.
+	let from = meter.bar_position(clip.start);
+	let to = meter.bar_position(clip.start + Tick(content.max(0)));
+	let bars = (to - from - 1e-9).ceil().max(1.0);
+	let rounded = meter.tick_at_bar_position(from + bars) - clip.start;
 	(clip.start, clip.start + rounded.max(clip.length))
 }
 
@@ -84,7 +87,7 @@ pub fn config(
 	match found {
 		Some((track, clip)) => (
 			PlayConfig {
-				loop_range: Some(pattern_range(clip, project.time_signature)),
+				loop_range: Some(pattern_range(clip, project.meter())),
 				audition: playing.then(|| vec![track.id]),
 				pattern: Some(clip.id),
 			},
@@ -138,7 +141,7 @@ mod tests {
 		assert_eq!(c.loop_range, Some((Tick(PPQ * 16), Tick(PPQ * 22))));
 		assert_eq!(c.audition, None, "no audition while stopped");
 		// Notes decide when they reach further than the clip: rounded up to the bar.
-		let ts = p.time_signature;
+		let ts = p.meter();
 		let mut clip = Clip::midi("c", Tick(PPQ * 4), Tick(PPQ * 2));
 		assert_eq!(
 			pattern_range(&clip, ts),

@@ -23,7 +23,7 @@ use egui::{
 use crate::state::AppState;
 use crate::state::layout::PanelKind;
 use crate::state::piano::{self, Ghosts, MIN_NOTE_LENGTH, PianoSnap, PianoView, Tool};
-use crate::state::timeline;
+use crate::state::timeline::{self, LineKind, Timeline};
 use crate::theme;
 use crate::ui::arrange;
 use crate::ui::widgets;
@@ -205,12 +205,24 @@ fn target(state: &AppState) -> Option<Target> {
 
 /// The piano roll's snap step (its own "magnet"; `Main` follows the global snap).
 pub fn snap_step(state: &AppState) -> Option<Tick> {
-	let ts = state.project().time_signature;
+	let ts = signature(state);
 	let main = state
 		.view
 		.snap
 		.then(|| state.view.piano.timeline.grid(ts).step);
 	state.view.piano.snap.step(ts, main)
+}
+
+/// The time signature the piano roll's bar/beat steps use: the one at the edited clip's
+/// start (else at the playhead).
+fn signature(state: &AppState) -> cadenza_core::TimeSignature {
+	let at = state
+		.view
+		.piano
+		.clip
+		.and_then(|id| state.project().find_clip(id))
+		.map_or(state.position(), |(_, c)| c.start);
+	state.project().meter().signature_at(at)
 }
 
 /// Grid step for a mouse gesture (None: snap off or Alt held).
@@ -224,14 +236,7 @@ fn step(state: &AppState, ui: &Ui) -> Option<Tick> {
 
 /// The step keyboard nudges and quantize use: the snap, else the visible grid.
 fn key_step(state: &AppState) -> Tick {
-	snap_step(state).unwrap_or_else(|| {
-		state
-			.view
-			.piano
-			.timeline
-			.grid(state.project().time_signature)
-			.step
-	})
+	snap_step(state).unwrap_or_else(|| state.view.piano.timeline.grid(signature(state)).step)
 }
 
 impl PianoUi {
@@ -416,11 +421,7 @@ impl PianoUi {
 				.color(theme::TEXT_FAINT),
 		);
 		let main_name = {
-			let grid = state
-				.view
-				.piano
-				.timeline
-				.grid(state.project().time_signature);
+			let grid = state.view.piano.timeline.grid(signature(state));
 			if state.view.snap {
 				format!("Main ({})", arrange::grid_name(grid.step, grid.bar))
 			} else {
@@ -550,7 +551,8 @@ impl PianoUi {
 		let p = ui.painter_at(area);
 		let v = state.view.piano.clone();
 		let tl = v.timeline;
-		let ts = state.project().time_signature;
+		let meter = cadenza_core::MeterMap::new(state.project().meter());
+		let fine = snap_step(state);
 		let clip = &t.clip;
 
 		// Rows: black keys darker, out-of-scale rows dimmed, roots tinted.
@@ -574,7 +576,7 @@ impl PianoUi {
 				);
 			}
 		}
-		arrange::grid(&p, area, &tl, ts);
+		piano_grid(&p, area, &tl, meter.view(), fine);
 		// Outside the clip: shaded; its edges marked.
 		let cx0 = area.left() + tl.tick_to_x(clip.start);
 		let cx1 = area.left() + tl.tick_to_x(clip.end());
@@ -1622,7 +1624,7 @@ impl PianoUi {
 			}
 		}
 		let step = key_step(state);
-		let bar = state.project().time_signature.ticks_per_bar();
+		let bar = signature(state).ticks_per_bar();
 		// Shifted (and Ctrl) variants first: a plain arrow also matches Shift+arrow.
 		let moves = [
 			(Modifiers::SHIFT, Key::ArrowUp, Tick::ZERO, 12),
@@ -1860,7 +1862,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 	let corner = Rect::from_min_max(pos2(g.keys.left(), r.top()), pos2(r.left(), r.bottom()));
 	ui.painter().rect_filled(corner, 0.0, theme::BG_PANEL);
 	let tl = state.view.piano.timeline;
-	let ts = state.project().time_signature;
+	let meter = cadenza_core::MeterMap::new(state.project().meter());
 	let p = ui.painter_at(r);
 	p.rect_filled(r, 0.0, theme::BG_RAISED);
 	let x0 = r.left() + tl.tick_to_x(t.clip.start);
@@ -1881,53 +1883,53 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 		);
 		p.rect_filled(band, CornerRadius::same(2), theme::PATTERN);
 	}
-	let grid = tl.grid(ts);
-	let beat = Tick(PPQ * 4 / i64::from(ts.denominator.max(1)));
-	let bar_px = tl.ticks_to_px(grid.bar);
-	let every = (40.0 / bar_px).ceil().max(1.0) as i64;
-	let step = if tl.ticks_to_px(beat) >= 6.0 {
-		beat.0.min(grid.step.0.max(beat.0))
-	} else {
-		grid.bar.0
-	};
-	let mut tick = tl.x_to_tick(0.0).0.max(0) / step * step;
-	let end = tl.x_to_tick(r.width()).0;
-	while tick <= end {
-		let x = r.left() + tl.tick_to_x(Tick(tick));
-		if tick % grid.bar.0 == 0 {
-			let bar = tick / grid.bar.0;
-			p.vline(
-				x,
-				r.top() + 8.0..=r.bottom(),
-				Stroke::new(1.0, theme::TEXT_FAINT),
-			);
-			if bar % every == 0 {
-				p.text(
-					pos2(x + 4.0, r.top() + 2.0),
-					Align2::LEFT_TOP,
-					format!("{}", bar + 1),
-					theme::mono(10.0),
-					theme::TEXT_DIM,
+	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(r.width()));
+	let shortest = meter
+		.view()
+		.segments_between(Tick(from.0.max(0)), to)
+		.map(|(_, ts)| ts.ticks_per_bar())
+		.min()
+		.unwrap_or(Tick(PPQ * 4));
+	let bar_px = tl.ticks_to_px(shortest);
+	let every = ((40.0 / bar_px).ceil().max(1.0) as u64).next_power_of_two() as i64;
+	for line in tl.grid_lines(meter.view(), from, to, None) {
+		let x = r.left() + tl.tick_to_x(line.tick);
+		match line.kind {
+			LineKind::Bar(index) => {
+				p.vline(
+					x,
+					r.top() + 8.0..=r.bottom(),
+					Stroke::new(1.0, theme::TEXT_FAINT),
 				);
+				if index % every == 0 {
+					p.text(
+						pos2(x + 4.0, r.top() + 2.0),
+						Align2::LEFT_TOP,
+						format!("{}", index + 1),
+						theme::mono(10.0),
+						theme::TEXT_DIM,
+					);
+				}
 			}
-		} else {
-			let (bar, beat_no, _) = timeline::bbt(Tick(tick), ts);
-			p.vline(
-				x,
-				r.bottom() - 5.0..=r.bottom(),
-				Stroke::new(1.0, theme::GRID_BAR),
-			);
-			if bar_px > 160.0 && tick % beat.0 == 0 {
-				p.text(
-					pos2(x + 3.0, r.top() + 4.0),
-					Align2::LEFT_TOP,
-					format!("{bar}.{beat_no}"),
-					theme::mono(8.5),
-					theme::TEXT_FAINT,
+			LineKind::Beat => {
+				let (bar, beat_no, _) = timeline::bbt(line.tick, meter.view());
+				p.vline(
+					x,
+					r.bottom() - 5.0..=r.bottom(),
+					Stroke::new(1.0, theme::GRID_BAR),
 				);
+				if bar_px > 160.0 {
+					p.text(
+						pos2(x + 3.0, r.top() + 4.0),
+						Align2::LEFT_TOP,
+						format!("{bar}.{beat_no}"),
+						theme::mono(8.5),
+						theme::TEXT_FAINT,
+					);
+				}
 			}
+			LineKind::Step => {}
 		}
-		tick += step;
 	}
 	p.hline(
 		r.x_range(),
@@ -1942,7 +1944,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 	{
 		let tick = tl.x_to_tick(pos.x - r.left());
 		let tick = if state.view.snap && !ui.input(|i| i.modifiers.alt) {
-			tl.snap(tick, ts)
+			tl.snap(tick, meter.view())
 		} else {
 			tick
 		};
@@ -2018,7 +2020,7 @@ fn scale_picker(ui: &mut Ui, v: &mut PianoView) {
 
 /// The track's MIDI clips (in time order, with their bar): switches the edited clip.
 fn clip_selector(ui: &mut Ui, state: &mut AppState, t: &Target) {
-	let ts = state.project().time_signature;
+	let meter = cadenza_core::MeterMap::new(state.project().meter());
 	let clips: Vec<(cadenza_core::ClipId, String)> = state
 		.project()
 		.track(t.track)
@@ -2027,7 +2029,7 @@ fn clip_selector(ui: &mut Ui, state: &mut AppState, t: &Target) {
 			c.sort_by_key(|c| c.start);
 			c.into_iter()
 				.map(|c| {
-					let bar = c.start.0 / ts.ticks_per_bar().0.max(1) + 1;
+					let bar = meter.view().bar_index(c.start) + 1;
 					(c.id, format!("{} · bar {bar}", c.name))
 				})
 				.collect()
@@ -2087,5 +2089,40 @@ fn empty(ui: &mut Ui, state: &mut AppState, rect: Rect) {
 		{
 			state.open_track_in_piano_roll(id);
 		}
+	}
+}
+
+/// The note grid (FL Studio-like): bars shaded alternately (a discreet zebra), and lines
+/// by hierarchy: bar lines strongest, beat lines medium, step lines (the snap grid, or
+/// the zoom grid) faint.
+fn piano_grid(
+	p: &Painter,
+	area: Rect,
+	tl: &Timeline,
+	meter: cadenza_core::Meter<'_>,
+	step: Option<Tick>,
+) {
+	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(area.width()));
+	for bar in meter.bar_lines(meter.bar_floor(Tick(from.0.max(0))), Tick(to.0 + 1)) {
+		if bar.index % 2 == 1 {
+			let x0 = (area.left() + tl.tick_to_x(bar.start)).max(area.left());
+			let x1 = (area.left() + tl.tick_to_x(bar.end())).min(area.right());
+			if x1 > x0 {
+				p.rect_filled(
+					Rect::from_min_max(pos2(x0, area.top()), pos2(x1, area.bottom())),
+					0.0,
+					theme::PIANO_ZEBRA,
+				);
+			}
+		}
+	}
+	for line in tl.grid_lines(meter, from, to, step) {
+		let x = area.left() + tl.tick_to_x(line.tick);
+		let stroke = match line.kind {
+			LineKind::Bar(_) => Stroke::new(1.5, theme::PIANO_GRID_BAR),
+			LineKind::Beat => Stroke::new(1.0, theme::PIANO_GRID_BEAT),
+			LineKind::Step => Stroke::new(1.0, theme::PIANO_GRID_STEP),
+		};
+		p.vline(x, area.y_range(), stroke);
 	}
 }

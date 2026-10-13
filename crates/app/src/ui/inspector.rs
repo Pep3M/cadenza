@@ -274,7 +274,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 	else {
 		return;
 	};
-	let ts = state.project().time_signature;
+	let meter = cadenza_core::MeterMap::new(state.project().meter());
 	let kind = if c.is_midi() {
 		"MIDI clip"
 	} else {
@@ -299,7 +299,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 			}
 			ui.end_row();
 			ui.label("Start");
-			ui.label(RichText::new(format_bbt(c.start, ts)).font(theme::mono(12.0)));
+			ui.label(RichText::new(format_bbt(c.start, meter.view())).font(theme::mono(12.0)));
 			ui.end_row();
 			ui.label("Length");
 			let (g, _) = widgets::edit_value(

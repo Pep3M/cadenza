@@ -4,7 +4,7 @@
 //! Gestures are previewed locally (ghost clips, insertion line, drop highlight) and
 //! become one command through [`AppState::apply`] when the mouse is released.
 
-use cadenza_core::{ClipId, PPQ, Tick, TrackId};
+use cadenza_core::{ClipId, MeterMap, PPQ, Tick, TrackId};
 use cadenza_model::{
 	ChannelPatch, Clip, ClipContent, Command, Marker, Project, Track, TrackKind, TrackPatch,
 };
@@ -21,7 +21,7 @@ use crate::state::files::{FileKind, classify};
 use crate::state::layout::FollowMode;
 use crate::state::rows::{RowKind, Rows};
 use crate::state::selection::DeviceRef;
-use crate::state::timeline::{self, Overview, Timeline};
+use crate::state::timeline::{self, LineKind, Overview, Timeline};
 use crate::state::{AppState, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT};
 use crate::theme;
 use crate::ui::dnd;
@@ -106,6 +106,8 @@ struct Layout {
 	body_top: f32,
 	/// Tempo lane (pinned under the markers) when shown, timeline part.
 	tempo: Option<Rect>,
+	/// Time signature lane (above the tempo lane, shown with it), timeline part.
+	signature: Option<Rect>,
 }
 
 /// Total height of the track list (with the room below the last track).
@@ -124,12 +126,12 @@ impl ArrangeUi {
 		let ov_bottom = full.top() + theme::OVERVIEW_HEIGHT;
 		let ruler_bottom = ov_bottom + theme::RULER_HEIGHT;
 		let markers_bottom = ruler_bottom + theme::MARKER_LANE_HEIGHT;
-		let tempo_h = if state.view.automation.tempo {
-			LANE_HEIGHT
+		let (tempo_h, sig_h) = if state.view.automation.tempo {
+			(LANE_HEIGHT, super::automation::SIGNATURE_LANE_HEIGHT)
 		} else {
-			0.0
+			(0.0, 0.0)
 		};
-		let top = markers_bottom + tempo_h;
+		let top = markers_bottom + sig_h + tempo_h;
 		self.rows = Rows::new(state.project(), &state.view);
 		let layout = Layout {
 			header: Rect::from_min_max(pos2(full.left(), top), pos2(x0, bottom)),
@@ -137,8 +139,14 @@ impl ArrangeUi {
 			overview: Rect::from_min_max(pos2(x0, full.top()), pos2(right, ov_bottom)),
 			ruler: Rect::from_min_max(pos2(x0, ov_bottom), pos2(right, ruler_bottom)),
 			markers: Rect::from_min_max(pos2(x0, ruler_bottom), pos2(right, markers_bottom)),
+			signature: (sig_h > 0.0).then(|| {
+				Rect::from_min_max(
+					pos2(x0, markers_bottom),
+					pos2(right, markers_bottom + sig_h),
+				)
+			}),
 			tempo: (tempo_h > 0.0)
-				.then(|| Rect::from_min_max(pos2(x0, markers_bottom), pos2(right, top))),
+				.then(|| Rect::from_min_max(pos2(x0, markers_bottom + sig_h), pos2(right, top))),
 			hbar: Rect::from_min_max(pos2(x0, bottom), pos2(right, full.bottom())),
 			vbar: Rect::from_min_max(pos2(right, top), pos2(full.right(), bottom)),
 			body_top: top,
@@ -173,6 +181,10 @@ impl ArrangeUi {
 		self.overview(ui, state, &layout);
 		ruler(ui, state, &layout, &mut self.loop_drag);
 		markers(ui, state, &layout);
+		if let Some(r) = layout.signature {
+			let header = Rect::from_min_max(pos2(full.left(), r.top()), pos2(x0, r.bottom()));
+			self.auto.signature_lane(ui, state, header, r);
+		}
 		if let Some(r) = layout.tempo {
 			let header = Rect::from_min_max(pos2(full.left(), r.top()), pos2(x0, r.bottom()));
 			self.auto.tempo_lane(ui, state, header, r);
@@ -318,7 +330,10 @@ impl ArrangeUi {
 			rect.y_range(),
 			Stroke::new(1.0, theme::BORDER_STRONG),
 		);
-		let grid = state.view.timeline.grid(state.project().time_signature);
+		let grid = state
+			.view
+			.timeline
+			.grid_at(state.position(), state.project().meter());
 		let row1 = Rect::from_min_size(
 			rect.min + vec2(8.0, 2.0),
 			vec2(rect.width() - 16.0, theme::OVERVIEW_HEIGHT),
@@ -506,7 +521,7 @@ impl ArrangeUi {
 		let tl = state.view.timeline;
 		let t = tl.x_to_tick(x - layout.lanes.left());
 		if state.view.snap {
-			tl.snap_floor(t, state.project().time_signature)
+			tl.snap_floor(t, state.project().meter())
 		} else {
 			Tick(t.0.max(0))
 		}
@@ -650,7 +665,7 @@ impl ArrangeUi {
 			let tl = state.view.timeline;
 			let x0 = layout.lanes.left() + tl.tick_to_x(at);
 			let w = tl
-				.ticks_to_px(Tick(state.project().time_signature.ticks_per_bar().0 * 2))
+				.ticks_to_px(state.project().meter().bar_start(2))
 				.max(60.0);
 			let ghost = Rect::from_min_size(pos2(x0, row.top() + 2.0), vec2(w, row.height() - 4.0));
 			let gp = ui.painter_at(layout.lanes);
@@ -1012,7 +1027,7 @@ impl ArrangeUi {
 		let h = state.view.track_height;
 		let scroll = state.view.scroll_y;
 		let tl = state.view.timeline;
-		let ts = state.project().time_signature;
+		let meter = MeterMap::new(state.project().meter());
 		let painter = ui.painter_at(area);
 		let tracks: Vec<Track> = state.project().tracks.clone();
 
@@ -1048,7 +1063,7 @@ impl ArrangeUi {
 			);
 		}
 		let grid_area = Rect::from_min_max(area.min, pos2(area.right(), below.min(area.bottom())));
-		grid(&painter, grid_area, &tl, ts);
+		grid(&painter, grid_area, &tl, meter.view());
 		for row in &self.rows.rows {
 			let y = layout.body_top + row.top - scroll;
 			let c = if matches!(row.kind, RowKind::Lane { .. }) {
@@ -1109,9 +1124,9 @@ impl ArrangeUi {
 				&& let Some(pos) = resp.interact_pointer_pos()
 			{
 				let tick = tl.x_to_tick(pos.x - area.left());
-				let bar = ts.ticks_per_bar();
-				let start = Tick(tick.0.max(0) / bar.0 * bar.0);
-				if let Some((cmd, id)) = edits::new_midi_clip(state.project(), t.id, start, bar)
+				let bar = meter.view().bar_at(Tick(tick.0.max(0)));
+				if let Some((cmd, id)) =
+					edits::new_midi_clip(state.project(), t.id, bar.start, bar.length)
 					&& state.apply(cmd)
 				{
 					state.selection.click_clip(t.id, id, false);
@@ -1221,7 +1236,7 @@ impl ArrangeUi {
 		let area = layout.lanes;
 		let h = state.view.track_height;
 		let tl = state.view.timeline;
-		let ts = state.project().time_signature;
+		let meter = MeterMap::new(state.project().meter());
 		let y = self.top(layout, index, state.view.scroll_y);
 		let x0 = area.left() + tl.tick_to_x(clip.start);
 		let x1 = area.left() + tl.tick_to_x(clip.end());
@@ -1310,7 +1325,7 @@ impl ArrangeUi {
 				let raw = d.origin + (now - d.press);
 				let (alt, ctrl) = ui.input(|i| (i.modifiers.alt, i.modifiers.command));
 				let snapped = if state.view.snap && !alt {
-					tl.snap(raw, ts)
+					tl.snap(raw, meter.view())
 				} else {
 					Tick(raw.0.max(0))
 				};
@@ -1734,24 +1749,18 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 	}
 }
 
-/// Vertical grid lines (bars strong, beats and subdivisions fainter).
-pub(crate) fn grid(p: &Painter, area: Rect, tl: &Timeline, ts: cadenza_core::TimeSignature) {
-	let g = tl.grid(ts);
-	let beat = Tick(PPQ * 4 / i64::from(ts.denominator.max(1)));
-	let first = tl.x_to_tick(0.0).0.max(0) / g.step.0 * g.step.0;
-	let mut t = first;
-	let end = tl.x_to_tick(area.width()).0;
-	while t <= end {
-		let x = area.left() + tl.tick_to_x(Tick(t));
-		let c = if t % g.bar.0 == 0 {
-			theme::GRID_BAR
-		} else if t % beat.0 == 0 {
-			theme::GRID_BEAT
-		} else {
-			theme::GRID_FINE
+/// Vertical grid lines following the time signatures (bars strong, beats and
+/// subdivisions fainter).
+pub(crate) fn grid(p: &Painter, area: Rect, tl: &Timeline, meter: cadenza_core::Meter<'_>) {
+	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(area.width()));
+	for line in tl.grid_lines(meter, from, to, None) {
+		let x = area.left() + tl.tick_to_x(line.tick);
+		let c = match line.kind {
+			LineKind::Bar(_) => theme::GRID_BAR,
+			LineKind::Beat => theme::GRID_BEAT,
+			LineKind::Step => theme::GRID_FINE,
 		};
 		p.vline(x, area.y_range(), Stroke::new(1.0, c));
-		t += g.step.0;
 	}
 }
 
@@ -1760,41 +1769,64 @@ pub(crate) fn grid(p: &Painter, area: Rect, tl: &Timeline, ts: cadenza_core::Tim
 fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Option<Tick>) {
 	let r = layout.ruler;
 	let tl = state.view.timeline;
-	let ts = state.project().time_signature;
+	let meter = MeterMap::new(state.project().meter());
 	let p = ui.painter_at(r);
 	p.rect_filled(r, 0.0, theme::BG_RAISED);
-	let g = tl.grid(ts);
-	// Bar numbers: every bar unless too dense.
-	let bar_px = tl.ticks_to_px(g.bar);
-	let every = (48.0 / bar_px).ceil().max(1.0) as u64;
-	let label_step = g.bar.0 * every.next_power_of_two() as i64;
-	let mut t = tl.x_to_tick(0.0).0.max(0) / g.step.0 * g.step.0;
-	let end = tl.x_to_tick(r.width()).0;
-	while t <= end {
-		let x = r.left() + tl.tick_to_x(Tick(t));
-		if t % g.bar.0 == 0 {
-			p.vline(
-				x,
-				r.top() + 10.0..=r.bottom(),
-				Stroke::new(1.0, theme::TEXT_FAINT),
-			);
-			if t % label_step == 0 {
-				p.text(
-					pos2(x + 4.0, r.top() + 3.0),
-					Align2::LEFT_TOP,
-					format!("{}", t / g.bar.0 + 1),
-					theme::mono(10.5),
-					theme::TEXT_DIM,
+	// Bar numbers: every bar unless too dense (then every 2^n bars).
+	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(r.width()));
+	let shortest = meter
+		.view()
+		.segments_between(Tick(from.0.max(0)), to)
+		.map(|(_, ts)| ts.ticks_per_bar())
+		.min()
+		.unwrap_or(Tick(PPQ * 4));
+	let every =
+		((48.0 / tl.ticks_to_px(shortest)).ceil().max(1.0) as u64).next_power_of_two() as i64;
+	for line in tl.grid_lines(meter.view(), from, to, None) {
+		let x = r.left() + tl.tick_to_x(line.tick);
+		match line.kind {
+			LineKind::Bar(index) => {
+				p.vline(
+					x,
+					r.top() + 10.0..=r.bottom(),
+					Stroke::new(1.0, theme::TEXT_FAINT),
+				);
+				if index % every == 0 {
+					p.text(
+						pos2(x + 4.0, r.top() + 3.0),
+						Align2::LEFT_TOP,
+						format!("{}", index + 1),
+						theme::mono(10.5),
+						theme::TEXT_DIM,
+					);
+				}
+			}
+			LineKind::Beat | LineKind::Step => {
+				let h = if line.kind == LineKind::Beat {
+					5.0
+				} else {
+					3.0
+				};
+				p.vline(
+					x,
+					r.bottom() - h..=r.bottom(),
+					Stroke::new(1.0, theme::GRID_BAR),
 				);
 			}
-		} else {
-			p.vline(
-				x,
-				r.bottom() - 5.0..=r.bottom(),
-				Stroke::new(1.0, theme::GRID_BAR),
+		}
+	}
+	// Time signature changes: a small tag at their bar line.
+	for (_, tick, ts) in meter.view().change_ticks() {
+		let x = r.left() + tl.tick_to_x(tick);
+		if (r.left() - 40.0..=r.right()).contains(&x) {
+			p.text(
+				pos2(x + 4.0, r.bottom() - 2.0),
+				Align2::LEFT_BOTTOM,
+				format!("{}/{}", ts.numerator, ts.denominator),
+				theme::small(),
+				theme::SIGNATURE,
 			);
 		}
-		t += g.step.0;
 	}
 	p.hline(
 		r.x_range(),
@@ -1812,7 +1844,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Opt
 		CursorIcon::PointingHand
 	});
 	let tick_at = |x: f32| tl.x_to_tick(x - r.left());
-	let step = (state.view.snap && !alt).then(|| tl.grid(ts).step);
+	let step = (state.view.snap && !alt).then(|| tl.grid_at(state.position(), meter.view()).step);
 	if resp.drag_started()
 		&& let Some(press) = ui.input(|i| i.pointer.press_origin())
 		&& (band.contains(press) || ctrl)
@@ -1845,7 +1877,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Opt
 	{
 		let tick = tick_at(pos.x);
 		let tick = if state.view.snap && !alt {
-			tl.snap(tick, ts)
+			tl.snap(tick, meter.view())
 		} else {
 			tick
 		};
@@ -1972,8 +2004,7 @@ fn markers(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 	if resp.double_clicked()
 		&& let Some(pos) = resp.interact_pointer_pos()
 	{
-		let ts = state.project().time_signature;
-		let tick = tl.snap(tl.x_to_tick(pos.x - r.left()), ts);
+		let tick = tl.snap(tl.x_to_tick(pos.x - r.left()), state.project().meter());
 		let name = format!("Marker {}", list.len() + 1);
 		state.apply(Command::AddMarker {
 			marker: Marker::new(tick, name),

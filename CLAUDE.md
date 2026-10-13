@@ -27,8 +27,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView`) | — |
 
-Future: time signature changes, automatic crossfades,
-sandbox and plugin editors on Windows/macOS, native Wayland plugin GUIs.
+Future: sandbox and plugin editors on Windows/macOS, native Wayland plugin GUIs.
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in
 `cadenza-audio-io` and are forwarded by `cadenza-engine` and `cadenza-cli`; both are OFF by
@@ -86,7 +85,8 @@ pub struct Project {
 	pub format_version: u32,           // 1
 	pub name: String,
 	pub tempo: TempoMap,
-	pub time_signature: TimeSignature,
+	pub time_signature: TimeSignature, // bar 1
+	pub time_signature_changes: Vec<MeterChange { bar: u32 /* 0-based index >= 1 */, numerator, denominator }>, // optional in JSON
 	pub tracks: Vec<Track>,            // display order
 	pub master: Channel,
 	pub automation: Vec<AutomationLane>,
@@ -131,7 +131,8 @@ patch), SetChannel (volume/pan/mute/solo/output patch, `track: Option<TrackId>` 
 master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
-SetTimeSignature, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
+SetTimeSignature { time_signature, bar /* 0-based index, 0 = bar 1, omitted when 0 */ },
+RemoveTimeSignature { bar }, SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
@@ -155,6 +156,15 @@ Clip fades are in **seconds**, not beats: like `offset_seconds` they shape the r
 and convert at the clip edge. AddClip/SetClipFades reject a fade (or fade_in + fade_out)
 longer than the clip at the current tempo; later resizes/tempo changes are not rejected —
 the engine scales fades down proportionally to fit.
+
+Time signatures (phase 17): changes are stored by **bar index**, not tick, so a change always
+starts a bar and editing an earlier signature only moves later bar lines (content stays at its
+ticks, like tempo changes). `cadenza_core::Meter<'_>` (`Project::meter()`, allocation free:
+`bar_at/bar_start/bar_floor/bar_ceil/bar_position/tick_at_bar_position/bbt/tick_at_bbt/
+bar_lines/segments_between/change_ticks/signature_at`) is the single bar/beat math (beats are
+the denominator note); `MeterMap` owns a copy. Summary: `time_signature` (bar 1) +
+`time_signature_changes [{bar (1-based), beat, time_signature}]`, marker bars and
+`length_bars` follow the changes. At most 1024 changes, bar index 1..=100000.
 
 Implemented extras: `ResetParam` (inverse of a first `SetParam`), `UpdateSend`, optional `index`
 on AddTrack/InsertDevice/AddSend, `UpdateClip` can move a clip to another track. Instruments are
@@ -211,7 +221,8 @@ pub struct ParamInfo { id: &'static str, name: &'static str, min: f32, max: f32,
 pub struct DeviceInfo { id: &'static str, name: &'static str, role: DeviceRole,
 	description: &'static str /* written for an AI choosing devices */, params: &'static [ParamInfo] }
 pub enum MidiEvent { NoteOn { offset: u32, pitch: u8, velocity: f32 }, NoteOff { offset: u32, pitch: u8 }, AllNotesOff { offset: u32 } }
-pub struct Transport { pub bpm: f64, pub playing: bool, pub beat_position: f64 }
+pub struct Transport { pub bpm: f64, pub playing: bool, pub beat_position: f64,
+	time_sig_numerator: u16, time_sig_denominator: u16, bar_start: f64 /* quarters */, bar_number: i32 } // Default = 4/4
 pub trait Processor: Send {
 	fn info(&self) -> &'static DeviceInfo;
 	fn prepare(&mut self, sample_rate: f32, max_block: usize);
@@ -379,6 +390,10 @@ track in the same batch); `build_device` fills default content; presets (factory
 zones; `set_output_routes` accepts built-in extra outputs; `write_drum_pattern` knows rim/pedal_hat/
 tambourine/cowbell lanes and warns about lanes a drum_sampler has no sample for. The agent's
 `PathPolicy::resolve_sample` allows the session folder or the factory folder.
+MCP time signatures: `set_time_signature { numerator, denominator, at_bar? (1-based) }`,
+`remove_time_signature { bar }`; `render`/export bar ranges, `write_drum_pattern` bars and
+`export_midi` follow the changes. MIDI import keeps every signature (`midi_io::meter_changes`:
+off-bar changes move to the next bar line with a warning, repeats dropped); export writes them.
 MCP file tools: `import_audio`, `get_audio_info`, `set_clip_fades`, `import_midi` (Batch via
 Document, one undo), `export_midi`; `render` picks WAV/FLAC/MP3 from the extension and takes
 `start_bar/end_bar` (1-based, end included) or beats, `tail`, `output_sample_rate`, `normalize`
@@ -462,7 +477,9 @@ Recording (phase 16; `engine::input`, `engine::metronome`, `engine::record`):
   never. A stopped graph renders (like note preview) while any track monitors. Arm states:
   `set_armed(track, bool)`/`disarm_all` (kept across loads; `Cmd::Arm`).
 - Metronome: `set_metronome(MetronomeSettings { on_play, on_record, level_db })`; synthesized
-  clicks (accent on the bar, time-signature beat unit) scheduled per quantum from the tempo
+  clicks (accent on every bar line, beat = the denominator note, both following time signature
+  changes through `metronome::MeterSegment`s built at compile time; the count-in uses the
+  signature at the playhead) scheduled per quantum from the tempo
   segments (floor of the exact beat sample, so none is lost between quanta) and delayed by the
   graph latency like the output; offline renders never click (untouched while silent).
 - Recording: `start_recording(&RecordSetup { folder, start (punch-in), punch_out, count_in_bars,
@@ -533,7 +550,13 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   real units. Right-click "Automate" on mixer faders/pans/sends and inspector controls creates
   and shows the lane. Tempo lane (transport ♩ toggle, pinned under the markers): step curve
   of the `TempoMap`, click adds a change, drag moves, right-click removes; the BPM field edits
-  the segment under the playhead. Time signature is still global (one per project).
+  the segment under the playhead. Time signatures (phase 17, `state::meter` builders): the
+  transport TIME field edits the signature in effect at the playhead; the signature lane
+  (shown with the tempo lane, above it) has a chip per signature, drag a change to another bar,
+  right-click a bar = presets / custom / remove. Ruler numbers, grids (`Timeline::grid_lines`:
+  bar/beat/step lines restarted at every bar line), snapping (`snap_meter`), bars.beats
+  display, pattern length, new clips, loop-the-bar, export bar ranges and MIDI clip growth all
+  follow the changes; the ruler tags each change.
 - Audio editor (`state::audio_edit` + `ui::audio_editor`; double-click an audio clip): shares
   the bottom editor dock with the piano roll (`view.audio_editor`; F7 toggles the dock).
   Source-file time axis, peaks when zoomed out and decoded samples (`PeakCache::samples`) when

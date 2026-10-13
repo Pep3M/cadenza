@@ -2306,3 +2306,53 @@ fn render_recording_screens() {
 	h.state_mut().state.open_audio_settings();
 	shot(&mut h, "audio_settings");
 }
+
+fn screenshot_harness(a: CadenzaApp) -> Harness<'static, CadenzaApp> {
+	Harness::builder()
+		.with_size(vec2(1600.0, 1000.0))
+		.wgpu()
+		.build_ui_state(
+			|ui, app: &mut CadenzaApp| {
+				app.logic(ui.ctx());
+				app.ui(ui);
+			},
+			a,
+		)
+}
+
+fn shot(h: &mut Harness<'_, CadenzaApp>, dir: &std::path::Path, name: &str) {
+	h.run_steps(3);
+	h.render()
+		.unwrap()
+		.save(dir.join(format!("{name}.png")))
+		.unwrap();
+}
+
+#[test]
+#[ignore]
+fn render_phase17_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let mut a = app();
+	let ts = |numerator, denominator| cadenza_core::TimeSignature {
+		numerator,
+		denominator,
+	};
+	for (bar, sig) in [(4, ts(3, 4)), (6, ts(7, 8)), (8, ts(4, 4))] {
+		assert!(a.state.apply(cadenza_model::Command::SetTimeSignature {
+			time_signature: sig,
+			bar,
+		}));
+	}
+	a.state.view.automation.tempo = true;
+	let midi = {
+		let p = a.state.project();
+		let t = p.tracks.iter().find(|t| t.name == "Keys").unwrap();
+		t.clips.iter().find(|c| c.is_midi()).unwrap().id
+	};
+	a.state.open_piano_roll(midi);
+	let mut h = screenshot_harness(a);
+	shot(&mut h, &dir, "time_signatures");
+}

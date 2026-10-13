@@ -21,6 +21,7 @@ pub mod export;
 pub mod files;
 pub mod layout;
 pub mod live;
+pub mod meter;
 pub mod meters;
 pub mod notices;
 pub mod piano;
@@ -1499,10 +1500,11 @@ impl AppState {
 	/// playhead.
 	pub fn toggle_loop(&mut self) {
 		if self.view.transport.loop_range.is_none() {
-			let bar = self.project().time_signature.ticks_per_bar();
-			let pos = self.position();
-			let start = Tick(pos.0.max(0) / bar.0 * bar.0);
-			self.view.transport.loop_range = Some((start, start + bar));
+			let bar = self
+				.project()
+				.meter()
+				.bar_at(Tick(self.position().0.max(0)));
+			self.view.transport.loop_range = Some((bar.start, bar.end()));
 		}
 		self.view.transport.loop_on = !self.view.transport.loop_on;
 		self.sync_transport();
@@ -1518,7 +1520,7 @@ impl AppState {
 
 	/// Song end (last clip end), at least one bar.
 	pub fn song_end(&self) -> Tick {
-		let bar = self.project().time_signature.ticks_per_bar();
+		let bar = self.project().meter().bar_start(1);
 		Tick(self.project().end_tick().0.max(bar.0))
 	}
 

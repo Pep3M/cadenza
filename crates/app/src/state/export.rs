@@ -308,10 +308,10 @@ impl ExportDialog {
 						s.from_bar, s.to_bar
 					));
 				}
-				let bar = project.time_signature.ticks_per_bar().0;
+				let meter = project.meter();
 				(
-					Tick(bar * i64::from(s.from_bar - 1)),
-					Some(Tick(bar * i64::from(s.to_bar))),
+					meter.bar_start(i64::from(s.from_bar) - 1),
+					Some(meter.bar_start(i64::from(s.to_bar))),
 				)
 			}
 		};

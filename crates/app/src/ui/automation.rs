@@ -65,7 +65,14 @@ pub struct AutoUi {
 	band: Option<Band>,
 	line: Option<LineDraw>,
 	tempo: Option<TempoDrag>,
+	/// Signature lane: the change being dragged (bar index) and where it would land.
+	sig_drag: Option<(u32, u32)>,
+	/// Signature lane: the bar the context menu edits.
+	sig_menu: u32,
 }
+
+/// Height of the time signature lane (shown with the tempo lane).
+pub const SIGNATURE_LANE_HEIGHT: f32 = 24.0;
 
 fn norm_to_y(rect: Rect, n: f32) -> f32 {
 	rect.bottom() - PAD - n.clamp(0.0, 1.0) * (rect.height() - 2.0 * PAD)
@@ -77,10 +84,7 @@ fn y_to_norm(rect: Rect, y: f32) -> f32 {
 
 fn snapped(state: &AppState, tick: Tick, free: bool) -> Tick {
 	if state.view.snap && !free {
-		state
-			.view
-			.timeline
-			.snap(tick, state.project().time_signature)
+		state.view.timeline.snap(tick, state.project().meter())
 	} else {
 		Tick(tick.0.max(0))
 	}
@@ -387,12 +391,12 @@ impl AutoUi {
 		if let Some((tick, v)) = tip
 			&& (resp.hovered() || resp.dragged())
 		{
-			let ts = state.project().time_signature;
+			let meter = cadenza_core::MeterMap::new(state.project().meter());
 			let at = pos2(x_of(tick), norm_to_y(rect, meta.to_norm(v)));
 			value_tag(
 				ui,
 				at,
-				&format!("{}  @ {}", meta.format(v), format_bbt(tick, ts)),
+				&format!("{}  @ {}", meta.format(v), format_bbt(tick, meter.view())),
 			);
 		} else if resp.hovered()
 			&& let Some(pos) = hover
@@ -745,7 +749,7 @@ impl AutoUi {
 					&format!(
 						"{:.1} BPM @ {}",
 						d.bpm,
-						format_bbt(d.to, state.project().time_signature)
+						format_bbt(d.to, state.project().meter())
 					),
 				);
 			}
@@ -770,6 +774,197 @@ impl AutoUi {
 		{
 			state.apply(cmd);
 		}
+	}
+}
+
+impl AutoUi {
+	/// The time signature lane: a chip per signature (bar 1 and each change). Drag a
+	/// change to another bar; right-click anywhere sets the signature of that bar (common
+	/// signatures, custom, or remove the change).
+	pub fn signature_lane(&mut self, ui: &mut Ui, state: &mut AppState, header: Rect, rect: Rect) {
+		let hp = ui.painter_at(header);
+		hp.rect_filled(header, 0.0, theme::BG_PANEL);
+		hp.rect_filled(
+			Rect::from_min_size(header.min, vec2(5.0, header.height())),
+			0.0,
+			theme::SIGNATURE,
+		);
+		hp.vline(
+			header.right() - 0.5,
+			header.y_range(),
+			Stroke::new(1.0, theme::BORDER_STRONG),
+		);
+		hp.hline(
+			header.x_range(),
+			header.bottom() - 0.5,
+			Stroke::new(1.0, theme::BORDER),
+		);
+		let now = state.project().meter().signature_at(state.position());
+		hp.text(
+			pos2(header.left() + 12.0, header.center().y),
+			Align2::LEFT_CENTER,
+			format!("Signature  {}/{}", now.numerator, now.denominator),
+			egui::FontId::proportional(12.0),
+			theme::TEXT,
+		);
+		hp.text(
+			pos2(header.right() - 10.0, header.center().y),
+			Align2::RIGHT_CENTER,
+			"right-click: set",
+			theme::small(),
+			theme::TEXT_FAINT,
+		);
+
+		let p = ui.painter_at(rect);
+		p.rect_filled(rect, 0.0, theme::AUTO_LANE);
+		p.hline(
+			rect.x_range(),
+			rect.bottom() - 0.5,
+			Stroke::new(1.0, theme::BORDER),
+		);
+		let tl = state.view.timeline;
+		let meter = cadenza_core::MeterMap::new(state.project().meter());
+		let x_of = |t: Tick| rect.left() + tl.tick_to_x(t);
+		let bar_at = |x: f32| -> u32 {
+			let t = Tick(tl.x_to_tick(x - rect.left()).0.max(0));
+			let pos = meter.view().bar_position(t).round().max(0.0);
+			pos as u32
+		};
+		let chips: Vec<(u32, Tick, cadenza_core::TimeSignature)> =
+			std::iter::once((0, Tick::ZERO, meter.first))
+				.chain(meter.view().change_ticks())
+				.collect();
+		let chip_rect = |x: f32, ts: cadenza_core::TimeSignature| {
+			let w = 10.0 + 7.0 * format!("{}/{}", ts.numerator, ts.denominator).len() as f32;
+			Rect::from_min_size(
+				pos2(x + 1.0, rect.top() + 3.0),
+				vec2(w, rect.height() - 6.0),
+			)
+		};
+		let resp = ui.interact(rect, Id::new("signature-lane"), Sense::click_and_drag());
+		let hovered_chip = resp.hover_pos().and_then(|pos| {
+			chips
+				.iter()
+				.find(|(_, t, ts)| chip_rect(x_of(*t), *ts).contains(pos))
+				.map(|c| c.0)
+		});
+		for &(bar, tick, ts) in &chips {
+			let dragged = self.sig_drag.is_some_and(|d| d.0 == bar);
+			let x = if let Some((_, to)) = self.sig_drag.filter(|_| dragged) {
+				x_of(meter.view().bar_start(i64::from(to)))
+			} else {
+				x_of(tick)
+			};
+			if x > rect.right() || x < rect.left() - 60.0 {
+				continue;
+			}
+			let r = chip_rect(x, ts);
+			p.vline(x, rect.y_range(), Stroke::new(1.0, theme::SIGNATURE));
+			let fill = if hovered_chip == Some(bar) || dragged {
+				theme::SIGNATURE.gamma_multiply(0.45)
+			} else {
+				theme::SIGNATURE.gamma_multiply(0.22)
+			};
+			p.rect_filled(r, CornerRadius::same(3), fill);
+			p.text(
+				r.center(),
+				Align2::CENTER_CENTER,
+				format!("{}/{}", ts.numerator, ts.denominator),
+				theme::mono(10.5),
+				theme::TEXT,
+			);
+		}
+		if resp.drag_started_by(PointerButton::Primary)
+			&& let Some(press) = ui
+				.input(|i| i.pointer.press_origin())
+				.or(resp.interact_pointer_pos())
+			&& let Some(&(bar, _, _)) = chips
+				.iter()
+				.find(|(b, t, ts)| *b > 0 && chip_rect(x_of(*t), *ts).contains(press))
+		{
+			self.sig_drag = Some((bar, bar));
+		}
+		if let Some((from, _)) = self.sig_drag {
+			if let Some(pos) = ui.ctx().pointer_interact_pos() {
+				let to = bar_at(pos.x).max(1);
+				self.sig_drag = Some((from, to));
+				value_tag(ui, pos, &format!("bar {}", to + 1));
+			}
+			if ui.input(|i| i.pointer.any_released()) {
+				let (from, to) = self.sig_drag.take().expect("signature drag");
+				if let Some(cmd) = crate::state::meter::move_change(state.project(), from, to) {
+					state.apply(cmd);
+				}
+			}
+		}
+		if resp.secondary_clicked()
+			&& let Some(pos) = resp.interact_pointer_pos()
+		{
+			let t = Tick(tl.x_to_tick(pos.x - rect.left()).0.max(0));
+			self.sig_menu = meter.view().bar_index(t).max(0) as u32;
+		}
+		let bar = self.sig_menu;
+		resp.context_menu(|ui| {
+			let project = state.project();
+			let current = project.meter().signature_at_bar(i64::from(bar));
+			let is_change = project.time_signature_changes.iter().any(|c| c.bar == bar);
+			ui.label(
+				egui::RichText::new(format!("Bar {}", bar + 1))
+					.font(theme::small())
+					.color(theme::TEXT_FAINT),
+			);
+			let mut pick = None;
+			for (n, d) in crate::state::meter::PRESETS {
+				let ts = cadenza_core::TimeSignature {
+					numerator: n,
+					denominator: d,
+				};
+				if ui
+					.selectable_label(ts == current, format!("{n}/{d}"))
+					.clicked()
+				{
+					pick = Some(ts);
+				}
+			}
+			ui.horizontal(|ui| {
+				let mut n = current.numerator;
+				let mut d = current.denominator;
+				let a = ui.add(egui::DragValue::new(&mut n).range(1..=32));
+				ui.label("/");
+				egui::ComboBox::from_id_salt("sig-den")
+					.width(38.0)
+					.selected_text(d.to_string())
+					.show_ui(ui, |ui| {
+						for v in [1u32, 2, 4, 8, 16, 32] {
+							ui.selectable_value(&mut d, v, v.to_string());
+						}
+					});
+				if (a.changed() && !a.dragged()) || a.drag_stopped() || d != current.denominator {
+					pick = Some(cadenza_core::TimeSignature {
+						numerator: n,
+						denominator: d,
+					});
+				}
+			});
+			let remove = ui
+				.add_enabled(is_change, egui::Button::new("Remove change"))
+				.clicked();
+			let cmd = if remove {
+				crate::state::meter::remove_change(project, bar)
+			} else {
+				pick.and_then(|ts| {
+					crate::state::meter::add_change(
+						project,
+						project.meter().bar_start(i64::from(bar)),
+						ts,
+					)
+				})
+			};
+			if let Some(cmd) = cmd {
+				state.apply(cmd);
+				ui.close();
+			}
+		});
 	}
 }
 

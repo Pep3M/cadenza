@@ -4,7 +4,7 @@
 //! adds its screen offset. Positions are kept in beats (quarter notes, f64) like the
 //! AI-facing API; edits convert to [`Tick`] at the edge.
 
-use cadenza_core::{PPQ, TempoMap, Tick, TimeSignature};
+use cadenza_core::{Meter, PPQ, TempoMap, Tick, TimeSignature};
 
 use super::layout::FollowMode;
 
@@ -39,7 +39,81 @@ pub struct Grid {
 	pub bar: Tick,
 }
 
+/// Weight of a grid line (FL Studio-like hierarchy: bars, beats, steps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+	/// A bar line (0-based bar index), with a number on the ruler.
+	Bar(i64),
+	Beat,
+	Step,
+}
+
+/// One vertical grid line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridLine {
+	pub tick: Tick,
+	pub kind: LineKind,
+}
+
 impl Timeline {
+	/// Grid lines in `[from, to]` following the time signatures: every bar line (only every
+	/// `n`th bar when zoomed out to multi-bar cells), then beats and steps inside each bar.
+	/// `step` overrides the zoom grid's subdivision (e.g. the piano roll snap).
+	pub fn grid_lines(
+		&self,
+		meter: Meter<'_>,
+		from: Tick,
+		to: Tick,
+		step: Option<Tick>,
+	) -> Vec<GridLine> {
+		let mut out = Vec::new();
+		let from = Tick(from.0.max(0));
+		let start = meter.bar_floor(from);
+		for bar in meter.bar_lines(start, Tick(to.0 + 1)) {
+			let g = self.grid(bar.signature);
+			let fine = step.map_or(g.step, |s| s.max(g.step));
+			if g.step >= g.bar {
+				let every = (g.step.0 / g.bar.0.max(1)).max(1);
+				if bar.index % every == 0 && bar.start >= from {
+					out.push(GridLine {
+						tick: bar.start,
+						kind: LineKind::Bar(bar.index),
+					});
+				}
+				if out.len() > 4096 {
+					break;
+				}
+				continue;
+			}
+			if bar.start >= from {
+				out.push(GridLine {
+					tick: bar.start,
+					kind: LineKind::Bar(bar.index),
+				});
+			}
+			let beat = bar.beat_length().0.max(1);
+			let fine = fine.0.max(1);
+			let mut t = bar.start.0 + fine;
+			while t < bar.end().0 && t <= to.0 {
+				if t >= from.0 {
+					out.push(GridLine {
+						tick: Tick(t),
+						kind: if (t - bar.start.0) % beat == 0 {
+							LineKind::Beat
+						} else {
+							LineKind::Step
+						},
+					});
+				}
+				t += fine;
+			}
+			if out.len() > 4096 {
+				break;
+			}
+		}
+		out
+	}
+
 	pub fn beat_to_x(&self, beat: f64) -> f32 {
 		((beat - self.scroll_beats) * f64::from(self.px_per_beat)) as f32
 	}
@@ -173,15 +247,20 @@ impl Timeline {
 		Grid { step, bar }
 	}
 
-	/// Rounds `tick` to the nearest grid line (never below 0).
-	pub fn snap(&self, tick: Tick, ts: TimeSignature) -> Tick {
-		snap_to(tick, self.grid(ts).step)
+	/// The grid at `tick` (its bar's time signature).
+	pub fn grid_at(&self, tick: Tick, meter: Meter<'_>) -> Grid {
+		self.grid(meter.signature_at(tick))
+	}
+
+	/// Rounds `tick` to the nearest grid line (never below 0). Grid lines restart at
+	/// every bar line, so they follow time signature changes.
+	pub fn snap(&self, tick: Tick, meter: Meter<'_>) -> Tick {
+		snap_meter(tick, meter, |ts| self.grid(ts).step, f64::round)
 	}
 
 	/// Snaps down to the grid line at or before `tick`.
-	pub fn snap_floor(&self, tick: Tick, ts: TimeSignature) -> Tick {
-		let step = self.grid(ts).step.0.max(1);
-		Tick(tick.0.max(0).div_euclid(step) * step)
+	pub fn snap_floor(&self, tick: Tick, meter: Meter<'_>) -> Tick {
+		snap_meter(tick, meter, |ts| self.grid(ts).step, f64::floor)
 	}
 }
 
@@ -257,25 +336,42 @@ pub fn clamp_scroll(scroll: f32, content: f32, view: f32) -> f32 {
 	scroll.clamp(0.0, (content - view).max(0.0))
 }
 
+/// Snaps `tick` to a grid of `step(signature)` restarted at every bar line (steps of a
+/// bar or more snap to bar lines, every `step / bar` bars). `round` picks nearest
+/// (`f64::round`) or previous (`f64::floor`) lines. Never below 0.
+pub fn snap_meter(
+	tick: Tick,
+	meter: Meter<'_>,
+	step: impl Fn(TimeSignature) -> Tick,
+	round: fn(f64) -> f64,
+) -> Tick {
+	let t = Tick(tick.0.max(0));
+	let bar = meter.bar_at(t);
+	let step = step(bar.signature).0.max(1);
+	if step >= bar.length.0 {
+		let every = (step / bar.length.0).max(1) as f64;
+		let k = round(meter.bar_position(t) / every) * every;
+		return meter.bar_start(k as i64).max(Tick::ZERO);
+	}
+	let into = (t - bar.start).0 as f64;
+	let k = round(into / step as f64) as i64;
+	Tick((bar.start.0 + k * step).min(bar.end().0)).max(Tick::ZERO)
+}
+
 pub fn snap_to(tick: Tick, step: Tick) -> Tick {
 	let step = step.0.max(1);
 	Tick(((tick.0 as f64 / step as f64).round() as i64 * step).max(0))
 }
 
 /// Bars:beats:ticks display (1-based bars and beats; ticks within the beat), e.g. `5.2.240`.
-pub fn format_bbt(tick: Tick, ts: TimeSignature) -> String {
-	let (bar, beat, ticks) = bbt(tick, ts);
+pub fn format_bbt(tick: Tick, meter: Meter<'_>) -> String {
+	let (bar, beat, ticks) = bbt(tick, meter);
 	format!("{bar}.{beat}.{ticks:03}")
 }
 
-/// (bar, beat, tick-in-beat), 1-based bar and beat. Assumes a constant time signature.
-pub fn bbt(tick: Tick, ts: TimeSignature) -> (i64, i64, i64) {
-	let t = tick.0.max(0);
-	let bar_len = ts.ticks_per_bar().0.max(1);
-	let beat_len = (PPQ * 4 / i64::from(ts.denominator.max(1))).max(1);
-	let bar = t / bar_len;
-	let in_bar = t % bar_len;
-	(bar + 1, in_bar / beat_len + 1, in_bar % beat_len)
+/// (bar, beat, tick-in-beat), 1-based bar and beat, following time signature changes.
+pub fn bbt(tick: Tick, meter: Meter<'_>) -> (i64, i64, i64) {
+	meter.bbt(Tick(tick.0.max(0)))
 }
 
 /// Clock time `m:ss.mmm` of `tick`.
@@ -293,6 +389,10 @@ mod tests {
 		numerator: 4,
 		denominator: 4,
 	};
+
+	fn four() -> Meter<'static> {
+		Meter::new(FOUR_FOUR, &[])
+	}
 
 	#[test]
 	fn thumb_of_a_collapsed_strip_is_empty() {
@@ -365,10 +465,10 @@ mod tests {
 			px_per_beat: 12.0,
 			scroll_beats: 0.0,
 		};
-		assert_eq!(t.snap(Tick(PPQ * 3 + 400), FOUR_FOUR), Tick(PPQ * 3));
-		assert_eq!(t.snap(Tick(PPQ * 3 + 500), FOUR_FOUR), Tick(PPQ * 4));
-		assert_eq!(t.snap(Tick(-500), FOUR_FOUR), Tick::ZERO);
-		assert_eq!(t.snap_floor(Tick(PPQ * 3 + 900), FOUR_FOUR), Tick(PPQ * 3));
+		assert_eq!(t.snap(Tick(PPQ * 3 + 400), four()), Tick(PPQ * 3));
+		assert_eq!(t.snap(Tick(PPQ * 3 + 500), four()), Tick(PPQ * 4));
+		assert_eq!(t.snap(Tick(-500), four()), Tick::ZERO);
+		assert_eq!(t.snap_floor(Tick(PPQ * 3 + 900), four()), Tick(PPQ * 3));
 	}
 
 	#[test]
@@ -444,11 +544,8 @@ mod tests {
 
 	#[test]
 	fn position_formats() {
-		assert_eq!(format_bbt(Tick::ZERO, FOUR_FOUR), "1.1.000");
-		assert_eq!(
-			format_bbt(Tick(PPQ * 4 * 4 + PPQ + 240), FOUR_FOUR),
-			"5.2.240"
-		);
+		assert_eq!(format_bbt(Tick::ZERO, four()), "1.1.000");
+		assert_eq!(format_bbt(Tick(PPQ * 4 * 4 + PPQ + 240), four()), "5.2.240");
 		let tempo = TempoMap::constant(120.0);
 		assert_eq!(format_time(Tick(PPQ * 2 * 61), &tempo), "1:01.000");
 		assert_eq!(format_time(Tick(PPQ / 4), &tempo), "0:00.125");
@@ -462,8 +559,36 @@ mod tests {
 		assert_eq!(format_time(Tick(PPQ * 16), &tempo), "0:08.000");
 		assert_eq!(format_time(Tick(PPQ * 18), &tempo), "0:10.000");
 		// Bars and beats count musical time: unaffected by the tempo.
-		assert_eq!(format_bbt(Tick(PPQ * 18), FOUR_FOUR), "5.3.000");
+		assert_eq!(format_bbt(Tick(PPQ * 18), four()), "5.3.000");
 		// Seconds -> position round-trips through the change.
 		assert_eq!(tempo.seconds_to_tick(10.0), Tick(PPQ * 18));
+	}
+
+	#[test]
+	fn snapping_follows_time_signature_changes() {
+		use cadenza_core::MeterChange;
+		// 4/4 for one bar, then 7/8 (bars of 3.5 beats) from bar 2.
+		let changes = [MeterChange::new(
+			1,
+			TimeSignature {
+				numerator: 7,
+				denominator: 8,
+			},
+		)];
+		let meter = Meter::new(FOUR_FOUR, &changes);
+		// Zoomed out to whole bars: snaps to the 7/8 bar lines at 4, 7.5, 11.
+		let t = Timeline {
+			px_per_beat: 4.0,
+			scroll_beats: 0.0,
+		};
+		assert_eq!(t.snap(Tick(PPQ * 7), meter), Tick(PPQ * 15 / 2));
+		assert_eq!(t.snap_floor(Tick(PPQ * 10), meter), Tick(PPQ * 15 / 2));
+		// Eighth-note grid restarts at each bar line.
+		let t = Timeline {
+			px_per_beat: 24.0,
+			scroll_beats: 0.0,
+		};
+		assert_eq!(t.snap(Tick(PPQ * 15 / 2 + 250), meter), Tick(PPQ * 8));
+		assert_eq!(format_bbt(Tick(PPQ * 8), meter), "3.2.000");
 	}
 }

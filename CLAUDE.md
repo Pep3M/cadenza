@@ -24,7 +24,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (shm + futex), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `gui` (starts `cadenza-app`) | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `library list|validate|import` (style library packs; MIDI -> pattern), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView`) | — |
 
@@ -273,6 +273,18 @@ section table; `build_form` is pure. `Project.meta: ProjectMeta { style }` (opti
 JSON, format_version 1; `Command::SetProjectMeta`, no sound: `live::diff` ignores it) and
 `ProjectSummary.style`. Budget test: `search_and_get_outputs_stay_under_their_caps`. Agent
 prompts carry the library lines; hand-off notes keep the library ids.
+Import (`library::import::import_pattern(notes, &ImportOptions)`, used by `cadenza library
+import <file.mid> [--pack dir] [--track n | --channel n] [--role] [--key] [--chords
+--beats-per-chord] [--steps-per-beat] [--bars] [--genre] [--force]`): quantizes to the grid,
+per-step timing deviations + velocity ratios become a `Groove` (`<slug>_groove`, skipped when
+the source was already quantized), role from GM channel 10 / program family / register,
+pitched notes as chord tones when the chords explain at least half of them, else scale
+degrees of the given or inferred (Krumhansl) key; lanes are found by realizing candidates, so
+realizing the result over the same chords gives the quantized notes back. Writes
+`patterns/<role>/<slug>.json`, `grooves/`, `midi/<slug>.mid` into the pack (default
+`<library dir>/user`, created with `LicenseRef-user-imports`, not redistributable) and
+re-validates it. `cadenza library validate <pack or library folder>` exits 1 on problems;
+`list [--items] [--json]`. Nothing is downloaded.
 
 ### cadenza-dsp
 

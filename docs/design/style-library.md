@@ -1,6 +1,6 @@
 # Style library: patterns, song forms and style guides
 
-Status: design draft (2026-10-12); **SL-1 and SL-2 shipped** (2026-10-13, phase 18a): the
+Status: design draft (2026-10-12); **SL-1, SL-2 and the SMF part of SL-3 shipped** (2026-10-13, phase 18a): the
 `cadenza-library` crate with the embedded `core` pack and the four MCP tools. See "What
 shipped" at the end.
 
@@ -376,3 +376,9 @@ Independent of the main phases. Each step ships on its own and leaves the tree g
   answered yes; set by `apply_form`, shown in the project summary). `chords` also accepts a
   progression id (read in `key`'s root with the progression's mode). Drum warnings also cover
   the built-in `drum_machine` (notes it has no sound for, e.g. shaker or congas).
+- **SL-3** (partial): `cadenza library import <file.mid>` (SMF -> pattern + groove in a user
+  pack: quantize, groove from timing deviations and velocities, role from GM channel 10 /
+  program / register, chord-relative or scale-degree lanes through `cadenza-theory`, key
+  inferred when not given), `cadenza library validate <dir>` and `cadenza library list`.
+  The dataset importers (Groove MIDI, free-midi-chords, LMMS, SALAMI) are not done: nothing
+  is downloaded.

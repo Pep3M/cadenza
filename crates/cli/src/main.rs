@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 mod chat;
 mod compose;
 mod export;
+mod library;
 mod midi_files;
 mod portable;
 
@@ -72,6 +73,12 @@ enum Command {
 	/// metadata, like the app's export dialog (e.g. `--stems tracks --range bars:9-24
 	/// --normalize lufs:-14:-1 --format flac`). Prints the export report as JSON.
 	Export(export::ExportArgs),
+	/// The style library: list installed packs, validate a pack folder, or import a MIDI
+	/// file as a pattern into a user pack (`cadenza library import groove.mid --chords "Am F"`).
+	Library {
+		#[command(subcommand)]
+		command: library::LibraryCommand,
+	},
 	/// Analyze a project's mix (loudness, peaks, band energy) without writing audio
 	Analyze {
 		project: PathBuf,
@@ -406,6 +413,7 @@ fn main() -> Result<()> {
 		} => midi_files::export(&project, &output, track),
 		Command::ListPlugins { query, json } => list_plugins(query, json),
 		Command::Export(args) => export::run(args, hosting),
+		Command::Library { command } => library::run(command),
 		Command::Collect {
 			project,
 			include_factory,

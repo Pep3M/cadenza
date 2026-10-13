@@ -322,3 +322,96 @@ fn export_writes_mixdown_and_stems_like_the_dialog() {
 	let bad = cadenza(&["export", s(&project), "--stems", "Drums"]);
 	assert!(String::from_utf8_lossy(&bad.stderr).contains("no track named"));
 }
+
+#[test]
+fn library_import_validate_and_list() {
+	let dir = tempfile::tempdir().unwrap();
+	// A tresillo bass over Am | F, as a one-clip MIDI file.
+	let notes = [
+		(45, 0.0, 1.5),
+		(45, 1.5, 1.5),
+		(52, 3.0, 0.5),
+		(41, 4.0, 1.5),
+		(41, 5.5, 1.5),
+		(48, 7.0, 0.5),
+	];
+	let clip = Clip::midi("bass", Tick::ZERO, Tick::from_beats(8.0)).with_notes(
+		notes
+			.iter()
+			.map(|&(p, s, l)| Note::new(p, Tick::from_beats(s), Tick::from_beats(l), 0.8)),
+	);
+	let project = Project::new("x");
+	let bytes =
+		cadenza_midi_io::export_clip(&clip, &project.tempo, &project.time_signature).unwrap();
+	let mid = dir.path().join("my bass.mid");
+	std::fs::write(&mid, bytes).unwrap();
+	let library = dir.path().join("library");
+	let pack = library.join("mine");
+	let import = |extra: &[&str]| {
+		let mut args = vec![
+			"library",
+			"import",
+			s(&mid),
+			"--pack",
+			s(&pack),
+			"--chords",
+			"Am F",
+			"--key",
+			"A minor",
+		];
+		args.extend_from_slice(extra);
+		cadenza(&args)
+	};
+	let out = import(&[]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let stdout = String::from_utf8_lossy(&out.stdout);
+	assert!(
+		stdout.contains("imported mine/my_bass: bass relative to the chords"),
+		"{stdout}"
+	);
+	let pattern: serde_json::Value = serde_json::from_str(
+		&std::fs::read_to_string(pack.join("patterns/bass/my_bass.json")).unwrap(),
+	)
+	.unwrap();
+	assert_eq!(pattern["harmony"], "chord");
+	assert_eq!(
+		pattern["lanes"]["R"],
+		"x=== ==x= ==== .... x=== ==x= ==== ...."
+	);
+	assert!(pack.join("pack.json").is_file());
+	assert!(pack.join("midi/my_bass.mid").is_file());
+	// Same id again needs --force.
+	let out = import(&[]);
+	assert!(!out.status.success());
+	assert!(String::from_utf8_lossy(&out.stderr).contains("--force"));
+	assert!(import(&["--force"]).status.success());
+
+	let out = cadenza(&["library", "validate", s(&library)]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args(["library", "list", "--json"])
+		.env("CADENZA_LIBRARY_DIR", &library)
+		.output()
+		.unwrap();
+	let packs: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	let ids: Vec<&str> = packs
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|p| p["id"].as_str().unwrap())
+		.collect();
+	assert_eq!(ids, ["core", "mine"]);
+
+	std::fs::write(pack.join("patterns/bass/broken.json"), "{").unwrap();
+	let out = cadenza(&["library", "validate", s(&pack)]);
+	assert!(!out.status.success());
+	assert!(String::from_utf8_lossy(&out.stderr).contains("broken.json"));
+}

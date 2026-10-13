@@ -144,7 +144,7 @@ struct Pending {
 }
 
 /// The seven-tone scale degrees are read in (pentatonic keys use their parent scale).
-fn heptatonic(kind: ScaleKind) -> &'static [u8] {
+pub(crate) fn heptatonic(kind: ScaleKind) -> &'static [u8] {
 	match kind {
 		ScaleKind::MinorPentatonic | ScaleKind::Blues => ScaleKind::NaturalMinor.intervals(),
 		ScaleKind::MajorPentatonic | ScaleKind::WholeTone | ScaleKind::Chromatic => {
@@ -169,7 +169,7 @@ fn diatonic_above(key: Option<&Scale>, root: u8, steps: usize) -> Option<i32> {
 /// Semitones above the chord root of chord tone `tone` (1, 3, 5... 13): the chord's own
 /// tone when it has one, else the key's diatonic tone, else a plain default (a seventh
 /// falls back to the octave so a triad never gets a foreign seventh).
-fn chord_tone(chord: &Chord, tone: u8, key: Option<&Scale>) -> i32 {
+pub(crate) fn chord_tone(chord: &Chord, tone: u8, key: Option<&Scale>) -> i32 {
 	let has = |set: &[u8]| {
 		set.iter()
 			.find(|iv| chord.intervals.contains(iv))
@@ -194,7 +194,7 @@ fn chord_tone(chord: &Chord, tone: u8, key: Option<&Scale>) -> i32 {
 }
 
 /// The pitch of pitch class `pc` in `[center - 6, center + 5]`.
-fn place(pc: u8, center: i32) -> i32 {
+pub(crate) fn place(pc: u8, center: i32) -> i32 {
 	let low = center - 6;
 	low + (pc as i32 - low).rem_euclid(12)
 }

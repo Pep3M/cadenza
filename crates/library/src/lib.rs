@@ -12,6 +12,7 @@
 //! Design: `docs/design/style-library.md`.
 
 pub mod format;
+pub mod import;
 pub mod lanes;
 pub mod library;
 pub mod realize;

@@ -1295,7 +1295,8 @@ impl Player {
 			}
 			if Instant::now() > deadline {
 				return Err(EngineError::Record(
-					"the audio thread did not hand the recording back; is the output device 					 still running?"
+					"the audio thread did not hand the recording back; is the output device \
+					 still running?"
 						.into(),
 				));
 			}
@@ -1320,7 +1321,8 @@ impl Player {
 			+ session.stats.dropped_frames();
 		if dropouts > 0 {
 			warnings.push(format!(
-				"{dropouts} frame(s) were lost while recording (dropouts); try a larger buffer 				 size in the audio settings"
+				"{dropouts} frame(s) were lost while recording (dropouts); try a larger buffer \
+				 size in the audio settings"
 			));
 		}
 		Ok(Recording {
@@ -1589,7 +1591,8 @@ impl Player {
 	pub fn open_editor(&mut self, device: DeviceId, title: &str) -> Result<(), EngineError> {
 		let slot = self.editors.slots.get(&device).ok_or_else(|| {
 			EngineError::Device(format!(
-				"device {device} is not a loaded plugin (built-in devices have no editor; 				 bypassed or failed plugins are not loaded)"
+				"device {device} is not a loaded plugin (built-in devices have no editor; \
+				 bypassed or failed plugins are not loaded)"
 			))
 		})?;
 		slot.editor

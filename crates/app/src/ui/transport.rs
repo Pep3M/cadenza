@@ -354,7 +354,8 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 		.on_hover_text("Metronome bars before recording starts");
 	if widgets::toggle(ui, s.punch, "PUNCH", theme::RECORD, vec2(48.0, 22.0))
 		.on_hover_text(
-			"Punch in/out: record only inside the loop region (with the loop on: a take per 			 pass)",
+			"Punch in/out: record only inside the loop region (with the loop on: a take per \
+			 pass)",
 		)
 		.clicked()
 	{
@@ -400,7 +401,10 @@ fn automation_mode(ui: &mut Ui, state: &mut AppState) {
 		vec2(64.0, 22.0),
 	);
 	let resp = resp.on_hover_text(
-		"Automation mode. Read: lanes play. Touch: moving a fader, knob or plugin control 		 while playing writes its lane until you let go. Latch: keeps writing the last value 		 until playback stops. Each playback pass is one undo step. Click cycles, right-click 		 picks.",
+		"Automation mode. Read: lanes play. Touch: moving a fader, knob or plugin control \
+		 while playing writes its lane until you let go. Latch: keeps writing the last value \
+		 until playback stops. Each playback pass is one undo step. Click cycles, right-click \
+		 picks.",
 	);
 	if resp.clicked() {
 		state.set_write_mode(match mode {

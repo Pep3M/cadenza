@@ -355,6 +355,7 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 
 	let mut p = mini_song();
 	let keys = p.tracks[2].id;
+	let drums = p.tracks[0].id;
 	let mut vox = Track::new("Vox", TrackKind::Audio);
 	vox.input = Some(TrackInput {
 		channel: 0,
@@ -422,6 +423,13 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 		}
 		if i % 40 == 20 {
 			let _ = midi_tx.push(note(&[0x80, 60 + (i % 12) as u8, 0]));
+		}
+		// A piano-roll preview on another track takes the live input and gives it back.
+		if i % 60 == 30 {
+			player.preview_note_on(drums, 38, 0.9).unwrap();
+		}
+		if i % 60 == 35 {
+			player.preview_note_off(drums, 38).unwrap();
 		}
 		dev.process(&mut out[..2 * block], &input[..2 * block]);
 	}

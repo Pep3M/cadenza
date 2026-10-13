@@ -536,7 +536,11 @@ gets a reset event at its end. Covered by `no_alloc`.
 Live MIDI: the midir callback pushes into an rtrb queue whose consumer is handed to the audio
 thread (and back to be dropped); each callback drains it into a pre-allocated buffer and
 `Graph::push_live_event` feeds the monitored instrument at the next quantum (offset 0: midir
-and cpal share no clock). Monitoring sounds while the transport runs; switching the monitored
+and cpal share no clock). Note previews (`Player::preview_note_on/off`, phase 19a) play on
+their own track: the callback points the graph's live target at it while preview notes are
+held and gives it back to the monitored (armed) track at the next block after the release
+(an arm change meanwhile waits); the app flushes a pending debounced reload before a preview
+so a just-changed instrument is the one heard. Monitoring sounds while the transport runs; switching the monitored
 track releases held notes.
 Shared session: `cadenza_mcp::SharedSession = Arc<Mutex<Session>>`;
 `CadenzaServer::with_shared_session` lets the app and the agent edit the same document (each tool

@@ -216,6 +216,10 @@ struct AudioCore {
 	midi_garbage: Producer<Consumer<TimedMessage>>,
 	mapped: Vec<MappedEvent>,
 	monitor: Option<TrackId>,
+	/// Previewed pitches held down (bit per pitch) and the track they play on: live
+	/// events go to it until they are released, then back to `monitor`.
+	preview_held: [u64; 2],
+	preview_track: Option<TrackId>,
 	sample_rate: f64,
 	input: Option<Box<InputReader>>,
 	inputs: Consumer<Box<InputReader>>,
@@ -307,6 +311,8 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			midi_garbage: midi_garbage_tx,
 			mapped: Vec::with_capacity(MIDI_QUEUE),
 			monitor: None,
+			preview_held: [0; 2],
+			preview_track: None,
 			sample_rate: f64::from(sample_rate),
 			input: None,
 			inputs: input_rx,
@@ -337,7 +343,7 @@ impl AudioCore {
 			if self.playing {
 				next.play();
 			}
-			next.set_monitor_track(self.monitor);
+			next.set_monitor_track(self.preview_track.or(self.monitor));
 			for &t in &self.armed {
 				next.set_armed(t, true);
 			}
@@ -350,6 +356,13 @@ impl AudioCore {
 				// Cannot fail: a slot was checked above and only this thread pushes.
 				let _ = self.garbage.push(old);
 			}
+		}
+		if self.preview_held == [0; 2]
+			&& let Some(track) = self.preview_track.take()
+			&& self.monitor != Some(track)
+			&& let Some(g) = &mut self.graph
+		{
+			g.set_monitor_track(self.monitor);
 		}
 		while let Ok(cmd) = self.commands.pop() {
 			match cmd {
@@ -373,7 +386,10 @@ impl AudioCore {
 				}
 				Cmd::Monitor(track) => {
 					self.monitor = track;
-					if let Some(g) = &mut self.graph {
+					// A preview in progress keeps its track until released.
+					if self.preview_track.is_none()
+						&& let Some(g) = &mut self.graph
+					{
 						g.set_monitor_track(track);
 					}
 				}
@@ -468,11 +484,24 @@ impl AudioCore {
 					};
 				}
 				Cmd::Preview(track, event) => {
-					if self.monitor != Some(track) {
-						self.monitor = Some(track);
+					// The previewed track plays (whatever is armed); the monitored track
+					// gets the live input back once the preview is released.
+					let current = self.preview_track.or(self.monitor);
+					if current != Some(track) {
+						self.preview_held = [0; 2];
 						if let Some(g) = &mut self.graph {
 							g.set_monitor_track(Some(track));
 						}
+					}
+					self.preview_track = Some(track);
+					match event {
+						MidiEvent::NoteOn { pitch, .. } => {
+							self.preview_held[usize::from(pitch >> 6) & 1] |= 1 << (pitch & 63);
+						}
+						MidiEvent::NoteOff { pitch, .. } => {
+							self.preview_held[usize::from(pitch >> 6) & 1] &= !(1 << (pitch & 63));
+						}
+						_ => {}
 					}
 					if let Some(g) = &mut self.graph {
 						g.push_live_event(event);
@@ -2106,6 +2135,51 @@ mod tests {
 			0,
 		);
 		assert_eq!(off.to_string(), "normal priority (disabled)");
+	}
+
+	#[test]
+	fn a_preview_plays_its_track_then_gives_the_live_input_back() {
+		let mut p = project();
+		let mut b = Track::new("b", TrackKind::Instrument)
+			.with_instrument(Device::builtin("electric_piano", "EP"));
+		b.clips.clear();
+		let (a_id, b_id) = (p.tracks[0].id, b.id);
+		p.tracks.push(b);
+		let (mut control, mut core) = channel_pair(48_000);
+		control
+			.load_graph(compile(&p, 48_000, 256).unwrap())
+			.unwrap();
+		let mut out = vec![0.0f32; 512];
+		core.fill_interleaved(&mut out, 2);
+		let node = |core: &AudioCore, id| {
+			let g = core.graph.as_ref().unwrap();
+			g.monitor.map(|i| g.nodes[i].track_id) == Some(id)
+		};
+		// Track a is armed (monitored); the piano roll previews on track b.
+		control.send(Cmd::Monitor(Some(a_id))).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(node(&core, a_id));
+		let on = MidiEvent::NoteOn {
+			offset: 0,
+			pitch: 60,
+			velocity: 0.8,
+		};
+		control.send(Cmd::Preview(b_id, on)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(node(&core, b_id), "the previewed track plays");
+		assert!(out.iter().any(|x| *x != 0.0));
+		// An arm change meanwhile waits for the preview to end.
+		control.send(Cmd::Monitor(Some(a_id))).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		assert!(node(&core, b_id));
+		let off = MidiEvent::NoteOff {
+			offset: 0,
+			pitch: 60,
+		};
+		control.send(Cmd::Preview(b_id, off)).unwrap();
+		core.fill_interleaved(&mut out, 2);
+		core.fill_interleaved(&mut out, 2);
+		assert!(node(&core, a_id), "live MIDI goes back to the armed track");
 	}
 
 	#[test]

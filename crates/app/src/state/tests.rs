@@ -348,7 +348,15 @@ fn note_previews_are_tracked_and_released() {
 	assert!(s.open_piano_roll(clip));
 	assert!(s.view.panels.visible(PanelKind::PianoRoll));
 	assert_eq!(s.piano_track(), Some(keys));
+	// A structural edit waiting for the debounced reload goes to the player first, so
+	// the preview sounds through the track's current instrument.
+	assert!(s.apply(Command::SetInstrument {
+		track: keys,
+		device: Some(cadenza_model::Device::builtin("electric_piano", "EP")),
+	}));
+	assert!(s.reload_pending());
 	s.preview_note_on(keys, 60, 0.8);
+	assert!(!s.reload_pending());
 	s.preview_note_on(keys, 64, 0.8);
 	s.preview_note_on(keys, 64, 0.8);
 	assert_eq!(s.previewing.len(), 2);

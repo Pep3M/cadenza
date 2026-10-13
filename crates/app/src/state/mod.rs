@@ -2697,6 +2697,11 @@ impl AppState {
 			return;
 		}
 		self.previewing.push((track, pitch));
+		// A pending structural edit (a new or swapped instrument) must reach the player
+		// first, or the note would sound through the previous instrument.
+		if self.reload_since.is_some() {
+			self.send_reload();
+		}
 		if let Some(a) = &self.audio {
 			a.preview_on(track, pitch, velocity);
 		}

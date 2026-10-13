@@ -665,6 +665,29 @@ pub fn set_velocities(
 	(!notes.is_empty()).then_some(Command::UpdateNotes { clip, notes })
 }
 
+/// Notes an Alt+wheel over `hovered` changes (FL Studio): the selection when the note is
+/// in it, else that note alone.
+pub fn wheel_targets(selected: &BTreeSet<NoteId>, hovered: NoteId) -> BTreeSet<NoteId> {
+	if selected.contains(&hovered) {
+		selected.clone()
+	} else {
+		BTreeSet::from([hovered])
+	}
+}
+
+/// Velocity change of one wheel notch (0..1 units).
+pub const WHEEL_VELOCITY_STEP: f32 = 0.02;
+
+/// The velocities of `ids` moved by `delta` from their values in `clip` (clamped 0..1;
+/// a note never drops below 1 % so it keeps sounding).
+pub fn nudge_velocities(clip: &Clip, ids: &BTreeSet<NoteId>, delta: f32) -> HashMap<NoteId, f32> {
+	clip.notes()
+		.iter()
+		.filter(|n| ids.contains(&n.id))
+		.map(|n| (n.id, (n.velocity + delta).clamp(0.01, 1.0)))
+		.collect()
+}
+
 /// What the piano roll's event lane shows (FL Studio's event selector).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum EventLane {
@@ -1183,6 +1206,21 @@ mod tests {
 
 	fn set(ids: &[NoteId]) -> BTreeSet<NoteId> {
 		ids.iter().copied().collect()
+	}
+
+	#[test]
+	fn alt_wheel_targets_the_selection_or_the_note_and_clamps_velocities() {
+		let fx = fixture();
+		let c = clip(&fx);
+		let sel: BTreeSet<NoteId> = [fx.ids[0], fx.ids[1]].into();
+		assert_eq!(wheel_targets(&sel, fx.ids[1]), sel);
+		assert_eq!(wheel_targets(&sel, fx.ids[2]), BTreeSet::from([fx.ids[2]]));
+		let up = nudge_velocities(&c, &sel, 0.3);
+		assert_eq!(up.len(), 2);
+		assert_eq!(up[&fx.ids[0]], 1.0, "clamped");
+		assert!((up[&fx.ids[1]] - 0.9).abs() < 1e-6);
+		let down = nudge_velocities(&c, &BTreeSet::from([fx.ids[2]]), -1.0);
+		assert_eq!(down[&fx.ids[2]], 0.01, "still sounds");
 	}
 
 	#[test]

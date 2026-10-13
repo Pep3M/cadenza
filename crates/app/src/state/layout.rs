@@ -420,6 +420,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc("Piano roll", "Clip menu / +", "Switch clip / new clip"),
 	sc(
 		"Piano roll",
+		"Alt+wheel over a note",
+		"Velocity (the selection when the note is in it)",
+	),
+	sc(
+		"Piano roll",
 		"P / B / E / C",
 		"Draw / paint / select / slice tool",
 	),

@@ -301,6 +301,71 @@ fn right_button(h: &Harness<'_, CadenzaApp>, pos: egui::Pos2, pressed: bool) {
 }
 
 #[test]
+fn alt_wheel_over_notes_changes_their_velocity_in_one_step() {
+	let (mut h, clip) = fl_piano();
+	let wheel = |h: &mut Harness<'_, CadenzaApp>, pos: egui::Pos2, notches: f32| {
+		h.hover_at(pos);
+		h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+		h.run_steps(1);
+		h.event(egui::Event::MouseWheel {
+			unit: egui::MouseWheelUnit::Point,
+			delta: vec2(0.0, 40.0 * notches),
+			phase: egui::TouchPhase::Move,
+			modifiers: Modifiers::ALT,
+		});
+		h.run_steps(30);
+	};
+	let velocities = |h: &Harness<'_, CadenzaApp>| -> Vec<f32> {
+		clip_notes(h, clip).iter().map(|n| n.velocity).collect()
+	};
+	let depth = h.state().state.document().history_labels().len();
+	let rows = h.state().state.view.piano.row_height;
+	let pos = note_pos(&h, clip, 0.25, 60);
+	wheel(&mut h, pos, 3.0);
+	assert_eq!(
+		velocities(&h),
+		vec![0.8, 0.8, 0.8],
+		"previewed, not committed yet"
+	);
+	assert_eq!(
+		h.state().state.view.piano.row_height,
+		rows,
+		"no key-height zoom over a note"
+	);
+	assert!(h.query_by_label_contains("Velocity 86%").is_some());
+	h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+	h.run_steps(2);
+	let v = velocities(&h);
+	assert!(
+		(v[0] - 0.86).abs() < 1e-3 && v[1] == 0.8 && v[2] == 0.8,
+		"{v:?}"
+	);
+	assert_eq!(h.state().state.document().history_labels().len(), depth + 1);
+
+	// Over a selected note: the whole selection moves (down), one more step.
+	h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+	h.run_steps(2);
+	let pos = note_pos(&h, clip, 1.25, 62);
+	wheel(&mut h, pos, -5.0);
+	h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+	h.run_steps(2);
+	let v = velocities(&h);
+	assert!(
+		(v[0] - 0.76).abs() < 1e-3 && (v[1] - 0.7).abs() < 1e-3,
+		"{v:?}"
+	);
+	assert_eq!(h.state().state.document().history_labels().len(), depth + 2);
+
+	// Over empty grid Alt+wheel still sets the key height.
+	let pos = note_pos(&h, clip, 3.5, 57);
+	wheel(&mut h, pos, -2.0);
+	h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+	h.run_steps(2);
+	assert_ne!(h.state().state.view.piano.row_height, rows);
+	assert_eq!(h.state().state.document().history_labels().len(), depth + 2);
+}
+
+#[test]
 fn piano_roll_right_button_sweep_deletes_every_note_passed_in_one_step() {
 	let (mut h, clip) = fl_piano();
 	let undo_depth = h.state().state.document().history_labels().len();

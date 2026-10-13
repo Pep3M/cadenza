@@ -155,10 +155,25 @@ struct Props {
 	pos: Pos2,
 }
 
+/// Alt+wheel over notes (FL Studio): their velocities move by `delta`, previewed until
+/// the wheel rests, then committed as one command.
+#[derive(Debug, Clone)]
+struct WheelVelocity {
+	clip: cadenza_core::ClipId,
+	ids: BTreeSet<NoteId>,
+	delta: f32,
+	/// Input time of the last wheel movement.
+	last: f64,
+}
+
+/// The wheel rests this long (seconds) before its velocity change is committed.
+const WHEEL_SETTLE: f64 = 0.6;
+
 /// View-local state of the piano roll.
 #[derive(Default)]
 pub struct PianoUi {
 	gesture: Option<Gesture>,
+	wheel_velocity: Option<WheelVelocity>,
 	erase: Option<Erase>,
 	velocity: Option<VelocityDrag>,
 	control: Option<ControlDrag>,
@@ -283,6 +298,7 @@ impl PianoUi {
 				.piano
 				.frame(&t.clip, g.grid.width(), g.grid.height());
 		}
+		self.wheel_velocity(ui, state, &g, &t);
 		self.navigate(ui, state, &g);
 		if state.is_playing() && self.gesture.is_none() && self.erase.is_none() {
 			state.view.piano.timeline.follow_mode(
@@ -316,6 +332,63 @@ impl PianoUi {
 		self.properties(ui, state, &t);
 	}
 
+	/// Alt+wheel over a note: velocity of the note, or of the selection it belongs to
+	/// (FL Studio). Previewed while the wheel turns; one command once it rests for
+	/// [`WHEEL_SETTLE`] or Alt is released.
+	fn wheel_velocity(&mut self, ui: &Ui, state: &mut AppState, g: &Geometry, t: &Target) {
+		let (now, scroll, alt) = ui.input(|i| (i.time, i.smooth_scroll_delta.y, i.modifiers.alt));
+		if let Some(w) = &self.wheel_velocity
+			&& (!alt || (now - w.last > WHEEL_SETTLE && scroll == 0.0) || w.clip != t.clip.id)
+		{
+			let w = self.wheel_velocity.take().expect("checked");
+			if let Some((_, clip)) = state.project().find_clip(w.clip) {
+				let values = piano::nudge_velocities(clip, &w.ids, w.delta);
+				if let Some(cmd) = piano::set_velocities(state.project(), w.clip, &values) {
+					state.apply(cmd);
+				}
+			}
+		}
+		if !alt || scroll == 0.0 {
+			return;
+		}
+		let Some(p) = ui
+			.ctx()
+			.pointer_hover_pos()
+			.filter(|p| g.grid.contains(*p) && ui.ui_contains_pointer())
+		else {
+			return;
+		};
+		if self.wheel_velocity.is_none() {
+			let v = &state.view.piano;
+			let abs = v.timeline.x_to_tick(p.x - g.grid.left());
+			let pitch = v.y_to_pitch(p.y - g.grid.top());
+			let Some(n) = piano::note_at(&t.clip, abs - t.clip.start, pitch) else {
+				return;
+			};
+			self.wheel_velocity = Some(WheelVelocity {
+				clip: t.clip.id,
+				ids: piano::wheel_targets(&v.selected, n.id),
+				delta: 0.0,
+				last: now,
+			});
+		}
+		if let Some(w) = self.wheel_velocity.as_mut() {
+			// One wheel notch (~40 points of scroll) = one velocity step.
+			w.delta = (w.delta + scroll / 40.0 * piano::WHEEL_VELOCITY_STEP).clamp(-1.0, 1.0);
+			w.last = now;
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_SETTLE + 0.05));
+		}
+	}
+
+	/// The previewed velocities of an Alt+wheel change on `clip`.
+	fn wheel_preview(&self, clip: &Clip) -> Option<HashMap<NoteId, f32>> {
+		self.wheel_velocity
+			.as_ref()
+			.filter(|w| w.clip == clip.id)
+			.map(|w| piano::nudge_velocities(clip, &w.ids, w.delta))
+	}
+
 	/// Wheel, Ctrl+wheel (zoom at the pointer), Alt+wheel (key height), middle-drag.
 	fn navigate(&mut self, ui: &Ui, state: &mut AppState, g: &Geometry) {
 		let area = Rect::from_min_max(
@@ -335,7 +408,9 @@ impl PianoUi {
 			if zoom != 1.0 {
 				v.timeline.zoom_around(zoom, (p.x - g.grid.left()).max(0.0));
 			}
-			if alt && scroll.y != 0.0 {
+			if alt && self.wheel_velocity.is_some() {
+				// Alt+wheel over notes changes their velocity instead.
+			} else if alt && scroll.y != 0.0 {
 				v.zoom_rows(
 					1.0 + scroll.y * 0.004,
 					(p.y - g.grid.top()).max(0.0),
@@ -696,6 +771,37 @@ impl PianoUi {
 			Some((n.clone(), edge))
 		};
 
+		// Velocity tooltips: live while Alt+wheel changes it, else on a resting pointer.
+		if let Some(values) = self.wheel_preview(clip) {
+			let (lo, hi) = values
+				.values()
+				.fold((1.0f32, 0.0f32), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+			let text = if values.len() == 1 || (hi - lo) < 0.005 {
+				format!("Velocity {}%", (hi * 100.0).round())
+			} else {
+				format!(
+					"Velocity {}–{}% ({} notes)",
+					(lo * 100.0).round(),
+					(hi * 100.0).round(),
+					values.len()
+				)
+			};
+			egui::Tooltip::for_widget(&response)
+				.at_pointer()
+				.gap(12.0)
+				.show(|ui| ui.label(text));
+		} else if let Some(pos) = hover
+			&& self.gesture.is_none()
+			&& self.erase.is_none()
+			&& let Some((n, _)) = hit(pos)
+		{
+			response.clone().on_hover_text_at_pointer(format!(
+				"{} · velocity {}% (Alt+wheel)",
+				cadenza_model::note_name(n.pitch),
+				(n.velocity * 100.0).round()
+			));
+		}
+
 		// Cursor feedback.
 		if let Some(pos) = hover
 			&& self.gesture.is_none()
@@ -1025,6 +1131,14 @@ impl PianoUi {
 			_ => None,
 		};
 		let in_rubber = |r: Rect| rubber.is_some_and(|rb| rb.intersects(r));
+		let wheel = self.wheel_preview(clip);
+		let vel = |n: &Note| {
+			wheel
+				.as_ref()
+				.and_then(|w| w.get(&n.id))
+				.copied()
+				.unwrap_or(n.velocity)
+		};
 		let pr = ui.painter_at(area);
 		let (t_lo, t_hi) = (
 			tl.x_to_tick(0.0) - clip.start,
@@ -1046,7 +1160,7 @@ impl PianoUi {
 					// Duplicate drag: the original stays, the copy is drawn moved.
 					let r = note_rect(v, area, clip.start, n.start, n.length, n.pitch);
 					if r.intersects(area) {
-						paint_note(&pr, r, t.color, n.velocity, false, n.pitch, v.row_height);
+						paint_note(&pr, r, t.color, vel(n), false, n.pitch, v.row_height);
 					}
 				} else {
 					ghost_origin = true;
@@ -1083,7 +1197,7 @@ impl PianoUi {
 			}
 			let r = note_rect(v, area, clip.start, start, length, pitch);
 			let selected = v.selected.contains(&n.id) || in_rubber(r);
-			paint_note(&pr, r, t.color, n.velocity, selected, pitch, v.row_height);
+			paint_note(&pr, r, t.color, vel(n), selected, pitch, v.row_height);
 		}
 		match &self.gesture {
 			// The note being placed.
@@ -1458,7 +1572,12 @@ impl PianoUi {
 				state.view.piano.last_velocity = *last;
 			}
 		}
-		let preview = self.velocity.as_ref().map(VelocityDrag::values);
+		let wheel = self.wheel_preview(clip);
+		let preview = self
+			.velocity
+			.as_ref()
+			.map(VelocityDrag::values)
+			.or(wheel.as_ref());
 		for n in clip.notes() {
 			let x = bar_x(n);
 			if x < lane.left() - 4.0 || x > lane.right() {

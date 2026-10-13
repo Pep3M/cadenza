@@ -841,7 +841,11 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   is selected (`targets`). Event lane (toolbar "Events" toggle; selector left of the lane, `PianoView::event_lane`:
   Velocity, Mod wheel, Expression, Sustain, Pitch bend, Pressure, CC 74, CC 7, any CC#, lanes
   with data marked ●). Velocity: drag paints (relative on a multi-selection), Alt/right-drag
-  draws a line (`velocity_line`). Controllers (step graph, value tag under the pointer): pencil
+  draws a line (`velocity_line`); Alt+wheel over a note (FL) moves the velocity of the
+  selection it belongs to, else of that note (`wheel_targets`, `nudge_velocities`, 2 % per
+  notch), previewed with a live tooltip and committed as one `UpdateNotes` when Alt is released
+  or the wheel rests 0.6 s (over empty grid Alt+wheel stays key height; Ctrl+wheel stays
+  zoom); a resting pointer on a note shows its name and velocity. Controllers (step graph, value tag under the pointer): pencil
   drag writes one event per snap cell (`controller_paint`), Alt/right-drag a ramp, right-click
   deletes the event under the pointer; switches snap on/off; one `SetControllerLane` per
   gesture (`set_controller`). Selected notes are warm red

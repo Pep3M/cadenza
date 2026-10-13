@@ -60,7 +60,9 @@ Devices have presets: `list_presets`/`load_preset` for a quick starting sound, \
 keyed by it (`set_sidechain`); give the separate outputs of a multi-output drum plugin \
 their own buses with `set_output_routes`.\n\
 5. Balance the mix with `set_channel` (volume/pan/mute/solo) and mark song sections with \
-`add_marker`. Use `analyze_mix` to get loudness/peak/band readings plus plain-language \
+`add_marker`; group tracks into folder tracks (`create_track` kind folder + \
+`set_track_folder`: the folder's volume offsets them all); `freeze_track` heavy plugin \
+tracks to save CPU. Odd meters: `set_time_signature` with `at_bar` adds changes. Use `analyze_mix` to get loudness/peak/band readings plus plain-language \
 mix observations before committing to a `render`. `play`/`stop` audition on the default \
 output device; edits made while playing are pushed to the player automatically.\n\n\
 Third-party plugins run in crash-isolated sandbox processes: a plugin that crashes or \

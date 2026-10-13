@@ -773,7 +773,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   the sampler editors, (`render_project_screens`) the start screen, export dialog/progress/
   result, Locate missing files and the recovery prompt, and (`render_recording_screens`) armed
   tracks with take lanes, a recording in progress (fed by the engine's virtual device) and the
-  audio settings dialog.
+  audio settings dialog, and (`render_phase17_screens`) time signature changes + the signature
+  lane, controller lanes (mod wheel, pitch bend), an automatic crossfade and a folder (open,
+  folded).
 - Plugin editors (`state::editors` pure logic, `audio::AudioEngine` polls open editors every
   30 ms): Edit button in the inspector (device and track instrument), double-click a plugin
   insert / instrument in the mixer or the instrument name in a track header. Window title

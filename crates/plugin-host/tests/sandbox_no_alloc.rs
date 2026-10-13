@@ -75,6 +75,22 @@ fn sandboxed_audio_path_never_allocates() {
 			velocity: 0.7,
 		})
 		.collect();
+	// Controllers too (CC as MIDI / note expressions / VST3 mapped params).
+	events.extend([
+		MidiEvent::ControlChange {
+			offset: 3,
+			controller: 64,
+			value: 1.0,
+		},
+		MidiEvent::PitchBend {
+			offset: 4,
+			value: 0.5,
+		},
+		MidiEvent::ChannelPressure {
+			offset: 5,
+			value: 0.3,
+		},
+	]);
 	events.sort_by_key(MidiEvent::offset);
 	events.push(MidiEvent::AllNotesOff { offset: 100 });
 	let transport = Transport {

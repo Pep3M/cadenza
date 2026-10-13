@@ -11,7 +11,7 @@
 //! An absolute `XDG_*_HOME` wins on every OS (handy for tests and portable setups);
 //! without a usable base folder the system temp folder is used.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const APP: &str = "cadenza";
 
@@ -95,6 +95,20 @@ pub fn cache_dir() -> PathBuf {
 /// Logs, autosaves and AI session transcripts.
 pub fn state_dir() -> PathBuf {
 	app_dir(Kind::State)
+}
+
+/// `path` canonicalized (absolute, symlinks resolved), without the `\\?\` prefix Windows
+/// puts on drive paths, so it compares equal to the paths users, file dialogs and models
+/// write (macOS temp folders, for one, resolve from `/var` to `/private/var`).
+pub fn real_path(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+	let real = path.as_ref().canonicalize()?;
+	#[cfg(windows)]
+	if let Some(rest) = real.to_str().and_then(|s| s.strip_prefix(r"\\?\"))
+		&& rest.as_bytes().get(1) == Some(&b':')
+	{
+		return Ok(PathBuf::from(rest));
+	}
+	Ok(real)
 }
 
 #[cfg(test)]

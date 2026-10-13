@@ -733,6 +733,7 @@ name = "cadenza-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "cadenza-core",
  "cadenza-mcp",
  "cadenza-model",
  "futures-util",

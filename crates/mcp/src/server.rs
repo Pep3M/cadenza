@@ -1203,7 +1203,7 @@ impl CadenzaServer {
 		Parameters(args): Parameters<mix::CompareToReferenceArgs>,
 	) -> Result<Json<mix::CompareToReferenceOutput>, ErrorData> {
 		let raw = std::path::PathBuf::from(args.file.trim());
-		let file = raw.canonicalize().map_err(|e| {
+		let file = cadenza_core::paths::real_path(&raw).map_err(|e| {
 			crate::McpError::Invalid(format!(
 				"cannot access reference file '{}': {e}; pass an existing audio file",
 				raw.display()

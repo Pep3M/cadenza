@@ -114,8 +114,7 @@ impl ProviderArgs {
 
 /// The app context of a project opened from the command line.
 pub fn cli_context(project: &Path) -> AppContext {
-	let files_root = project
-		.canonicalize()
+	let files_root = cadenza_core::paths::real_path(project)
 		.ok()
 		.and_then(|p| p.parent().map(|d| d.to_path_buf()))
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());

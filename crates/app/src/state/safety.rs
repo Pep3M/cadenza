@@ -271,8 +271,7 @@ pub fn untitled_recoveries(
 
 /// Moves `path` to the front of `recent` (deduplicated, at most [`RECENT_MAX`]).
 pub fn push_recent(recent: &mut Vec<PathBuf>, path: &Path) {
-	let path = path
-		.canonicalize()
+	let path = cadenza_core::paths::real_path(path)
 		.or_else(|_| std::path::absolute(path))
 		.unwrap_or_else(|_| path.to_path_buf());
 	recent.retain(|p| *p != path);

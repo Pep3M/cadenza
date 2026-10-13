@@ -1141,7 +1141,13 @@ fn wait_until(s: &mut AppState, done: impl Fn(&AppState) -> bool) {
 	}
 }
 
+/// `dir` as saved paths spell it (macOS temp folders live behind `/var -> /private/var`).
+fn real_dir(dir: &Path) -> PathBuf {
+	cadenza_core::paths::real_path(dir).unwrap()
+}
+
 fn saved_song(dir: &Path) -> (AppState, PathBuf) {
+	let dir = &real_dir(dir);
 	let (mut s, _) = state_with_song();
 	s.enable_safety(dir.join("state"));
 	let file = dir.join("Song").join("Song.cadenza.json");
@@ -1277,7 +1283,7 @@ fn export_dialog_job_reports_progress_and_cancels() {
 fn collect_and_relink_from_the_app_are_single_undo_steps() {
 	let tmp = tempfile::tempdir().unwrap();
 	let (mut s, file) = saved_song(tmp.path());
-	let ext = tmp.path().join("ext").join("take.wav");
+	let ext = real_dir(tmp.path()).join("ext").join("take.wav");
 	std::fs::create_dir_all(ext.parent().unwrap()).unwrap();
 	let buf = cadenza_audio_io::AudioBuffer::from_planar(48_000, vec![vec![0.1; 4800]]).unwrap();
 	cadenza_audio_io::export(

@@ -80,7 +80,7 @@ pub fn run(args: MixArgs) -> Result<()> {
 		.with_context(|| format!("opening {}", args.project.display()))?;
 	let reference = match &args.reference {
 		Some(path) => Some(
-			path.canonicalize()
+			cadenza_core::paths::real_path(path)
 				.with_context(|| format!("reference track {}", path.display()))?,
 		),
 		None => None,

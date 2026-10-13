@@ -106,7 +106,7 @@ pub fn import_audio(
 	args: ImportAudioArgs,
 ) -> Result<ImportAudioOutput, McpError> {
 	let raw = PathBuf::from(args.path.trim());
-	let path = raw.canonicalize().map_err(|e| {
+	let path = cadenza_core::paths::real_path(&raw).map_err(|e| {
 		McpError::Invalid(format!(
 			"cannot access audio file '{}': {e}; pass an existing file path",
 			raw.display()

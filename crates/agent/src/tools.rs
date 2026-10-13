@@ -47,6 +47,18 @@ const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cadenzapack"];
 /// MIDI file extensions for `import_midi`/`export_midi`.
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
+pub use cadenza_core::paths::real_path;
+
+/// A drive-relative (`C:file`) or `..` component: never inside the session folder. An
+/// absolute path's drive prefix is fine (it is checked against the root).
+fn escapes(raw: &Path) -> bool {
+	raw.components().any(|c| match c {
+		Component::ParentDir => true,
+		Component::Prefix(_) => !raw.is_absolute(),
+		_ => false,
+	})
+}
+
 /// Where the session may read and write files.
 #[derive(Debug, Clone)]
 pub struct PathPolicy {
@@ -60,7 +72,7 @@ pub struct PathPolicy {
 impl PathPolicy {
 	/// `root` must exist; it is canonicalized so symlinks can't be used to escape it.
 	pub fn new(root: &Path, project_file: &str, wav_file: &str) -> std::io::Result<Self> {
-		let root = root.canonicalize()?;
+		let root = real_path(root)?;
 		Ok(Self {
 			default_project: root.join(project_file),
 			default_wav: root.join(wav_file),
@@ -103,10 +115,7 @@ impl PathPolicy {
 				"empty path; use a file name ending in .{extension}"
 			));
 		}
-		if raw_path
-			.components()
-			.any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
-		{
+		if escapes(raw_path) {
 			return Err(outside());
 		}
 		let path = if raw_path.is_absolute() {
@@ -131,9 +140,7 @@ impl PathPolicy {
 		}
 		let parent = path.parent().ok_or_else(outside)?;
 		std::fs::create_dir_all(parent).map_err(|e| format!("cannot create folder: {e}"))?;
-		let real_parent = parent
-			.canonicalize()
-			.map_err(|e| format!("cannot resolve folder: {e}"))?;
+		let real_parent = real_path(parent).map_err(|e| format!("cannot resolve folder: {e}"))?;
 		if !real_parent.starts_with(&self.root) {
 			return Err(outside());
 		}
@@ -152,10 +159,7 @@ impl PathPolicy {
 			format!("folder '{raw}' is outside the session folder; use a folder inside it (or '.')")
 		};
 		let raw_path = Path::new(raw.trim());
-		if raw_path
-			.components()
-			.any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
-		{
+		if escapes(raw_path) {
 			return Err(outside());
 		}
 		let path = if raw_path.is_absolute() {
@@ -163,9 +167,7 @@ impl PathPolicy {
 		} else {
 			self.root.join(raw_path)
 		};
-		let real = path
-			.canonicalize()
-			.map_err(|e| format!("cannot open folder '{raw}': {e}"))?;
+		let real = real_path(&path).map_err(|e| format!("cannot open folder '{raw}': {e}"))?;
 		if !real.starts_with(&self.root) {
 			return Err(outside());
 		}
@@ -180,10 +182,7 @@ impl PathPolicy {
 		} else {
 			self.root.join(raw_path)
 		};
-		let lexically_inside = joined.starts_with(&self.root)
-			&& !raw_path
-				.components()
-				.any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)));
+		let lexically_inside = joined.starts_with(&self.root) && !escapes(raw_path);
 		if lexically_inside {
 			std::fs::create_dir_all(&joined).map_err(|e| format!("cannot create folder: {e}"))?;
 		}
@@ -193,7 +192,7 @@ impl PathPolicy {
 	/// Lets the session read `path` although it lies outside the root (a reference track
 	/// the user chose). Ignored when it does not exist.
 	pub fn allow_read(&mut self, path: &Path) {
-		if let Ok(real) = path.canonicalize() {
+		if let Ok(real) = real_path(path) {
 			self.extra_reads.push(real);
 		}
 	}
@@ -201,7 +200,7 @@ impl PathPolicy {
 	/// An existing file to read: one allowed with [`PathPolicy::allow_read`], else a file in
 	/// the session folder with one of `extensions`.
 	pub fn resolve_read(&self, raw: &str, extensions: &[&str]) -> Result<PathBuf, String> {
-		if let Ok(real) = Path::new(raw.trim()).canonicalize()
+		if let Ok(real) = real_path(Path::new(raw.trim()))
 			&& self.extra_reads.contains(&real)
 		{
 			return Ok(real);
@@ -219,7 +218,7 @@ impl PathPolicy {
 		let extensions = cadenza_mcp::tools::audio::AUDIO_EXTENSIONS;
 		let candidate = Path::new(raw.trim());
 		if candidate.is_absolute()
-			&& let (Ok(real), Ok(factory)) = (candidate.canonicalize(), factory.canonicalize())
+			&& let (Ok(real), Ok(factory)) = (real_path(candidate), real_path(factory))
 			&& real.starts_with(&factory)
 		{
 			return Ok(real);
@@ -663,8 +662,8 @@ mod tests {
 		let ok = policy
 			.resolve_sample_in(kick.to_str().unwrap(), factory.path())
 			.unwrap();
-		assert_eq!(ok, kick.canonicalize().unwrap());
-		let root = dir.path().canonicalize().unwrap();
+		assert_eq!(ok, real_path(kick).unwrap());
+		let root = real_path(dir.path()).unwrap();
 		assert_eq!(
 			policy
 				.resolve_sample_in("drums/snare.wav", factory.path())
@@ -701,7 +700,7 @@ mod tests {
 			policy
 				.resolve_read(reference.to_str().unwrap(), exts)
 				.unwrap(),
-			reference.canonicalize().unwrap()
+			real_path(reference).unwrap()
 		);
 		assert!(policy.resolve_read(other.to_str().unwrap(), exts).is_err());
 	}
@@ -709,7 +708,7 @@ mod tests {
 	#[test]
 	fn paths_are_confined_to_the_session_folder() {
 		let (policy, dir) = policy();
-		let root = dir.path().canonicalize().unwrap();
+		let root = real_path(dir.path()).unwrap();
 		assert_eq!(
 			policy.resolve("mix.wav", "wav").unwrap(),
 			root.join("mix.wav")
@@ -747,7 +746,7 @@ mod tests {
 	#[test]
 	fn file_tools_are_confined_and_typed() {
 		let (policy, dir) = policy();
-		let root = dir.path().canonicalize().unwrap();
+		let root = real_path(dir.path()).unwrap();
 		let bridge = ToolBridge::new(CadenzaServer::new(), policy, false, 10_000);
 		let ok = |name: &str, path: &str| {
 			bridge

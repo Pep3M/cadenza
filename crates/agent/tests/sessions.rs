@@ -87,7 +87,7 @@ async fn full_session_writes_parts_and_renders_with_correct_wire_format() {
 		outcome.final_message.as_deref(),
 		Some("Rain: a 4-bar sad ballad in A minor at 72 bpm on electric piano.")
 	);
-	let out = s.out.path().canonicalize().unwrap();
+	let out = cadenza_agent::tools::real_path(s.out.path()).unwrap();
 	assert_eq!(
 		outcome.wav_path.as_deref(),
 		Some(out.join("rain.wav").as_path())

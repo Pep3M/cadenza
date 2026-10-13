@@ -392,7 +392,8 @@ mod tests {
 		}
 		push_recent(&mut recent, Path::new("/p/5.cadenza.json"));
 		assert_eq!(recent.len(), RECENT_MAX);
-		assert_eq!(recent[0], PathBuf::from("/p/5.cadenza.json"));
+		// Made absolute (on Windows that adds the current drive).
+		assert_eq!(recent[0], std::path::absolute("/p/5.cadenza.json").unwrap());
 		assert_eq!(
 			recent
 				.iter()

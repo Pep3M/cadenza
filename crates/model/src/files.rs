@@ -380,7 +380,8 @@ mod tests {
 		let json = std::fs::read_to_string(&file).unwrap();
 		assert!(json.contains("\"Audio/take 1.wav\""), "{json}");
 		assert!(json.contains("\"Samples/piano C4.wav\""));
-		assert!(json.contains(&outside.display().to_string()));
+		let outside_json = serde_json::to_string(&outside).unwrap();
+		assert!(json.contains(&outside_json), "{json}");
 		assert_eq!(Project::load_json(&file).unwrap(), p, "round trip");
 
 		let moved = tmp.path().join("Moved");
@@ -467,11 +468,14 @@ mod tests {
 		);
 		assert_eq!(l.audio_dir(), PathBuf::from("/music/My_ Song/Audio"));
 		assert_eq!(l.stem(), "My_ Song");
+		// Absolute on every OS (`/a` has no drive on Windows).
+		let tmp = std::env::temp_dir();
+		let a = tmp.join("a");
 		assert_eq!(
-			relativize(Path::new("/a/b/c.wav"), Path::new("/a")),
+			relativize(&a.join("b").join("c.wav"), &a),
 			Some(PathBuf::from("b/c.wav"))
 		);
-		assert_eq!(relativize(Path::new("/x/c.wav"), Path::new("/a")), None);
+		assert_eq!(relativize(&tmp.join("x").join("c.wav"), &a), None);
 		assert_eq!(
 			absolutize(Path::new("b/c.wav"), Path::new("/a")),
 			Some(PathBuf::from("/a/b/c.wav"))

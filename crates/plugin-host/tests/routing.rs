@@ -94,6 +94,7 @@ fn sidechain_reaches_the_aux_input_in_process() {
 	check_sidechain(false);
 }
 
+#[cfg(unix)] // the sandbox is Unix-only
 #[test]
 fn sidechain_reaches_the_aux_input_sandboxed() {
 	check_sidechain(true);
@@ -134,6 +135,7 @@ fn extra_outputs_are_readable_in_process() {
 	check_multi_output(false);
 }
 
+#[cfg(unix)] // the sandbox is Unix-only
 #[test]
 fn extra_outputs_are_readable_sandboxed() {
 	check_multi_output(true);
@@ -163,6 +165,7 @@ fn factory_presets_list_load_and_persist_in_process() {
 	check_presets(false);
 }
 
+#[cfg(unix)] // the sandbox is Unix-only
 #[test]
 fn factory_presets_list_load_and_persist_sandboxed() {
 	check_presets(true);
@@ -171,6 +174,7 @@ fn factory_presets_list_load_and_persist_sandboxed() {
 /// Engine-like quanta through a batched sandbox: the main output, the
 /// sidechain key and the extra outputs all come out exactly as in-process,
 /// delayed by the batching latency.
+#[cfg(unix)] // the sandbox is Unix-only
 #[test]
 fn sidechain_and_extra_outputs_survive_batching() {
 	const Q: usize = 32;

@@ -72,10 +72,23 @@ pub(crate) fn write_utf16(dst: &mut [TChar], s: &str) {
 	dst[n] = 0;
 }
 
-/// A class id as 32 uppercase hex digits, in memory byte order (the form
-/// `moduleinfo.json` uses on non-Windows platforms).
+/// Memory position of each printed byte of a class id. The SDK prints `FUID`s as
+/// GUID fields; with Windows' COM-compatible layout the first three fields are
+/// little-endian in memory, elsewhere memory order and printed order coincide.
+const PRINTED_ORDER: [usize; 16] = if cfg!(windows) {
+	[3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15]
+} else {
+	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+};
+
+/// A class id as 32 uppercase hex digits, as the SDK prints it (and
+/// `moduleinfo.json` spells it): the same string for a plugin on every OS, so
+/// projects stay portable.
 pub(crate) fn tuid_to_hex(tuid: &TUID) -> String {
-	tuid.iter().map(|&b| format!("{:02X}", b as u8)).collect()
+	PRINTED_ORDER
+		.iter()
+		.map(|&i| format!("{:02X}", tuid[i] as u8))
+		.collect()
 }
 
 /// Parses [`tuid_to_hex`] output.
@@ -85,8 +98,8 @@ pub(crate) fn tuid_from_hex(s: &str) -> Option<TUID> {
 		return None;
 	}
 	let mut out = [0 as c_char; 16];
-	for (i, o) in out.iter_mut().enumerate() {
-		*o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()? as c_char;
+	for (k, &i) in PRINTED_ORDER.iter().enumerate() {
+		out[i] = u8::from_str_radix(&s[2 * k..2 * k + 2], 16).ok()? as c_char;
 	}
 	Some(out)
 }
@@ -773,7 +786,7 @@ mod tests {
 		let hex = "64737020616270326D2020206162326D";
 		let t = tuid_from_hex(hex).unwrap();
 		assert_eq!(tuid_to_hex(&t), hex);
-		assert_eq!(t[0] as u8, 0x64);
+		assert_eq!(t[if cfg!(windows) { 3 } else { 0 }] as u8, 0x64);
 		assert!(tuid_from_hex("xyz").is_none());
 	}
 }

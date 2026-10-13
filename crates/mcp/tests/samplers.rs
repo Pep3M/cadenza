@@ -145,10 +145,11 @@ async fn drum_sampler_starts_with_the_kit_and_pads_are_editable() {
 	.await
 	.unwrap_err();
 	assert!(err.contains("load_sample"), "{err}");
+	let missing = std::env::temp_dir().join("nope").join("missing.wav");
 	let err = call(
 		&server,
 		"load_sample",
-		json!({"track_id": track_id, "path": "/nope/missing.wav", "pad": "kick"}),
+		json!({"track_id": track_id, "path": missing, "pad": "kick"}),
 	)
 	.await
 	.unwrap_err();

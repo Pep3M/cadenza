@@ -54,30 +54,12 @@ impl ModuleInfo {
 		Self::parse(&std::fs::read_to_string(path).ok()?)
 	}
 
-	/// The entry for the class whose TUID memory bytes are `hex` (as
-	/// produced by `tuid_to_hex`).
+	/// The entry for the class id `hex` (as printed by `tuid_to_hex`).
 	pub fn class(&self, hex: &str) -> Option<&ClassEntry> {
-		let wanted = moduleinfo_cid(hex);
 		self.classes
 			.iter()
-			.find(|c| c.cid.trim().eq_ignore_ascii_case(&wanted))
+			.find(|c| c.cid.trim().eq_ignore_ascii_case(hex.trim()))
 	}
-}
-
-/// How moduleinfo spells a class id given its memory-order hex. The SDK
-/// prints `FUID`s as GUID fields; with Windows' COM-compatible layout the
-/// first three fields are little-endian in memory, elsewhere memory order
-/// and printed order coincide.
-fn moduleinfo_cid(memory_hex: &str) -> String {
-	let hex = memory_hex.trim().to_ascii_uppercase();
-	if !cfg!(windows) || hex.len() != 32 || !hex.is_ascii() {
-		return hex;
-	}
-	let byte = |i: usize| &hex[2 * i..2 * i + 2];
-	[3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15]
-		.iter()
-		.map(|&i| byte(i))
-		.collect()
 }
 
 /// Strips `//` line comments and trailing commas outside strings.

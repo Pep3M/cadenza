@@ -89,7 +89,7 @@ fn builtin_factory_and_user_presets() {
 	)
 	.unwrap();
 	assert!(
-		saved.path.ends_with("poly_synth/My Pad.json"),
+		std::path::Path::new(&saved.path).ends_with("poly_synth/My Pad.json"),
 		"{}",
 		saved.path
 	);

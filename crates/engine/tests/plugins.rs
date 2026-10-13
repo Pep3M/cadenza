@@ -76,7 +76,12 @@ fn plugin_latency_is_compensated() {
 	let p = project(vec![wet.clone(), dry]);
 	let graph = compile_hosted(&p, 48_000, 512, Some(&catalog()), &sandboxed()).unwrap();
 	// Realtime graphs batch 4 quanta per sandbox round trip (3 quanta of latency).
-	assert_eq!(graph.latency_samples(), 64 + 96);
+	let batching = if cadenza_plugin_host::SANDBOX_SUPPORTED {
+		96
+	} else {
+		0
+	};
+	assert_eq!(graph.latency_samples(), 64 + batching);
 	assert!(graph.warnings().is_empty(), "{:?}", graph.warnings());
 
 	let wet_alone = render_offline(&project(vec![wet]), &with_plugins(4.0)).unwrap();

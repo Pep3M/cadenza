@@ -192,6 +192,11 @@ pub struct RecordState {
 const LEVEL_FALL: f32 = 1.5;
 
 impl AppState {
+	/// The count-in before a recording while it runs (from the player's clock).
+	pub fn count_in(&self) -> Option<cadenza_engine::CountInStatus> {
+		self.clock.as_ref().and_then(|c| c.count_in())
+	}
+
 	pub fn is_armed(&self, track: TrackId) -> bool {
 		self.project().armed.contains(&track)
 	}

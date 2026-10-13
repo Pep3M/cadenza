@@ -485,8 +485,15 @@ fn icon_button(ui: &mut Ui, icon: Icon, active: bool) -> egui::Response {
 fn position_display(ui: &mut Ui, state: &mut AppState) {
 	let pos = state.position();
 	let project = state.project();
-	let bbt = format_bbt(pos, project.meter());
-	let time = format_time(pos, &project.tempo);
+	let mut bbt = format_bbt(pos, project.meter());
+	let mut time = format_time(pos, &project.tempo);
+	// Counting in: the bars before the record start (-2.1, -1.4...), the playhead waits.
+	if let Some(c) = state.count_in() {
+		let (bar, beat) = c.bar_beat();
+		bbt = format!("{bar}.{beat}");
+		time = "COUNT-IN".into();
+		ui.ctx().request_repaint();
+	}
 	let (rect, _) = ui.allocate_exact_size(vec2(210.0, 34.0), Sense::hover());
 	let p = ui.painter();
 	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::BG_DEEP);

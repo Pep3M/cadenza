@@ -47,7 +47,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
@@ -181,6 +181,11 @@ struct Shared {
 	/// Kernel id of the output callback thread, published by its first callback (0 =
 	/// not yet) so a helper thread can raise its priority.
 	audio_thread: AtomicI32,
+	/// The running count-in: beats heard (f64 bits), length in beats, beats per bar
+	/// (length 0 = none).
+	count_in_heard: AtomicU64,
+	count_in_beats: AtomicU32,
+	count_in_per_bar: AtomicU32,
 }
 
 /// Audio-thread side: owns the current graph.
@@ -338,6 +343,9 @@ impl AudioCore {
 			}
 			next.set_metronome(self.metronome);
 			next.set_recording(self.tap.is_some());
+			if let Some(old) = &self.graph {
+				next.continue_count_in(old);
+			}
 			if let Some(old) = self.graph.replace(next) {
 				// Cannot fail: a slot was checked above and only this thread pushes.
 				let _ = self.garbage.push(old);
@@ -598,9 +606,16 @@ impl AudioCore {
 	}
 
 	fn end_block(&mut self) {
+		let mut count_in = (0.0, 0, 0);
 		if let Some(g) = &self.graph {
 			self.position = g.position();
+			count_in = g.count_in_progress().unwrap_or(count_in);
 		}
+		let s = &self.shared;
+		s.count_in_heard
+			.store(count_in.0.to_bits(), Ordering::Relaxed);
+		s.count_in_per_bar.store(count_in.2, Ordering::Relaxed);
+		s.count_in_beats.store(count_in.1, Ordering::Relaxed);
 		self.shared
 			.position
 			.store(self.position.0, Ordering::Relaxed);
@@ -767,6 +782,28 @@ impl Control {
 	}
 }
 
+/// A count-in in progress (see [`PlayerClock::count_in`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CountInStatus {
+	/// Beats counted so far (fractional).
+	pub heard_beats: f64,
+	/// Length of the count-in in beats.
+	pub beats: u32,
+	pub per_bar: u32,
+}
+
+impl CountInStatus {
+	/// Where the count-in is, as a bar before the record start (-2, -1) and a 1-based
+	/// beat in it: what a bars.beats display shows for it.
+	pub fn bar_beat(&self) -> (i64, u32) {
+		let heard = self.heard_beats.max(0.0).floor() as i64;
+		let per_bar = i64::from(self.per_bar.max(1));
+		let bars = (i64::from(self.beats) + per_bar - 1) / per_bar;
+		let bar = -(bars - heard / per_bar);
+		(bar.min(-1), (heard % per_bar) as u32 + 1)
+	}
+}
+
 /// Read-only view of a [`Player`]'s transport that can be sent to and polled from any
 /// thread (e.g. a UI drawing the playhead) while the `Player` itself stays on its own
 /// thread (its `cpal::Stream` is not `Send` everywhere).
@@ -784,6 +821,18 @@ impl PlayerClock {
 
 	pub fn is_playing(&self) -> bool {
 		self.shared.playing.load(Ordering::Relaxed)
+	}
+
+	/// The count-in before a recording, while it runs (the playhead waits at the record
+	/// start meanwhile).
+	pub fn count_in(&self) -> Option<CountInStatus> {
+		let s = &self.shared;
+		let beats = s.count_in_beats.load(Ordering::Relaxed);
+		(beats > 0).then(|| CountInStatus {
+			heard_beats: f64::from_bits(s.count_in_heard.load(Ordering::Relaxed)),
+			beats,
+			per_bar: s.count_in_per_bar.load(Ordering::Relaxed).max(1),
+		})
 	}
 
 	/// Output device sample rate.

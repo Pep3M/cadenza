@@ -666,7 +666,11 @@ Recording (phase 16; `engine::input`, `engine::metronome`, `engine::record`):
   tracks: [RecordTrack { track, name, input: Some(TrackInput) = audio | None = MIDI }],
   buffer_seconds (4) })` -> `Arc<RecordingMonitor>`; plays from the current playhead after a
   frozen-transport count-in (`Graph::start_count_in`: clicks only, monitoring live, then a clean
-  start). After each block `Graph::segments()` says which timeline samples the output played
+  start; a graph swapped in mid count-in continues it, `Graph::continue_count_in`, so an
+  edit cannot start the song early; `PlayerClock::count_in()` -> `CountInStatus { heard_beats,
+  beats, per_bar }`, `bar_beat()` = (-2, 1)...: the app's position display shows "-1.3" and
+  COUNT-IN, also at bar 1 with no song pre-roll; count-in stays 0 bars unless chosen). After
+  each block `Graph::segments()` says which timeline samples the output played
   (split at loop wraps, none during count-in); the `RecordTap` (boxed through an rtrb, back through
   a garbage ring) pushes the recorded input channels of those frames, filtered to [start,
   punch_out + 1 s), into a pre-allocated sample ring + `RecEvent::Audio { tag, frames }`, MIDI

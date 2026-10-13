@@ -388,6 +388,52 @@ fn the_metronome_clicks_on_beats_and_counts_in() {
 }
 
 #[test]
+fn a_count_in_at_the_song_start_shows_its_bars_and_survives_a_reload() {
+	// Two bars before bar 1, with the metronome off: the count-in still clicks.
+	let dir = folder("count-in-reload");
+	let (vp, track) = vox_project(MonitorMode::Off);
+	let (mut player, mut dev) = Player::virtual_device(SR, 1);
+	player.load(&vp).unwrap();
+	let clock = player.clock();
+	assert_eq!(clock.count_in(), None);
+	let mut setup = audio_setup(&dir, track, 0);
+	setup.count_in_bars = 2;
+	player.start_recording(&setup).unwrap();
+	let mut stream = 0;
+	run(&mut dev, &mut stream, BEAT / BLOCK + 2, &|_| 0.5);
+	let c = clock.count_in().expect("counting in");
+	assert_eq!((c.beats, c.per_bar), (8, 4));
+	assert_eq!(c.bar_beat(), (-2, 2), "{c:?}");
+	// An edit reloads the graph mid count-in: the count goes on, the song waits.
+	player.load(&vp).unwrap();
+	let out = run(&mut dev, &mut stream, 5 * BEAT / BLOCK, &|_| 0.5);
+	assert_eq!(player.position(), Tick::ZERO, "still counting in");
+	assert_eq!(clock.count_in().unwrap().bar_beat().0, -1);
+	let left: Vec<f32> = out.chunks(2).map(|f| f[0]).collect();
+	let clicks = (0..5)
+		.filter(|b| {
+			left[b * BEAT..(b * BEAT + 2000).min(left.len())]
+				.iter()
+				.any(|v| *v != 0.0)
+		})
+		.count();
+	assert!(clicks >= 4, "clicks after the reload: {clicks}");
+	run(&mut dev, &mut stream, 3 * BEAT / BLOCK, &|_| 0.5);
+	assert_eq!(clock.count_in(), None);
+	assert!(player.position() > Tick::ZERO);
+	player.request_stop_recording().unwrap();
+	run(&mut dev, &mut stream, 1, &|_| 0.0);
+	let rec = player
+		.finish_recording(std::time::Duration::from_secs(5))
+		.unwrap();
+	assert_eq!(
+		rec.passes[0].tag, 0,
+		"recording starts at bar 1 after the count-in"
+	);
+	let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn input_monitoring_follows_the_mode() {
 	let level = |mode: MonitorMode, armed: bool, playing: bool| {
 		let (p, track) = vox_project(mode);

@@ -1512,3 +1512,38 @@ fn arm_states_are_saved_with_the_song_and_undoable() {
 	assert_eq!(reopened.record.armed, vec![keys, vox]);
 	assert!(reopened.recording_context().unwrap().contains("Vox"));
 }
+
+#[test]
+fn a_count_in_at_the_song_start_is_shown_before_bar_one() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, keys) = state_with_song();
+	s.safety.state_dir = tmp.path().to_path_buf();
+	s.toggle_arm(keys);
+	// Off unless asked for: no count-in by default.
+	assert_eq!(s.record_plan().unwrap().setup.count_in_bars, 0);
+	s.record.settings.count_in_bars = 1;
+	let plan = s.record_plan().unwrap();
+	assert_eq!((plan.setup.start, plan.play_from), (Tick::ZERO, Tick::ZERO));
+	assert_eq!(plan.setup.count_in_bars, 1);
+	let (mut player, mut dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	player.load(s.project()).unwrap();
+	s.clock = Some(player.clock());
+	let mut setup = plan.setup;
+	setup.folder = tmp.path().to_path_buf();
+	player.start_recording(&setup).unwrap();
+	let mut out = vec![0.0f32; 512];
+	for _ in 0..100 {
+		dev.process(&mut out, &[]);
+	}
+	let c = s.count_in().expect("counting in");
+	assert_eq!(c.bar_beat(), (-1, 2), "{c:?}");
+	assert_eq!(s.position(), Tick::ZERO, "the playhead waits at bar 1");
+	for _ in 0..300 {
+		dev.process(&mut out, &[]);
+	}
+	assert!(s.count_in().is_none());
+	assert!(s.position() > Tick::ZERO);
+	player.request_stop_recording().unwrap();
+	dev.process(&mut out, &[]);
+	player.finish_recording(Duration::from_secs(5)).unwrap();
+}

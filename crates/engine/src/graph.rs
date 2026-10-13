@@ -852,6 +852,31 @@ impl Graph {
 		self.count_in.left > 0
 	}
 
+	/// The running count-in: beats heard so far, its length in beats and beats per bar.
+	pub fn count_in_progress(&self) -> Option<(f64, u32, u32)> {
+		let c = &self.count_in;
+		(c.left > 0 && c.beat_frames > 0.0).then(|| {
+			(
+				(c.total - c.left) as f64 / c.beat_frames,
+				(c.total as f64 / c.beat_frames).round() as u32,
+				c.per_bar,
+			)
+		})
+	}
+
+	/// Continues `old`'s count-in in this graph (a reload swapped in while counting in
+	/// must not start the song early). Realtime safe.
+	pub(crate) fn continue_count_in(&mut self, old: &Graph) {
+		if old.count_in.left == 0 {
+			return;
+		}
+		self.count_in = CountIn {
+			// The new graph renders from the output position on.
+			rendered: old.count_in.total - old.count_in.left,
+			..old.count_in
+		};
+	}
+
 	/// What the last [`Graph::process`] call played: output stretches and the timeline
 	/// samples they were heard at (none while stopped or counting in; two around a loop
 	/// wrap). Used to tag recorded input.

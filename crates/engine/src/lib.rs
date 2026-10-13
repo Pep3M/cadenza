@@ -50,8 +50,9 @@ pub use input::{AudioDeviceInfo, AudioDevices, InputInfo, InputMode, InputStats,
 pub use meter::{MeterBank, MeterReading};
 pub use metronome::MetronomeSettings;
 pub use player::{
-	AUDIO_RT_PRIORITY, AUDIO_RT_PRIORITY_ENV, AudioConfig, AuditionScope, EditorState,
-	EditorUpdate, Player, PlayerClock, VirtualDevice, find_midi_input, midi_input_ports,
+	AUDIO_RT_PRIORITY, AUDIO_RT_PRIORITY_ENV, AudioConfig, AuditionScope, CountInStatus,
+	EditorState, EditorUpdate, Player, PlayerClock, VirtualDevice, find_midi_input,
+	midi_input_ports,
 };
 pub use record::{
 	LiveRecording, MidiItem, RecordOptions, RecordSetup, RecordTrack, RecordedAudio, RecordedPass,

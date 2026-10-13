@@ -74,8 +74,9 @@ pub fn diff(old: &Project, new: &Project, live_state: LiveState) -> Option<LiveC
 		changes.automation = true;
 		normalized.automation = new.automation.clone();
 	}
-	// Song metadata does not sound.
+	// Song metadata does not sound; arm states reach the player on their own.
 	normalized.meta = new.meta.clone();
+	normalized.armed = new.armed.clone();
 	(normalized == *new).then_some(changes)
 }
 

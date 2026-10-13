@@ -110,6 +110,16 @@ impl Project {
 		self.markers.sort_by_key(|m| m.tick);
 		self.time_signature_changes.sort_by_key(|c| c.bar);
 		self.time_signature_changes.dedup_by_key(|c| c.bar);
+		// Arm states are a convenience: stale or repeated ids are dropped, not errors.
+		let mut seen = std::collections::HashSet::new();
+		let armable: Vec<cadenza_core::TrackId> = self
+			.tracks
+			.iter()
+			.filter(|t| t.can_record())
+			.map(|t| t.id)
+			.collect();
+		self.armed
+			.retain(|t| armable.contains(t) && seen.insert(*t));
 	}
 }
 

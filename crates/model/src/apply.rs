@@ -137,6 +137,11 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				a.track == Some(id)
 					|| matches!(a.target, ParamTarget::Send { send } if dropped_sends.contains(&send))
 			}));
+			if project.armed.contains(&id) {
+				let old = project.armed.clone();
+				project.armed.retain(|t| *t != id);
+				inverse.push(Command::SetArmedTracks { armed: old });
+			}
 			Ok(inverse)
 		}
 
@@ -1050,6 +1055,28 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.map_err(|_| ModelError::MarkerNotFound(*tick))?;
 			let removed = project.markers.remove(i);
 			Ok(vec![Command::AddMarker { marker: removed }])
+		}
+
+		Command::SetArmedTracks { armed } => {
+			for (i, id) in armed.iter().enumerate() {
+				let t = project.track(*id).ok_or(ModelError::TrackNotFound(*id))?;
+				if !t.can_record() {
+					return Err(ModelError::invalid(
+						"armed track",
+						t.name.clone(),
+						"only audio and instrument tracks record",
+					));
+				}
+				if armed[..i].contains(id) {
+					return Err(ModelError::invalid(
+						"armed track",
+						t.name.clone(),
+						"is listed twice",
+					));
+				}
+			}
+			let old = std::mem::replace(&mut project.armed, armed.clone());
+			Ok(vec![Command::SetArmedTracks { armed: old }])
 		}
 
 		Command::SetProjectMeta { meta } => {

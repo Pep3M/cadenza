@@ -165,7 +165,8 @@ pub struct RecordPlan {
 
 #[derive(Default)]
 pub struct RecordState {
-	/// Armed tracks, in arming order.
+	/// Armed tracks as the player has them: a mirror of `Project::armed` (saved with the
+	/// song, changed through `Command::SetArmedTracks`), synced after every edit.
 	pub armed: Vec<TrackId>,
 	/// Record mode (R): Play records.
 	pub mode: bool,
@@ -192,7 +193,7 @@ const LEVEL_FALL: f32 = 1.5;
 
 impl AppState {
 	pub fn is_armed(&self, track: TrackId) -> bool {
-		self.record.armed.contains(&track)
+		self.project().armed.contains(&track)
 	}
 
 	/// Audio and instrument tracks can record.
@@ -202,8 +203,9 @@ impl AppState {
 			.is_some_and(|t| matches!(t.kind, TrackKind::Audio | TrackKind::Instrument))
 	}
 
-	/// Arms or disarms `track` (its ● button). An audio track without an input gets
-	/// input 1 (one undo step); instrument tracks play the MIDI input while armed.
+	/// Arms or disarms `track` (its ● button; one undo step, saved with the song). An
+	/// audio track without an input gets input 1 in the same step; instrument tracks play
+	/// the MIDI input while armed.
 	pub fn toggle_arm(&mut self, track: TrackId) {
 		if self.is_recording() {
 			self.notices
@@ -217,24 +219,27 @@ impl AppState {
 			self.notices.info("Only audio and instrument tracks record");
 			return;
 		}
-		if self.is_armed(track) {
-			self.record.armed.retain(|a| *a != track);
-			if let Some(a) = &self.audio {
-				a.arm(track, false);
-			}
+		let mut armed = self.project().armed.clone();
+		let mut commands = Vec::new();
+		let label = if armed.contains(&track) {
+			armed.retain(|a| *a != track);
+			format!("Disarm '{}'", t.name)
 		} else {
-			if t.kind == TrackKind::Audio
-				&& t.input.is_none()
-				&& !self.set_track_input(track, Some(TrackInput::mono(0)))
-			{
-				return;
+			if t.kind == TrackKind::Audio && t.input.is_none() {
+				commands.push(Command::UpdateTrack {
+					track,
+					patch: TrackPatch {
+						input: Some(Some(TrackInput::mono(0))),
+						..TrackPatch::default()
+					},
+				});
 			}
-			self.record.armed.push(track);
-			if let Some(a) = &self.audio {
-				a.arm(track, true);
-			}
-		}
-		self.update_midi_monitor();
+			armed.push(track);
+			format!("Arm '{}'", t.name)
+		};
+		commands.push(Command::SetArmedTracks { armed });
+		// The player follows in `sync_arms` (after this edit, and after undo/redo).
+		self.apply(Command::Batch { label, commands });
 	}
 
 	/// Live MIDI plays through the last armed instrument track.
@@ -421,7 +426,7 @@ impl AppState {
 			return;
 		}
 		// Pattern mode with nothing armed records into the pattern's track.
-		if self.record.armed.is_empty()
+		if self.project().armed.is_empty()
 			&& let (config, _) = self.transport_config()
 			&& let Some((track, _)) = config.pattern.and_then(|c| self.project().find_clip(c))
 		{
@@ -696,15 +701,24 @@ impl AppState {
 		}
 	}
 
-	/// Drops arm states and take views of tracks that are gone.
+	/// Drops take views of tracks that are gone and brings the player's arm states to the
+	/// project's (an arm click, undo/redo, an opened song).
 	pub(crate) fn prune_record(&mut self) {
 		let p = &self.doc.project;
-		let before = self.record.armed.len();
-		self.record.armed.retain(|t| p.track(*t).is_some());
 		self.view.takes.retain(|t| p.track(*t).is_some());
-		if self.record.armed.len() != before {
-			self.update_midi_monitor();
+		if self.record.armed == p.armed {
+			return;
 		}
+		if let Some(a) = &self.audio {
+			for &t in self.record.armed.iter().filter(|t| !p.armed.contains(t)) {
+				a.arm(t, false);
+			}
+			for &t in p.armed.iter().filter(|t| !self.record.armed.contains(t)) {
+				a.arm(t, true);
+			}
+		}
+		self.record.armed = p.armed.clone();
+		self.update_midi_monitor();
 	}
 
 	/// Re-sends arm states and settings to a (re)started player.

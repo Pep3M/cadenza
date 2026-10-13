@@ -233,6 +233,10 @@ pub enum Command {
 	SetProjectMeta {
 		meta: ProjectMeta,
 	},
+	/// Replaces the tracks armed for recording (audio and instrument tracks, arming order).
+	SetArmedTracks {
+		armed: Vec<TrackId>,
+	},
 	/// Applies all commands atomically: if one fails, nothing changes. Undone as one step.
 	Batch {
 		label: String,
@@ -378,6 +382,7 @@ impl Command {
 			Self::AddMarker { .. } => "add_marker",
 			Self::RemoveMarker { .. } => "remove_marker",
 			Self::SetProjectMeta { .. } => "set_project_meta",
+			Self::SetArmedTracks { .. } => "set_armed_tracks",
 			Self::Batch { .. } => "batch",
 		}
 	}
@@ -521,6 +526,8 @@ impl Command {
 				Some(style) => format!("Set song style to '{style}'"),
 				None => "Clear song style".into(),
 			},
+			Self::SetArmedTracks { armed } if armed.is_empty() => "Disarm all tracks".into(),
+			Self::SetArmedTracks { .. } => "Arm tracks".into(),
 			Self::Batch { label, .. } => label.clone(),
 		}
 	}

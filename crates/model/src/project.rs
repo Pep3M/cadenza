@@ -41,6 +41,10 @@ pub struct Project {
 	/// What the song is (its style guide); missing in older files.
 	#[serde(default, skip_serializing_if = "ProjectMeta::is_empty")]
 	pub meta: ProjectMeta,
+	/// Tracks armed for recording, in arming order (the last armed instrument track plays
+	/// the live MIDI input). Saved with the song; missing in older files.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub armed: Vec<TrackId>,
 }
 
 /// Song-level metadata that has no effect on the sound.
@@ -427,6 +431,7 @@ impl Project {
 			automation: Vec::new(),
 			markers: Vec::new(),
 			meta: ProjectMeta::default(),
+			armed: Vec::new(),
 		}
 	}
 
@@ -571,6 +576,11 @@ impl Default for Channel {
 
 impl Track {
 	/// New track with a fresh id, default channel and no content.
+	/// Audio and instrument tracks can be armed for recording.
+	pub fn can_record(&self) -> bool {
+		matches!(self.kind, TrackKind::Audio | TrackKind::Instrument)
+	}
+
 	pub fn new(name: impl Into<String>, kind: TrackKind) -> Self {
 		Self {
 			id: TrackId::new(),

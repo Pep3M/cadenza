@@ -2544,3 +2544,53 @@ fn project_meta_is_undoable_validated_and_optional_in_json() {
 		.is_err()
 	);
 }
+
+#[test]
+fn armed_tracks_are_saved_undoable_and_follow_track_removal() {
+	let mut p = Project::new("Song");
+	let vox = Track::new("Vox", TrackKind::Audio);
+	let keys = Track::new("Keys", TrackKind::Instrument);
+	let bus = Track::new("Bus", TrackKind::Bus);
+	let (vox_id, keys_id, bus_id) = (vox.id, keys.id, bus.id);
+	p.tracks.extend([vox, keys, bus]);
+	assert!(!serde_json::to_string(&p).unwrap().contains("armed"));
+	let mut doc = Document::new(p);
+	doc.execute(Command::SetArmedTracks {
+		armed: vec![keys_id, vox_id],
+	})
+	.unwrap();
+	assert_eq!(doc.project().armed, vec![keys_id, vox_id]);
+	let json = doc.project().to_json_string().unwrap();
+	assert_eq!(
+		Project::from_json_str(&json).unwrap().armed,
+		vec![keys_id, vox_id]
+	);
+	// Buses do not record; ids are checked.
+	assert!(
+		doc.execute(Command::SetArmedTracks {
+			armed: vec![bus_id]
+		})
+		.is_err()
+	);
+	assert!(
+		doc.execute(Command::SetArmedTracks {
+			armed: vec![vox_id, vox_id]
+		})
+		.is_err()
+	);
+	// Removing an armed track disarms it; undo arms it again.
+	doc.execute(Command::RemoveTrack { track: vox_id }).unwrap();
+	assert_eq!(doc.project().armed, vec![keys_id]);
+	doc.undo().unwrap();
+	assert_eq!(doc.project().armed, vec![keys_id, vox_id]);
+	doc.undo().unwrap();
+	assert!(doc.project().armed.is_empty());
+	// A stale id in a file is dropped on load, not an error.
+	let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+	v["armed"]
+		.as_array_mut()
+		.unwrap()
+		.push(json!(TrackId::new().to_string()));
+	let loaded = Project::from_json_str(&v.to_string()).unwrap();
+	assert_eq!(loaded.armed, vec![keys_id, vox_id]);
+}

@@ -985,6 +985,16 @@ pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	for t in &project.tracks {
 		track(project, t)?;
 	}
+	for (i, id) in project.armed.iter().enumerate() {
+		let t = project.track(*id).ok_or(ModelError::TrackNotFound(*id))?;
+		if !t.can_record() || project.armed[..i].contains(id) {
+			return Err(ModelError::invalid(
+				"armed track",
+				t.name.clone(),
+				"only audio and instrument tracks, each once",
+			));
+		}
+	}
 	for d in &project.master.inserts {
 		device_links(project, None, d, false)?;
 	}

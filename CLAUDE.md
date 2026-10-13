@@ -99,6 +99,7 @@ pub struct Project {
 	pub master: Channel,
 	pub automation: Vec<AutomationLane>,
 	pub markers: Vec<Marker>,          // song sections: Intro, Verse 1, Chorus...
+	pub armed: Vec<TrackId>,           // armed for recording, arming order (optional in JSON; stale ids dropped on load)
 }
 pub enum TrackKind { Instrument, Audio, Bus, Folder }
 pub struct Track { id: TrackId, name, kind, color: Option<String /* #RRGGBB */>,
@@ -143,7 +144,8 @@ master), SetInstrument, InsertDevice, RemoveDevice,
 MoveDevice, SetDeviceBypass, SetParam { address, value }, AddSend, RemoveSend, AddClip,
 RemoveClip, UpdateClip, AddNotes, RemoveNotes, UpdateNotes, SetTempo, RemoveTempoPoint,
 SetTimeSignature { time_signature, bar /* 0-based index, 0 = bar 1, omitted when 0 */ },
-RemoveTimeSignature { bar }, SetTrackFreeze { track, freeze: Option<Freeze> } (instrument/audio only), SetTrackFolder { track, folder: Option }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
+RemoveTimeSignature { bar }, SetArmedTracks { armed } (audio/instrument tracks, no repeats;
+RemoveTrack disarms), SetTrackFreeze { track, freeze: Option<Freeze> } (instrument/audio only), SetTrackFolder { track, folder: Option }, SetControllerLane { clip, controller, points } (replace; empty removes), SetAutomation (replace lane; empty points removes it), AddMarker, RemoveMarker,
 SetDeviceState { track, device, state, params: Option<map> /* Some = replace all params */ },
 SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
@@ -957,7 +959,10 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   every reload clears that. Editors opened before the device is loaded wait for the reload.
   The generic editor (inspector sliders) has a filter and "show all" for large plugins.
 - Recording (phase 16; `state::record` logic + `ui::record` views, `ui::transport`): arm states
-  are session state (`RecordState.armed`, mirrored to the player, kept across device reopen);
+  live in the project (`Project.armed`, saved; phase 19a): the ● button is one undo step "Arm
+  'Vox'" (`SetArmedTracks`, plus In 1 for an audio track without input), `prune_record` syncs
+  the player mirror `RecordState.armed` after every edit/undo/open (`live::diff` ignores
+  arms; kept across device reopen); audio input monitoring already lives in `TrackInput.monitor`;
   ● on track headers and mixer strips (arming an audio track without an input gives it In 1,
   one undo step; armed instrument tracks get the live MIDI). Audio headers: input selector (mono
   / stereo pairs of the open input, or none), speaker monitor button (`ui::record::

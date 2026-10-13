@@ -1472,3 +1472,43 @@ fn freeze_bounce_and_consolidate_are_single_undo_steps() {
 	assert_eq!(s.undo_label(), Some("Consolidate clips"));
 	assert_eq!(s.project().track(bounced).unwrap().clips.len(), 1);
 }
+
+#[test]
+fn arm_states_are_saved_with_the_song_and_undoable() {
+	let tmp = tempfile::tempdir().unwrap();
+	let (mut s, keys) = state_with_song();
+	s.safety.state_dir = tmp.path().to_path_buf();
+	let vox = {
+		let t = Track::new("Vox", TrackKind::Audio);
+		let id = t.id;
+		assert!(s.apply(Command::AddTrack {
+			track: t,
+			index: None
+		}));
+		id
+	};
+	s.toggle_arm(keys);
+	s.toggle_arm(vox);
+	assert_eq!(s.undo_label(), Some("Arm 'Vox'"));
+	assert!(s.is_armed(keys) && s.is_armed(vox));
+	assert_eq!(s.record.armed, vec![keys, vox], "the player mirror follows");
+	assert!(
+		s.project().track(vox).unwrap().input.is_some(),
+		"input 1 in the same step"
+	);
+	s.undo();
+	assert!(!s.is_armed(vox) && s.project().track(vox).unwrap().input.is_none());
+	assert_eq!(s.record.armed, vec![keys]);
+	s.redo();
+	assert_eq!(s.record.armed, vec![keys, vox]);
+
+	let path = tmp.path().join("Song").join("Song.cadenza.json");
+	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+	assert!(s.save_as(path.clone()));
+	let mut reopened = AppState::headless();
+	reopened.safety.state_dir = tmp.path().to_path_buf();
+	assert!(reopened.open(&path));
+	assert!(reopened.is_armed(keys) && reopened.is_armed(vox));
+	assert_eq!(reopened.record.armed, vec![keys, vox]);
+	assert!(reopened.recording_context().unwrap().contains("Vox"));
+}

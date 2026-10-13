@@ -4,6 +4,7 @@ description = "Cadenza's style library: genre style guides, song forms, progress
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 cadenza-core.workspace = true

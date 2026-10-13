@@ -3,6 +3,7 @@ name = "cadenza-audio-io"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Audio file decoding, resampling, caching, waveform peaks, clip DSP and export for Cadenza"
 
 [features]

@@ -4,6 +4,7 @@ description = "Cadenza's embedded AI arranger/mix engineer: an LLM tool loop ove
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 cadenza-core.workspace = true

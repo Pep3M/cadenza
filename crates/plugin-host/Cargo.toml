@@ -4,6 +4,7 @@ description = "Third-party plugin hosting for Cadenza: discovery, out-of-process
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 cadenza-dsp.workspace = true

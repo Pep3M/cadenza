@@ -55,7 +55,7 @@ the platform: rustup targets + `cargo check/clippy --target ...` (C build script
 target C toolchain or a stub `CC_<target>`); CI is the real check.
 CI (`.github/workflows/ci.yml`, toolchain pinned in `RUST_TOOLCHAIN`): Linux fmt/clippy
 `-D warnings`/`cargo test --release` + `cargo deny check` (`deny.toml`: permissive licenses +
-MPL-2.0 + egui's font licenses, Cadenza crates as exceptions) on every push/PR; Windows and
+MPL-2.0 + egui's font licenses; Cadenza crates are `LicenseRef-Proprietary`, `publish = false`, see `LICENSE`) on every push/PR; Windows and
 macOS clippy + release tests (+ `cargo check --target x86_64-apple-darwin`) only on PRs to
 main/staging, pushes to main, `v*` tags and `workflow_dispatch` (`platforms` input); docs-only
 changes skipped, superseded runs cancelled. No secrets: AI tests use the scripted provider.

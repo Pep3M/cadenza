@@ -4,6 +4,7 @@ description = "Cadenza command line: render projects, run the MCP server, compos
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "cadenza"

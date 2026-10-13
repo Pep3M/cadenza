@@ -5,7 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "LicenseRef-Proprietary"
+publish = false
 repository = "https://github.com/Pep3M/cadenza"
 rust-version = "1.88"
 

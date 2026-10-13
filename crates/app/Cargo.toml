@@ -4,6 +4,7 @@ description = "Cadenza desktop application (egui)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 # egui 0.36 needs a newer compiler than the rest of the workspace.
 rust-version = "1.95"
 

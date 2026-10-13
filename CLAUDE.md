@@ -42,7 +42,12 @@ Future: sandbox on Windows, plugin editors on Windows/macOS (HWND/NSView), nativ
 | per-user folders | XDG | `~/Library/{Application Support,Caches}` | `%APPDATA%` / `%LOCALAPPDATA%` |
 
 Folders come from `cadenza_core::paths::{data,config,cache,state}_dir()` (each ends in
-`cadenza`; an absolute `XDG_*_HOME` wins on every OS, which tests use). Sandbox and editor
+`cadenza`; an absolute `XDG_*_HOME` wins on every OS, which tests use). Canonicalize user
+paths with `paths::real_path` (no Windows `\\?\` prefix; tests compare against it since
+macOS temp dirs resolve to `/private/var` and Windows ones expand `RUNNER~1`). VST3 class ids
+are the SDK's printed form on every OS (`vst3::com::tuid_to_hex` swaps Windows' COM GUID
+fields), so ids in projects are portable. Repo file names must differ beyond case
+(`core_pack_file_names_differ_beyond_case`). Sandbox and editor
 integration tests are `#![cfg]`-gated to the platforms that have them; `plugin_support::
 sandboxed()` is in-process on Windows so the parity tests still run. `plugin-host` allows
 dead code off Linux (that plumbing is type-checked, not wired). Cross-check locally without

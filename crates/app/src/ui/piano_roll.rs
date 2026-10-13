@@ -21,6 +21,7 @@ use egui::{
 };
 
 use crate::state::AppState;
+use crate::state::layout::PanelKind;
 use crate::state::piano::{self, Ghosts, MIN_NOTE_LENGTH, PianoSnap, PianoView, Tool};
 use crate::state::timeline;
 use crate::theme;
@@ -477,6 +478,28 @@ impl PianoUi {
 				.clicked()
 			{
 				state.close_piano_roll();
+			}
+			let maximized = state.view.panels.maximized == Some(PanelKind::PianoRoll);
+			if ui
+				.add(
+					egui::Button::new(
+						RichText::new(if maximized { "🗗" } else { "🗖" })
+							.size(13.0)
+							.color(theme::TEXT_DIM),
+					)
+					.frame(false),
+				)
+				.on_hover_text(if maximized {
+					"Restore the layout (F11)"
+				} else {
+					"Maximize the piano roll (F11)"
+				})
+				.clicked()
+			{
+				state
+					.view
+					.panels
+					.toggle_maximize_panel(PanelKind::PianoRoll);
 			}
 			if let Some(t) = t {
 				if ui

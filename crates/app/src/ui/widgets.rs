@@ -355,25 +355,76 @@ pub fn paint_toggle(
 	);
 }
 
-/// Horizontal level bar used in compact places (track headers): volume as a fader
-/// position, value text on top.
-pub fn volume_bar(p: &egui::Painter, rect: Rect, db: f32, color: Color32) {
-	p.rect_filled(rect, CornerRadius::same(2), theme::METER_BG);
-	let w = db_to_fader(db) * rect.width();
-	p.rect_filled(
-		Rect::from_min_size(rect.min, vec2(w, rect.height())),
-		CornerRadius::same(2),
-		color.gamma_multiply(0.55),
-	);
-	let zero = rect.left() + db_to_fader(0.0) * rect.width();
-	p.vline(zero, rect.y_range(), Stroke::new(1.0, theme::TEXT_FAINT));
-	p.text(
-		Pos2::new(rect.right() - 3.0, rect.center().y),
-		Align2::RIGHT_CENTER,
-		format!("{} dB", format_db(db)),
-		egui::FontId::proportional(9.5),
-		theme::TEXT,
-	);
+/// Horizontal volume fader for compact places (track headers): same curve as the mixer
+/// fader. Drag (Shift: fine), double-click: 0 dB.
+pub fn volume_slider(
+	ui: &mut Ui,
+	id: Id,
+	db: f32,
+	rect: Rect,
+	color: Color32,
+) -> (Gesture, Response) {
+	let response = ui
+		.interact(rect, id, Sense::click_and_drag())
+		.on_hover_cursor(CursorIcon::ResizeHorizontal);
+	let fine = if ui.input(|i| i.modifiers.shift) {
+		0.2
+	} else {
+		1.0
+	};
+	let travel = (rect.width() - 4.0).max(1.0);
+	let delta = response.drag_delta().x / travel * fine;
+	let gesture = match drag_value(&response, id, db_to_fader(db), delta) {
+		_ if response.double_clicked() => Gesture::Commit(0.0),
+		Gesture::Preview(p) => Gesture::Preview(fader_to_db(p)),
+		Gesture::Commit(p) => Gesture::Commit(fader_to_db(p)),
+		Gesture::Idle => Gesture::Idle,
+	};
+	let shown = match gesture {
+		Gesture::Preview(v) | Gesture::Commit(v) => v,
+		Gesture::Idle => db,
+	};
+	if ui.is_rect_visible(rect) {
+		let p = ui.painter();
+		let active = response.dragged() || response.hovered();
+		p.rect_filled(rect, CornerRadius::same(2), theme::METER_BG);
+		let x = rect.left() + 2.0 + db_to_fader(shown) * travel;
+		p.rect_filled(
+			Rect::from_min_max(rect.min, pos2(x, rect.bottom())),
+			CornerRadius::same(2),
+			color.gamma_multiply(if active { 0.5 } else { 0.32 }),
+		);
+		let zero = rect.left() + 2.0 + db_to_fader(0.0) * travel;
+		p.vline(
+			zero,
+			rect.bottom() - 3.0..=rect.bottom(),
+			Stroke::new(1.0, theme::TEXT_DIM),
+		);
+		p.text(
+			Pos2::new(rect.center().x, rect.center().y),
+			Align2::CENTER_CENTER,
+			format!("{} dB", format_db(shown)),
+			egui::FontId::proportional(9.5),
+			theme::TEXT,
+		);
+		let handle = Rect::from_center_size(pos2(x, rect.center().y), vec2(4.0, rect.height()));
+		p.rect(
+			handle,
+			CornerRadius::same(1),
+			if active { theme::ACCENT } else { theme::TEXT },
+			Stroke::new(1.0, theme::BG_DEEP),
+			StrokeKind::Outside,
+		);
+		if active {
+			p.rect_stroke(
+				rect,
+				CornerRadius::same(2),
+				Stroke::new(1.0, theme::BORDER_STRONG),
+				StrokeKind::Inside,
+			);
+		}
+	}
+	(gesture, response)
 }
 
 /// Thin themed scrollbar over `rect` for a view showing `visible` of `total` starting

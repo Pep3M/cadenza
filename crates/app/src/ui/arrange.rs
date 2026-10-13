@@ -24,7 +24,8 @@ use crate::state::selection::DeviceRef;
 use crate::state::timeline::{self, Overview, Timeline};
 use crate::state::{AppState, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT};
 use crate::theme;
-use crate::ui::{dnd, widgets};
+use crate::ui::dnd;
+use crate::ui::widgets::{self, Gesture};
 
 /// Width of the clip edge that resizes instead of moving.
 const RESIZE_HANDLE: f32 = 7.0;
@@ -930,7 +931,24 @@ impl ArrangeUi {
 				}
 			}
 			let vol_rect = Rect::from_min_size(pos2(right - 58.0, row2), vec2(58.0, 14.0));
-			widgets::volume_bar(&p, vol_rect, state.volume_db(Some(track.id)), color);
+			let (gesture, vol) = widgets::volume_slider(
+				ui,
+				id.with("volume"),
+				state.volume_db(Some(track.id)),
+				vol_rect,
+				color,
+			);
+			match gesture {
+				Gesture::Preview(v) => state.preview_volume(Some(track.id), v),
+				Gesture::Commit(v) => state.commit_volume(Some(track.id), v),
+				Gesture::Idle => {}
+			}
+			let vol_addr = crate::state::volume_address(Some(track.id));
+			if state.is_automated(&vol_addr) {
+				super::automation::automated_badge(ui, vol_rect);
+			}
+			vol.on_hover_text("Volume: drag (Shift: fine), double-click: 0 dB")
+				.context_menu(|ui| super::automation::automate_item(ui, state, vol_addr));
 		}
 		// Meter along the right edge.
 		let meter = Rect::from_min_max(

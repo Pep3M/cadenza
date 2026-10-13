@@ -445,6 +445,20 @@ fn f7_opens_the_track_clip_or_creates_one() {
 	assert!(s.apply(edits::add_track(s.project(), bus, None)));
 	assert!(!s.open_track_in_piano_roll(bus_id));
 	assert!(s.notices.last().unwrap().text.contains("not an instrument"));
+
+	// F7 with the piano roll open on another track's clip switches to the selected track.
+	s.selection.select_track(keys);
+	s.toggle_piano_roll();
+	let open = s.view.piano.clip.expect("a clip is open");
+	assert_eq!(s.project().find_clip(open).unwrap().0.id, keys);
+	s.selection.select_track(ep);
+	s.toggle_piano_roll();
+	let open = s.view.piano.clip.expect("a clip is open");
+	assert_eq!(s.project().find_clip(open).unwrap().0.id, ep);
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+	// Same track: F7 closes it.
+	s.toggle_piano_roll();
+	assert!(!s.view.panels.visible(PanelKind::PianoRoll));
 }
 
 #[test]

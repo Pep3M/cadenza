@@ -175,6 +175,10 @@ impl PanelLayout {
 	/// Opens the piano roll in the bottom dock; a visible mixer makes room for it and
 	/// comes back when the piano roll is closed.
 	pub fn open_piano_roll(&mut self) {
+		if self.maximized == Some(PanelKind::PianoRoll) {
+			self.focus = Some(PanelKind::PianoRoll);
+			return;
+		}
 		if !self.piano_roll && self.mixer && self.maximized.is_none() {
 			self.mixer = false;
 			self.mixer_yielded = true;
@@ -193,8 +197,22 @@ impl PanelLayout {
 			.focus
 			.filter(|p| self.shown(*p))
 			.unwrap_or(PanelKind::Arrange);
+		self.maximize(panel);
+	}
+
+	/// Maximizes `panel` (showing it), or restores the layout when it already is.
+	pub fn toggle_maximize_panel(&mut self, panel: PanelKind) {
+		if self.maximized == Some(panel) {
+			self.maximized = None;
+		} else {
+			self.maximize(panel);
+		}
+	}
+
+	fn maximize(&mut self, panel: PanelKind) {
 		*self.flag(panel) = true;
 		self.maximized = Some(panel);
+		self.focus = Some(panel);
 	}
 
 	/// F12: hides every tool panel, leaving the arrange view alone.
@@ -626,6 +644,20 @@ mod tests {
 		l.open_piano_roll();
 		l.toggle(PanelKind::Arrange);
 		assert_eq!(l.center(), Some(PanelKind::PianoRoll));
+	}
+
+	#[test]
+	fn maximized_piano_roll_stays_maximized_when_switching_clips() {
+		let mut l = PanelLayout::default();
+		l.open_piano_roll();
+		l.toggle_maximize_panel(PanelKind::PianoRoll);
+		assert_eq!(l.center(), Some(PanelKind::PianoRoll));
+		assert!(!l.visible(PanelKind::Arrange));
+		l.open_piano_roll();
+		assert_eq!(l.maximized, Some(PanelKind::PianoRoll));
+		l.toggle_maximize_panel(PanelKind::PianoRoll);
+		assert_eq!(l.maximized, None);
+		assert!(l.visible(PanelKind::Arrange) && l.visible(PanelKind::PianoRoll));
 	}
 
 	#[test]

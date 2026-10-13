@@ -115,36 +115,19 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		}
 	}
 
-	// Fixed regions so every strip lines up, top to bottom.
 	let inner = rect.shrink2(vec2(5.0, 5.0));
 	let w = inner.width();
-	let mut y = inner.top();
-	let mut take = |h: f32| {
-		let r = Rect::from_min_size(pos2(inner.left(), y), vec2(w, h));
-		y += h + 3.0;
-		r
-	};
-	let name_r = take(18.0);
-	let what_r = take(16.0);
-	let inserts_label = take(10.0);
-	let inserts_r = take(INSERT_ROWS as f32 * (ROW + 2.0));
-	let sends_label = take(10.0);
-	let sends_r = take(SEND_ROWS as f32 * 19.0 + 18.0);
-	let output_r = take(20.0);
-	let top_end = y;
-	let mut yb = inner.bottom();
-	let mut take_bottom = |h: f32| {
-		let r = Rect::from_min_max(pos2(inner.left(), yb - h), pos2(inner.right(), yb));
-		yb -= h + 3.0;
-		r
-	};
-	let ms_r = take_bottom(18.0);
-	let readout_r = take_bottom(16.0);
-	let pan_r = Rect::from_min_size(pos2(inner.left(), top_end + 2.0), vec2(w, 16.0));
-	let fader_r = Rect::from_min_max(
-		pos2(inner.left(), pan_r.bottom() + 6.0),
-		pos2(inner.right(), yb),
-	);
+	let StripLayout {
+		name: name_r,
+		what: what_r,
+		inserts: inserts_area,
+		sends: sends_area,
+		output: output_r,
+		pan: pan_r,
+		fader: fader_r,
+		readout: readout_r,
+		mute_solo: ms_r,
+	} = StripLayout::new(inner);
 
 	let p = ui.painter().clone();
 	let name = track.map_or("Master".to_owned(), |t| t.name.clone());
@@ -169,79 +152,86 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		Some(TrackKind::Bus) => "Bus".into(),
 		None => "Main out".into(),
 	};
-	let wr = ui.interact(what_r, Id::new(("strip-what", id)), Sense::click());
-	p.rect_filled(
-		what_r,
-		CornerRadius::same(2),
-		if wr.hovered() {
-			theme::BG_WIDGET
-		} else {
-			theme::BG_RAISED
-		},
-	);
-	p.with_clip_rect(what_r).text(
-		what_r.center(),
-		Align2::CENTER_CENTER,
-		&what,
-		theme::small(),
-		theme::TEXT_DIM,
-	);
-	if wr.clicked()
-		&& let Some(d) = track.and_then(|t| t.instrument.as_ref())
-	{
-		state.selection.select_device(DeviceRef {
-			track: id,
-			device: d.id,
-		});
-	}
-	if let Some(d) = track.and_then(|t| t.instrument.as_ref())
-		&& state.is_plugin(d.id)
-	{
-		if state.plugin_editor_open(d.id) {
-			p.circle_filled(
-				pos2(what_r.right() - 5.0, what_r.center().y),
-				2.5,
-				theme::ACCENT,
-			);
+	if let Some(what_r) = what_r {
+		let wr = ui.interact(what_r, Id::new(("strip-what", id)), Sense::click());
+		p.rect_filled(
+			what_r,
+			CornerRadius::same(2),
+			if wr.hovered() {
+				theme::BG_WIDGET
+			} else {
+				theme::BG_RAISED
+			},
+		);
+		p.with_clip_rect(what_r).text(
+			what_r.center(),
+			Align2::CENTER_CENTER,
+			&what,
+			theme::small(),
+			theme::TEXT_DIM,
+		);
+		if wr.clicked()
+			&& let Some(d) = track.and_then(|t| t.instrument.as_ref())
+		{
+			state.selection.select_device(DeviceRef {
+				track: id,
+				device: d.id,
+			});
 		}
-		let wr = wr.on_hover_text("Double-click: plugin editor");
-		if wr.double_clicked() {
-			state.toggle_plugin_editor(d.id);
-		}
-	} else if let Some(d) = track.and_then(|t| t.instrument.as_ref()) {
-		let r = DeviceRef {
-			track: id,
-			device: d.id,
-		};
-		if state.is_sample_device(r) {
-			let wr = wr.on_hover_text("Double-click: pads / zones editor");
+		if let Some(d) = track.and_then(|t| t.instrument.as_ref())
+			&& state.is_plugin(d.id)
+		{
+			if state.plugin_editor_open(d.id) {
+				p.circle_filled(
+					pos2(what_r.right() - 5.0, what_r.center().y),
+					2.5,
+					theme::ACCENT,
+				);
+			}
+			let wr = wr.on_hover_text("Double-click: plugin editor");
 			if wr.double_clicked() {
-				state.toggle_instrument_editor(r);
+				state.toggle_plugin_editor(d.id);
+			}
+		} else if let Some(d) = track.and_then(|t| t.instrument.as_ref()) {
+			let r = DeviceRef {
+				track: id,
+				device: d.id,
+			};
+			if state.is_sample_device(r) {
+				let wr = wr.on_hover_text("Double-click: pads / zones editor");
+				if wr.double_clicked() {
+					state.toggle_instrument_editor(r);
+				}
 			}
 		}
 	}
 
-	section_label(&p, inserts_label, "INSERTS");
-	p.rect_filled(inserts_r, CornerRadius::same(2), theme::BG_DEEP);
-	let mut rows = ui.new_child(
-		egui::UiBuilder::new()
-			.max_rect(inserts_r.shrink(1.0))
-			.layout(Layout::top_down(Align::Min)),
-	);
+	let inserts_r = inserts_area.map_or(Rect::NOTHING, |(_, r)| r);
 	let mut row_rects = Vec::with_capacity(channel.inserts.len());
-	egui::ScrollArea::vertical()
-		.id_salt(("inserts", id))
-		.auto_shrink([false, false])
-		.show(&mut rows, |ui| {
-			ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-			for d in &channel.inserts {
-				row_rects.push(insert_row(ui, state, id, d, w - 2.0));
-			}
-			insert_menu(ui, state, id, w - 2.0);
-		});
+	if let Some((inserts_label, inserts_r)) = inserts_area {
+		section_label(&p, inserts_label, "INSERTS");
+		p.rect_filled(inserts_r, CornerRadius::same(2), theme::BG_DEEP);
+		let mut rows = ui.new_child(
+			egui::UiBuilder::new()
+				.max_rect(inserts_r.shrink(1.0))
+				.layout(Layout::top_down(Align::Min)),
+		);
+		egui::ScrollArea::vertical()
+			.id_salt(("inserts", id))
+			.auto_shrink([false, false])
+			.show(&mut rows, |ui| {
+				ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+				for d in &channel.inserts {
+					row_rects.push(insert_row(ui, state, id, d, w - 2.0));
+				}
+				insert_menu(ui, state, id, w - 2.0);
+			});
+	}
 	drop_zone(ui, state, id, rect, inserts_r, &row_rects);
 
-	if let Some(t) = track {
+	if let Some(t) = track
+		&& let Some((sends_label, sends_r)) = sends_area
+	{
 		section_label(&p, sends_label, "SENDS");
 		let mut sends = ui.new_child(
 			egui::UiBuilder::new()
@@ -286,6 +276,10 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 					);
 				}
 			});
+	}
+	if let Some(t) = track
+		&& let Some(output_r) = output_r
+	{
 		let mut out = ui.new_child(egui::UiBuilder::new().max_rect(output_r));
 		output_selector(&mut out, state, t, &channel, w);
 	}
@@ -416,6 +410,102 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32) 
 		}
 		if arm {
 			super::record::mixer_arm(&mut ms, state, t.id, half);
+		}
+	}
+}
+
+/// Regions of a strip, top to bottom. Every strip of the same height gets the same
+/// layout so they line up; when the panel is short the optional sections shrink and then
+/// disappear (least important first) so the fader keeps a usable travel.
+struct StripLayout {
+	name: Rect,
+	what: Option<Rect>,
+	/// Label and slot area.
+	inserts: Option<(Rect, Rect)>,
+	sends: Option<(Rect, Rect)>,
+	output: Option<Rect>,
+	pan: Rect,
+	fader: Rect,
+	readout: Rect,
+	mute_solo: Rect,
+}
+
+/// Shortest fader travel worth showing before sections are dropped.
+const MIN_FADER: f32 = 72.0;
+const GAP: f32 = 3.0;
+const LABEL: f32 = 10.0;
+
+impl StripLayout {
+	fn new(inner: Rect) -> Self {
+		// (insert rows, send rows, what, output); send rows `None` = no sends section.
+		const LEVELS: [(usize, Option<usize>, bool, bool); 6] = [
+			(INSERT_ROWS, Some(SEND_ROWS), true, true),
+			(2, Some(1), true, true),
+			(1, Some(0), true, true),
+			(1, None, true, true),
+			(1, None, false, true),
+			(0, None, false, false),
+		];
+		let bottom = 18.0 + GAP + 16.0 + GAP;
+		let fixed = 18.0 + GAP + 2.0 + 16.0 + 6.0 + bottom;
+		let sections = |&(ins, sends, what, output): &(usize, Option<usize>, bool, bool)| {
+			let mut h = 0.0;
+			if what {
+				h += 16.0 + GAP;
+			}
+			if ins > 0 {
+				h += LABEL + GAP + ins as f32 * (ROW + 2.0) + GAP;
+			}
+			if let Some(n) = sends {
+				h += LABEL + GAP + n as f32 * 19.0 + 18.0 + GAP;
+			}
+			if output {
+				h += 20.0 + GAP;
+			}
+			h
+		};
+		let level = LEVELS
+			.iter()
+			.find(|l| inner.height() - fixed - sections(l) >= MIN_FADER)
+			.unwrap_or(&LEVELS[LEVELS.len() - 1]);
+		let (ins, sends, what, output) = *level;
+
+		let w = inner.width();
+		let mut y = inner.top();
+		let mut take = |h: f32| {
+			let r = Rect::from_min_size(pos2(inner.left(), y), vec2(w, h));
+			y += h + GAP;
+			r
+		};
+		let name = take(18.0);
+		let what = what.then(|| take(16.0));
+		let inserts = (ins > 0).then(|| (take(LABEL), take(ins as f32 * (ROW + 2.0))));
+		let sends = sends.map(|n| (take(LABEL), take(n as f32 * 19.0 + 18.0)));
+		let output = output.then(|| take(20.0));
+		let pan = Rect::from_min_size(pos2(inner.left(), y + 2.0), vec2(w, 16.0));
+		let mut yb = inner.bottom();
+		let mut take_bottom = |h: f32| {
+			let r = Rect::from_min_max(pos2(inner.left(), yb - h), pos2(inner.right(), yb));
+			yb -= h + GAP;
+			r
+		};
+		let mute_solo = take_bottom(18.0);
+		let readout = take_bottom(16.0);
+		// Even below the last level the fader never inverts (it just gets very short).
+		let fader = Rect::from_min_max(
+			pos2(inner.left(), pan.bottom() + 6.0),
+			pos2(inner.right(), yb.max(pan.bottom() + 6.0 + 24.0)),
+		);
+		Self {
+			name,
+			what,
+			inserts,
+			sends,
+			output,
+			pan,
+			fader,
+			readout,
+			mute_solo,
 		}
 	}
 }
@@ -766,5 +856,35 @@ fn output_selector(ui: &mut Ui, state: &mut AppState, track: &Track, channel: &C
 				..Default::default()
 			},
 		);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn layout(height: f32) -> StripLayout {
+		StripLayout::new(Rect::from_min_size(pos2(0.0, 0.0), vec2(90.0, height)))
+	}
+
+	#[test]
+	fn strip_sections_give_way_to_the_fader() {
+		let tall = layout(600.0);
+		assert!(tall.what.is_some() && tall.sends.is_some() && tall.output.is_some());
+		assert_eq!(
+			tall.inserts.unwrap().1.height(),
+			INSERT_ROWS as f32 * (ROW + 2.0)
+		);
+		for h in [600.0, 400.0, 330.0, 280.0, 240.0, 200.0, 160.0] {
+			let l = layout(h);
+			assert!(l.fader.height() >= MIN_FADER, "{h}: {}", l.fader.height());
+			assert!(l.pan.bottom() < l.fader.top(), "{h}");
+			assert!(l.fader.bottom() < l.readout.top(), "{h}");
+			assert!(l.readout.bottom() < l.mute_solo.top(), "{h}");
+		}
+		let short = layout(160.0);
+		assert!(short.inserts.is_none() && short.sends.is_none() && short.output.is_none());
+		// Never inverted, even when far too short.
+		assert!(layout(60.0).fader.height() > 0.0);
 	}
 }

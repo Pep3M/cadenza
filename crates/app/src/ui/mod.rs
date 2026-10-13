@@ -226,7 +226,7 @@ impl CadenzaApp {
 			let r = Panel::bottom("piano-roll")
 				.resizable(true)
 				.default_size(360.0)
-				.size_range(200.0..=900.0)
+				.size_range(200.0..=f32::INFINITY)
 				.frame(Frame::new().fill(theme::BG_DEEP))
 				.show(ui, |ui| {
 					if locked {

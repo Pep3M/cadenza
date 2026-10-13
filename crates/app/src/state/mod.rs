@@ -2027,18 +2027,29 @@ impl AppState {
 		self.apply(cmd) && self.open_piano_roll(clip)
 	}
 
-	/// F7: hides a visible editor dock; otherwise opens the piano roll for the selected
+	/// F7: hides a visible editor dock (unless an instrument track other than the one
+	/// being edited is selected: that track's clip is shown instead); otherwise opens the piano roll for the selected
 	/// instrument track (see [`AppState::open_track_in_piano_roll`]), or the selected clip
 	/// of another kind in its editor, or just shows the dock.
 	pub fn toggle_piano_roll(&mut self) {
-		if self.view.panels.visible(PanelKind::PianoRoll) {
-			self.close_piano_roll();
-			return;
-		}
 		let track = self
 			.selection
 			.track
 			.filter(|t| self.project().track(*t).map(|t| t.kind) == Some(TrackKind::Instrument));
+		if self.view.panels.visible(PanelKind::PianoRoll) {
+			// Another instrument track was selected since: show its clip instead of closing.
+			let editing = (!self.view.audio_editor && !self.view.instrument_editor)
+				.then_some(self.view.piano.clip)
+				.flatten()
+				.and_then(|c| self.project().find_clip(c).map(|(t, _)| t.id));
+			match track {
+				Some(t) if editing != Some(t) => {
+					self.open_track_in_piano_roll(t);
+				}
+				_ => self.close_piano_roll(),
+			}
+			return;
+		}
 		if let Some(track) = track {
 			self.open_track_in_piano_roll(track);
 			return;

@@ -1231,7 +1231,9 @@ impl CadenzaServer {
 			bell|low_shelf|high_shelf|high_pass|low_pass, freq_hz, gain_db, q} on the built-in \
 			Parametric EQ (inserted first when missing), compressor {track_id?, threshold_db, \
 			ratio, attack_ms, release_ms, makeup_db}, limiter {track_id? (master), ceiling_db, \
-			input_gain_db}, send {track_id, bus_id, level_db}. Omitted track_id = master. \
+			input_gain_db}, send {track_id, bus_id | effect: reverb|delay, level_db} (effect = the \
+			song's return bus, created in the same step when missing; only raises an existing \
+			send). Omitted track_id = master. \
 			All or nothing: an invalid move names its index."
 	)]
 	fn apply_mix_moves(

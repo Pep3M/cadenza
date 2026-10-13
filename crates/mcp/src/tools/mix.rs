@@ -14,7 +14,7 @@ use cadenza_analysis::issues::{
 	Issue, IssueKind, LimiterState, MasterInput, TrackInput, find_issues, track_masking,
 };
 use cadenza_analysis::masking::MaskingPair;
-use cadenza_analysis::moves::{EqKind, MixMove};
+use cadenza_analysis::moves::{EqKind, MixMove, ReturnEffect};
 use cadenza_analysis::reference::{ReferenceComparison, compare};
 use cadenza_analysis::roles::{Role, infer_role};
 use cadenza_analysis::spectrum::OCTAVE_HZ;
@@ -1175,38 +1175,108 @@ fn one_move(project: &Project, mv: &MixMove) -> Result<Vec<Command>, String> {
 		MixMove::Send {
 			track_id,
 			bus_id,
+			effect,
 			level_db,
 		} => {
 			let channel = channel_of(project, Some(*track_id))?;
-			let bus = project.track(*bus_id).ok_or_else(|| {
-				format!("bus {bus_id} does not exist; create one with create_track kind bus")
-			})?;
-			if bus.kind != TrackKind::Bus {
-				return Err(format!("'{}' is not a bus track", bus.name));
-			}
 			if !level_db.is_finite() {
 				return Err("level_db must be a finite number".into());
 			}
 			let level = level_db.clamp(-96.0, 12.0);
-			Ok(vec![
-				match channel.sends.iter().find(|s| s.target == *bus_id) {
-					Some(send) => Command::UpdateSend {
-						track: *track_id,
-						send: send.id,
-						patch: SendPatch {
-							level_db: Some(level),
-							..SendPatch::default()
-						},
-					},
-					None => Command::AddSend {
-						track: *track_id,
-						send: ModelSend::new(*bus_id, level),
-						index: None,
+			let mut commands = Vec::new();
+			let (bus_id, only_raise) = match (bus_id, effect) {
+				(Some(id), _) => {
+					let bus = project.track(*id).ok_or_else(|| {
+						format!(
+							"bus {id} does not exist; create one with create_track kind bus, or \
+							 pass effect reverb|delay without bus_id to use (or create) a return"
+						)
+					})?;
+					if bus.kind != TrackKind::Bus {
+						return Err(format!("'{}' is not a bus track", bus.name));
+					}
+					(*id, false)
+				}
+				(None, Some(effect)) => match return_bus(project, *effect) {
+					Some(id) => (id, true),
+					None => {
+						let bus = new_return_bus(*effect);
+						let id = bus.id;
+						commands.push(Command::AddTrack {
+							track: bus,
+							index: None,
+						});
+						(id, true)
+					}
+				},
+				(None, None) => {
+					return Err(
+						"give bus_id (a bus track) or effect reverb|delay (the song's return, \
+						 created when missing)"
+							.into(),
+					);
+				}
+			};
+			if bus_id == *track_id {
+				return Err("a track cannot send to itself".into());
+			}
+			commands.push(match channel.sends.iter().find(|s| s.target == bus_id) {
+				Some(send) if only_raise && send.level_db >= level => return Ok(commands),
+				Some(send) => Command::UpdateSend {
+					track: *track_id,
+					send: send.id,
+					patch: SendPatch {
+						level_db: Some(level),
+						..SendPatch::default()
 					},
 				},
-			])
+				None => Command::AddSend {
+					track: *track_id,
+					send: ModelSend::new(bus_id, level),
+					index: None,
+				},
+			});
+			Ok(commands)
 		}
 	}
+}
+
+/// The song's return bus for `effect`: a bus track carrying that built-in (the one named
+/// after it first).
+fn return_bus(project: &Project, effect: ReturnEffect) -> Option<TrackId> {
+	let carries = |t: &&cadenza_model::Track| {
+		t.kind == TrackKind::Bus
+			&& t.channel
+				.inserts
+				.iter()
+				.any(|d| d.builtin_id() == Some(effect.device()))
+	};
+	let buses: Vec<&cadenza_model::Track> = project.tracks.iter().filter(carries).collect();
+	buses
+		.iter()
+		.find(|t| t.name.eq_ignore_ascii_case(effect.name()))
+		.or(buses.first())
+		.map(|t| t.id)
+}
+
+/// A new return bus: the built-in at 100 % wet with musical defaults.
+fn new_return_bus(effect: ReturnEffect) -> cadenza_model::Track {
+	let mut bus = cadenza_model::Track::new(effect.name(), TrackKind::Bus);
+	let device = Device::builtin(effect.device(), effect.name()).with_param("mix", 100.0);
+	let device = match effect {
+		ReturnEffect::Reverb => device
+			.with_param("decay", 1.8)
+			.with_param("pre_delay", 25.0)
+			.with_param("low_cut", 250.0),
+		// Dotted eighth, a few dark repeats.
+		ReturnEffect::Delay => device
+			.with_param("sync", 7.0)
+			.with_param("feedback", 30.0)
+			.with_param("high_cut", 4_000.0)
+			.with_param("low_cut", 250.0),
+	};
+	bus.channel.inserts.push(device);
+	bus
 }
 
 fn move_name(mv: &MixMove) -> &'static str {
@@ -1412,7 +1482,8 @@ mod tests {
 			},
 			MixMove::Send {
 				track_id: keys,
-				bus_id: bus,
+				bus_id: Some(bus),
+				effect: None,
 				level_db: -18.0,
 			},
 			MixMove::Pan {
@@ -1459,7 +1530,8 @@ mod tests {
 					bell(-4.0, 260.0),
 					MixMove::Send {
 						track_id: keys,
-						bus_id: bus,
+						bus_id: Some(bus),
+						effect: None,
 						level_db: -12.0,
 					},
 					MixMove::Compressor {
@@ -1491,6 +1563,84 @@ mod tests {
 	}
 
 	#[test]
+	fn send_moves_create_a_return_bus_once_in_the_same_undo_step() {
+		let mut s = session();
+		let keys = add(&mut s, Track::new("Keys", TrackKind::Instrument));
+		let pad = add(&mut s, Track::new("Pad", TrackKind::Instrument));
+		let tracks_before = s.document().project().tracks.len();
+		let undo_before = s.document().history_labels().len();
+		let send = |track_id, level_db| MixMove::Send {
+			track_id,
+			bus_id: None,
+			effect: Some(ReturnEffect::Reverb),
+			level_db,
+		};
+		let out = apply_mix_moves(
+			&mut s,
+			ApplyMixMovesArgs {
+				moves: vec![send(keys, -18.0), send(pad, -15.0)],
+				label: Some("Mix fix: space".into()),
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			out.applied[0],
+			"Keys: send to the reverb return at -18.0 dB"
+		);
+		let p = s.document().project();
+		assert_eq!(p.tracks.len(), tracks_before + 1, "one return for both");
+		let bus = p.tracks.last().unwrap();
+		assert_eq!((bus.name.as_str(), bus.kind), ("Reverb", TrackKind::Bus));
+		let reverb = builtin(&bus.channel, "reverb").unwrap();
+		assert_eq!(param(reverb, "mix"), 100.0);
+		let bus_id = bus.id;
+		for (t, db) in [(keys, -18.0), (pad, -15.0)] {
+			let sends = &p.track(t).unwrap().channel.sends;
+			assert_eq!(sends.len(), 1);
+			assert_eq!((sends[0].target, sends[0].level_db), (bus_id, db));
+		}
+		assert_eq!(s.document().history_labels().len(), undo_before + 1);
+
+		// Found by its effect again: the bus is reused and a send is only raised.
+		apply_mix_moves(
+			&mut s,
+			ApplyMixMovesArgs {
+				moves: vec![send(keys, -24.0), send(pad, -12.0)],
+				label: None,
+			},
+		)
+		.unwrap();
+		let p = s.document().project();
+		assert_eq!(p.tracks.len(), tracks_before + 1);
+		assert_eq!(p.track(keys).unwrap().channel.sends[0].level_db, -18.0);
+		assert_eq!(p.track(pad).unwrap().channel.sends[0].level_db, -12.0);
+
+		// One undo removes the return and its sends.
+		s.document_mut().undo().unwrap();
+		s.document_mut().undo().unwrap();
+		let p = s.document().project();
+		assert_eq!(p.tracks.len(), tracks_before);
+		assert!(p.track(keys).unwrap().channel.sends.is_empty());
+
+		// Neither a bus nor an effect: an actionable error.
+		let err = apply_mix_moves(
+			&mut s,
+			ApplyMixMovesArgs {
+				moves: vec![MixMove::Send {
+					track_id: keys,
+					bus_id: None,
+					effect: None,
+					level_db: -10.0,
+				}],
+				label: None,
+			},
+		)
+		.unwrap_err()
+		.to_string();
+		assert!(err.contains("effect reverb|delay"), "{err}");
+	}
+
+	#[test]
 	fn invalid_moves_name_their_index_and_change_nothing() {
 		let mut s = session();
 		let keys = add(&mut s, Track::new("Keys", TrackKind::Instrument));
@@ -1506,7 +1656,8 @@ mod tests {
 					},
 					MixMove::Send {
 						track_id: keys,
-						bus_id: keys,
+						bus_id: Some(keys),
+						effect: None,
 						level_db: -10.0,
 					},
 				],

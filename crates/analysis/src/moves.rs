@@ -121,13 +121,44 @@ pub enum MixMove {
 		)]
 		input_gain_db: Option<f32>,
 	},
-	/// Send level from a track to a bus (adds the send when missing).
+	/// Send level from a track to a bus (adds the send when missing). Give `bus_id`, or
+	/// `effect` alone to use the project's reverb/delay return (the bus carrying that
+	/// built-in, created as "Reverb"/"Delay" at 100 % wet when there is none); a send found
+	/// that way is only raised, never lowered.
 	Send {
 		track_id: TrackId,
-		bus_id: TrackId,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		bus_id: Option<TrackId>,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		effect: Option<ReturnEffect>,
 		#[serde(serialize_with = "crate::short::f32")]
 		level_db: f32,
 	},
+}
+
+/// The effect of a return bus a [`MixMove::Send`] can ask for by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReturnEffect {
+	Reverb,
+	Delay,
+}
+
+impl ReturnEffect {
+	/// The built-in device id (also the name of a new return bus, capitalized).
+	pub fn device(self) -> &'static str {
+		match self {
+			ReturnEffect::Reverb => "reverb",
+			ReturnEffect::Delay => "delay",
+		}
+	}
+
+	pub fn name(self) -> &'static str {
+		match self {
+			ReturnEffect::Reverb => "Reverb",
+			ReturnEffect::Delay => "Delay",
+		}
+	}
 }
 
 impl MixMove {
@@ -197,8 +228,18 @@ impl MixMove {
 				s
 			}
 			MixMove::Send {
-				bus_id, level_db, ..
-			} => format!("{who}: send to {} at {level_db:.1} dB", name(Some(*bus_id))),
+				bus_id,
+				effect,
+				level_db,
+				..
+			} => {
+				let to = match (bus_id, effect) {
+					(Some(bus), _) => name(Some(*bus)),
+					(None, Some(e)) => format!("the {} return", e.device()),
+					(None, None) => "a bus".into(),
+				};
+				format!("{who}: send to {to} at {level_db:.1} dB")
+			}
 		}
 	}
 }

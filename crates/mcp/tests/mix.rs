@@ -161,7 +161,17 @@ async fn analyze_fix_and_reanalyze() {
 	let targets = call(&server, "mix_targets", json!({})).await;
 	assert_eq!(targets["profile"], "pop");
 	assert!(targets["notes"].as_str().unwrap().contains("Vocal space"));
-	assert_eq!(targets["tracks"].as_array().unwrap().len(), 4);
+	// The four tracks, plus the reverb return a "too narrow" fix creates.
+	let names: Vec<&str> = targets["tracks"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|t| t["name"].as_str().unwrap())
+		.collect();
+	assert!(
+		names.len() == 4 || (names.len() == 5 && names[4] == "Reverb"),
+		"{names:?}"
+	);
 }
 
 #[tokio::test]

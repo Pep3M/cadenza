@@ -14,7 +14,7 @@ use egui::{
 
 use crate::jobs::FileAction;
 use crate::state::AppState;
-use crate::state::mix::{PassPhase, Purpose};
+use crate::state::mix::{MixSection, PassPhase, Purpose};
 use crate::theme;
 
 /// Loudness bars span this range (LUFS).
@@ -24,6 +24,8 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 	toolbar(ui, state);
 	ui.add_space(2.0);
 	status(ui, state);
+	// Sections fold by default when the panel is short (see `MixSection::COMPACT_HEIGHT`).
+	let height = ui.available_height();
 	ScrollArea::vertical()
 		.id_salt("mix-assistant")
 		.auto_shrink([false, false])
@@ -31,21 +33,59 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			ui.set_width(ui.available_width());
 			review(ui, state);
 			match state.mix.report.clone() {
-				Some(report) => report_ui(ui, state, &report),
+				Some(report) => report_ui(ui, state, &report, height),
 				None if state.mix.job.is_none() => empty(ui),
 				None => {}
 			}
 		});
 }
 
-fn section(ui: &mut Ui, text: &str) {
+/// A foldable section header: disclosure triangle, title and (right) a summary that keeps
+/// the gist visible while folded. Returns whether the section is open and the header rect.
+fn fold_header(
+	ui: &mut Ui,
+	state: &mut AppState,
+	section: MixSection,
+	title: &str,
+	summary: &str,
+	height: f32,
+) -> (bool, Rect) {
 	ui.add_space(6.0);
-	ui.label(
-		RichText::new(text)
-			.font(theme::small())
-			.strong()
-			.color(theme::TEXT_DIM),
+	let open = !state.mix.is_folded(section, height);
+	let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click());
+	resp.widget_info(|| {
+		egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title)
+	});
+	let p = ui.painter_at(rect);
+	let color = if resp.hovered() {
+		theme::TEXT
+	} else {
+		theme::TEXT_DIM
+	};
+	super::widgets::paint_disclosure(&p, pos2(rect.left() + 5.0, rect.center().y), open, color);
+	p.text(
+		pos2(rect.left() + 14.0, rect.center().y),
+		Align2::LEFT_CENTER,
+		title,
+		theme::small(),
+		color,
 	);
+	if !summary.is_empty() {
+		p.text(
+			pos2(rect.right() - 2.0, rect.center().y),
+			Align2::RIGHT_CENTER,
+			summary,
+			theme::small(),
+			theme::TEXT_FAINT,
+		);
+	}
+	if resp
+		.on_hover_text(if open { "Fold" } else { "Unfold" })
+		.clicked()
+	{
+		state.mix.toggle_section(section, height);
+	}
+	(open, rect)
 }
 
 fn faint(text: impl Into<String>) -> RichText {
@@ -327,7 +367,7 @@ fn delta_color(label: &str, d: f64) -> Color32 {
 	}
 }
 
-fn report_ui(ui: &mut Ui, state: &mut AppState, report: &MixAnalysis) {
+fn report_ui(ui: &mut Ui, state: &mut AppState, report: &MixAnalysis, height: f32) {
 	if state.mix_report_stale() {
 		ui.horizontal(|ui| {
 			ui.label(
@@ -343,15 +383,20 @@ fn report_ui(ui: &mut Ui, state: &mut AppState, report: &MixAnalysis) {
 			}
 		});
 	}
-	master_card(ui, report);
-	channels(ui, state, report);
-	masking(ui, report);
-	issues(ui, state, report);
+	// The numbers and what to do first; the detail below folds away in short panels.
+	master_card(ui, state, report, height);
+	issues(ui, state, report, height);
+	tone_card(ui, state, report, height);
+	channels(ui, state, report, height);
+	masking(ui, state, report, height);
 }
 
-fn master_card(ui: &mut Ui, r: &MixAnalysis) {
-	section(ui, "MASTER");
+fn master_card(ui: &mut Ui, state: &mut AppState, r: &MixAnalysis, height: f32) {
 	let s = &r.master.stats;
+	let summary = format!("{:.1} LUFS · {:.1} dBTP", s.lufs_integrated, s.true_peak_db);
+	if !fold_header(ui, state, MixSection::Master, "MASTER", &summary, height).0 {
+		return;
+	}
 	card(ui, theme::BORDER, |ui| {
 		ui.horizontal(|ui| {
 			let gap = s.lufs_integrated - r.targets.lufs;
@@ -410,7 +455,20 @@ fn master_card(ui: &mut Ui, r: &MixAnalysis) {
 				},
 			);
 		});
-		ui.add_space(4.0);
+	});
+}
+
+/// Octave spectrum + tone balance against the target profile.
+fn tone_card(ui: &mut Ui, state: &mut AppState, r: &MixAnalysis, height: f32) {
+	let (name, worst) = tone_rows(r)
+		.into_iter()
+		.max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+		.unwrap_or(("", 0.0));
+	let summary = format!("{name} {worst:+.1} dB");
+	if !fold_header(ui, state, MixSection::Tone, "TONE", &summary, height).0 {
+		return;
+	}
+	card(ui, theme::BORDER, |ui| {
 		spectrum(ui, r);
 		ui.add_space(2.0);
 		tone(ui, r);
@@ -463,16 +521,21 @@ fn short_hz(f: f32) -> String {
 	}
 }
 
-/// Band balance against the target profile: centered bars, + = too much.
-fn tone(ui: &mut Ui, r: &MixAnalysis) {
+/// Band balance minus the target profile's curve (+ = too much), per band.
+fn tone_rows(r: &MixAnalysis) -> [(&'static str, f32); 4] {
 	let b = &r.master.stats.band_energy_db;
 	let c = r.targets.profile.curve();
-	let rows = [
+	[
 		("lows", b.low - b.mid - c.low),
 		("low-mids", b.low_mid - b.mid - c.low_mid),
 		("high-mids", b.high_mid - b.mid - c.high_mid),
 		("highs", b.high - b.mid - c.high),
-	];
+	]
+}
+
+/// Band balance against the target profile: centered bars, + = too much.
+fn tone(ui: &mut Ui, r: &MixAnalysis) {
+	let rows = tone_rows(r);
 	ui.label(faint(format!(
 		"tone vs {} target",
 		r.targets.profile.name()
@@ -512,8 +575,20 @@ fn tone(ui: &mut Ui, r: &MixAnalysis) {
 	}
 }
 
-fn channels(ui: &mut Ui, state: &AppState, r: &MixAnalysis) {
-	section(ui, "CHANNELS");
+fn channels(ui: &mut Ui, state: &mut AppState, r: &MixAnalysis, height: f32) {
+	let summary = format!("{}", r.channels.len());
+	if !fold_header(
+		ui,
+		state,
+		MixSection::Channels,
+		"CHANNELS",
+		&summary,
+		height,
+	)
+	.0
+	{
+		return;
+	}
 	card(ui, theme::BORDER, |ui| {
 		ui.spacing_mut().item_spacing.y = 3.0;
 		for c in &r.channels {
@@ -593,11 +668,14 @@ fn channels(ui: &mut Ui, state: &AppState, r: &MixAnalysis) {
 	});
 }
 
-fn masking(ui: &mut Ui, r: &MixAnalysis) {
+fn masking(ui: &mut Ui, state: &mut AppState, r: &MixAnalysis, height: f32) {
 	if r.masking.is_empty() {
 		return;
 	}
-	section(ui, "MASKING");
+	let summary = format!("{} pairs", r.masking.len().min(5));
+	if !fold_header(ui, state, MixSection::Masking, "MASKING", &summary, height).0 {
+		return;
+	}
 	card(ui, theme::BORDER, |ui| {
 		for p in r.masking.iter().take(5) {
 			let (a, b, cut) = (
@@ -632,33 +710,34 @@ fn severity_color(s: Severity) -> Color32 {
 	}
 }
 
-fn issues(ui: &mut Ui, state: &mut AppState, r: &MixAnalysis) {
+fn issues(ui: &mut Ui, state: &mut AppState, r: &MixAnalysis, height: f32) {
 	let fixable = r
 		.issues
 		.iter()
 		.filter(|i| !i.moves.is_empty() && !state.mix.fixed.contains(&i.id))
 		.count();
-	ui.add_space(6.0);
-	ui.horizontal(|ui| {
-		ui.label(
-			RichText::new(format!("ISSUES ({})", r.issues.len()))
-				.font(theme::small())
-				.strong()
-				.color(theme::TEXT_DIM),
-		);
-		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-			if ui
-				.add_enabled(
-					fixable > 1 && !state.mix.busy() && !state.ai.busy(),
-					egui::Button::new(RichText::new("Fix all").font(theme::small())),
-				)
-				.on_hover_text("Apply every fix as one undo step")
-				.clicked()
-			{
-				state.mix_fix_all();
-			}
-		});
+	let title = format!("ISSUES ({})", r.issues.len());
+	let (open, header) = fold_header(ui, state, MixSection::Issues, &title, "", height);
+	// Fix all sits on the header, so it works folded too.
+	let button = Rect::from_min_max(
+		pos2(header.right() - 52.0, header.top() - 2.0),
+		pos2(header.right(), header.bottom() + 2.0),
+	);
+	let enabled = fixable > 1 && !state.mix.busy() && !state.ai.busy();
+	let fix_all = ui.add_enabled_ui(enabled, |ui| {
+		ui.put(
+			button,
+			egui::Button::new(RichText::new("Fix all").font(theme::small())),
+		)
+		.on_hover_text("Apply every fix as one undo step")
+		.clicked()
 	});
+	if fix_all.inner {
+		state.mix_fix_all();
+	}
+	if !open {
+		return;
+	}
 	if r.issues.is_empty() {
 		card(ui, theme::BORDER, |ui| {
 			ui.label(

@@ -271,11 +271,14 @@ pub fn find_issues(
 	let stereo = master.detail.stereo;
 	if !silent && m.stereo_correlation > NEAR_MONO_CORRELATION && stereo.width < 0.03 {
 		let mut side = -1.0;
-		let moves: Vec<MixMove> = tracks
+		let spread: Vec<&TrackInput<'_>> = tracks
 			.iter()
 			.filter(|t| !t.is_bus && t.role.spreads() && t.pan.abs() < 0.05)
 			.filter(|t| !t.detail.is_silent())
 			.take(4)
+			.collect();
+		let mut moves: Vec<MixMove> = spread
+			.iter()
 			.map(|t| {
 				side = -side;
 				MixMove::Pan {
@@ -284,6 +287,13 @@ pub fn find_issues(
 				}
 			})
 			.collect();
+		// A shared stereo reverb widens what panning cannot (created when the song has none).
+		moves.extend(spread.iter().take(2).map(|t| MixMove::Send {
+			track_id: t.id,
+			bus_id: None,
+			effect: Some(crate::moves::ReturnEffect::Reverb),
+			level_db: -18.0,
+		}));
 		push(
 			Severity::Low,
 			IssueKind::NarrowImage,

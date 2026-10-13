@@ -313,7 +313,10 @@ severity, kind, track_id, message, moves }>` (clipping/true peak, loudness via l
 fader, phase, narrow image, wide low end, tone balance vs curve, over-compression, hot
 channels, role balance vs median anchor, rumble -> high-pass, masking -> bell cut).
 `moves::MixMove` (tagged `move`: gain, pan, eq {kind bell|low_shelf|high_shelf|high_pass|
-low_pass}, compressor, limiter, send) is the fix vocabulary. `reference::compare(mix, ref)`:
+low_pass}, compressor, limiter, send {bus_id | effect: reverb|delay}) is the fix vocabulary;
+a send by `effect` targets the song's return (bus carrying that built-in, `return_bus`) and
+creates "Reverb"/"Delay" (100 % wet) in the same batch when missing, only raising an existing
+send (the narrow-image issue proposes two reverb sends). `reference::compare(mix, ref)`:
 loudness/crest/width deltas, octave shape deltas after level matching, findings, master EQ
 moves. Engine: `analyze_mix_detailed(project, opts, progress) -> DetailedMix { report,
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
@@ -913,6 +916,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   (reuses a fresh report), `AiChat::send_mix_pass` -> `SessionAgent::run_engineer_pass`
   (reference track via File dialog `FileAction::MixReference`, notes), measure again,
   `compare_passes` table with Keep / Revert (undo, only while "AI mix pass" is the last step).
+  Report order: MASTER, ISSUES (Fix all on the header), TONE (spectrum + tone), CHANNELS,
+  MASKING; each folds (`MixSection`, `mix.folded`; header summary while folded). Until the user
+  folds anything, panels shorter than `MixSection::COMPACT_HEIGHT` fold tone/channels/masking.
   Library style documents show the mix profile and role levels.
 - Fonts: `theme::fonts()` appends egui's bundled Hack to the proportional family (arrows,
   geometric shapes, block elements: `← → ◆ ● ⊘ ▍`); `proportional_fonts_cover_the_app_symbols`

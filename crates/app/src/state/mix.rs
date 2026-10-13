@@ -32,6 +32,38 @@ pub enum Purpose {
 	AfterPass,
 }
 
+/// Foldable sections of the report card, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MixSection {
+	Master,
+	Issues,
+	Tone,
+	Channels,
+	Masking,
+}
+
+impl MixSection {
+	pub const ALL: [MixSection; 5] = [
+		MixSection::Master,
+		MixSection::Issues,
+		MixSection::Tone,
+		MixSection::Channels,
+		MixSection::Masking,
+	];
+
+	/// Folded by default in a panel shorter than this (until the user folds anything):
+	/// the master numbers and the issues stay in view.
+	pub const COMPACT_HEIGHT: f32 = 560.0;
+
+	fn auto_folded(self, panel_height: f32) -> bool {
+		panel_height < Self::COMPACT_HEIGHT
+			&& matches!(
+				self,
+				MixSection::Tone | MixSection::Channels | MixSection::Masking
+			)
+	}
+}
+
 enum JobEvent {
 	Progress(f32),
 	Done(Result<Box<MixAnalysis>, String>),
@@ -83,6 +115,8 @@ pub struct MixAssistant {
 	/// Issue ids fixed since the report was made.
 	pub fixed: BTreeSet<String>,
 	pub error: Option<String>,
+	/// Report sections folded by the user (`None`: automatic, by the panel height).
+	pub folded: Option<BTreeSet<MixSection>>,
 }
 
 impl MixAssistant {
@@ -96,6 +130,28 @@ impl MixAssistant {
 
 	pub fn analyzing(&self) -> Option<(Purpose, f32)> {
 		self.job.as_ref().map(|j| (j.purpose, j.progress))
+	}
+
+	/// Whether a report section is folded in a panel `panel_height` tall.
+	pub fn is_folded(&self, section: MixSection, panel_height: f32) -> bool {
+		match &self.folded {
+			Some(set) => set.contains(&section),
+			None => section.auto_folded(panel_height),
+		}
+	}
+
+	/// Folds / unfolds a section; from then on the sections stay as the user leaves them.
+	pub fn toggle_section(&mut self, section: MixSection, panel_height: f32) {
+		let mut set = self.folded.take().unwrap_or_else(|| {
+			MixSection::ALL
+				.into_iter()
+				.filter(|s| s.auto_folded(panel_height))
+				.collect()
+		});
+		if !set.remove(&section) {
+			set.insert(section);
+		}
+		self.folded = Some(set);
 	}
 
 	fn targets(&self) -> TargetArgs {
@@ -413,6 +469,7 @@ fn issue_label(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
 	use std::time::{Duration, Instant};
 
 	use cadenza_agent::scripted::ScriptedTurn;
@@ -420,6 +477,24 @@ mod tests {
 
 	use super::*;
 	use crate::state::tests::ai_chat::{chat_state, wait};
+
+	#[test]
+	fn short_panels_fold_the_detail_sections_until_the_user_chooses() {
+		let mut m = MixAssistant::default();
+		let short = MixSection::COMPACT_HEIGHT - 100.0;
+		let tall = MixSection::COMPACT_HEIGHT + 100.0;
+		assert!(!m.is_folded(MixSection::Master, short));
+		assert!(!m.is_folded(MixSection::Issues, short));
+		assert!(m.is_folded(MixSection::Channels, short));
+		assert!(!m.is_folded(MixSection::Channels, tall));
+		// Opening one section keeps the others as they were shown.
+		m.toggle_section(MixSection::Channels, short);
+		assert!(!m.is_folded(MixSection::Channels, short));
+		assert!(m.is_folded(MixSection::Tone, short));
+		assert!(m.is_folded(MixSection::Tone, tall), "the choice sticks");
+		m.toggle_section(MixSection::Issues, tall);
+		assert!(m.is_folded(MixSection::Issues, tall));
+	}
 
 	/// Ticks until the mix assistant is idle.
 	fn settle(s: &mut AppState) {

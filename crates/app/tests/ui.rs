@@ -2401,7 +2401,7 @@ fn render_phase17_screens() {
 		let mut t = cadenza_model::Track::new("Vox", cadenza_model::TrackKind::Audio);
 		let a = cadenza_model::Clip::audio("Take A", Tick(0), Tick(PPQ * 6), &wav);
 		let b = cadenza_model::Clip::audio("Take B", Tick(PPQ * 4), Tick(PPQ * 6), &wav);
-		t.clips = vec![a, b];
+		t.clips = vec![b, a];
 		assert!(s.apply(cadenza_model::Command::AddTrack {
 			track: t,
 			index: Some(0)

@@ -763,9 +763,10 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   pitch with the app's `stretch` feature) render a processed copy on a worker into
   `<project dir>/<project> audio/` (user cache when unsaved) and swap it in with one undoable
   `UpdateAudioClip` batch; the original file is never modified. Overlapping audio clips crossfade
-  automatically (`edits::crossfades` mirrors the engine rule): the arrange draws the fade-out/
-  fade-in curves, shades the cut rest of the overlap and puts a length handle at the crossfade
-  end (drag, snapped unless Alt; double-click resets to the whole overlap; one `SetClipFades`
+  automatically (`edits::crossfades` mirrors the engine rule): the arrange draws what plays
+  (clips by start, later on top; waveforms shaped by `edits::crossfade_gain`, the earlier clip
+  fading out under the later one and cut at the crossfade end), the fade-out/fade-in curves and
+  a length handle at the crossfade end (drag, snapped unless Alt; double-click resets to the whole overlap; one `SetClipFades`
   on the later clip, `edits::set_crossfade`); nested clips that sum keep the X mark.
 - `audio::AudioEngine`: the `Player` on its own thread (like MCP `PlayerHandle`) but never
   blocking the UI: requests are fire-and-forget, a burst of loads is coalesced into the newest,

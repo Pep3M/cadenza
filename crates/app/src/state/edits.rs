@@ -477,6 +477,36 @@ pub fn crossfades(project: &Project, track: &Track) -> Vec<Crossfade> {
 	out
 }
 
+/// What the engine plays of `clip` at `tick` because of the track's crossfades: `Some(1.0)`
+/// outside them, the fade-out (earlier clip) / fade-in (later clip) gain inside, `None` where
+/// the earlier clip was cut (past the crossfade end). The arrange draws what plays with it.
+pub fn crossfade_gain(
+	project: &Project,
+	xfs: &[Crossfade],
+	clip: ClipId,
+	tick: Tick,
+) -> Option<f32> {
+	let tempo = &project.tempo;
+	let pos = |xf: &Crossfade| {
+		let s0 = tempo.tick_to_seconds(xf.start);
+		let s1 = tempo.tick_to_seconds(xf.end);
+		((tempo.tick_to_seconds(tick) - s0) / (s1 - s0).max(1e-9)).clamp(0.0, 1.0) as f32
+	};
+	let mut gain = 1.0;
+	for xf in xfs {
+		let curve = super::audio_edit::fade_curve(xf.curve);
+		if xf.earlier == clip && tick >= xf.start {
+			if tick >= xf.end {
+				return None;
+			}
+			gain *= curve.fade_out(pos(xf));
+		} else if xf.later == clip && tick < xf.end {
+			gain *= curve.fade_in(pos(xf));
+		}
+	}
+	Some(gain)
+}
+
 /// Sets a crossfade to end at `end` (clamped to the overlap) through the later clip's
 /// fade-in; `None` resets it to the whole overlap.
 pub fn set_crossfade(project: &Project, xf: &Crossfade, end: Option<Tick>) -> Option<Command> {
@@ -925,5 +955,15 @@ mod trim_tests {
 		let reset = set_crossfade(&p2, &xf2, None).unwrap();
 		let p4 = exec(&p2, reset);
 		assert!(!crossfades(&p4, &p4.tracks[0])[0].custom);
+		// What plays: the earlier clip fades out over the crossfade and is cut after it.
+		let xfs = crossfades(&p2, &p2.tracks[0]);
+		let g = |c, b| crossfade_gain(&p2, &xfs, c, beats(b));
+		assert_eq!(g(a_id, 2.0), Some(1.0));
+		assert!((g(a_id, 3.25).unwrap() - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
+		assert_eq!(g(a_id, 3.5), None);
+		assert_eq!(g(a_id, 3.9), None);
+		assert!(g(b_id, 3.0).unwrap() < 1e-3);
+		assert!((g(b_id, 3.25).unwrap() - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
+		assert_eq!(g(b_id, 3.6), Some(1.0));
 	}
 }

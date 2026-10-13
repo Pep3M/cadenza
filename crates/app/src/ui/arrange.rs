@@ -1308,9 +1308,17 @@ impl ArrangeUi {
 				// Clips scrolled out of view still process an in-flight drag.
 				continue;
 			}
-			// Takes that do not play live in the take lanes.
-			for c in t.clips.iter().filter(|c| c.plays()) {
-				self.clip(ui, state, &painter, layout, t, i, c);
+			// Takes that do not play live in the take lanes. Later clips draw on top (what
+			// plays after a crossfade is the later clip).
+			let mut clips: Vec<&Clip> = t.clips.iter().filter(|c| c.plays()).collect();
+			clips.sort_by_key(|c| c.start);
+			let xfs = if t.kind == TrackKind::Audio {
+				edits::crossfades(state.project(), t)
+			} else {
+				Vec::new()
+			};
+			for c in clips {
+				self.clip(ui, state, &painter, layout, t, i, c, &xfs);
 			}
 		}
 		for r in std::mem::take(&mut self.overlaps) {
@@ -1335,8 +1343,7 @@ impl ArrangeUi {
 		self.rubber_band(ui, state, layout);
 	}
 
-	/// Crossfades: the fade-out / fade-in curves over the crossfade, the rest of the overlap
-	/// (the earlier clip is cut) shaded, and a handle at the crossfade end that sets its
+	/// Crossfades: the fade-out / fade-in curves over the crossfade and a handle at the crossfade end that sets its
 	/// length (drag; double-click: the whole overlap). One command on release.
 	fn crossfades(&mut self, ui: &mut Ui, state: &mut AppState, painter: &Painter, area: Rect) {
 		let tl = state.view.timeline;
@@ -1352,14 +1359,9 @@ impl ArrangeUi {
 			let end = dragged.unwrap_or(xf.end);
 			let x_end = (area.left() + tl.tick_to_x(end)).clamp(r.left(), r.right());
 			let fade = Rect::from_min_max(r.min, pos2(x_end, r.bottom()));
-			painter.rect_filled(fade, 0.0, Color32::from_black_alpha(55));
-			if x_end < r.right() {
-				painter.rect_filled(
-					Rect::from_min_max(pos2(x_end, r.top()), r.max),
-					0.0,
-					Color32::from_black_alpha(35),
-				);
-			}
+			// The clips under it are drawn as they play (the earlier one shaped by the
+			// fade-out and cut at the crossfade end), so only the crossfade itself is marked.
+			painter.rect_filled(fade, 0.0, Color32::from_black_alpha(35));
 			let curve = crate::state::audio_edit::fade_curve(xf.curve);
 			let steps = 24;
 			let pts = |out: bool| -> Vec<Pos2> {
@@ -1473,6 +1475,7 @@ impl ArrangeUi {
 		track: &Track,
 		index: usize,
 		clip: &Clip,
+		xfs: &[edits::Crossfade],
 	) {
 		let area = layout.lanes;
 		let h = state.view.track_height;
@@ -1673,7 +1676,9 @@ impl ArrangeUi {
 		if copying {
 			// The original stays; the copy is drawn at the destination.
 			if rect.intersects(area) {
-				paint_clip(painter, state, track, clip, rect, selected, editing, area);
+				paint_clip(
+					painter, state, track, clip, rect, selected, editing, area, xfs,
+				);
 			}
 		} else if ghost && rect.intersects(area) {
 			painter.rect_stroke(
@@ -1686,8 +1691,10 @@ impl ArrangeUi {
 		if !draw_rect.intersects(area) {
 			return;
 		}
+		// A clip being moved or resized no longer crossfades where it was drawn.
+		let xfs = if draw_rect == rect { xfs } else { &[] };
 		paint_clip(
-			painter, state, track, clip, draw_rect, selected, editing, area,
+			painter, state, track, clip, draw_rect, selected, editing, area, xfs,
 		);
 		if copying {
 			painter.text(
@@ -2309,6 +2316,7 @@ fn paint_clip(
 	selected: bool,
 	editing: bool,
 	area: Rect,
+	xfs: &[edits::Crossfade],
 ) {
 	let color = theme::track_color(track.color.as_deref());
 	let body = theme::mix(color, theme::BG_DEEP, 0.62);
@@ -2350,23 +2358,81 @@ fn paint_clip(
 				fade_in,
 				fade_out,
 			} => {
+				// Draw what plays: crossfaded clips are shaped by the crossfade gain and the
+				// earlier clip stops at the crossfade end.
 				let peaks = state.peaks.get(file);
+				let early_peaks: Vec<(edits::Crossfade, Peaks)> = xfs
+					.iter()
+					.filter(|x| x.later == clip.id)
+					.filter_map(|xf| {
+						let (_, early) = state.project().find_clip(xf.earlier)?;
+						let ClipContent::Audio { file, .. } = &early.content else {
+							return None;
+						};
+						let file = file.clone();
+						Some((*xf, state.peaks.get(&file)))
+					})
+					.collect();
+				let project = state.project();
+				let gain = |t: Tick| edits::crossfade_gain(project, xfs, clip.id, t);
 				paint_waveform(
 					&p,
-					state.project(),
+					project,
 					clip,
 					&peaks,
 					*offset_seconds,
 					*gain_db,
 					content,
 					area,
-					color,
+					theme::mix(color, Color32::WHITE, 0.25),
+					&gain,
 				);
+				// Under the later clip of a crossfade: the earlier one fading out.
+				for (xf, peaks) in &early_peaks {
+					let Some((_, early)) = project.find_clip(xf.earlier) else {
+						continue;
+					};
+					let ClipContent::Audio {
+						offset_seconds,
+						gain_db,
+						..
+					} = &early.content
+					else {
+						continue;
+					};
+					if !matches!(peaks, Peaks::Ready(_)) {
+						continue;
+					}
+					let px_per_tick = content.width() / clip.length.0.max(1) as f32;
+					let left = content.left() + (early.start.0 - clip.start.0) as f32 * px_per_tick;
+					let early_content = Rect::from_min_max(
+						pos2(left, content.top()),
+						pos2(left + early.length.0 as f32 * px_per_tick, content.bottom()),
+					);
+					let gain = |t: Tick| {
+						(t < xf.end)
+							.then(|| edits::crossfade_gain(project, xfs, early.id, t))
+							.flatten()
+					};
+					paint_waveform(
+						&p,
+						project,
+						early,
+						peaks,
+						*offset_seconds,
+						*gain_db,
+						early_content,
+						area.intersect(content),
+						theme::mix(color, Color32::WHITE, 0.6).gamma_multiply(0.55),
+						&gain,
+					);
+				}
+				let crossfaded_in = xfs.iter().any(|x| x.later == clip.id);
 				paint_fades(
 					&p,
-					state.project(),
+					project,
 					clip,
-					fade_in.map(|f| f.seconds),
+					fade_in.filter(|_| !crossfaded_in).map(|f| f.seconds),
 					fade_out.map(|f| f.seconds),
 					rect,
 				);
@@ -2444,9 +2510,9 @@ fn paint_waveform(
 	gain_db: f32,
 	content: Rect,
 	area: Rect,
-	color: Color32,
+	wave_color: Color32,
+	gain_at: &dyn Fn(Tick) -> Option<f32>,
 ) {
-	let wave_color = theme::mix(color, Color32::WHITE, 0.25);
 	let peaks = match peaks {
 		Peaks::Ready(p) => p,
 		Peaks::Pending => {
@@ -2497,6 +2563,13 @@ fn paint_waveform(
 		if f0 >= peaks.frames {
 			break;
 		}
+		let tick =
+			clip.start + Tick::from_beats(f64::from(x + 0.5 - content.left()) / f64::from(ppb));
+		let Some(shape) = gain_at(tick) else {
+			x += 1.0;
+			continue;
+		};
+		let gain = gain * shape;
 		let mut mm = cadenza_audio_io::MinMax::EMPTY;
 		for c in 0..channels {
 			mm = mm.merge(level.range(c, f0, f1));

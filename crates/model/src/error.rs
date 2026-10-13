@@ -20,6 +20,8 @@ pub enum ModelError {
 	SendNotFound { track: TrackId, send: DeviceId },
 	#[error("no tempo point at tick {} (beat {}); existing points are listed in the project summary", .0.0, .0.beats())]
 	TempoPointNotFound(Tick),
+	#[error("no time signature change at bar {} (bar 1 cannot be removed; change it instead); existing changes are listed in the project summary", .0 + 1)]
+	TimeSignatureChangeNotFound(u32),
 	#[error("no marker at tick {} (beat {})", .0.0, .0.beats())]
 	MarkerNotFound(Tick),
 

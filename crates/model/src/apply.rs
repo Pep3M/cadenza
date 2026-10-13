@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use cadenza_core::{ParamAddress, ParamTarget, Tick, TrackId};
+use cadenza_core::{MeterChange, ParamAddress, ParamTarget, Tick, TrackId};
 
 use crate::command::{
 	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
@@ -872,11 +872,52 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
-		Command::SetTimeSignature { time_signature } => {
+		Command::SetTimeSignature {
+			time_signature,
+			bar,
+		} => {
 			validate::time_signature(*time_signature)?;
-			let old = std::mem::replace(&mut project.time_signature, *time_signature);
+			if *bar == 0 {
+				let old = std::mem::replace(&mut project.time_signature, *time_signature);
+				return Ok(vec![Command::SetTimeSignature {
+					time_signature: old,
+					bar: 0,
+				}]);
+			}
+			validate::meter_bar(*bar)?;
+			let changes = &mut project.time_signature_changes;
+			let change = MeterChange::new(*bar, *time_signature);
+			match changes.binary_search_by_key(bar, |c| c.bar) {
+				Ok(i) => {
+					let old = std::mem::replace(&mut changes[i], change);
+					Ok(vec![Command::SetTimeSignature {
+						time_signature: old.signature(),
+						bar: *bar,
+					}])
+				}
+				Err(i) => {
+					if changes.len() >= validate::MAX_METER_CHANGES {
+						return Err(ModelError::invalid(
+							"time signature changes",
+							changes.len().to_string(),
+							"a project holds at most 1024 time signature changes",
+						));
+					}
+					changes.insert(i, change);
+					Ok(vec![Command::RemoveTimeSignature { bar: *bar }])
+				}
+			}
+		}
+
+		Command::RemoveTimeSignature { bar } => {
+			let changes = &mut project.time_signature_changes;
+			let i = changes
+				.binary_search_by_key(bar, |c| c.bar)
+				.map_err(|_| ModelError::TimeSignatureChangeNotFound(*bar))?;
+			let old = changes.remove(i);
 			Ok(vec![Command::SetTimeSignature {
-				time_signature: old,
+				time_signature: old.signature(),
+				bar: *bar,
 			}])
 		}
 

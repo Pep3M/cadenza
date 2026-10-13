@@ -189,7 +189,8 @@ pub fn export_midi(session: &Session, args: ExportMidiArgs) -> Result<ExportMidi
 			if !clip.is_midi() {
 				return Err(ModelError::NotAMidiClip(id).into());
 			}
-			let bytes = cadenza_midi_io::export_clip(clip, &project.tempo, &project.time_signature)
+			let signature = project.meter().signature_at(clip.start);
+			let bytes = cadenza_midi_io::export_clip(clip, &project.tempo, &signature)
 				.map_err(|e| McpError::Invalid(e.to_string()))?;
 			(bytes, 1, clip.notes().len())
 		}

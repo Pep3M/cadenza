@@ -35,7 +35,10 @@ pub fn new_project(
 		})?;
 	}
 	if let Some(time_signature) = args.time_signature {
-		document.execute(Command::SetTimeSignature { time_signature })?;
+		document.execute(Command::SetTimeSignature {
+			time_signature,
+			bar: 0,
+		})?;
 	}
 	document.clear_history();
 	session.reset(document, None);

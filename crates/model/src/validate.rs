@@ -79,6 +79,25 @@ pub(crate) fn tempo(bpm: f64) -> Result<(), ModelError> {
 	}
 }
 
+/// Most time signature changes a project holds.
+pub(crate) const MAX_METER_CHANGES: usize = 1024;
+/// Highest bar index a time signature change may start at.
+const MAX_METER_BAR: u32 = 100_000;
+
+/// A bar index where a time signature change may start (bar 1 is the song's first
+/// signature, not a change).
+pub(crate) fn meter_bar(bar: u32) -> Result<(), ModelError> {
+	if (1..=MAX_METER_BAR).contains(&bar) {
+		Ok(())
+	} else {
+		Err(ModelError::invalid(
+			"time signature change bar index",
+			bar.to_string(),
+			"changes start at bar index 1..=100000 (0-based; index 0 is bar 1, the song's first signature)",
+		))
+	}
+}
+
 pub(crate) fn time_signature(ts: TimeSignature) -> Result<(), ModelError> {
 	let ok = (1..=32).contains(&ts.numerator)
 		&& (1..=32).contains(&ts.denominator)
@@ -745,6 +764,26 @@ pub(crate) fn location(track: Option<TrackId>) -> String {
 pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	name("project", &project.name)?;
 	time_signature(project.time_signature)?;
+	if project.time_signature_changes.len() > MAX_METER_CHANGES {
+		return Err(ModelError::invalid(
+			"time signature changes",
+			project.time_signature_changes.len().to_string(),
+			"a project holds at most 1024 time signature changes",
+		));
+	}
+	for c in &project.time_signature_changes {
+		meter_bar(c.bar)?;
+		time_signature(c.signature())?;
+	}
+	for w in project.time_signature_changes.windows(2) {
+		if w[0].bar >= w[1].bar {
+			return Err(ModelError::invalid(
+				"time signature changes",
+				format!("bar index {}", w[1].bar),
+				"changes must be sorted by bar with at most one per bar",
+			));
+		}
+	}
 	let tempo_points = project.tempo.points();
 	match tempo_points.first() {
 		Some(first) if first.tick == Tick::ZERO => {}

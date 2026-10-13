@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use cadenza_core::{ClipId, TakeGroupId, TempoMap, Tick, TimeSignature, TrackId};
+use cadenza_core::{ClipId, Meter, MeterMap, TakeGroupId, TempoMap, Tick, TrackId};
 use cadenza_midi_io::{RandomIds, RawMessage, RecordedNote, Recorder};
 use cadenza_model::{
 	Clip, ClipContent, ClipPatch, Command, Document, Note, Project, Take, TrackInput,
@@ -908,14 +908,12 @@ fn midi_passes(rec: &Recording, tempo: &TempoMap, quantize: Option<Tick>) -> Vec
 	passes
 }
 
-fn bar_floor(t: Tick, ts: TimeSignature) -> Tick {
-	let bar = ts.ticks_per_bar().0.max(1);
-	Tick(t.0.max(0).div_euclid(bar) * bar)
+fn bar_floor(t: Tick, meter: Meter<'_>) -> Tick {
+	meter.bar_floor(t.max(Tick::ZERO))
 }
 
-fn bar_ceil(t: Tick, ts: TimeSignature) -> Tick {
-	let bar = ts.ticks_per_bar().0.max(1);
-	Tick((t.0.max(0) + bar - 1).div_euclid(bar) * bar)
+fn bar_ceil(t: Tick, meter: Meter<'_>) -> Tick {
+	meter.bar_ceil(t.max(Tick::ZERO))
 }
 
 fn relative(notes: &[Note], origin: Tick) -> Vec<Note> {
@@ -937,7 +935,8 @@ fn midi_clips(
 	rec: &Recording,
 	options: &RecordOptions,
 ) {
-	let ts = doc.project().time_signature;
+	let meter = MeterMap::new(doc.project().meter());
+	let meter = meter.view();
 	let Some(name) = doc.project().track(track).map(|t| t.name.clone()) else {
 		return;
 	};
@@ -990,8 +989,8 @@ fn midi_clips(
 			})
 		});
 	let Some(target) = target else {
-		let start = bar_floor(first.min(rec_start.max(first)), ts);
-		let end = bar_ceil(last, ts).max(start + ts.ticks_per_bar());
+		let start = bar_floor(first.min(rec_start.max(first)), meter);
+		let end = bar_ceil(last, meter).max(meter.bar_at(start).end());
 		let clip = Clip::midi(name, start, end - start).with_notes(relative(&notes, start));
 		run(doc, commands, Command::AddClip { track, clip });
 		return;
@@ -1022,7 +1021,7 @@ fn midi_clips(
 		}
 	}
 	if last > clip_end {
-		let end = bar_ceil(last, ts);
+		let end = bar_ceil(last, meter);
 		run(
 			doc,
 			commands,

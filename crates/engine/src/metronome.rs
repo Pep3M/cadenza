@@ -167,12 +167,105 @@ impl Metronome {
 	}
 }
 
-/// Clicks of beats (multiples of `unit` quarter notes, accented every `per_bar`) whose
-/// position falls in `[b0, b1)` quarter notes, where `sample_of(beat)` maps a beat to
-/// its offset from the quantum start. Returns how many were written to `out`.
+/// A stretch of the song in one time signature, in quarter notes (the graph's view of
+/// the project's time signature changes; built at compile time).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MeterSegment {
+	pub start_beat: f64,
+	/// 0-based index of its first bar.
+	pub first_bar: i64,
+	pub numerator: u32,
+	pub denominator: u32,
+}
+
+impl MeterSegment {
+	/// Beat length in quarter notes (the denominator note).
+	pub fn unit(&self) -> f64 {
+		4.0 / f64::from(self.denominator.max(1))
+	}
+
+	pub fn bar_quarters(&self) -> f64 {
+		f64::from(self.numerator.max(1)) * self.unit()
+	}
+
+	/// (0-based bar index, bar start in quarter notes) of the bar holding `beat`.
+	pub fn bar_at(&self, beat: f64) -> (i64, f64) {
+		let k = ((beat - self.start_beat) / self.bar_quarters() + 1e-9).floor();
+		(
+			self.first_bar + k as i64,
+			self.start_beat + k * self.bar_quarters(),
+		)
+	}
+}
+
+/// The meter segments of a project (never empty; the first starts at beat 0).
+pub(crate) fn meter_segments(meter: cadenza_core::Meter<'_>) -> Vec<MeterSegment> {
+	let first = meter.first();
+	std::iter::once((0u32, cadenza_core::Tick::ZERO, first))
+		.chain(meter.change_ticks())
+		.map(|(bar, tick, ts)| MeterSegment {
+			start_beat: tick.beats(),
+			first_bar: i64::from(bar),
+			numerator: ts.numerator,
+			denominator: ts.denominator,
+		})
+		.collect()
+}
+
+/// The segment holding `beat` (beats before the start belong to the first one).
+pub(crate) fn meter_at(segments: &[MeterSegment], beat: f64) -> MeterSegment {
+	let i = segments.partition_point(|s| s.start_beat <= beat);
+	segments[i.saturating_sub(1)]
+}
+
+/// Clicks of every meter segment overlapping `[b0, b1)` quarter notes (see
+/// [`clicks_between`]).
+pub(crate) fn meter_clicks(
+	segments: &[MeterSegment],
+	b0: f64,
+	b1: f64,
+	sample_of: impl Fn(f64) -> i64,
+	out: &mut [Click; MAX_CLICKS],
+	count: &mut usize,
+) {
+	for (i, s) in segments.iter().enumerate() {
+		let end = segments.get(i + 1).map_or(f64::INFINITY, |n| n.start_beat);
+		let (from, to) = (b0.max(s.start_beat), b1.min(end));
+		if i == 0 && b0 < s.start_beat {
+			clicks_between(
+				b0,
+				to,
+				s.start_beat,
+				s.unit(),
+				s.numerator,
+				&sample_of,
+				out,
+				count,
+			);
+		} else if from < to {
+			clicks_between(
+				from,
+				to,
+				s.start_beat,
+				s.unit(),
+				s.numerator,
+				&sample_of,
+				out,
+				count,
+			);
+		}
+	}
+}
+
+/// Clicks of beats (`origin` plus multiples of `unit` quarter notes, accented every
+/// `per_bar` from `origin`) whose position falls in `[b0, b1)` quarter notes, where
+/// `sample_of(beat)` maps a beat to its offset from the quantum start. Returns how many
+/// were written to `out`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn clicks_between(
 	b0: f64,
 	b1: f64,
+	origin: f64,
 	unit: f64,
 	per_bar: u32,
 	sample_of: impl Fn(f64) -> i64,
@@ -182,9 +275,9 @@ pub(crate) fn clicks_between(
 	if unit.is_nan() || unit <= 0.0 || b1 <= b0 {
 		return;
 	}
-	let mut k = (b0 / unit - 1e-9).ceil();
-	while k * unit < b1 && *count < MAX_CLICKS {
-		let offset = sample_of(k * unit);
+	let mut k = ((b0 - origin) / unit - 1e-9).ceil();
+	while origin + k * unit < b1 && *count < MAX_CLICKS {
+		let offset = sample_of(origin + k * unit);
 		if (0..QUANTUM as i64).contains(&offset) {
 			let index = k as i64;
 			out[*count] = Click {
@@ -215,6 +308,7 @@ mod tests {
 		clicks_between(
 			b0,
 			b1,
+			0.0,
 			1.0,
 			4,
 			|b| (b * 24_000.0).round() as i64 - start,
@@ -225,8 +319,47 @@ mod tests {
 		assert_eq!(out[0].offset, 10);
 		assert!(!out[0].accent, "beat 2 of the bar");
 		n = 0;
-		clicks_between(0.0, 0.001, 1.0, 4, |b| b as i64, &mut out, &mut n);
+		clicks_between(0.0, 0.001, 0.0, 1.0, 4, |b| b as i64, &mut out, &mut n);
 		assert_eq!((n, out[0].accent), (1, true), "the downbeat is accented");
+	}
+
+	#[test]
+	fn accents_follow_time_signature_changes() {
+		use cadenza_core::{Meter, MeterChange, TimeSignature};
+		// 2 bars of 4/4, then 3/4: clicks every beat, accents at 0, 4, 8, 11, 14.
+		let changes = [MeterChange::new(
+			2,
+			TimeSignature {
+				numerator: 3,
+				denominator: 4,
+			},
+		)];
+		let segs = meter_segments(Meter::new(TimeSignature::default(), &changes));
+		assert_eq!(segs.len(), 2);
+		assert_eq!(meter_at(&segs, 9.0).numerator, 3);
+		assert_eq!(segs[1].bar_at(12.5), (3, 11.0));
+		let mut accents = Vec::new();
+		for q in 0..16 {
+			let mut out = [Click {
+				offset: 0,
+				accent: false,
+			}; MAX_CLICKS];
+			let mut n = 0;
+			let b0 = f64::from(q);
+			meter_clicks(
+				&segs,
+				b0,
+				b0 + 1.0,
+				|b| ((b - b0) * 100.0).round() as i64,
+				&mut out,
+				&mut n,
+			);
+			assert_eq!(n, 1, "one click per beat");
+			if out[0].accent {
+				accents.push(q);
+			}
+		}
+		assert_eq!(accents, vec![0, 4, 8, 11, 14]);
 	}
 
 	#[test]

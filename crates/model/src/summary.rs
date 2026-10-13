@@ -17,13 +17,25 @@ use crate::sample::{LoopMode, SampleZone};
 pub struct ProjectSummary {
 	pub name: String,
 	pub tempo: Vec<TempoSummary>,
-	/// e.g. "4/4".
+	/// Time signature of bar 1, e.g. "4/4".
 	pub time_signature: String,
+	/// Later time signature changes (empty: one signature for the whole song).
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub time_signature_changes: Vec<TimeSignatureSummary>,
 	pub length_beats: f64,
 	pub length_bars: f64,
 	pub markers: Vec<MarkerSummary>,
 	pub master: MasterSummary,
 	pub tracks: Vec<TrackSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct TimeSignatureSummary {
+	/// 1-based bar the signature starts at.
+	pub bar: u32,
+	pub beat: f64,
+	/// e.g. "3/4".
+	pub time_signature: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -35,7 +47,7 @@ pub struct TempoSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct MarkerSummary {
 	pub beat: f64,
-	/// 1-based bar position in the current time signature.
+	/// 1-based bar position (fractional inside a bar), following time signature changes.
 	pub bar: f64,
 	pub name: String,
 }
@@ -147,7 +159,7 @@ pub struct ClipSummary {
 
 impl Project {
 	pub fn summary(&self) -> ProjectSummary {
-		let quarters_per_bar = self.time_signature.quarters_per_bar();
+		let meter = self.meter();
 		let length = beats(self.end_tick());
 		ProjectSummary {
 			name: self.name.clone(),
@@ -164,14 +176,22 @@ impl Project {
 				"{}/{}",
 				self.time_signature.numerator, self.time_signature.denominator
 			),
+			time_signature_changes: meter
+				.change_ticks()
+				.map(|(bar, tick, ts)| TimeSignatureSummary {
+					bar: bar + 1,
+					beat: beats(tick),
+					time_signature: format!("{}/{}", ts.numerator, ts.denominator),
+				})
+				.collect(),
 			length_beats: length,
-			length_bars: round(length / quarters_per_bar),
+			length_bars: round(meter.bar_position(self.end_tick())),
 			markers: self
 				.markers
 				.iter()
 				.map(|m| MarkerSummary {
 					beat: beats(m.tick),
-					bar: round(m.tick.beats() / quarters_per_bar + 1.0),
+					bar: round(meter.bar_position(m.tick) + 1.0),
 					name: m.name.clone(),
 				})
 				.collect(),

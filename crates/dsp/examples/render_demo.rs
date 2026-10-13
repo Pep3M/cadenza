@@ -281,6 +281,7 @@ fn main() -> std::io::Result<()> {
 			bpm: BPM,
 			playing: true,
 			beat_position: pos as f64 / SR as f64 * BPM / 60.0,
+			..Default::default()
 		};
 		mix_l[..n].fill(0.0);
 		mix_r[..n].fill(0.0);

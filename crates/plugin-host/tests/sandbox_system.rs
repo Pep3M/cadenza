@@ -38,6 +38,7 @@ fn render(p: &mut dyn Processor, role: PluginRole) -> (Vec<f32>, Duration) {
 		bpm: 120.0,
 		playing: true,
 		beat_position: 0.0,
+		..Default::default()
 	};
 	let chord: Vec<MidiEvent> = [60u8, 64, 67]
 		.map(|pitch| MidiEvent::NoteOn {

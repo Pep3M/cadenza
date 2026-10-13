@@ -34,6 +34,7 @@ fn exercise(desc: &PluginDescriptor) -> Result<String, String> {
 		bpm: 120.0,
 		playing: true,
 		beat_position: 0.0,
+		..Default::default()
 	};
 	let mut l = vec![0.0f32; block];
 	let mut r = vec![0.0f32; block];

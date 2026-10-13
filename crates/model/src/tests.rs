@@ -1,6 +1,8 @@
 //! Cross-module tests: command application, undo/redo, validation and persistence.
 
-use cadenza_core::{ClipId, DeviceId, NoteId, PPQ, ParamAddress, Tick, TimeSignature, TrackId};
+use cadenza_core::{
+	ClipId, DeviceId, MeterChange, NoteId, PPQ, ParamAddress, Tick, TimeSignature, TrackId,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -415,6 +417,7 @@ fn every_command_round_trips() {
 				numerator: 7,
 				denominator: 8,
 			},
+			bar: 0,
 		},
 		Command::SetAutomation {
 			address: ParamAddress::track_pan(fx.lead),
@@ -940,6 +943,7 @@ fn validation_errors() {
 			numerator,
 			denominator,
 		},
+		bar: 0,
 	};
 	assert!(matches!(
 		exec_err(p, ts(3, 6)),
@@ -1154,6 +1158,7 @@ fn execute_clears_redo_and_tracks_history() {
 			numerator: 3,
 			denominator: 4,
 		},
+		bar: 0,
 	})
 	.unwrap();
 	assert!(!doc.can_redo());
@@ -2279,4 +2284,71 @@ fn sample_zones_are_validated() {
 		),
 		ModelError::InvalidValue { .. }
 	));
+}
+
+#[test]
+fn time_signature_changes_round_trip_and_summarize() {
+	let fx = fixture();
+	let ts = |numerator, denominator| TimeSignature {
+		numerator,
+		denominator,
+	};
+	let p = round_trip(
+		&fx.project,
+		Command::SetTimeSignature {
+			time_signature: ts(3, 4),
+			bar: 4,
+		},
+	);
+	assert_eq!(
+		p.time_signature_changes,
+		vec![MeterChange::new(4, ts(3, 4))]
+	);
+	let p = round_trip(
+		&p,
+		Command::SetTimeSignature {
+			time_signature: ts(7, 8),
+			bar: 4,
+		},
+	);
+	assert_eq!(p.time_signature_changes[0].signature(), ts(7, 8));
+	let p2 = round_trip(&p, Command::RemoveTimeSignature { bar: 4 });
+	assert!(p2.time_signature_changes.is_empty());
+	assert!(matches!(
+		exec_err(&p2, Command::RemoveTimeSignature { bar: 4 }),
+		ModelError::TimeSignatureChangeNotFound(4)
+	));
+	assert!(matches!(
+		exec_err(&p2, Command::RemoveTimeSignature { bar: 0 }),
+		ModelError::TimeSignatureChangeNotFound(0)
+	));
+	assert!(
+		exec_err(
+			&p2,
+			Command::SetTimeSignature {
+				time_signature: ts(3, 4),
+				bar: 200_000,
+			}
+		)
+		.to_string()
+		.contains("bar index")
+	);
+
+	// Bars 1-4 in 4/4 (16 beats), then 3/4: a marker at beat 19 is bar 6.
+	let mut p = p;
+	p.time_signature_changes = vec![MeterChange::new(4, ts(3, 4))];
+	p.markers = vec![Marker::new(beats(19.0), "B")];
+	let s = p.summary();
+	assert_eq!(s.time_signature_changes.len(), 1);
+	assert_eq!(s.time_signature_changes[0].bar, 5);
+	assert_eq!(s.time_signature_changes[0].beat, 16.0);
+	assert_eq!(s.time_signature_changes[0].time_signature, "3/4");
+	assert_eq!(s.markers[0].bar, 6.0);
+
+	// Persisted as an optional field; old files without it still load.
+	let json = p.to_json_string().unwrap();
+	assert!(json.contains("time_signature_changes"));
+	assert_eq!(Project::from_json_str(&json).unwrap(), p);
+	let plain = fx.project.to_json_string().unwrap();
+	assert!(!plain.contains("time_signature_changes"));
 }

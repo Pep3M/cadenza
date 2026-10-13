@@ -51,7 +51,7 @@ pub(crate) const W_BLOCKS: usize = 21;
 /// Written by the child when a request is done; the host futex-waits on it.
 pub(crate) const W_ACK_SEQ: usize = 32;
 const HEADER_WORDS: usize = 64;
-const BLOCK_WORDS: usize = 8;
+const BLOCK_WORDS: usize = 12;
 
 /// Request kinds in `W_CMD`.
 pub(crate) const CMD_PROCESS: u32 = 1;
@@ -280,6 +280,13 @@ impl<'a> Block<'a> {
 		self.store_f64(w + 4, b.transport.beat_position);
 		self.store(w + 6, b.events_end);
 		self.store(w + 7, b.params_end);
+		self.store(
+			w + 8,
+			u32::from(b.transport.time_sig_numerator)
+				| (u32::from(b.transport.time_sig_denominator) << 16),
+		);
+		self.store(w + 9, b.transport.bar_number as u32);
+		self.store_f64(w + 10, b.transport.bar_start);
 	}
 
 	/// Sub-block `i` as the other side wrote it (frames clamped to the
@@ -294,6 +301,10 @@ impl<'a> Block<'a> {
 				bpm: self.load_f64(w + 2),
 				playing: flags & SUB_PLAYING != 0,
 				beat_position: self.load_f64(w + 4),
+				time_sig_numerator: (self.load(w + 8) & 0xffff) as u16,
+				time_sig_denominator: (self.load(w + 8) >> 16) as u16,
+				bar_number: self.load(w + 9) as i32,
+				bar_start: self.load_f64(w + 10),
 			},
 			keyed: flags & SUB_KEYED != 0,
 			events_end: self.load(w + 6),
@@ -684,6 +695,7 @@ mod tests {
 			bpm: 97.5,
 			playing: true,
 			beat_position: 3.25,
+			..Default::default()
 		};
 		ba.set_request(CMD_PROCESS, FLAG_RESET, 5);
 		assert_eq!(bb.cmd(), CMD_PROCESS);

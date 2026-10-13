@@ -110,6 +110,13 @@ pub struct Transport {
 	pub playing: bool,
 	/// Position of the first sample of the block, in quarter notes.
 	pub beat_position: f64,
+	/// Time signature in effect at the block start.
+	pub time_sig_numerator: u16,
+	pub time_sig_denominator: u16,
+	/// Start of the bar holding the block start, in quarter notes.
+	pub bar_start: f64,
+	/// 0-based index of that bar.
+	pub bar_number: i32,
 }
 
 impl Default for Transport {
@@ -118,6 +125,10 @@ impl Default for Transport {
 			bpm: 120.0,
 			playing: false,
 			beat_position: 0.0,
+			time_sig_numerator: 4,
+			time_sig_denominator: 4,
+			bar_start: 0.0,
+			bar_number: 0,
 		}
 	}
 }

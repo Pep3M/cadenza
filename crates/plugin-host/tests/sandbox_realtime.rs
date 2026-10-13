@@ -113,6 +113,7 @@ fn surge_xt_survives_its_editor_while_playing_in_real_time() {
 				bpm: 120.0,
 				playing: true,
 				beat_position: 0.0,
+				..Default::default()
 			};
 			let (mut callbacks, mut overruns, mut slowest) = (0u64, 0u64, Duration::ZERO);
 			let mut quantum = 0u64;

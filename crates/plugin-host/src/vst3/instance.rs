@@ -325,15 +325,15 @@ impl Vst3Processor {
 		c.sampleRate = sr;
 		c.tempo = t.bpm;
 		c.projectTimeMusic = t.beat_position;
-		c.barPositionMusic = (t.beat_position / 4.0).floor() * 4.0;
+		c.barPositionMusic = t.bar_start;
 		c.projectTimeSamples = if t.bpm > 0.0 {
 			(t.beat_position * 60.0 / t.bpm * sr).round() as i64
 		} else {
 			0
 		};
 		c.continousTimeSamples = self.continuous_samples;
-		c.timeSigNumerator = 4;
-		c.timeSigDenominator = 4;
+		c.timeSigNumerator = i32::from(t.time_sig_numerator.max(1));
+		c.timeSigDenominator = i32::from(t.time_sig_denominator.max(1));
 	}
 
 	/// Calls `IAudioProcessor::process` with the prepared lists. `frames == 0`

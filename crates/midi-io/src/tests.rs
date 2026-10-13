@@ -243,6 +243,13 @@ fn round_trips_project_export_and_import() {
 		numerator: 3,
 		denominator: 4,
 	};
+	project.time_signature_changes = vec![cadenza_core::MeterChange::new(
+		2,
+		TimeSignature {
+			numerator: 7,
+			denominator: 8,
+		},
+	)];
 	project.markers.push(Marker {
 		tick: Tick(cadenza_core::PPQ * 2),
 		name: "Verse".to_string(),
@@ -323,8 +330,10 @@ fn round_trips_project_export_and_import() {
 		.iter()
 		.any(|c| matches!(c, Command::SetTempo { bpm, .. } if (*bpm - 96.0).abs() < 1e-6));
 	assert!(tempo_set);
-	let sig_set = commands.iter().any(|c| matches!(c, Command::SetTimeSignature { time_signature } if *time_signature == TimeSignature { numerator: 3, denominator: 4 }));
+	let sig_set = commands.iter().any(|c| matches!(c, Command::SetTimeSignature { time_signature, bar: 0 } if *time_signature == TimeSignature { numerator: 3, denominator: 4 }));
 	assert!(sig_set);
+	let change_set = commands.iter().any(|c| matches!(c, Command::SetTimeSignature { time_signature, bar: 2 } if *time_signature == TimeSignature { numerator: 7, denominator: 8 }));
+	assert!(change_set, "the change at bar 3 survives the round trip");
 	let marker_added = commands
 		.iter()
 		.any(|c| matches!(c, Command::AddMarker { marker } if marker.name == "Verse"));
@@ -391,4 +400,35 @@ fn deterministic_ids_are_reused_when_an_allocator_is_supplied() {
 	// Just confirms the lower-level entry point used by import_smf is itself usable
 	// directly, e.g. to reuse a single parse across several `ImportOptions`.
 	assert!(matches!(command, Command::Batch { .. }));
+}
+
+#[test]
+fn meter_changes_snap_to_bar_lines() {
+	use cadenza_core::{MeterChange, PPQ};
+	let ts = |numerator, denominator| TimeSignature {
+		numerator,
+		denominator,
+	};
+	let mut warnings = Vec::new();
+	// 4/4, 3/4 at bar 3 (beat 8), 3/4 again (dropped), 6/8 off the grid at beat 12.5.
+	let (first, changes) = crate::meter_changes(
+		&[
+			(Tick(0), ts(4, 4)),
+			(Tick(8 * PPQ), ts(3, 4)),
+			(Tick(11 * PPQ), ts(3, 4)),
+			(Tick(12 * PPQ + PPQ / 2), ts(6, 8)),
+		],
+		&mut warnings,
+	);
+	assert_eq!(first, Some(ts(4, 4)));
+	assert_eq!(
+		changes,
+		vec![MeterChange::new(2, ts(3, 4)), MeterChange::new(4, ts(6, 8))]
+	);
+	assert_eq!(warnings.len(), 1);
+	assert!(warnings[0].contains("not on a bar line"));
+	// A change without a signature at the start keeps 4/4 for bar 1.
+	let (first, changes) = crate::meter_changes(&[(Tick(4 * PPQ), ts(3, 4))], &mut warnings);
+	assert_eq!(first, Some(ts(4, 4)));
+	assert_eq!(changes, vec![MeterChange::new(1, ts(3, 4))]);
 }

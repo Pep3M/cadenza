@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cadenza_core::{
-	ClipId, DeviceId, NoteId, ParamAddress, TakeGroupId, TempoMap, Tick, TimeSignature, TrackId,
+	ClipId, DeviceId, Meter, MeterChange, NoteId, ParamAddress, TakeGroupId, TempoMap, Tick,
+	TimeSignature, TrackId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,12 @@ pub struct Project {
 	pub format_version: u32,
 	pub name: String,
 	pub tempo: TempoMap,
+	/// Time signature of bar 1.
 	pub time_signature: TimeSignature,
+	/// Later time signatures, sorted by bar (0-based index >= 1, one per bar). Missing in
+	/// older files (= one signature for the whole song).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub time_signature_changes: Vec<MeterChange>,
 	/// Display order.
 	#[serde(default)]
 	pub tracks: Vec<Track>,
@@ -371,11 +377,17 @@ impl Project {
 			name: name.into(),
 			tempo: TempoMap::constant(120.0),
 			time_signature: TimeSignature::default(),
+			time_signature_changes: Vec::new(),
 			tracks: Vec::new(),
 			master: Channel::default(),
 			automation: Vec::new(),
 			markers: Vec::new(),
 		}
+	}
+
+	/// The song's time signatures (bar 1 plus changes) for bar/beat math.
+	pub fn meter(&self) -> Meter<'_> {
+		Meter::new(self.time_signature, &self.time_signature_changes)
 	}
 
 	pub fn track(&self, id: TrackId) -> Option<&Track> {

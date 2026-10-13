@@ -92,6 +92,7 @@ fn vst3_process_and_set_param_never_allocate() {
 		bpm: 97.0,
 		playing: true,
 		beat_position: 3.5,
+		..Default::default()
 	};
 
 	for name in ["Parametric Equalizer x8 Stereo", "Compressor Stereo"] {

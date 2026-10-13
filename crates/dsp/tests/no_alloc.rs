@@ -90,6 +90,7 @@ fn process_and_set_param_never_allocate() {
 		bpm: 97.0,
 		playing: true,
 		beat_position: 0.0,
+		..Default::default()
 	};
 
 	for info in registry() {

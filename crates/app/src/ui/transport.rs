@@ -504,7 +504,10 @@ fn time_signature(ui: &mut Ui, state: &mut AppState) {
 	if let Some(n) = next
 		&& n != ts
 	{
-		state.apply(Command::SetTimeSignature { time_signature: n });
+		state.apply(Command::SetTimeSignature {
+			time_signature: n,
+			bar: 0,
+		});
 	}
 }
 

@@ -15,7 +15,10 @@ use crate::automation::{AutoTarget, AutomationBindings, Binding, DeviceSlot, Res
 use crate::hosting::{PluginCrash, PluginEditorSlot, PluginWatch, PluginXruns};
 use crate::input::{InputFifo, MAX_INPUT_CHANNELS};
 use crate::meter::{MeterBank, Meters};
-use crate::metronome::{Click, MAX_CLICKS, Metronome, MetronomeSettings, clicks_between};
+use crate::metronome::{
+	Click, MAX_CLICKS, MeterSegment, Metronome, MetronomeSettings, clicks_between, meter_at,
+	meter_clicks,
+};
 use crate::schedule::MidiSchedule;
 
 /// Which tracks are heard while auditioning (see [`Graph::set_audition`]): written by the
@@ -551,8 +554,8 @@ pub struct Graph {
 	pub(crate) recording: bool,
 	pub(crate) metronome: Metronome,
 	/// Clicks per bar and click length in quarter notes (from the time signature).
-	pub(crate) beats_per_bar: u32,
-	pub(crate) beat_unit: f64,
+	/// Time signatures (never empty).
+	pub(crate) meter: Vec<MeterSegment>,
 	pub(crate) count_in: CountIn,
 	/// What the last `process` call played (see [`Graph::segments`]).
 	pub(crate) segments: [Segment; MAX_SEGMENTS],
@@ -798,14 +801,15 @@ impl Graph {
 			return;
 		}
 		let seg = self.segment_at(self.out_pos as f64);
-		let beat_frames = self.beat_unit * 60.0 / seg.bpm * f64::from(self.sample_rate);
-		let total = (f64::from(bars * self.beats_per_bar) * beat_frames).round() as u64;
+		let meter = meter_at(&self.meter, self.beat_at(self.out_pos));
+		let beat_frames = meter.unit() * 60.0 / seg.bpm * f64::from(self.sample_rate);
+		let total = (f64::from(bars * meter.numerator.max(1)) * beat_frames).round() as u64;
 		self.count_in = CountIn {
 			left: total,
 			total,
 			rendered: 0,
 			beat_frames,
-			per_bar: self.beats_per_bar,
+			per_bar: meter.numerator.max(1),
 		};
 	}
 
@@ -863,11 +867,10 @@ impl Graph {
 				continue;
 			}
 			let (b0, b1) = (self.beat_at(start), self.beat_at(start + len as i64));
-			clicks_between(
+			meter_clicks(
+				&self.meter,
 				b0,
 				b1,
-				self.beat_unit,
-				self.beats_per_bar,
 				|b| self.sample_at_beat(b).floor() as i64 - start + offset as i64,
 				&mut out,
 				&mut n,
@@ -1116,6 +1119,7 @@ impl Graph {
 					clicks_between(
 						b0,
 						b1,
+						0.0,
 						1.0,
 						c.per_bar,
 						|b| (b * c.beat_frames).floor() as i64 - c.rendered as i64,
@@ -1348,10 +1352,17 @@ impl Graph {
 			)
 		};
 		let seg = self.segment_at(pos as f64);
+		let beat = self.beat_at(pos).max(0.0);
+		let meter = meter_at(&self.meter, beat);
+		let (bar, bar_start) = meter.bar_at(beat);
 		let transport = Transport {
 			bpm: seg.bpm,
 			playing: !preview,
-			beat_position: self.beat_at(pos).max(0.0),
+			beat_position: beat,
+			time_sig_numerator: meter.numerator as u16,
+			time_sig_denominator: meter.denominator as u16,
+			bar_start,
+			bar_number: bar.clamp(0, i64::from(i32::MAX)) as i32,
 		};
 		for acc in &mut self.accumulators {
 			acc.clear();

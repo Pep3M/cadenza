@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use cadenza_core::{Tick, TimeSignature};
+use cadenza_core::{Meter, MeterChange, Tick, TimeSignature};
 use cadenza_model::{Clip, ClipContent, Command, Device, DeviceKind, Note, Track, TrackKind};
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 
@@ -251,21 +251,6 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 			bpm,
 		})
 		.collect();
-	let distinct_signatures: Vec<_> = {
-		let mut seen = Vec::new();
-		for (_, sig) in &time_signatures {
-			if !seen.contains(sig) {
-				seen.push(*sig);
-			}
-		}
-		seen
-	};
-	if distinct_signatures.len() > 1 {
-		warnings.push(format!(
-			"{} different time signatures found; the project model holds only one value, the first encountered was kept",
-			distinct_signatures.len()
-		));
-	}
 	let time_signatures = time_signatures
 		.into_iter()
 		.map(|(tick, sig)| (rescale(tick), sig))
@@ -368,6 +353,53 @@ fn clip_length(notes: &[ParsedNote]) -> Tick {
 		.unwrap_or(Tick(cadenza_core::PPQ))
 }
 
+/// Bar-indexed time signatures from the file's (tick, signature) events: the signature of
+/// bar 1 (`None` when the file has none) and the changes after it. A change that does not
+/// fall on a bar line of the signatures before it moves to the next bar line (warned);
+/// repeated signatures are dropped.
+pub fn meter_changes(
+	signatures: &[(Tick, TimeSignature)],
+	warnings: &mut Vec<String>,
+) -> (Option<TimeSignature>, Vec<MeterChange>) {
+	let mut sorted = signatures.to_vec();
+	sorted.sort_by_key(|(tick, _)| *tick);
+	let mut first: Option<TimeSignature> = None;
+	let mut changes: Vec<MeterChange> = Vec::new();
+	for (tick, sig) in sorted {
+		if tick <= Tick::ZERO {
+			first = Some(sig);
+			continue;
+		}
+		let base = first.unwrap_or_default();
+		let meter = Meter::new(base, &changes);
+		if meter.signature_at(tick) == sig {
+			continue;
+		}
+		let bar = meter.bar_at(tick);
+		let index = if bar.start == tick {
+			bar.index
+		} else {
+			warnings.push(format!(
+				"time signature {}/{} at beat {} is not on a bar line; moved to bar {}",
+				sig.numerator,
+				sig.denominator,
+				tick.beats(),
+				bar.index + 2
+			));
+			bar.index + 1
+		};
+		let index = index.clamp(1, i64::from(u32::MAX)) as u32;
+		match changes.last_mut() {
+			Some(last) if last.bar == index => *last = MeterChange::new(index, sig),
+			_ => changes.push(MeterChange::new(index, sig)),
+		}
+	}
+	if first.is_none() && !changes.is_empty() {
+		first = Some(TimeSignature::default());
+	}
+	(first, changes)
+}
+
 /// Builds the undoable command that applies `parsed` to a project, per `options`.
 pub fn build_import_command(
 	parsed: &ParsedMidiFile,
@@ -383,9 +415,17 @@ pub fn build_import_command(
 			bpm: point.bpm,
 		});
 	}
-	if let Some((_, sig)) = parsed.time_signatures.first() {
+	let (first, changes) = meter_changes(&parsed.time_signatures, warnings);
+	if let Some(first) = first {
 		commands.push(Command::SetTimeSignature {
-			time_signature: *sig,
+			time_signature: first,
+			bar: 0,
+		});
+	}
+	for change in changes {
+		commands.push(Command::SetTimeSignature {
+			time_signature: change.signature(),
+			bar: change.bar,
 		});
 	}
 	for marker in &parsed.markers {

@@ -39,7 +39,7 @@ pub use record::{RecordedNote, Recorder};
 pub use smf_export::{export_clip, export_project};
 pub use smf_import::{
 	ImportOptions, ImportResult, ImportTarget, build_import_command, import_smf,
-	import_smf_with_ids, parse_smf,
+	import_smf_with_ids, meter_changes, parse_smf,
 };
 
 #[cfg(test)]

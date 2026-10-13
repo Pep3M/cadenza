@@ -49,6 +49,7 @@ fn run(
 		bpm: 120.0,
 		playing: true,
 		beat_position: 0.0,
+		..Default::default()
 	};
 	while started.elapsed() < time && !done(&events) {
 		l.fill(0.0);

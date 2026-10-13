@@ -360,6 +360,7 @@ fn through_master(
 	let mut p = Project::new("Stem");
 	p.tempo = project.tempo.clone();
 	p.time_signature = project.time_signature;
+	p.time_signature_changes = project.time_signature_changes.clone();
 	p.master = project.master.clone();
 	p.automation = project
 		.automation

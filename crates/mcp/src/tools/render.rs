@@ -160,7 +160,7 @@ pub fn resolve_range(
 				.into(),
 		));
 	}
-	let bar = project.time_signature.ticks_per_bar();
+	let meter = project.meter();
 	if start_bar == Some(0) || end_bar == Some(0) {
 		return Err(McpError::Invalid(
 			"bars are numbered from 1 (start_bar 1 = the song start)".into(),
@@ -175,12 +175,12 @@ pub fn resolve_range(
 	}
 	let start = match (start_beat, start_bar) {
 		(Some(b), _) => beats_to_tick(b),
-		(_, Some(n)) => Tick(bar.0 * i64::from(n - 1)),
+		(_, Some(n)) => meter.bar_start(i64::from(n) - 1),
 		_ => Tick::ZERO,
 	};
 	let end = match (end_beat, end_bar) {
 		(Some(b), _) => Some(beats_to_tick(b)),
-		(_, Some(n)) => Some(Tick(bar.0 * i64::from(n))),
+		(_, Some(n)) => Some(meter.bar_start(i64::from(n))),
 		_ => None,
 	};
 	Ok((start, end))

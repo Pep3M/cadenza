@@ -885,12 +885,24 @@ impl CadenzaServer {
 		self.run_mut(|s| arrange::set_tempo(s, args))
 	}
 
-	#[tool(description = "Sets the project's time signature.")]
+	#[tool(
+		description = "Sets the time signature from a bar on (default bar 1 = the whole song). A later bar adds a time signature change (e.g. a 2/4 bar before a chorus, a 7/8 section); notes stay at their beats, bar lines move. get_project lists time_signature_changes."
+	)]
 	fn set_time_signature(
 		&self,
 		Parameters(args): Parameters<arrange::SetTimeSignatureArgs>,
 	) -> Result<(), ErrorData> {
 		self.run_mut(|s| arrange::set_time_signature(s, args))
+	}
+
+	#[tool(
+		description = "Removes the time signature change at a bar (>= 2); the signature before it continues."
+	)]
+	fn remove_time_signature(
+		&self,
+		Parameters(args): Parameters<arrange::RemoveTimeSignatureArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| arrange::remove_time_signature(s, args))
 	}
 
 	#[tool(

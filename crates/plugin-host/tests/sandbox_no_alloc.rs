@@ -81,6 +81,7 @@ fn sandboxed_audio_path_never_allocates() {
 		bpm: 97.0,
 		playing: true,
 		beat_position: 3.5,
+		..Default::default()
 	};
 
 	for desc in [descriptor(GAIN_ID), descriptor(SINE_ID)] {

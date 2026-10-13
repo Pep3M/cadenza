@@ -82,6 +82,7 @@ fn process_and_set_param_never_allocate() {
 		bpm: 97.0,
 		playing: true,
 		beat_position: 3.5,
+		..Default::default()
 	};
 
 	let vst3: Vec<PluginDescriptor> = scan_in_subprocess(

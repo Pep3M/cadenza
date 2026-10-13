@@ -325,7 +325,9 @@ impl ClapProcessor {
 }
 
 fn transport_event(t: &Transport) -> TransportEvent {
-	let mut flags = TransportFlags::HAS_TEMPO | TransportFlags::HAS_BEATS_TIMELINE;
+	let mut flags = TransportFlags::HAS_TEMPO
+		| TransportFlags::HAS_BEATS_TIMELINE
+		| TransportFlags::HAS_TIME_SIGNATURE;
 	if t.playing {
 		flags |= TransportFlags::IS_PLAYING;
 	}
@@ -340,10 +342,10 @@ fn transport_event(t: &Transport) -> TransportEvent {
 		loop_end_beats: Default::default(),
 		loop_start_seconds: Default::default(),
 		loop_end_seconds: Default::default(),
-		bar_start: Default::default(),
-		bar_number: 0,
-		time_signature_numerator: 4,
-		time_signature_denominator: 4,
+		bar_start: BeatTime::from_float(t.bar_start),
+		bar_number: t.bar_number,
+		time_signature_numerator: t.time_sig_numerator.max(1),
+		time_signature_denominator: t.time_sig_denominator.max(1),
 	}
 }
 

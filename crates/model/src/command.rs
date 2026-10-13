@@ -186,8 +186,16 @@ pub enum Command {
 	RemoveTempoPoint {
 		tick: Tick,
 	},
+	/// Sets the time signature from bar index `bar` on (0 = bar 1, the song's first
+	/// signature; later bars add or replace a change).
 	SetTimeSignature {
 		time_signature: TimeSignature,
+		#[serde(default, skip_serializing_if = "is_zero")]
+		bar: u32,
+	},
+	/// Removes the time signature change at bar index `bar` (>= 1).
+	RemoveTimeSignature {
+		bar: u32,
 	},
 	/// Replaces the automation lane for `address`; empty `points` removes the lane.
 	SetAutomation {
@@ -337,6 +345,7 @@ impl Command {
 			Self::SetTempo { .. } => "set_tempo",
 			Self::RemoveTempoPoint { .. } => "remove_tempo_point",
 			Self::SetTimeSignature { .. } => "set_time_signature",
+			Self::RemoveTimeSignature { .. } => "remove_time_signature",
 			Self::SetAutomation { .. } => "set_automation",
 			Self::AddMarker { .. } => "add_marker",
 			Self::RemoveMarker { .. } => "remove_marker",
@@ -451,9 +460,22 @@ impl Command {
 				format!("Set tempo to {bpm} bpm at beat {}", tick.beats())
 			}
 			Self::RemoveTempoPoint { .. } => "Remove tempo change".into(),
-			Self::SetTimeSignature { time_signature: ts } => {
+			Self::SetTimeSignature {
+				time_signature: ts,
+				bar: 0,
+			} => {
 				format!("Set time signature to {}/{}", ts.numerator, ts.denominator)
 			}
+			Self::SetTimeSignature {
+				time_signature: ts,
+				bar,
+			} => format!(
+				"Set time signature to {}/{} at bar {}",
+				ts.numerator,
+				ts.denominator,
+				bar + 1
+			),
+			Self::RemoveTimeSignature { .. } => "Remove time signature change".into(),
 			Self::SetAutomation { points, .. } if points.is_empty() => "Clear automation".into(),
 			Self::SetAutomation { .. } => "Write automation".into(),
 			Self::AddMarker { marker } => format!("Add marker '{}'", marker.name),
@@ -473,4 +495,8 @@ fn plural(verb: &str, n: usize, noun: &str) -> String {
 	} else {
 		format!("{verb} {n} {noun}s")
 	}
+}
+
+fn is_zero(v: &u32) -> bool {
+	*v == 0
 }

@@ -1,7 +1,7 @@
 //! Standard MIDI File export: a whole [`Project`] (one track per instrument track plus a
 //! tempo/meta track) or a single [`Clip`].
 
-use cadenza_core::{TempoMap, Tick, TimeSignature};
+use cadenza_core::{Meter, TempoMap, Tick, TimeSignature};
 use cadenza_model::{Clip, ClipContent, Project, TrackKind};
 use midly::num::{u4, u7, u15, u24, u28};
 use midly::{
@@ -85,7 +85,7 @@ fn to_midi_track<'a>(events: &[RawNoteEvent], name: &'a [u8]) -> Track<'a> {
 /// [`to_midi_track`]); `markers[i].1` indexes into it.
 fn meta_track<'a>(
 	tempo: &TempoMap,
-	time_signature: &TimeSignature,
+	meter: Meter<'_>,
 	markers: &[(Tick, usize)],
 	marker_names: &'a [Vec<u8>],
 ) -> Track<'a> {
@@ -101,16 +101,19 @@ fn meta_track<'a>(
 			kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(micros_per_quarter))),
 		});
 	}
-	let denom_pow2 = time_signature.denominator.trailing_zeros() as u8;
-	events.push(MetaEvent {
-		tick: 0,
-		kind: TrackEventKind::Meta(MetaMessage::TimeSignature(
-			time_signature.numerator as u8,
-			denom_pow2,
-			24,
-			8,
-		)),
-	});
+	let signatures = std::iter::once((Tick::ZERO, meter.first()))
+		.chain(meter.change_ticks().map(|(_, tick, ts)| (tick, ts)));
+	for (tick, ts) in signatures {
+		events.push(MetaEvent {
+			tick: tick.0,
+			kind: TrackEventKind::Meta(MetaMessage::TimeSignature(
+				ts.numerator as u8,
+				ts.denominator.trailing_zeros() as u8,
+				24,
+				8,
+			)),
+		});
+	}
 	for (tick, name_index) in markers {
 		events.push(MetaEvent {
 			tick: tick.0,
@@ -191,7 +194,7 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>> {
 
 	let mut tracks = vec![meta_track(
 		&project.tempo,
-		&project.time_signature,
+		project.meter(),
 		&markers,
 		&marker_names,
 	)];
@@ -207,6 +210,7 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>> {
 }
 
 /// Exports a single clip as a two-track SMF (tempo/time signature, then the notes).
+/// `time_signature` is the one in effect at the clip start.
 pub fn export_clip(
 	clip: &Clip,
 	tempo: &TempoMap,
@@ -219,7 +223,7 @@ pub fn export_clip(
 		notes.iter().map(|n| (Tick::ZERO, n.clone())).collect();
 	let name_bytes = clip.name.clone().into_bytes();
 	let tracks = vec![
-		meta_track(tempo, time_signature, &[], &[]),
+		meta_track(tempo, Meter::new(*time_signature, &[]), &[], &[]),
 		to_midi_track(&note_events(&notes), &name_bytes),
 	];
 	write_smf(tracks)

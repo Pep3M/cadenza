@@ -103,6 +103,8 @@ impl Project {
 		self.automation
 			.sort_by_cached_key(|l| l.address.to_string());
 		self.markers.sort_by_key(|m| m.tick);
+		self.time_signature_changes.sort_by_key(|c| c.bar);
+		self.time_signature_changes.dedup_by_key(|c| c.bar);
 	}
 }
 

@@ -23,6 +23,7 @@ fn transport() -> Transport {
 		bpm: 120.0,
 		playing: true,
 		beat_position: 0.0,
+		..Default::default()
 	}
 }
 

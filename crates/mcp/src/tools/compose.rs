@@ -246,13 +246,14 @@ pub fn write_drum_pattern(
 	}
 	let steps_per_beat = args.steps_per_beat.unwrap_or(4).max(1);
 	let swing = args.swing.unwrap_or(0.0).clamp(0.0, 1.0);
-	let quarters_per_bar = session
-		.document()
-		.project()
-		.time_signature
-		.quarters_per_bar();
-	let total_steps =
-		(args.bars as f64 * quarters_per_bar * steps_per_beat as f64).round() as usize;
+	// Bars follow the time signatures from the start (a 3/4 bar is three beats long).
+	let total_beats = {
+		let meter = session.document().project().meter();
+		let start = beats_to_tick(args.start_beat);
+		let end = meter.tick_at_bar_position(meter.bar_position(start) + f64::from(args.bars));
+		(end - start).beats()
+	};
+	let total_steps = (total_beats * steps_per_beat as f64).round() as usize;
 	let step_beats = 1.0 / steps_per_beat as f64;
 
 	let drum_sampler = session

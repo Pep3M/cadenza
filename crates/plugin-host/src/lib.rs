@@ -43,6 +43,12 @@ pub use sandbox::{
 };
 pub use scanner::{DEFAULT_SCAN_TIMEOUT, SCANNER_ENV, scanner_path};
 
+/// Realtime scheduling for audio threads (the sandbox child's and the host's output
+/// callback): `SCHED_FIFO` directly, else RealtimeKit, else a negative nice value.
+pub mod realtime {
+	pub use crate::sandbox::rt::{Scheduling, current_thread_id, promote_thread};
+}
+
 /// How the plugin will be driven, passed to plugins that distinguish it
 /// (VST3 `ProcessModes`). CLAP plugins currently always run in realtime mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

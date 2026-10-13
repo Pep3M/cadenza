@@ -46,7 +46,8 @@
 //! reported by [`Player::take_editor_states`] so it can be stored in the project.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
@@ -177,6 +178,9 @@ struct Shared {
 	playing: AtomicBool,
 	/// Buffer under/overruns the audio device reported (cpal `Xrun` errors).
 	device_xruns: AtomicU64,
+	/// Kernel id of the output callback thread, published by its first callback (0 =
+	/// not yet) so a helper thread can raise its priority.
+	audio_thread: AtomicI32,
 }
 
 /// Audio-thread side: owns the current graph.
@@ -194,6 +198,8 @@ struct AudioCore {
 	/// A schedule for a graph that is queued but not swapped in yet.
 	pending_schedule: Option<Box<ScheduleSwap>>,
 	shared: Arc<Shared>,
+	/// The callback thread's id was published to `shared`.
+	thread_published: bool,
 	playing: bool,
 	position: Tick,
 	loop_range: Option<(Tick, Tick)>,
@@ -285,6 +291,7 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			schedule_garbage: sched_garbage_tx,
 			pending_schedule: None,
 			shared,
+			thread_published: false,
 			playing: false,
 			position: Tick::ZERO,
 			loop_range: None,
@@ -664,6 +671,11 @@ impl AudioCore {
 		data: &mut [T],
 		channels: usize,
 	) {
+		if !self.thread_published {
+			self.thread_published = true;
+			let tid = cadenza_plugin_host::realtime::current_thread_id();
+			self.shared.audio_thread.store(tid, Ordering::Relaxed);
+		}
 		self.begin_block();
 		let channels = channels.max(1);
 		let mut at = 0;
@@ -817,6 +829,8 @@ pub struct Player {
 	metronome: MetronomeSettings,
 	armed: Vec<TrackId>,
 	recording: Option<RecordSession>,
+	/// How the output callback thread is scheduled, once the helper thread raised it.
+	audio_scheduling: Arc<Mutex<Option<String>>>,
 	_stream: Option<cpal::Stream>,
 }
 
@@ -974,6 +988,10 @@ impl Player {
 			Some(stream),
 			output_latency,
 		);
+		promote_output_thread(
+			player.control.shared.clone(),
+			player.audio_scheduling.clone(),
+		);
 		if config.input_enabled
 			&& let Err(e) = player.set_audio_input(Some(config.input.as_deref()))
 		{
@@ -1059,6 +1077,7 @@ impl Player {
 			metronome: MetronomeSettings::default(),
 			armed: Vec::new(),
 			recording: None,
+			audio_scheduling: Arc::new(Mutex::new(None)),
 			_stream: stream,
 		}
 	}
@@ -1122,6 +1141,15 @@ impl Player {
 	/// Input levels and dropout counters (lock-free; poll from any thread).
 	pub fn input_stats(&self) -> Arc<InputStats> {
 		self.input_stats.clone()
+	}
+
+	/// How the output callback thread is scheduled (e.g. `SCHED_FIFO 10 (RealtimeKit)`),
+	/// once known; `None` before its first callback or without a device.
+	pub fn audio_scheduling(&self) -> Option<String> {
+		self.audio_scheduling
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.clone()
 	}
 
 	/// Buffer under/overruns the output device reported since it was opened (audible
@@ -1874,6 +1902,46 @@ impl Drop for Player {
 	}
 }
 
+/// Environment variable with the `SCHED_FIFO` priority of the output callback thread
+/// (default [`AUDIO_RT_PRIORITY`]; `0` keeps normal scheduling).
+pub const AUDIO_RT_PRIORITY_ENV: &str = "CADENZA_AUDIO_RT_PRIORITY";
+
+/// The output thread's default realtime priority: the sandboxed plugins' audio threads
+/// use the same, so neither starves the other while they hand blocks back and forth.
+pub const AUDIO_RT_PRIORITY: u32 = 10;
+
+/// Raises the output callback thread to realtime scheduling from a helper thread (the
+/// promotion may wait on the system bus, which the callback itself must never do). Waits
+/// for the first callback to publish its thread id; failing is fine: playback works at
+/// normal priority, just with less headroom. Logs one line either way.
+fn promote_output_thread(shared: Arc<Shared>, result: Arc<Mutex<Option<String>>>) {
+	let priority = std::env::var(AUDIO_RT_PRIORITY_ENV)
+		.ok()
+		.and_then(|v| v.trim().parse::<u32>().ok())
+		.unwrap_or(AUDIO_RT_PRIORITY);
+	let spawned = std::thread::Builder::new()
+		.name("cadenza-audio-rt".into())
+		.spawn(move || {
+			let deadline = Instant::now() + Duration::from_secs(5);
+			let tid = loop {
+				let tid = shared.audio_thread.load(Ordering::Relaxed);
+				if tid != 0 {
+					break tid;
+				}
+				if Instant::now() > deadline || Arc::strong_count(&shared) == 1 {
+					return;
+				}
+				std::thread::sleep(Duration::from_millis(5));
+			};
+			let scheduling = cadenza_plugin_host::realtime::promote_thread(tid, priority);
+			eprintln!("cadenza: audio output thread: {scheduling}");
+			*result.lock().unwrap_or_else(|p| p.into_inner()) = Some(scheduling.to_string());
+		});
+	if let Err(e) = spawned {
+		eprintln!("cadenza: audio output thread keeps normal priority ({e})");
+	}
+}
+
 fn build<T: SizedSample + FromSample<f32>>(
 	device: &cpal::Device,
 	config: cpal::StreamConfig,
@@ -1960,6 +2028,32 @@ mod tests {
 		assert_eq!(control.garbage.slots(), 1);
 		control.collect_garbage();
 		assert!(core.graph.as_ref().unwrap().is_playing());
+	}
+
+	#[test]
+	fn the_first_callback_publishes_its_thread_for_promotion() {
+		let (player, mut dev) = Player::virtual_device(48_000, 0);
+		assert_eq!(
+			player.control.shared.audio_thread.load(Ordering::Relaxed),
+			0
+		);
+		let mut out = vec![0.0f32; 256];
+		dev.process(&mut out, &[]);
+		assert_eq!(
+			player.control.shared.audio_thread.load(Ordering::Relaxed),
+			cadenza_plugin_host::realtime::current_thread_id()
+		);
+		assert_eq!(
+			player.audio_scheduling(),
+			None,
+			"no device: nothing promoted"
+		);
+		// Promotion can be switched off; it never touches a thread then.
+		let off = cadenza_plugin_host::realtime::promote_thread(
+			cadenza_plugin_host::realtime::current_thread_id(),
+			0,
+		);
+		assert_eq!(off.to_string(), "normal priority (disabled)");
 	}
 
 	#[test]

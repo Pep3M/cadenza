@@ -823,6 +823,9 @@ pub fn audio_settings(ctx: &egui::Context, state: &mut AppState) {
 					if let Some(e) = &s.midi_error {
 						ui.colored_label(theme::ERROR, e);
 					}
+					if let Some(t) = &s.audio_thread {
+						ui.label(format!("Audio thread: {t}"));
+					}
 				}
 				None => {
 					ui.label("No audio device is open.");

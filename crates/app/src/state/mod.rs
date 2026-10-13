@@ -3157,6 +3157,11 @@ impl AppState {
 					self.notices.error(format!("Playback engine: {error}"));
 				}
 				AudioEvent::ReloadNeeded => self.schedule_reload(),
+				AudioEvent::AudioThread(scheduling) => {
+					if let Some(status) = &mut self.record.status {
+						status.audio_thread = Some(scheduling);
+					}
+				}
 				AudioEvent::Xruns { device, plugins } => {
 					self.xruns.update(device, plugins, Instant::now());
 				}

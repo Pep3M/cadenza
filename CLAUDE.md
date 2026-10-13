@@ -445,7 +445,12 @@ batching: `realtime_chunk` (128) = 4 engine quanta per round trip as 4 sub-block
 (events/params/transport stay per quantum), +96 frames of latency reported through
 `latency()` so PDC absorbs it; offline is not batched (`offline_chunk` 0). The child's audio
 thread asks for `SCHED_FIFO` (`realtime_priority` 10, direct or RealtimeKit via `busctl`;
-`RLIMIT_RTTIME` soft limit demotes it on `SIGXCPU`), shm is `mlock`ed. Surge XT stress test:
+`RLIMIT_RTTIME` soft limit demotes it on `SIGXCPU`), shm is `mlock`ed. The same code is
+public as `cadenza_plugin_host::realtime::{current_thread_id, promote_thread}`: the host's
+cpal output callback publishes its tid on its first call (`Shared::audio_thread`, no alloc)
+and a `cadenza-audio-rt` helper thread promotes it (`AUDIO_RT_PRIORITY` 10,
+`CADENZA_AUDIO_RT_PRIORITY`, 0 = off), logging one line; `Player::audio_scheduling()` (shown
+in the app's Audio settings status). Surge XT stress test:
 `cargo test -p cadenza-plugin-host --release --test sandbox_realtime -- --ignored --nocapture`.
 Plugin state is captured explicitly (MCP `capture_plugin_state`, automatically on `save_project`,
 and after loading a plugin preset) from a fresh instance, then stored with `SetDeviceState`.

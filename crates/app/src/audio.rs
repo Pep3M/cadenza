@@ -124,6 +124,8 @@ pub struct DeviceStatus {
 	pub output_latency: u64,
 	/// Latency compensation the next recording would use, frames.
 	pub recording_latency: i64,
+	/// How the output callback thread is scheduled (e.g. `SCHED_FIFO 10 (RealtimeKit)`).
+	pub audio_thread: Option<String>,
 }
 
 /// What the player thread reports back.
@@ -159,6 +161,8 @@ pub enum AudioEvent {
 		device: u64,
 		plugins: Vec<PluginXruns>,
 	},
+	/// The output thread's scheduling became known (after the device opened).
+	AudioThread(String),
 	/// What happened in open plugin editors.
 	Editor(Vec<EditorUpdate>),
 	/// Live plugin states to store in the project (captured, or carried over by a load).
@@ -391,6 +395,7 @@ fn status(player: &Player, kept: &Kept) -> DeviceStatus {
 		midi_error: kept.midi_error.clone(),
 		output_latency: player.output_latency(),
 		recording_latency: player.recording_latency(),
+		audio_thread: player.audio_scheduling(),
 	}
 }
 
@@ -504,6 +509,7 @@ fn run(
 	});
 	let mut next_crash_poll = Instant::now() + CRASH_POLL;
 	let mut last_xruns: (u64, Vec<PluginXruns>) = (0, Vec::new());
+	let mut scheduling_sent = player.audio_scheduling().is_some();
 	let mut next_editor_poll = Instant::now() + EDITOR_POLL;
 	loop {
 		let now = Instant::now();
@@ -512,6 +518,10 @@ fn run(
 			let crashes = player.take_plugin_crashes();
 			if !crashes.is_empty() {
 				emit(AudioEvent::PluginCrashes(crashes));
+			}
+			if !scheduling_sent && let Some(s) = player.audio_scheduling() {
+				scheduling_sent = true;
+				emit(AudioEvent::AudioThread(s));
 			}
 			let xruns = (player.device_xruns(), player.plugin_xruns());
 			if xruns != last_xruns {
@@ -681,6 +691,7 @@ fn run(
 							}
 						}
 					};
+					scheduling_sent = player.audio_scheduling().is_some();
 					emit(AudioEvent::Ready {
 						clock: player.clock(),
 						input: player.input_stats(),

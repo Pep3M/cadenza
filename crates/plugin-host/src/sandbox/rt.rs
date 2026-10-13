@@ -21,7 +21,7 @@
 
 /// How the audio thread ended up being scheduled (shown in diagnostics).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Scheduling {
+pub enum Scheduling {
 	Realtime { priority: u32, via: &'static str },
 	Nice { nice: i32, via: &'static str },
 	Normal { reason: String },
@@ -131,8 +131,8 @@ mod imp {
 			unsafe {
 				let policy = libc::SCHED_OTHER | libc::SCHED_RESET_ON_FORK;
 				if libc::sched_setscheduler(tid, policy, &param) == 0 {
-					let msg = b"cadenza-plugin-sandbox: the plugin used too much realtime CPU \
-						without blocking; its audio thread is back at normal priority\n";
+					let msg = b"cadenza: an audio thread used too much realtime CPU without \
+						blocking; it is back at normal priority\n";
 					libc::write(2, msg.as_ptr().cast(), msg.len());
 				}
 			}
@@ -158,9 +158,12 @@ mod imp {
 		}
 	}
 
-	pub(super) fn promote(priority: u32) -> Scheduling {
+	pub(super) fn current_tid() -> i32 {
 		// SAFETY: gettid has no preconditions.
-		let tid = unsafe { libc::gettid() };
+		unsafe { libc::gettid() }
+	}
+
+	pub(super) fn promote(tid: i32, priority: u32) -> Scheduling {
 		AUDIO_TID.store(tid, Ordering::Relaxed);
 		if set_fifo(tid, priority) {
 			limit_rttime(200_000);
@@ -209,7 +212,11 @@ mod imp {
 mod imp {
 	use super::Scheduling;
 
-	pub(super) fn promote(_priority: u32) -> Scheduling {
+	pub(super) fn current_tid() -> i32 {
+		0
+	}
+
+	pub(super) fn promote(_tid: i32, _priority: u32) -> Scheduling {
 		Scheduling::Normal {
 			reason: "not implemented on this OS".into(),
 		}
@@ -219,12 +226,31 @@ mod imp {
 /// Raises the calling thread to `SCHED_FIFO` `priority` (or the best the
 /// system allows). `priority == 0` leaves it alone.
 pub(crate) fn promote_current_thread(priority: u32) -> Scheduling {
-	if priority == 0 {
+	promote_thread(current_thread_id(), priority)
+}
+
+/// The calling thread's kernel id (Linux `gettid`; 0 elsewhere). One syscall, no
+/// allocation: an audio callback may publish it for [`promote_thread`].
+pub fn current_thread_id() -> i32 {
+	imp::current_tid()
+}
+
+/// Raises thread `tid` of this process (from [`current_thread_id`]) to `SCHED_FIFO`
+/// `priority`, or the best the system allows (RealtimeKit, then a negative nice value).
+/// May block on the system bus for a moment: call it from a helper thread, never from
+/// the audio thread itself. `priority == 0` or `tid == 0` leaves it alone. Only one
+/// thread per process is demoted by the `RLIMIT_RTTIME` guard (the last promoted).
+pub fn promote_thread(tid: i32, priority: u32) -> Scheduling {
+	if priority == 0 || tid == 0 {
 		return Scheduling::Normal {
-			reason: "disabled".into(),
+			reason: if priority == 0 {
+				"disabled".into()
+			} else {
+				"not supported on this OS".into()
+			},
 		};
 	}
-	imp::promote(priority.min(99))
+	imp::promote(tid, priority.min(99))
 }
 
 /// Faults in `buf`'s pages now instead of on the first audio request (a fresh

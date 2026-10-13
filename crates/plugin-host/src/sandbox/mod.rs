@@ -75,7 +75,7 @@
 mod child;
 mod protocol;
 #[cfg(unix)]
-mod rt;
+pub(crate) mod rt;
 mod shm;
 mod sync;
 

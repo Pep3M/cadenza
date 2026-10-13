@@ -99,15 +99,10 @@ pub struct AiChat {
 	waker: Option<Waker>,
 }
 
-/// `$XDG_STATE_HOME/cadenza/sessions` (or `~/.local/state/...`).
+/// `sessions` in the state folder (`$XDG_STATE_HOME/cadenza` or `~/.local/state/cadenza` on
+/// Linux; see [`cadenza_core::paths`]).
 pub fn sessions_dir() -> PathBuf {
-	std::env::var_os("XDG_STATE_HOME")
-		.map(PathBuf::from)
-		.filter(|p| p.is_absolute())
-		.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-		.unwrap_or_else(std::env::temp_dir)
-		.join("cadenza")
-		.join("sessions")
+	cadenza_core::paths::state_dir().join("sessions")
 }
 
 impl AiChat {

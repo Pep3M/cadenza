@@ -2,6 +2,9 @@
 //! hang isolation during renders and realtime graphs, and the in-process fallback when the
 //! sandbox executable is missing.
 
+// Plugin sandboxing is Unix-only (`SANDBOX_SUPPORTED`).
+#![cfg(unix)]
+
 mod common;
 mod plugin_support;
 

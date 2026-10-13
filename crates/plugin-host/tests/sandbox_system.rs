@@ -3,6 +3,9 @@
 //! in-process. Ignored by default: run with
 //! `cargo test -p cadenza-plugin-host --release --test sandbox_system -- --ignored --nocapture`.
 
+// Plugin sandboxing is Unix-only (`SANDBOX_SUPPORTED`).
+#![cfg(unix)]
+
 mod common;
 
 use std::path::Path;

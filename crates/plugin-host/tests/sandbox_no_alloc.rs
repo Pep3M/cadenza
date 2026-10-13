@@ -3,6 +3,9 @@
 //! heap, including when the child crashes or hangs mid-stream. The child's
 //! allocations happen in another process and are not counted.
 
+// Plugin sandboxing is Unix-only (`SANDBOX_SUPPORTED`).
+#![cfg(unix)]
+
 mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};

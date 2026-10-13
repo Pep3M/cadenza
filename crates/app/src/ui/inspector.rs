@@ -531,6 +531,14 @@ fn editor_button(ui: &mut Ui, state: &mut AppState, device: cadenza_core::Device
 	if !state.is_plugin(device) {
 		return;
 	}
+	if !cadenza_engine::EDITORS_SUPPORTED {
+		ui.add_enabled(false, egui::Button::new("Edit").small())
+			.on_disabled_hover_text(
+				"Plugin editor windows are not supported on this platform yet; use the \
+				 parameter controls below",
+			);
+		return;
+	}
 	let open = state.plugin_editor_open(device);
 	let label = if open { "Close editor" } else { "Edit" };
 	if ui

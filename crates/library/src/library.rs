@@ -19,7 +19,7 @@ mod embedded {
 }
 
 /// Where user packs live: `$CADENZA_LIBRARY_DIR`, else the OS data dir +
-/// `cadenza/library` (`$XDG_DATA_HOME` or `~/.local/share` on Linux).
+/// `cadenza/library` (see [`cadenza_core::paths`]).
 pub fn default_library_dir() -> PathBuf {
 	let var = |k: &str| {
 		std::env::var_os(k)
@@ -29,16 +29,7 @@ pub fn default_library_dir() -> PathBuf {
 	if let Some(dir) = var(LIBRARY_DIR_ENV) {
 		return dir;
 	}
-	let base = if cfg!(windows) {
-		var("APPDATA")
-	} else if cfg!(target_os = "macos") {
-		var("HOME").map(|h| h.join("Library/Application Support"))
-	} else {
-		var("XDG_DATA_HOME").or_else(|| var("HOME").map(|h| h.join(".local/share")))
-	};
-	base.unwrap_or_else(std::env::temp_dir)
-		.join("cadenza")
-		.join("library")
+	cadenza_core::paths::data_dir().join("library")
 }
 
 /// One item of a loaded pack.

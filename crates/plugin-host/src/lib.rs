@@ -14,6 +14,17 @@
 //! descriptor, catalog, scanner and `instantiate` API. Both share one plugin
 //! main thread (`cadenza-plugin-main`, see `main_thread.rs`), which is also
 //! the event loop of plugin editor windows ([`editor`], [`PluginEditor`]).
+//!
+//! Platforms: hosting, scanning and the catalog work everywhere; the sandbox
+//! needs Unix ([`SANDBOX_SUPPORTED`]) and editor windows X11 (Linux/BSD,
+//! [`EDITORS_SUPPORTED`]).
+
+// Elsewhere the sandbox transport, the editor windows and the fd event loop
+// they share are compiled (type-checked) but not wired up.
+#![cfg_attr(
+	not(all(unix, not(target_os = "macos"))),
+	allow(dead_code, unused_imports)
+)]
 
 pub mod catalog;
 pub mod clap;
@@ -38,8 +49,8 @@ pub use discovery::{default_search_paths, find_clap_files, find_plugin_files, fi
 pub use editor::{EDITORS_SUPPORTED, EditorEvent, PluginEditor, TITLE_STRIP_HEIGHT};
 pub use error::PluginError;
 pub use sandbox::{
-	CrashInfo, CrashReason, SANDBOX_ENV, SandboxMonitor, SandboxOptions, SandboxStats,
-	SandboxedProcessor, sandbox_path,
+	CrashInfo, CrashReason, SANDBOX_ENV, SANDBOX_SUPPORTED, SandboxMonitor, SandboxOptions,
+	SandboxStats, SandboxedProcessor, sandbox_path,
 };
 pub use scanner::{DEFAULT_SCAN_TIMEOUT, SCANNER_ENV, scanner_path};
 

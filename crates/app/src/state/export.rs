@@ -243,8 +243,8 @@ pub struct ExportDialog {
 pub fn default_folder(project_path: Option<&Path>) -> PathBuf {
 	match project_path {
 		Some(p) => ProjectLayout::new(p).renders_dir(),
-		None => std::env::var_os("HOME")
-			.map(|h| PathBuf::from(h).join("Music"))
+		None => cadenza_core::paths::home_dir()
+			.map(|h| h.join("Music"))
 			.unwrap_or_else(std::env::temp_dir),
 	}
 }

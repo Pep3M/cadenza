@@ -2,6 +2,9 @@
 //! output parity with in-process hosting, state, latency, crash and hang
 //! isolation, restart, and a round-trip benchmark (ignored).
 
+// Plugin sandboxing is Unix-only (`SANDBOX_SUPPORTED`).
+#![cfg(unix)]
+
 mod common;
 
 use std::time::{Duration, Instant};

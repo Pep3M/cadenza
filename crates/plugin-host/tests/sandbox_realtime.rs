@@ -15,6 +15,9 @@
 //! defaults; `CADENZA_TEST_SECONDS` sets the run length (default 8) and
 //! `CADENZA_TEST_STRESS=<threads>` adds spinning threads (a busy desktop).
 
+// Plugin sandboxing is Unix-only (`SANDBOX_SUPPORTED`).
+#![cfg(unix)]
+
 mod common;
 
 use std::path::Path;

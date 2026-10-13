@@ -3,6 +3,9 @@
 //! plays and while the transport is stopped (`Processor::idle`), in-process and
 //! sandboxed.
 
+// Plugin editors are X11-only for now (`EDITORS_SUPPORTED`).
+#![cfg(all(unix, not(target_os = "macos")))]
+
 mod common;
 mod plugin_support;
 

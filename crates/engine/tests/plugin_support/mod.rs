@@ -100,7 +100,11 @@ pub fn sandbox_exe() -> PathBuf {
 
 /// Sandboxed hosting with this build's sandbox executable, no core dumps (the crash
 /// tests abort on purpose) and a realtime deadline loose enough for loaded CI machines.
+/// In-process where the OS cannot sandbox plugins (the parity tests then still run).
 pub fn sandboxed() -> PluginHosting {
+	if !cadenza_plugin_host::SANDBOX_SUPPORTED {
+		return PluginHosting::in_process();
+	}
 	let mut hosting = PluginHosting::sandboxed();
 	hosting.sandbox.executable = Some(sandbox_exe());
 	hosting.sandbox.core_dumps = false;

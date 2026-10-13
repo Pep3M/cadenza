@@ -9,6 +9,9 @@
 //! GUI edits, plugin-initiated resizes and timers end to end; installed
 //! plugins (Surge XT and LSP, CLAP and VST3) are opened if present.
 
+// Plugin editors are X11-only for now (`EDITORS_SUPPORTED`).
+#![cfg(all(unix, not(target_os = "macos")))]
+
 mod common;
 
 use std::path::Path;

@@ -101,13 +101,8 @@ impl ProviderArgs {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs())
 			.unwrap_or_default();
-		let state_dir = std::env::var_os("XDG_STATE_HOME")
-			.map(PathBuf::from)
-			.filter(|p| p.is_absolute())
-			.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-			.unwrap_or_else(std::env::temp_dir);
-		let transcript = state_dir
-			.join("cadenza/sessions")
+		let transcript = cadenza_core::paths::state_dir()
+			.join("sessions")
 			.join(format!("cli-{stamp}-{}", std::process::id()))
 			.join("transcript.jsonl");
 		let mut config = SessionConfig::new(provider, &transcript);

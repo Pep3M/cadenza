@@ -132,6 +132,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> ExitCode {
 			return ExitCode::from(1);
 		}
 	};
+	sync::prepare();
 	let region = match Region::open(&args.shm) {
 		Ok(r) => Arc::new(r),
 		Err(e) => {

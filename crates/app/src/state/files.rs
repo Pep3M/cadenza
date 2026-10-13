@@ -101,7 +101,7 @@ pub fn list_dir(dir: &Path, filter: FileFilter) -> std::io::Result<Vec<FileEntry
 }
 
 fn home() -> Option<PathBuf> {
-	std::env::var_os("HOME").map(PathBuf::from)
+	cadenza_core::paths::home_dir()
 }
 
 /// `~/Music` (when it exists) and the home folder.

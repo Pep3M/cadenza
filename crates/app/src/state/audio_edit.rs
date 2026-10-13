@@ -424,11 +424,7 @@ pub fn processed_path(project_path: Option<&Path>, source: &Path, op: Process) -
 }
 
 fn cache_dir() -> PathBuf {
-	std::env::var_os("XDG_CACHE_HOME")
-		.map(PathBuf::from)
-		.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-		.unwrap_or_else(std::env::temp_dir)
-		.join("cadenza")
+	cadenza_core::paths::cache_dir()
 }
 
 /// Applies `op` to frames `a..b` of `buffer`. Returns the new buffer and how many

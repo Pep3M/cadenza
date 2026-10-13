@@ -1,6 +1,9 @@
 //! Plugin crashes through the MCP server: renders and analyses complete and name the
 //! crashed plugin in their warnings, which is what the LLM reads.
 
+// Plugin sandboxing is Unix-only (`SANDBOX_SUPPORTED`).
+#![cfg(unix)]
+
 mod plugin_support;
 
 use cadenza_mcp::{CadenzaServer, Session};

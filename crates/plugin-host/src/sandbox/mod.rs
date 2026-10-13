@@ -68,13 +68,18 @@
 //! background thread (no zombies), and the shared memory name is unlinked as
 //! soon as the child has mapped it.
 //!
+//! # Platforms
+//!
+//! Linux and other Unix systems (macOS included; see `sync.rs` for how each
+//! one waits). On Windows ([`SANDBOX_SUPPORTED`] is false) the code is
+//! compiled but never spawns a child: hosts run plugins in-process there.
+//!
 //! Future work: grouping several plugins per sandbox process (lower overhead,
 //! weaker isolation), Windows support (named file mappings + events).
 
 #[cfg(unix)]
 mod child;
 mod protocol;
-#[cfg(unix)]
 pub(crate) mod rt;
 mod shm;
 mod sync;
@@ -101,6 +106,9 @@ use shm::{
 };
 
 use crate::ports::KeyInput;
+
+/// Whether this OS can run plugins in a sandbox process (Unix: Linux, macOS, BSD).
+pub const SANDBOX_SUPPORTED: bool = cfg!(unix);
 
 /// Environment variable overriding the sandbox executable location.
 pub const SANDBOX_ENV: &str = "CADENZA_PLUGIN_SANDBOX";
@@ -629,6 +637,7 @@ impl Connection {
 		};
 		let region = Region::create(layout.bytes()).map_err(fail)?;
 		layout.write_header(region.words());
+		sync::prepare();
 
 		let mut cmd = Command::new(&exe);
 		cmd.arg("--shm")

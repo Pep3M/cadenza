@@ -24,7 +24,7 @@ const VERSION_FILE: &str = ".cadenza-factory-version";
 const RATE: u32 = 48_000;
 
 /// Where the factory samples live: `$CADENZA_FACTORY_SAMPLES`, else the OS data dir +
-/// `cadenza/samples/factory` (`$XDG_DATA_HOME` or `~/.local/share` on Linux).
+/// `cadenza/samples/factory` (see [`cadenza_core::paths`]).
 pub fn factory_sample_dir() -> PathBuf {
 	let var = |k: &str| {
 		std::env::var_os(k)
@@ -34,15 +34,7 @@ pub fn factory_sample_dir() -> PathBuf {
 	if let Some(dir) = var(FACTORY_SAMPLES_ENV) {
 		return dir;
 	}
-	let base = if cfg!(windows) {
-		var("APPDATA")
-	} else if cfg!(target_os = "macos") {
-		var("HOME").map(|h| h.join("Library/Application Support"))
-	} else {
-		var("XDG_DATA_HOME").or_else(|| var("HOME").map(|h| h.join(".local/share")))
-	};
-	base.unwrap_or_else(std::env::temp_dir)
-		.join("cadenza")
+	cadenza_core::paths::data_dir()
 		.join("samples")
 		.join("factory")
 }

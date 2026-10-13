@@ -138,15 +138,10 @@ impl SecretStore for SystemSecretStore {
 	}
 }
 
-/// `$XDG_CONFIG_HOME/cadenza/credentials.json` (or `~/.config/...`).
+/// `credentials.json` in the config folder (`$XDG_CONFIG_HOME/cadenza` or `~/.config/cadenza`
+/// on Linux; see [`cadenza_core::paths`]).
 pub fn default_credentials_path() -> PathBuf {
-	std::env::var_os("XDG_CONFIG_HOME")
-		.map(PathBuf::from)
-		.filter(|p| p.is_absolute())
-		.or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-		.unwrap_or_else(std::env::temp_dir)
-		.join("cadenza")
-		.join("credentials.json")
+	cadenza_core::paths::config_dir().join("credentials.json")
 }
 
 /// Keys in a JSON file readable only by the user.

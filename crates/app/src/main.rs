@@ -1,5 +1,9 @@
 //! `cadenza-app [project.cadenza.json]`: the Cadenza desktop application.
 
+// Release builds on Windows start without a console window (`cadenza gui` from a
+// terminal still shows the CLI's output).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 

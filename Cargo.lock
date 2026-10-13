@@ -865,6 +865,7 @@ dependencies = [
 name = "cadenza-library"
 version = "0.1.0"
 dependencies = [
+ "cadenza-core",
  "cadenza-theory",
  "serde",
  "serde_json",

@@ -1672,8 +1672,9 @@ impl AppState {
 			return;
 		}
 		if !cadenza_engine::EDITORS_SUPPORTED {
-			self.notices
-				.warn("Plugin editor windows are not available on this OS yet; use the inspector");
+			self.notices.warn(
+				"Plugin editor windows are not supported on this platform yet; use the inspector",
+			);
 			return;
 		}
 		let Some(title) = editors::title(project, device) else {

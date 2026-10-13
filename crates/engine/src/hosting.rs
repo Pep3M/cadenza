@@ -3,7 +3,9 @@
 //! By default every CLAP/VST3 device runs in its own `cadenza-plugin-sandbox` process
 //! ([`HostingMode::Sandboxed`]): a plugin that crashes or hangs is bypassed (instruments go
 //! silent, effects pass audio through) and reported, while the render, analysis or playback
-//! keeps going. [`HostingMode::InProcess`] is kept for debugging and benchmarks.
+//! keeps going. [`HostingMode::InProcess`] is kept for debugging and benchmarks, and is the
+//! default where sandboxing is not available ([`cadenza_plugin_host::SANDBOX_SUPPORTED`],
+//! i.e. Windows for now).
 
 use std::path::PathBuf;
 
@@ -16,7 +18,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Environment variable choosing the default hosting mode: `in-process` or `sandboxed`
-/// (the default; unknown values also mean `sandboxed`).
+/// (the default; unknown values also mean `sandboxed`). Ignored where sandboxing is not
+/// supported: plugins run in-process there.
 pub const HOSTING_ENV: &str = "CADENZA_PLUGIN_HOSTING";
 
 /// How third-party plugin devices are hosted.
@@ -45,8 +48,19 @@ impl PluginHosting {
 		}
 	}
 
-	/// [`PluginHosting::sandboxed`] unless [`HOSTING_ENV`] says `in-process`.
+	/// [`PluginHosting::sandboxed`] unless [`HOSTING_ENV`] says `in-process` or this OS
+	/// cannot sandbox plugins (logged once).
 	pub fn from_env() -> Self {
+		if !cadenza_plugin_host::SANDBOX_SUPPORTED {
+			static LOGGED: std::sync::Once = std::sync::Once::new();
+			LOGGED.call_once(|| {
+				eprintln!(
+					"cadenza: plugin sandboxing is not available on this OS yet; CLAP/VST3 \
+					 plugins run inside Cadenza (a crashing plugin takes the session down)"
+				);
+			});
+			return Self::in_process();
+		}
 		let value = std::env::var(HOSTING_ENV).unwrap_or_default();
 		match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
 			"in-process" | "inprocess" => Self::in_process(),
@@ -64,7 +78,7 @@ impl Default for PluginHosting {
 
 /// Why plugins cannot be sandboxed here, or `None` if they can. Not real-time.
 pub(crate) fn sandbox_unavailable(options: &SandboxOptions) -> Option<String> {
-	if !cfg!(unix) {
+	if !cadenza_plugin_host::SANDBOX_SUPPORTED {
 		return Some(
 			"plugin sandboxing is not available on this operating system yet, so third-party \
 			 plugins run inside Cadenza: a crashing plugin would abort the whole render or session"

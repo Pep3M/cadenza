@@ -1,5 +1,10 @@
 //! Realtime scheduling for the sandbox child's audio thread.
 //!
+//! Linux is described below. macOS uses the Mach time-constraint policy
+//! (`thread_policy_set`, what Core Audio gives its own I/O threads) and Windows
+//! `THREAD_PRIORITY_TIME_CRITICAL` (MMCSS only applies to the calling thread,
+//! and promotion runs on a helper thread).
+//!
 //! A plugin process also runs the plugin's GUI and its own worker threads; at
 //! normal priority any of them (or anything else on the desktop) can delay the
 //! thread that answers the host's audio requests. The child therefore asks for
@@ -22,15 +27,30 @@
 /// How the audio thread ended up being scheduled (shown in diagnostics).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scheduling {
-	Realtime { priority: u32, via: &'static str },
-	Nice { nice: i32, via: &'static str },
-	Normal { reason: String },
+	Realtime {
+		priority: u32,
+		via: &'static str,
+	},
+	/// A platform realtime class without a numeric priority (macOS time
+	/// constraint, Windows time-critical).
+	TimeCritical {
+		policy: &'static str,
+		via: &'static str,
+	},
+	Nice {
+		nice: i32,
+		via: &'static str,
+	},
+	Normal {
+		reason: String,
+	},
 }
 
 impl std::fmt::Display for Scheduling {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Scheduling::Realtime { priority, via } => write!(f, "SCHED_FIFO {priority} ({via})"),
+			Scheduling::TimeCritical { policy, via } => write!(f, "{policy} ({via})"),
 			Scheduling::Nice { nice, via } => write!(f, "nice {nice} ({via})"),
 			Scheduling::Normal { reason } => write!(f, "normal priority ({reason})"),
 		}
@@ -208,7 +228,123 @@ mod imp {
 	}
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod imp {
+	use super::Scheduling;
+
+	/// `mach_timebase_info_data_t` (libc's binding is deprecated in favor of `mach2`).
+	#[repr(C)]
+	struct Timebase {
+		numer: u32,
+		denom: u32,
+	}
+
+	unsafe extern "C" {
+		fn mach_timebase_info(info: *mut Timebase) -> libc::c_int;
+	}
+
+	/// The Mach port of the calling thread (valid for the whole process, so a
+	/// helper thread can change its policy).
+	pub(super) fn current_tid() -> i32 {
+		// SAFETY: no preconditions; the port belongs to the running thread.
+		unsafe { libc::pthread_mach_thread_np(libc::pthread_self()) as i32 }
+	}
+
+	/// Time-constraint policy sized for a 128-frame quantum at 48 kHz (about
+	/// 2.7 ms): may compute up to half of every period, finished within it.
+	pub(super) fn promote(tid: i32, _priority: u32) -> Scheduling {
+		let mut timebase = Timebase { numer: 0, denom: 0 };
+		// SAFETY: valid out-parameter.
+		if unsafe { mach_timebase_info(&mut timebase) } != 0 || timebase.numer == 0 {
+			return Scheduling::Normal {
+				reason: "mach_timebase_info failed".into(),
+			};
+		}
+		let ns_to_abs =
+			|ns: u64| (ns * u64::from(timebase.denom) / u64::from(timebase.numer)) as u32;
+		let period = 2_666_667;
+		let mut policy = libc::thread_time_constraint_policy {
+			period: ns_to_abs(period),
+			computation: ns_to_abs(period / 2),
+			constraint: ns_to_abs(period),
+			preemptible: 1,
+		};
+		// SAFETY: `tid` is a thread port of this process from `current_tid`;
+		// the policy struct matches the flavor and count.
+		let r = unsafe {
+			libc::thread_policy_set(
+				tid as libc::thread_t,
+				libc::THREAD_TIME_CONSTRAINT_POLICY as libc::thread_policy_flavor_t,
+				(&raw mut policy).cast(),
+				libc::THREAD_TIME_CONSTRAINT_POLICY_COUNT,
+			)
+		};
+		if r == libc::KERN_SUCCESS {
+			Scheduling::TimeCritical {
+				policy: "time constraint",
+				via: "thread_policy_set",
+			}
+		} else {
+			Scheduling::Normal {
+				reason: format!("thread_policy_set failed ({r})"),
+			}
+		}
+	}
+}
+
+#[cfg(windows)]
+mod imp {
+	use super::Scheduling;
+	use std::ffi::c_void;
+
+	const THREAD_SET_INFORMATION: u32 = 0x0020;
+	const THREAD_QUERY_INFORMATION: u32 = 0x0040;
+	const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+
+	#[link(name = "kernel32")]
+	unsafe extern "system" {
+		fn GetCurrentThreadId() -> u32;
+		fn OpenThread(access: u32, inherit: i32, thread_id: u32) -> *mut c_void;
+		fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
+		fn CloseHandle(handle: *mut c_void) -> i32;
+	}
+
+	pub(super) fn current_tid() -> i32 {
+		// SAFETY: no preconditions.
+		unsafe { GetCurrentThreadId() as i32 }
+	}
+
+	pub(super) fn promote(tid: i32, _priority: u32) -> Scheduling {
+		// SAFETY: plain Win32 calls; the handle is closed before returning.
+		unsafe {
+			let thread = OpenThread(
+				THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION,
+				0,
+				tid as u32,
+			);
+			if thread.is_null() {
+				return Scheduling::Normal {
+					reason: format!("OpenThread failed ({})", std::io::Error::last_os_error()),
+				};
+			}
+			let ok = SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL) != 0;
+			let err = std::io::Error::last_os_error();
+			CloseHandle(thread);
+			if ok {
+				Scheduling::TimeCritical {
+					policy: "time critical",
+					via: "SetThreadPriority",
+				}
+			} else {
+				Scheduling::Normal {
+					reason: format!("SetThreadPriority failed ({err})"),
+				}
+			}
+		}
+	}
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod imp {
 	use super::Scheduling;
 
@@ -225,18 +361,21 @@ mod imp {
 
 /// Raises the calling thread to `SCHED_FIFO` `priority` (or the best the
 /// system allows). `priority == 0` leaves it alone.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn promote_current_thread(priority: u32) -> Scheduling {
 	promote_thread(current_thread_id(), priority)
 }
 
-/// The calling thread's kernel id (Linux `gettid`; 0 elsewhere). One syscall, no
+/// The calling thread's id (Linux `gettid`, macOS Mach port, Windows thread id; 0
+/// elsewhere). One syscall, no
 /// allocation: an audio callback may publish it for [`promote_thread`].
 pub fn current_thread_id() -> i32 {
 	imp::current_tid()
 }
 
 /// Raises thread `tid` of this process (from [`current_thread_id`]) to `SCHED_FIFO`
-/// `priority`, or the best the system allows (RealtimeKit, then a negative nice value).
+/// `priority`, or the best the system allows (RealtimeKit, then a negative nice value;
+/// the platform's realtime class on macOS/Windows, where `priority` only switches it on).
 /// May block on the system bus for a moment: call it from a helper thread, never from
 /// the audio thread itself. `priority == 0` or `tid == 0` leaves it alone. Only one
 /// thread per process is demoted by the `RLIMIT_RTTIME` guard (the last promoted).
@@ -255,6 +394,7 @@ pub fn promote_thread(tid: i32, priority: u32) -> Scheduling {
 
 /// Faults in `buf`'s pages now instead of on the first audio request (a fresh
 /// zeroed allocation may still be unmapped copy-on-write zero pages).
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn prefault(buf: &mut [f32]) {
 	for chunk in buf.chunks_mut(1024) {
 		chunk[0] = std::hint::black_box(0.0);

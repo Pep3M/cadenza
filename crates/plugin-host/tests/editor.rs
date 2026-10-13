@@ -5,6 +5,9 @@
 //! idle (transport stopped). Display-dependent tests live in
 //! `editor_display.rs`.
 
+// Plugin editors are X11-only for now (`EDITORS_SUPPORTED`).
+#![cfg(all(unix, not(target_os = "macos")))]
+
 mod common;
 
 use std::time::{Duration, Instant};

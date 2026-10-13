@@ -318,6 +318,7 @@ impl PluginGuiImpl for MainThread<'_> {
 	}
 
 	fn set_parent(&self, window: Window) -> Result<(), PluginError> {
+		#[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
 		let mut gui = self.gui.borrow_mut();
 		if !gui.embedded {
 			return Err(PluginError::Message("not an embedded editor"));

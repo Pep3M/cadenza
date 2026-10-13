@@ -28,7 +28,7 @@ pub const PRESET_DIR_ENV: &str = "CADENZA_PRESET_DIR";
 const PRESET_FORMAT_VERSION: u32 = 1;
 
 /// Where user presets live: `$CADENZA_PRESET_DIR`, else the OS data dir +
-/// `cadenza/presets` (`$XDG_DATA_HOME` or `~/.local/share` on Linux).
+/// `cadenza/presets` (see [`cadenza_core::paths`]).
 pub fn default_preset_dir() -> PathBuf {
 	let var = |k: &str| {
 		std::env::var_os(k)
@@ -38,16 +38,7 @@ pub fn default_preset_dir() -> PathBuf {
 	if let Some(dir) = var(PRESET_DIR_ENV) {
 		return dir;
 	}
-	let base = if cfg!(windows) {
-		var("APPDATA")
-	} else if cfg!(target_os = "macos") {
-		var("HOME").map(|h| h.join("Library/Application Support"))
-	} else {
-		var("XDG_DATA_HOME").or_else(|| var("HOME").map(|h| h.join(".local/share")))
-	};
-	base.unwrap_or_else(std::env::temp_dir)
-		.join("cadenza")
-		.join("presets")
+	cadenza_core::paths::data_dir().join("presets")
 }
 
 /// A user preset file.

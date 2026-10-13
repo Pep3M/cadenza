@@ -3,6 +3,7 @@
 pub mod id;
 pub mod meter;
 pub mod param;
+pub mod paths;
 pub mod tempo;
 pub mod time;
 pub mod units;

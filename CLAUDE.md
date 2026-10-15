@@ -55,15 +55,18 @@ the platform: rustup targets + `cargo check/clippy --target ...` (C build script
 target C toolchain or a stub `CC_<target>`); CI is the real check.
 CI (`.github/workflows/ci.yml`, toolchain pinned in `RUST_TOOLCHAIN`): Linux fmt/clippy
 `-D warnings`/`cargo test --release` + `cargo deny check` (`deny.toml`: permissive licenses +
-MPL-2.0 + egui's font licenses; Cadenza crates are `LicenseRef-Proprietary`, `publish = false`, see `LICENSE`) on every push/PR; Windows and
+MPL-2.0 + egui's font licenses; Cadenza crates are `GPL-3.0-or-later`, `publish = false`, see `LICENSE`) on every push/PR; Windows and
 macOS clippy + release tests (+ `cargo check --target x86_64-apple-darwin`) only on PRs to
 main/staging, pushes to main, `v*` tags and `workflow_dispatch` (`platforms` input); docs-only
 changes skipped, superseded runs cancelled. No secrets: AI tests use the scripted provider.
 Release (`release.yml`, `v*` tags or manual; `packaging/`): Linux tar.gz + AppImage (built on
 ubuntu-22.04), Windows zip (no sandbox binary), macOS universal `Cadenza.app` (lipo, ad-hoc
 signed) in a dmg; each ships `cadenza`, `cadenza-app`, `cadenza-plugin-scanner` (+
-`cadenza-plugin-sandbox` on Unix) side by side. Tags get a draft GitHub Release; a manual run
-with `draft_release=<tag>` too (a draft creates no tag). TODO: Developer ID signing +
+`cadenza-plugin-sandbox` on Unix) side by side, plus LICENSE/README. Tags publish a GitHub Release
+(prerelease when the tag has a `-suffix`) with `SHA256SUMS` and the installers (`install.sh`:
+Linux/macOS, `install.ps1`: Windows; both read `releases/latest`, verify the checksums and put
+wrapper scripts, not symlinks, on the PATH); a manual run with `draft_release=<tag>` makes a draft
+(no tag). README banner: `docs/assets/banner.png`, rendered from `banner.html` (headless Chrome, 2x). TODO: Developer ID signing +
 notarization (macOS), Authenticode (Windows).
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in

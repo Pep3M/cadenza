@@ -17,8 +17,8 @@ ignore = []
 
 [licenses]
 confidence-threshold = 0.9
-# Permissive licenses (plus MPL-2.0, file-level copyleft: symphonia) that allow
-# shipping Cadenza under any license, commercial included.
+# Permissive licenses (plus MPL-2.0, file-level copyleft: symphonia), all compatible
+# with Cadenza's GPL-3.0-or-later.
 allow = [
 	"0BSD",
 	"Apache-2.0",
@@ -37,23 +37,23 @@ allow = [
 	"OFL-1.1",
 	"Ubuntu-font-1.0",
 ]
-# Cadenza's own crates: proprietary (all rights reserved) until the owner picks a license.
+# Cadenza's own crates are GPL-3.0-or-later; dependencies stay on the list above.
 exceptions = [
-	{ crate = "cadenza-agent", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-analysis", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-app", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-audio-io", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-cli", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-core", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-dsp", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-engine", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-library", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-mcp", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-midi-io", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-model", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-plugin-host", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-test-plugins", allow = ["LicenseRef-Proprietary"] },
-	{ crate = "cadenza-theory", allow = ["LicenseRef-Proprietary"] },
+	{ crate = "cadenza-agent", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-analysis", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-app", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-audio-io", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-cli", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-core", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-dsp", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-engine", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-library", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-mcp", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-midi-io", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-model", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-plugin-host", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-test-plugins", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-theory", allow = ["GPL-3.0-or-later"] },
 ]
 
 [bans]

@@ -730,7 +730,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadenza-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "cadenza-core",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-analysis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "realfft",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-agent",
  "cadenza-analysis",
@@ -784,11 +784,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "winresource",
 ]
 
 [[package]]
 name = "cadenza-audio-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flacenc",
  "hound",
@@ -804,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "cadenza-agent",
@@ -824,11 +825,12 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing-subscriber",
+ "winresource",
 ]
 
 [[package]]
 name = "cadenza-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "schemars",
  "serde",
@@ -839,11 +841,11 @@ dependencies = [
 
 [[package]]
 name = "cadenza-dsp"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "cadenza-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-analysis",
  "cadenza-audio-io",
@@ -864,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-library"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "cadenza-theory",
@@ -876,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-analysis",
  "cadenza-audio-io",
@@ -903,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-midi-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "cadenza-dsp",
@@ -918,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "schemars",
@@ -931,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-plugin-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "cadenza-dsp",
@@ -951,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-test-plugins"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
@@ -961,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-theory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "schemars",
@@ -5459,7 +5461,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -6770,6 +6772,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "version_check",
 ]
 
 [[package]]

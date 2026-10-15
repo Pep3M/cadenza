@@ -38,6 +38,9 @@ thiserror.workspace = true
 tokio.workspace = true
 keyring.workspace = true
 
+[build-dependencies]
+winresource.workspace = true
+
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 tempfile.workspace = true

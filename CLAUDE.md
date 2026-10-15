@@ -66,7 +66,11 @@ signed) in a dmg; each ships `cadenza`, `cadenza-app`, `cadenza-plugin-scanner` 
 (prerelease when the tag has a `-suffix`) with `SHA256SUMS` and the installers (`install.sh`:
 Linux/macOS, `install.ps1`: Windows; both read `releases/latest`, verify the checksums and put
 wrapper scripts, not symlinks, on the PATH); a manual run with `draft_release=<tag>` makes a draft
-(no tag). README banner: `docs/assets/banner.png`, rendered from `banner.html` (headless Chrome, 2x). TODO: Developer ID signing +
+(no tag). README banner: `docs/assets/banner.png`, rendered from `banner.html` (headless Chrome, 2x).
+Icons: `packaging/icons/generate.py` (rsvg-convert + iconutil) writes `cadenza.svg` (also
+`packaging/linux/`), `cadenza-macos.svg` (Apple grid: 824/1024 body + shadow) -> `cadenza.icns`
+(bundle `CFBundleIconFile`), `cadenza.ico` (embedded in the Windows exes by the app/cli `build.rs`
+with `winresource`) and `cadenza-256.png` (window icon, `include_bytes!` in the app); outputs are committed. TODO: Developer ID signing +
 notarization (macOS), Authenticode (Windows).
 
 Cargo features `stretch` (Signalsmith, C++/libclang) and `mp3` (LAME, LGPL) live in

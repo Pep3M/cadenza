@@ -7,7 +7,7 @@
 #   --version vX.Y.Z   CADENZA_VERSION      release to install (default: latest)
 #   --bin-dir DIR      CADENZA_BIN_DIR      where the `cadenza` / `cadenza-app` commands go
 #                                           (default: ~/.local/bin)
-#   --app-dir DIR      CADENZA_APP_DIR      Linux: install folder (default: ~/.local/share/cadenza)
+#   --app-dir DIR      CADENZA_APP_DIR      Linux: install folder (default: ~/.local/opt/cadenza)
 #                                           macOS: folder for Cadenza.app (default: /Applications,
 #                                           ~/Applications when not writable)
 #   --uninstall                             remove what this script installed
@@ -75,7 +75,9 @@ case "$OS" in
 			*) die "no prebuilt Linux binaries for $ARCH yet; build from source (see README)" ;;
 		esac
 		PLATFORM="linux-x86_64"; EXT="tar.gz"
-		[ -n "$APP_DIR" ] || APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/cadenza"
+		# Not $XDG_DATA_HOME/cadenza: that is the app's own data folder (settings, factory
+		# samples, style library, presets), which an install must never own or wipe.
+		[ -n "$APP_DIR" ] || APP_DIR="$HOME/.local/opt/cadenza"
 		;;
 	Darwin)
 		PLATFORM="macos-universal"; EXT="dmg"
@@ -90,11 +92,31 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 DESKTOP_FILE="$DATA_HOME/applications/cadenza.desktop"
 ICON_FILE="$DATA_HOME/icons/hicolor/scalable/apps/cadenza.svg"
 
+# What the Linux archive ships; nothing else may live in an install folder.
+SHIPPED="cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner LICENSE README.md cadenza.desktop cadenza.svg"
+# Installer 0.1.0/0.1.1 used the app's data folder as the install folder.
+LEGACY_DIR="$DATA_HOME/cadenza"
+
+is_shipped() {
+	for f in $SHIPPED; do [ "$1" = "$f" ] && return 0; done
+	return 1
+}
+
 # Linux installs own APP_DIR entirely: refuse to wipe a folder that holds anything else.
 check_app_dir() {
-	if [ -d "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ] && [ ! -f "$APP_DIR/cadenza-app" ]; then
-		die "$APP_DIR is not empty and holds no Cadenza install; choose another --app-dir"
-	fi
+	[ -d "$APP_DIR" ] || return 0
+	for entry in "$APP_DIR"/* "$APP_DIR"/.[!.]* "$APP_DIR"/..?*; do
+		[ -e "$entry" ] || continue
+		is_shipped "${entry##*/}" ||
+			die "$APP_DIR holds files that are not part of a Cadenza install (${entry##*/}); choose another --app-dir"
+	done
+}
+
+# Remove an install left in the legacy folder, file by file: user data lives next to it.
+remove_legacy_install() {
+	[ "$APP_DIR" != "$LEGACY_DIR" ] && [ -f "$LEGACY_DIR/cadenza-app" ] || return 0
+	for f in $SHIPPED; do rm -f "$LEGACY_DIR/$f"; done
+	say "removed the old install from $LEGACY_DIR (your settings and data there were kept)"
 }
 
 uninstall() {
@@ -108,6 +130,7 @@ uninstall() {
 	else
 		check_app_dir
 		rm -rf "$APP_DIR"
+		remove_legacy_install
 		rm -f "$DESKTOP_FILE" "$ICON_FILE"
 		command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DATA_HOME/applications" 2>/dev/null || true
 	fi
@@ -167,6 +190,7 @@ if [ "$OS" = Linux ]; then
 	rm -rf "$APP_DIR"
 	mkdir -p "$APP_DIR"
 	cp -R "$SRC/." "$APP_DIR/"
+	remove_legacy_install
 	write_wrapper cadenza "$APP_DIR/cadenza"
 	write_wrapper cadenza-app "$APP_DIR/cadenza-app"
 	if [ -f "$APP_DIR/cadenza.desktop" ]; then

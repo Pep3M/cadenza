@@ -49,7 +49,7 @@ it or undo it like any edit of your own.
 curl -fsSL https://github.com/Pep3M/cadenza/releases/latest/download/install.sh | sh
 ```
 
-- **Linux** (x86_64): installs to `~/.local/share/cadenza`, adds a desktop entry and the
+- **Linux** (x86_64): installs to `~/.local/opt/cadenza`, adds a desktop entry and the
   `cadenza` / `cadenza-app` commands in `~/.local/bin`. Audio needs ALSA (`libasound2`),
   present on most desktops.
 - **macOS** (Apple Silicon and Intel, 11+): installs `Cadenza.app` to `/Applications`

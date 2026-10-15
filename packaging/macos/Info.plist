@@ -10,6 +10,8 @@
 	<string>dev.cadenza.app</string>
 	<key>CFBundleExecutable</key>
 	<string>cadenza-app</string>
+	<key>CFBundleIconFile</key>
+	<string>cadenza</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>

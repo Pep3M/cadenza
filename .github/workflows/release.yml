@@ -164,6 +164,7 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
           mkdir -p "$app/Contents/Resources"
           cp LICENSE README.md "$app/Contents/Resources/"
+          cp packaging/icons/cadenza.icns "$app/Contents/Resources/"
           cp LICENSE "dist/$NAME/"
           codesign --force --deep --sign - "$app"
           ln -s /Applications "dist/$NAME/Applications"

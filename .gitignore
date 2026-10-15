@@ -8,3 +8,4 @@ __pycache__/
 /.claude/
 # Cadenza project caches and autosaves
 .cadenza/
+.DS_Store

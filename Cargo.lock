@@ -730,7 +730,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadenza-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "cadenza-core",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-analysis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "realfft",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-agent",
  "cadenza-analysis",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-audio-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flacenc",
  "hound",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "cadenza-agent",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "schemars",
  "serde",
@@ -841,11 +841,11 @@ dependencies = [
 
 [[package]]
 name = "cadenza-dsp"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "cadenza-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-analysis",
  "cadenza-audio-io",
@@ -866,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-library"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "cadenza-theory",
@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-analysis",
  "cadenza-audio-io",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-midi-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "cadenza-dsp",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "schemars",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-plugin-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "cadenza-dsp",
@@ -953,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-test-plugins"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "cadenza-theory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadenza-core",
  "schemars",

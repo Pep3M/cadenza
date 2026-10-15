@@ -66,7 +66,10 @@ signed) in a dmg; each ships `cadenza`, `cadenza-app`, `cadenza-plugin-scanner` 
 (prerelease when the tag has a `-suffix`) with `SHA256SUMS` and the installers (`install.sh`:
 Linux/macOS, `install.ps1`: Windows; both read `releases/latest`, verify the checksums and put
 wrapper scripts, not symlinks, on the PATH); a manual run with `draft_release=<tag>` makes a draft
-(no tag). README banner: `docs/assets/banner.png`, rendered from `banner.html` (headless Chrome, 2x).
+(no tag). AUR: `packaging/arch/PKGBUILD` (`cadenza-bin`, repackages the release
+tar.gz into `/opt/cadenza` + `/usr/bin` symlinks); on a release bump `pkgver`, reset `pkgrel`,
+update `sha256sums` (from `SHA256SUMS`), regenerate `.SRCINFO` (`makepkg --printsrcinfo`) and
+push both to the AUR repo. README banner: `docs/assets/banner.png`, rendered from `banner.html` (headless Chrome, 2x).
 Icons: `packaging/icons/generate.py` (rsvg-convert + iconutil) writes `cadenza.svg` (also
 `packaging/linux/`), `cadenza-macos.svg` (Apple grid: 824/1024 body + shadow) -> `cadenza.icns`
 (bundle `CFBundleIconFile`), `cadenza.ico` (embedded in the Windows exes by the app/cli `build.rs`

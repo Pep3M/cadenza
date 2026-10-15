@@ -58,6 +58,18 @@ curl -fsSL https://github.com/Pep3M/cadenza/releases/latest/download/install.sh 
 Options: `--version v0.1.0`, `--bin-dir DIR`, `--app-dir DIR`, `--uninstall`. Pass them
 after `sh -s --`, e.g. `curl -fsSL …/install.sh | sh -s -- --uninstall`.
 
+### Arch Linux and Omarchy
+
+From the AUR ([`cadenza-bin`](https://aur.archlinux.org/packages/cadenza-bin), the release
+binaries): in Omarchy, **Install → AUR → cadenza-bin**, or from a terminal:
+
+```sh
+yay -S cadenza-bin
+```
+
+It installs to `/opt/cadenza` with `cadenza` / `cadenza-app` in `/usr/bin` and a desktop
+entry. The PKGBUILD lives in `packaging/arch/` (`makepkg -si` there builds it locally).
+
 ### Windows
 
 In PowerShell:

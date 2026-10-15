@@ -1,0 +1,22 @@
+{
+	"id": "piano_pop_eighths",
+	"kind": "pattern",
+	"name": "Pop piano 8ths",
+	"summary": "Driving pop piano: block chords on every 8th, accented on 1 and 3.",
+	"role": "comping",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"ballad"
+	],
+	"sections": [
+		"chorus"
+	],
+	"energy": 3,
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "close",
+	"lanes": {
+		"chord": "X.x. x.x. X.x. x.x."
+	}
+}

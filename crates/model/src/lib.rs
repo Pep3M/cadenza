@@ -1,14 +1,41 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Cadenza project document: data model, the undoable [`Command`] API, the [`Document`]
+//! undo/redo session, JSON persistence and the AI-oriented [`ProjectSummary`].
+//!
+//! Only this crate mutates [`Project`]; every other crate goes through [`Document::execute`].
+
+mod apply;
+pub mod command;
+pub mod controller;
+pub mod document;
+pub mod error;
+pub mod files;
+mod freeze;
+mod persist;
+pub mod project;
+pub mod sample;
+pub mod summary;
+pub mod takes;
+pub mod validate;
+
+pub use command::{
+	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
+};
+pub use controller::{Controller, ControllerLane, ControllerPoint};
+pub use document::Document;
+pub use error::ModelError;
+pub use files::{FileRef, FileUse, ProjectLayout};
+pub use persist::{backup_path, write_atomic};
+pub use project::{
+	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
+	FORMAT_VERSION, FadeCurve, Freeze, Marker, MonitorMode, Note, Output, OutputRoute, PointShape,
+	Project, ProjectMeta, Send, SidechainSource, Take, Track, TrackInput, TrackKind,
+	automation_value,
+};
+pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
+pub use summary::{
+	ClipSummary, DeviceSummary, MarkerSummary, MasterSummary, ProjectSummary, SendSummary,
+	TempoSummary, TimeSignatureSummary, TrackSummary, ZoneSummary, note_name, zone_summaries,
+};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod tests;

@@ -1,0 +1,28 @@
+{
+	"id": "house_fill",
+	"kind": "pattern",
+	"name": "House snare roll fill",
+	"summary": "One-bar house fill: kick stops on beat 4 while a 16th snare roll builds over beats 3 and 4.",
+	"role": "drums",
+	"genres": [
+		"house",
+		"deep_house",
+		"dance"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		118,
+		128
+	],
+	"family": "house",
+	"variant": "fill",
+	"lanes": {
+		"kick": "x... x... x... ....",
+		"clap": ".... x... .... ....",
+		"snare": ".... .... xxxx XXXX"
+	}
+}

@@ -1,0 +1,29 @@
+{
+	"id": "hook_pop_major",
+	"kind": "pattern",
+	"name": "Major pop hook",
+	"summary": "Two-bar singable major hook: 3-2-1 descent, leap to 5 and 6, falling back to the tonic.",
+	"role": "lead",
+	"genres": [
+		"pop",
+		"dance_pop"
+	],
+	"sections": [
+		"chorus",
+		"post_chorus"
+	],
+	"energy": 3,
+	"bars": 2,
+	"harmony": "scale",
+	"lanes": {
+		"^3": "x=.. .... .... x=.. .... ..x= .... ....",
+		"^2": "..x= ..x= ==.. .... .... .... x=.. ....",
+		"^1": ".... x=.. .... .... .... .... ..x= ====",
+		"^5": ".... .... .... ..x= ...x ==.. .... ....",
+		"^6": ".... .... .... .... x==. .... .... ...."
+	},
+	"tags": [
+		"hook",
+		"motif"
+	]
+}

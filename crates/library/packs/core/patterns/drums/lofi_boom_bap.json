@@ -1,0 +1,35 @@
+{
+	"id": "lofi_boom_bap",
+	"kind": "pattern",
+	"name": "Lo-fi boom bap",
+	"summary": "Lazy swung boom bap: kick on 1, the a of 2 and the & of 3, snare on 2 and 4, swung 8th hats.",
+	"role": "drums",
+	"genres": [
+		"lofi",
+		"hip_hop",
+		"boom_bap"
+	],
+	"sections": [
+		"verse",
+		"chorus",
+		"intro"
+	],
+	"energy": 2,
+	"feel": "swing:0.5",
+	"bars": 1,
+	"tempo": [
+		70,
+		92
+	],
+	"family": "lofi",
+	"variant": "main",
+	"lanes": {
+		"kick": "x... ...x ..x. ....",
+		"snare": ".... x... .... x...",
+		"closed_hat": "x.x. x.x. x.x. x.xo"
+	},
+	"pairs_with": [
+		"core/bass_walk_chord_tones",
+		"core/rhodes_lofi_comp"
+	]
+}

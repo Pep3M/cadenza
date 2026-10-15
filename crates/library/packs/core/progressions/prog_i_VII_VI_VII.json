@@ -1,0 +1,17 @@
+{
+	"id": "prog_i_VII_VI_VII",
+	"kind": "progression",
+	"name": "i-VII-VI-VII",
+	"summary": "Rocking minor loop (Am G F G): house, EDM, trap, latin pop.",
+	"mode": "minor",
+	"numerals": "i VII VI VII",
+	"genres": [
+		"house",
+		"edm",
+		"trap",
+		"latin_pop"
+	],
+	"sections": [
+		"any"
+	]
+}

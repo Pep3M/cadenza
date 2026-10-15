@@ -1,0 +1,90 @@
+{
+	"id": "form_neosoul",
+	"kind": "form",
+	"name": "Neo-soul song form",
+	"summary": "Intro-V-C-V-C-Bridge-C-Outro with room for keys solos, about 3:30 at 84 bpm.",
+	"genres": [
+		"neo_soul",
+		"rnb"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"keys"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Chorus 1",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"lead"
+			]
+		},
+		{
+			"name": "Verse 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Chorus 2",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"lead"
+			]
+		},
+		{
+			"name": "Bridge",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"keys",
+				"bass"
+			]
+		},
+		{
+			"name": "Chorus 3",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"lead"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"keys"
+			]
+		}
+	]
+}

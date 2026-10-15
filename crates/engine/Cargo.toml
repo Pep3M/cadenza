@@ -3,5 +3,31 @@ name = "cadenza-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Offline time-stretch / pitch-shift (Signalsmith Stretch; needs a C++ compiler + libclang).
+stretch = ["cadenza-audio-io/stretch"]
+# MP3 export (vendored LAME, LGPL; needs a C toolchain).
+mp3 = ["cadenza-audio-io/mp3"]
 
 [dependencies]
+cadenza-core.workspace = true
+cadenza-model.workspace = true
+cadenza-dsp.workspace = true
+cadenza-plugin-host.workspace = true
+cadenza-audio-io.workspace = true
+cadenza-midi-io.workspace = true
+cadenza-analysis.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+schemars.workspace = true
+hound.workspace = true
+cpal.workspace = true
+rtrb.workspace = true
+
+[dev-dependencies]
+cadenza-audio-io.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,29 @@
+{
+	"id": "lofi_fill",
+	"kind": "pattern",
+	"name": "Lo-fi fill",
+	"summary": "One-bar boom bap fill: snare ghosts and a flam-like double into the next bar.",
+	"role": "drums",
+	"genres": [
+		"lofi",
+		"hip_hop",
+		"boom_bap"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 3,
+	"feel": "swing:0.5",
+	"bars": 1,
+	"tempo": [
+		70,
+		92
+	],
+	"family": "lofi",
+	"variant": "fill",
+	"lanes": {
+		"kick": "x... .... ..x. ....",
+		"snare": ".... x... ..o. xoxX",
+		"closed_hat": "x.x. x.x. x... ...."
+	}
+}

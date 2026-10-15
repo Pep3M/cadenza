@@ -1,0 +1,11 @@
+{
+	"format_version": 1,
+	"id": "core",
+	"name": "Cadenza Core",
+	"version": "1.0.0",
+	"license": "CC0-1.0",
+	"attribution": "Cadenza contributors (hand-written)",
+	"homepage": "https://github.com/Pep3M/cadenza",
+	"description": "Hand-written style guides, forms, progressions, grooves and patterns shipped with Cadenza. Public domain: use them in anything.",
+	"redistributable": true
+}

@@ -1,0 +1,32 @@
+{
+	"id": "trap_hat_rolls",
+	"kind": "pattern",
+	"name": "Trap hat rolls",
+	"summary": "Trap groove on a 32nd grid: hats with rolls into beats 3 and 4, accented roll at the end of bar 2.",
+	"role": "drums",
+	"genres": [
+		"trap",
+		"hip_hop"
+	],
+	"sections": [
+		"chorus",
+		"verse"
+	],
+	"energy": 4,
+	"bars": 2,
+	"tempo": [
+		130,
+		160
+	],
+	"family": "trap",
+	"variant": "variation",
+	"steps_per_beat": 8,
+	"lanes": {
+		"kick": "x....... ......x. ....x... ........ x....... ........ ....x... ....x...",
+		"clap": "........ ........ x....... ........ ........ ........ x....... ........",
+		"closed_hat": "x...x... x...xxxx x...x... x.x.x.x. x...x... x...x... x...xxxx XxXxXxXx"
+	},
+	"pairs_with": [
+		"core/bass_808_trap"
+	]
+}

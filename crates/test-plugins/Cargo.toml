@@ -1,0 +1,43 @@
+[package]
+name = "cadenza-test-plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clack-plugin.workspace = true
+clack-extensions = { workspace = true, features = ["clack-plugin", "audio-ports", "note-ports", "params", "state", "latency", "preset-discovery", "gui", "timer", "posix-fd"] }
+
+[dev-dependencies]
+vst3.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb.workspace = true
+
+# Minimal VST3 plugin for the VST3 host tests (wrapped into a `.vst3` bundle
+# by `cadenza-plugin-host`'s test helpers).
+[[example]]
+name = "vst3_gain"
+crate-type = ["cdylib"]
+
+# CLAP effect that aborts or hangs on demand, for the sandbox tests (its own
+# `.clap` file so the main test bundle keeps exactly two plugins).
+[[example]]
+name = "clap_crash"
+crate-type = ["cdylib"]
+
+# Effect with a sidechain input, multi-output instrument and preset-discovery
+# factory, for the sidechain/multi-output/preset tests.
+[[example]]
+name = "clap_routing"
+crate-type = ["cdylib"]
+
+# Effect with a scripted editor (gui + timer + posix-fd extensions), for the
+# plugin editor tests.
+[[example]]
+name = "clap_gui"
+crate-type = ["cdylib"]

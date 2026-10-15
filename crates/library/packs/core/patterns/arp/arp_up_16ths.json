@@ -1,0 +1,27 @@
+{
+	"id": "arp_up_16ths",
+	"kind": "pattern",
+	"name": "16th up arpeggio",
+	"summary": "Synth arpeggio: root, third, fifth, octave on every 16th.",
+	"role": "arp",
+	"genres": [
+		"pop",
+		"house",
+		"edm",
+		"synthwave"
+	],
+	"sections": [
+		"pre",
+		"chorus",
+		"build"
+	],
+	"energy": 3,
+	"bars": 1,
+	"harmony": "chord",
+	"lanes": {
+		"R": "x... x... x... x...",
+		"3": ".x.. .x.. .x.. .x..",
+		"5": "..x. ..x. ..x. ..x.",
+		"R+1": "...x ...x ...x ...x"
+	}
+}

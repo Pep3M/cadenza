@@ -1,0 +1,27 @@
+{
+	"id": "arp_updown_8ths",
+	"kind": "pattern",
+	"name": "8th up-down arpeggio",
+	"summary": "Gentle 8th-note arpeggio up to the tenth and back: intros, verses, ballads.",
+	"role": "arp",
+	"genres": [
+		"pop",
+		"ballad",
+		"latin_pop"
+	],
+	"sections": [
+		"intro",
+		"verse",
+		"bridge"
+	],
+	"energy": 2,
+	"bars": 1,
+	"harmony": "chord",
+	"lanes": {
+		"R": "x... .... .... ....",
+		"3": "..x. .... .... ..x.",
+		"5": ".... x... .... x...",
+		"R+1": ".... ..x. ..x. ....",
+		"3+1": ".... .... x... ...."
+	}
+}

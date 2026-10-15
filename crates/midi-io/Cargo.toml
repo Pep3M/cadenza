@@ -1,0 +1,19 @@
+[package]
+name = "cadenza-midi-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cadenza-core.workspace = true
+cadenza-model.workspace = true
+cadenza-theory.workspace = true
+cadenza-dsp.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+rtrb.workspace = true
+midly.workspace = true
+midir.workspace = true
+
+[dev-dependencies]

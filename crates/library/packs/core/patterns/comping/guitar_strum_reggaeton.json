@@ -1,0 +1,31 @@
+{
+	"id": "guitar_strum_reggaeton",
+	"kind": "pattern",
+	"name": "Reggaeton guitar strum",
+	"summary": "Muted guitar strums on the dembow accents (1, the a of 1, the & of 2 in both halves).",
+	"role": "comping",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"chorus",
+		"verse"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"harmony": "chord",
+	"voicing": "close",
+	"lanes": {
+		"chord": "X..x ..x. X..x ..x."
+	},
+	"pairs_with": [
+		"core/dembow_basic"
+	]
+}

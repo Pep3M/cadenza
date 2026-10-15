@@ -1,0 +1,16 @@
+{
+	"id": "prog_ii_V_I_vi_7ths",
+	"kind": "progression",
+	"name": "ii7-V7-Imaj7-vi7",
+	"summary": "Jazz turnaround with sevenths (Dm7 G7 Cmaj7 Am7): lo-fi, jazz, neo-soul.",
+	"mode": "major",
+	"numerals": "ii7 V7 Imaj7 vi7",
+	"genres": [
+		"lofi",
+		"jazz",
+		"neo_soul"
+	],
+	"sections": [
+		"any"
+	]
+}

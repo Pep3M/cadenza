@@ -1,0 +1,16 @@
+{
+	"id": "prog_i_iv_VII_III",
+	"kind": "progression",
+	"name": "i-iv-VII-III",
+	"summary": "Minor loop climbing through the relative major (Am Dm G C): latin pop, bachata, ballads.",
+	"mode": "minor",
+	"numerals": "i iv VII III",
+	"genres": [
+		"latin_pop",
+		"bachata",
+		"ballad"
+	],
+	"sections": [
+		"any"
+	]
+}

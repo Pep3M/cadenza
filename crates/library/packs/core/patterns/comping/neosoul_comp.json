@@ -1,0 +1,25 @@
+{
+	"id": "neosoul_comp",
+	"kind": "pattern",
+	"name": "Neo-soul comping",
+	"summary": "Neo-soul keys: rootless voicings pushed on 1, the a of 2 and the & of 4 (anticipating the next bar).",
+	"role": "comping",
+	"genres": [
+		"neo_soul",
+		"rnb"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"feel": "swing:0.6",
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "rootless",
+	"lanes": {
+		"chord": "x=.. ...x =... ..x="
+	},
+	"pairs_with": [
+		"core/neosoul_drums"
+	]
+}

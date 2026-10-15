@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cadenza
+GenericName=Digital Audio Workstation
+Comment=DAW with an AI arranger and sound engineer
+Exec=cadenza-app %f
+Icon=cadenza
+Terminal=false
+Categories=AudioVideo;Audio;Midi;Sequencer;

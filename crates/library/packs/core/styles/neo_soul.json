@@ -1,0 +1,95 @@
+{
+	"id": "neo_soul",
+	"kind": "style",
+	"name": "Neo-soul",
+	"aliases": [
+		"neo soul",
+		"neosoul",
+		"rnb",
+		"soul"
+	],
+	"summary": "Behind-the-beat neo-soul at 70-96 bpm: heavily swung drums with ghost notes, rootless 7th/9th chords, melodic bass.",
+	"genres": [
+		"neo_soul",
+		"rnb",
+		"soul"
+	],
+	"tempo": {
+		"min": 70,
+		"max": 96,
+		"typical": 84
+	},
+	"feel": "swing:0.6",
+	"meter": "4/4",
+	"keys": [
+		"major with extended chords",
+		"dorian"
+	],
+	"harmony": {
+		"loops": [
+			"core/prog_IV_iii_ii_I_maj7",
+			"core/prog_ii_V_I_vi_7ths",
+			"core/prog_dorian_i_IV"
+		],
+		"harmonic_rhythm_beats": 4,
+		"notes": "Extended chords (maj9, m9, 13) voiced rootless; chromatic passing chords welcome."
+	},
+	"forms": [
+		"core/form_neosoul"
+	],
+	"roles": {
+		"drums": {
+			"any": [
+				"core/neosoul_drums"
+			],
+			"fill": "end sections with a snare ghost run"
+		},
+		"bass": {
+			"any": [
+				"core/bass_neosoul"
+			]
+		},
+		"keys": {
+			"verse": [
+				"core/neosoul_comp"
+			],
+			"chorus": [
+				"core/neosoul_comp",
+				"core/rhodes_lofi_comp"
+			],
+			"sound": "Rhodes or Wurlitzer"
+		},
+		"lead": {
+			"chorus": [
+				"core/lofi_counter_line"
+			],
+			"notes": "answer the vocal, never on top of it"
+		}
+	},
+	"sounds": {
+		"kit": "drum_machine: Tight Kit",
+		"keys": "electric_piano: Classic Tine",
+		"bass": "poly_synth: Sub Bass"
+	},
+	"mix": {
+		"lufs": -12,
+		"profile": "acoustic",
+		"levels": {
+			"drums": 0,
+			"bass": -1,
+			"keys": -2,
+			"lead": -3
+		},
+		"notes": "Warm and wide: drums dry and present, keys with chorus, gentle bus compression; groove core/groove_lofi_lazy."
+	},
+	"do": [
+		"Play behind the beat (swing, late snare)",
+		"Ghost notes on snare and bass",
+		"Extended chords"
+	],
+	"dont": [
+		"Straight quantized grooves",
+		"Triads only",
+		"Loud, squashed masters"
+	]
+}

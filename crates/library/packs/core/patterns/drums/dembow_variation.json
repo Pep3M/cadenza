@@ -1,0 +1,35 @@
+{
+	"id": "dembow_variation",
+	"kind": "pattern",
+	"name": "Dembow variation",
+	"summary": "Busier dembow for choruses: kick pickup on the a of 3, clap layer, 16th hats with an open hat on the & of 4.",
+	"role": "drums",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"chorus",
+		"post_chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"family": "dembow",
+	"variant": "variation",
+	"lanes": {
+		"kick": "x... x... x..x x...",
+		"snare": "...x ..x. ...x ..x.",
+		"clap": ".... .... ...x ..x.",
+		"closed_hat": "xoxo xoxo xoxo xo.o",
+		"open_hat": ".... .... .... ..x."
+	},
+	"pairs_with": [
+		"core/bass_dembow_sync"
+	]
+}

@@ -1,0 +1,8 @@
+{
+	"mcpServers": {
+		"cadenza": {
+			"command": "./target/release/cadenza",
+			"args": ["mcp"]
+		}
+	}
+}

@@ -1,0 +1,35 @@
+{
+	"id": "house_four_floor",
+	"kind": "pattern",
+	"name": "House four on the floor",
+	"summary": "House groove: kick on every beat, clap on 2 and 4, open hats on the offbeats, ghosted closed hats.",
+	"role": "drums",
+	"genres": [
+		"house",
+		"deep_house",
+		"dance"
+	],
+	"sections": [
+		"drop",
+		"chorus",
+		"pre"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		118,
+		128
+	],
+	"family": "house",
+	"variant": "main",
+	"lanes": {
+		"kick": "x... x... x... x...",
+		"clap": ".... x... .... x...",
+		"open_hat": "..x. ..x. ..x. ..x.",
+		"closed_hat": "x..o x..o x..o x..o"
+	},
+	"pairs_with": [
+		"core/bass_house_offbeat",
+		"core/house_chord_stabs"
+	]
+}

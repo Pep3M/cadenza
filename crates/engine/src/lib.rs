@@ -1,14 +1,85 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Cadenza audio engine: compiles a [`cadenza_model::Project`] into a render [`Graph`] and
+//! drives it offline ([`render_offline`], [`render_to_wav`], [`render_to_file`]), for mix analysis
+//! ([`analyze_mix`], the AI's "ears") and in realtime ([`Player`]).
+//!
+//! The graph always runs in fixed quanta of [`QUANTUM`] samples on a grid anchored at the
+//! render/seek start, whatever block size the host asks for. Automation is evaluated once
+//! per quantum, and the output is bit-identical for any host block size.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod analysis;
+mod audio_clip;
+mod automation;
+pub mod bounce;
+mod compile;
+mod devices;
+mod error;
+pub mod export;
+pub mod factory;
+mod graph;
+pub mod hosting;
+pub mod input;
+mod meter;
+pub mod metronome;
+mod pdc;
+mod player;
+pub mod record;
+mod render;
+mod samples;
+mod schedule;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
+pub use automation::AutomationBindings;
+pub use bounce::{BounceScope, bounce_project, render_track};
+pub use cadenza_analysis::detail::Detail;
+pub use cadenza_audio_io::Metadata;
+pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
+pub use cadenza_midi_io::PortInfo as MidiPort;
+pub use cadenza_plugin_host::PluginCatalog;
+pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions, SandboxStats};
+pub use cadenza_plugin_host::{EDITORS_SUPPORTED, EditorEvent};
+pub use compile::{compile, compile_hosted, compile_with};
+pub use devices::{capture_state, plugin_presets, preset_state};
+pub use error::EngineError;
+pub use export::{
+	ExportProgress, ExportReport, ExportSpec, ExportedFile, Normalize, StemSet, export_project,
+	format_extension, normalize_gain, stem_tracks,
+};
+pub use graph::{Graph, ScheduleSwap, Segment};
+pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting, PluginXruns};
+pub use input::{AudioDeviceInfo, AudioDevices, InputInfo, InputMode, InputStats, audio_devices};
+pub use meter::{MeterBank, MeterReading};
+pub use metronome::MetronomeSettings;
+pub use player::{
+	AUDIO_RT_PRIORITY, AUDIO_RT_PRIORITY_ENV, AudioConfig, AuditionScope, CountInStatus,
+	EditorState, EditorUpdate, Player, PlayerClock, VirtualDevice, find_midi_input,
+	midi_input_ports,
+};
+pub use record::{
+	LiveRecording, MidiItem, RecordOptions, RecordSetup, RecordTrack, RecordedAudio, RecordedPass,
+	Recording, RecordingMonitor, record_commands,
+};
+pub use render::{
+	DetailedMix, EXPORT_EXTENSIONS, MP3_SUPPORTED, RenderOptions, StereoBuffer, TrackDetail,
+	analyze_mix, analyze_mix_detailed, export_options_for_path, render_offline, render_to_file,
+	render_to_wav,
+};
+pub use samples::{auto_zone, detect_root};
+
+/// Internal processing quantum in samples: devices always process this many samples at a
+/// time, and automation and transport changes are applied at quantum boundaries.
+pub const QUANTUM: usize = 32;
+
+/// Live MIDI events (monitoring) a graph buffers between two quanta; extra events in a
+/// burst are dropped.
+pub const LIVE_EVENT_CAPACITY: usize = 512;
+
+/// How long a stopped graph keeps rendering the monitored instrument after the last live
+/// note was released (on top of the project's longest device tail, see
+/// [`crate::Graph::push_live_event`]).
+pub const PREVIEW_RELEASE_SECONDS: f32 = 1.5;
+
+/// Finite stand-in for -inf dB (silence) so reports stay valid JSON.
+pub const FLOOR_DB: f32 = cadenza_analysis::FLOOR_DB;
+
+/// Upper bound on the effect tail appended to renders with `end: None`.
+pub const MAX_TAIL_SECONDS: f32 = 10.0;

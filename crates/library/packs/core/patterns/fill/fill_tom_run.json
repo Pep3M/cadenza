@@ -1,0 +1,25 @@
+{
+	"id": "fill_tom_run",
+	"kind": "pattern",
+	"name": "Tom run",
+	"summary": "One-bar generic fill: kick on 1, toms from high to low over beats 3 and 4.",
+	"role": "fill",
+	"genres": [
+		"pop",
+		"rock",
+		"latin_pop",
+		"house"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 4,
+	"bars": 1,
+	"family": "tom_run",
+	"lanes": {
+		"kick": "x... .... .... ....",
+		"high_tom": ".... .... XxXx ....",
+		"mid_tom": ".... .... .... Xx..",
+		"low_tom": ".... .... .... ..XX"
+	}
+}

@@ -1,0 +1,17 @@
+{
+	"id": "prog_dorian_i_IV",
+	"kind": "progression",
+	"name": "i7-IV7 (dorian)",
+	"summary": "Dorian two-chord vamp (Am7 D7): funk, house, neo-soul grooves.",
+	"mode": "dorian",
+	"numerals": "i7 IV7",
+	"genres": [
+		"house",
+		"funk",
+		"neo_soul",
+		"lofi"
+	],
+	"sections": [
+		"any"
+	]
+}

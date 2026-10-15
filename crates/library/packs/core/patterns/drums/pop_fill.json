@@ -1,0 +1,30 @@
+{
+	"id": "pop_fill",
+	"kind": "pattern",
+	"name": "Pop tom fill",
+	"summary": "One-bar pop fill: backbeat on 2, then a tom run high to low over beats 3 and 4.",
+	"role": "drums",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"rock"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		80,
+		130
+	],
+	"family": "pop",
+	"variant": "fill",
+	"lanes": {
+		"kick": "x... .... x... ....",
+		"snare": ".... x... .... ....",
+		"high_tom": ".... .... xx.. ....",
+		"mid_tom": ".... .... ..xx ....",
+		"low_tom": ".... .... .... xxX."
+	}
+}

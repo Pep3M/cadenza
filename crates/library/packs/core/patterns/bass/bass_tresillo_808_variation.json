@@ -1,0 +1,35 @@
+{
+	"id": "bass_tresillo_808_variation",
+	"kind": "pattern",
+	"name": "Tresillo 808 bass variation",
+	"summary": "Tresillo 808 with an octave pop on the & of 3 and a chromatic approach into the next chord.",
+	"role": "bass",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"chorus",
+		"post_chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"family": "tresillo_bass",
+	"variant": "variation",
+	"harmony": "chord",
+	"octave": -1,
+	"lanes": {
+		"R": "x=== ==x= ==.. ....",
+		"R+1": ".... .... ..x. ....",
+		"app": ".... .... .... ..x."
+	},
+	"pairs_with": [
+		"core/dembow_variation"
+	]
+}

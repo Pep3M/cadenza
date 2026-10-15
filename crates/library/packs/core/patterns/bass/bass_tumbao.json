@@ -1,0 +1,35 @@
+{
+	"id": "bass_tumbao",
+	"kind": "pattern",
+	"name": "Son/salsa tumbao bass",
+	"summary": "Tumbao: fifth on the & of 2, next chord's root anticipated on 4 and tied over the bar line (no downbeat).",
+	"role": "bass",
+	"genres": [
+		"salsa",
+		"son",
+		"latin",
+		"cha_cha"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		80,
+		210
+	],
+	"harmony": "chord",
+	"lanes": {
+		"5": ".... ..x= ==== ....",
+		"ant": "==== ==.. .... x==="
+	},
+	"pairs_with": [
+		"core/piano_montuno",
+		"core/perc_conga_tumbao"
+	],
+	"tags": [
+		"tumbao",
+		"anticipation"
+	]
+}

@@ -1,0 +1,25 @@
+{
+	"id": "bass_root_eighths",
+	"kind": "pattern",
+	"name": "Root 8ths bass",
+	"summary": "Driving pop/rock bass: chord root on every 8th note.",
+	"role": "bass",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"rock"
+	],
+	"sections": [
+		"verse",
+		"chorus"
+	],
+	"energy": 3,
+	"bars": 1,
+	"harmony": "chord",
+	"lanes": {
+		"R": "x.x. x.x. x.x. x.x."
+	},
+	"pairs_with": [
+		"core/pop_backbeat"
+	]
+}

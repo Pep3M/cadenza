@@ -1,0 +1,34 @@
+{
+	"id": "dembow_minimal",
+	"kind": "pattern",
+	"name": "Dembow minimal",
+	"summary": "Sparse dembow for intros and verses: kick on the beat, rimshot on the dembow hits, offbeat closed hats.",
+	"role": "drums",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"intro",
+		"verse",
+		"pre"
+	],
+	"energy": 2,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"family": "dembow",
+	"variant": "intro",
+	"lanes": {
+		"kick": "x... x... x... x...",
+		"rim": "...x ..x. ...x ..x.",
+		"closed_hat": "..x. ..x. ..x. ..x."
+	},
+	"pairs_with": [
+		"core/bass_tresillo_808"
+	]
+}

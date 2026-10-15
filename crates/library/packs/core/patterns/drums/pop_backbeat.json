@@ -1,0 +1,32 @@
+{
+	"id": "pop_backbeat",
+	"kind": "pattern",
+	"name": "Pop backbeat",
+	"summary": "Straight pop groove: kick on 1 and 3&, snare on 2 and 4, 8th closed hats.",
+	"role": "drums",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"rock"
+	],
+	"sections": [
+		"verse",
+		"chorus"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		80,
+		130
+	],
+	"family": "pop",
+	"variant": "main",
+	"lanes": {
+		"kick": "x... .... x.x. ....",
+		"snare": ".... x... .... x...",
+		"closed_hat": "x.x. x.x. x.x. x.x."
+	},
+	"pairs_with": [
+		"core/bass_root_eighths"
+	]
+}

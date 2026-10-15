@@ -1,0 +1,32 @@
+{
+	"id": "nylon_arp_tresillo",
+	"kind": "pattern",
+	"name": "Nylon arpeggio tresillo",
+	"summary": "Nylon-guitar arpeggio flowing over the tresillo: root, fifth, octave and tenth.",
+	"role": "arp",
+	"genres": [
+		"latin_pop",
+		"reggaeton",
+		"bachata"
+	],
+	"sections": [
+		"intro",
+		"verse"
+	],
+	"energy": 2,
+	"bars": 1,
+	"tempo": [
+		80,
+		110
+	],
+	"harmony": "chord",
+	"lanes": {
+		"R": "x... .... .... ....",
+		"5": "...x .... ..x. ....",
+		"R+1": ".... ..x. .... x...",
+		"3+1": ".... .... x... ..x."
+	},
+	"pairs_with": [
+		"core/dembow_minimal"
+	]
+}

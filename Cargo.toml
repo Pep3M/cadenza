@@ -5,7 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "LicenseRef-Proprietary"
+publish = false
 repository = "https://github.com/Pep3M/cadenza"
 rust-version = "1.88"
 
@@ -16,6 +17,13 @@ cadenza-theory = { path = "crates/theory" }
 cadenza-dsp = { path = "crates/dsp" }
 cadenza-engine = { path = "crates/engine" }
 cadenza-mcp = { path = "crates/mcp" }
+cadenza-plugin-host = { path = "crates/plugin-host" }
+cadenza-agent = { path = "crates/agent" }
+cadenza-audio-io = { path = "crates/audio-io" }
+cadenza-midi-io = { path = "crates/midi-io" }
+cadenza-app = { path = "crates/app" }
+cadenza-library = { path = "crates/library" }
+cadenza-analysis = { path = "crates/analysis" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,10 +36,39 @@ rtrb = "0.4"
 arc-swap = "1.9"
 schemars = { version = "1", features = ["uuid1"] }
 tokio = { version = "1", features = ["full"] }
-rmcp = "3.5"
+rmcp = { version = "3.5", features = ["server", "macros", "transport-io"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clack-host = "0.2"
+clack-plugin = "0.2"
+clack-extensions = "0.2"
+base64 = "0.22"
+tempfile = "3"
+# Font charmap checks in the app tests (already in the tree through epaint).
+skrifa = "0.44"
+vst3 = "0.3"
+libloading = "0.8"
+libc = "0.2"
+x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+async-trait = "0.1"
+symphonia = { version = "0.6", features = ["all"] }
+rubato = "5"
+realfft = "3.5"
+flacenc = { version = "0.5", default-features = false }
+signalsmith-stretch = "0.1"
+mp3lame-encoder = "0.2"
+midly = { version = "0.5.3", default-features = false, features = ["std"] }
+midir = "0.11.1"
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wayland", "x11", "wgpu"] }
+egui = "0.36"
+egui_kittest = "0.36"
+keyring = "4"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sha2 = "0.11"
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [profile.release]
 debug = 1

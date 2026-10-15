@@ -1,0 +1,31 @@
+{
+	"id": "lofi_counter_line",
+	"kind": "pattern",
+	"name": "Lo-fi counter-line",
+	"summary": "Sparse two-bar counter-melody: 5 falling to 3 and 2, answered by 1, 7 below and 1.",
+	"role": "lead",
+	"genres": [
+		"lofi",
+		"neo_soul",
+		"jazz"
+	],
+	"sections": [
+		"verse",
+		"intro",
+		"outro"
+	],
+	"energy": 1,
+	"feel": "swing:0.5",
+	"bars": 2,
+	"harmony": "scale",
+	"lanes": {
+		"^5": "..x= ==.. .... .... .... .... .... ....",
+		"^3": ".... .... x=.. .... .... .... .... ....",
+		"^2": ".... .... ..x= ==== .... .... .... ....",
+		"^1": ".... .... .... .... ..x= ==.. ..x= ====",
+		"^7-1": ".... .... .... .... .... .... x=.. ...."
+	},
+	"tags": [
+		"melody"
+	]
+}

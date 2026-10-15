@@ -1,0 +1,24 @@
+{
+	"id": "clave_rumba_32",
+	"kind": "pattern",
+	"name": "Rumba clave 3-2",
+	"summary": "Rumba clave, 3-2: like son clave but the third note of the three side moves to the a of 2.",
+	"role": "perc",
+	"genres": [
+		"rumba",
+		"salsa",
+		"latin"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"bars": 2,
+	"family": "clave",
+	"lanes": {
+		"claves": "x... ...x .... x... .... x... x... ...."
+	},
+	"tags": [
+		"clave"
+	]
+}

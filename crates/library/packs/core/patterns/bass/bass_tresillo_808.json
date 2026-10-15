@@ -1,0 +1,38 @@
+{
+	"id": "bass_tresillo_808",
+	"kind": "pattern",
+	"name": "Tresillo 808 bass",
+	"summary": "Sub bass on the tresillo (3+3+2) following chord roots, fifth pickup at the end of the bar.",
+	"role": "bass",
+	"genres": [
+		"reggaeton",
+		"latin_pop",
+		"dembow",
+		"urbano"
+	],
+	"sections": [
+		"verse",
+		"chorus",
+		"post_chorus"
+	],
+	"energy": 3,
+	"bars": 1,
+	"tempo": [
+		88,
+		102
+	],
+	"family": "tresillo_bass",
+	"harmony": "chord",
+	"octave": -1,
+	"lanes": {
+		"R": "x=== ==x= ==== x=..",
+		"5": ".... .... .... ..x."
+	},
+	"pairs_with": [
+		"core/dembow_basic"
+	],
+	"tags": [
+		"808",
+		"tresillo"
+	]
+}

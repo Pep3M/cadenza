@@ -1,0 +1,27 @@
+{
+	"id": "bass_pop_syncopated",
+	"kind": "pattern",
+	"name": "Syncopated pop bass",
+	"summary": "Pop bass: root on 1, the & of 2 and 3, fifth on 4, chromatic approach on the & of 4.",
+	"role": "bass",
+	"genres": [
+		"pop",
+		"dance_pop",
+		"latin_pop"
+	],
+	"sections": [
+		"chorus",
+		"verse"
+	],
+	"energy": 3,
+	"bars": 1,
+	"harmony": "chord",
+	"lanes": {
+		"R": "x=.. ..x. x=.. ....",
+		"5": ".... .... .... x...",
+		"app": ".... .... .... ..x."
+	},
+	"pairs_with": [
+		"core/pop_backbeat_variation"
+	]
+}

@@ -1,0 +1,17 @@
+{
+	"id": "prog_i_VI_iv_V",
+	"kind": "progression",
+	"name": "i-VI-iv-V",
+	"summary": "Minor loop with a major V for a strong pull home (Am F Dm E).",
+	"mode": "minor",
+	"numerals": "i VI iv V",
+	"genres": [
+		"trap",
+		"latin_pop",
+		"flamenco_pop"
+	],
+	"sections": [
+		"chorus",
+		"verse"
+	]
+}

@@ -1,0 +1,82 @@
+{
+	"id": "form_salsa",
+	"kind": "form",
+	"name": "Salsa form",
+	"summary": "Intro-Verse-Montuno-Mambo-Montuno-Coda: the verse sets the song, the montuno is the call-and-response.",
+	"genres": [
+		"salsa",
+		"son"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"clave",
+				"piano",
+				"bass",
+				"perc"
+			]
+		},
+		{
+			"name": "Verse",
+			"bars": 16,
+			"energy": 2,
+			"roles": [
+				"clave",
+				"piano",
+				"bass",
+				"perc"
+			]
+		},
+		{
+			"name": "Montuno 1",
+			"bars": 16,
+			"energy": 4,
+			"roles": [
+				"clave",
+				"piano",
+				"bass",
+				"perc",
+				"lead"
+			]
+		},
+		{
+			"name": "Mambo",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"clave",
+				"piano",
+				"bass",
+				"perc",
+				"lead"
+			]
+		},
+		{
+			"name": "Montuno 2",
+			"bars": 16,
+			"energy": 4,
+			"roles": [
+				"clave",
+				"piano",
+				"bass",
+				"perc",
+				"lead"
+			]
+		},
+		{
+			"name": "Coda",
+			"bars": 4,
+			"energy": 3,
+			"roles": [
+				"clave",
+				"piano",
+				"bass",
+				"perc"
+			],
+			"ending": "drop"
+		}
+	]
+}

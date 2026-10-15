@@ -1,0 +1,28 @@
+{
+	"id": "trap_fill",
+	"kind": "pattern",
+	"name": "Trap fill",
+	"summary": "One-bar trap fill on a 32nd grid: kick on 1, clap on 3, hat rolls speeding up into the next bar.",
+	"role": "drums",
+	"genres": [
+		"trap",
+		"hip_hop"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		130,
+		160
+	],
+	"family": "trap",
+	"variant": "fill",
+	"steps_per_beat": 8,
+	"lanes": {
+		"kick": "x....... ........ ........ ........",
+		"clap": "........ ........ x....... ........",
+		"closed_hat": "x.x.x.x. xxxxxxxx x.x.x.x. XxXxXxXx"
+	}
+}

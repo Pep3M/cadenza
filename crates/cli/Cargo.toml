@@ -1,12 +1,40 @@
 [package]
 name = "cadenza-cli"
-description = "Cadenza command line: render projects, run the MCP server"
+description = "Cadenza command line: render projects, run the MCP server, compose with the AI agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "cadenza"
 path = "src/main.rs"
 
+[features]
+default = []
+# Offline time-stretch / pitch-shift (needs a C++ compiler + libclang).
+stretch = ["cadenza-engine/stretch"]
+# MP3 export (vendored LAME, LGPL; needs a C toolchain).
+mp3 = ["cadenza-engine/mp3"]
+
 [dependencies]
+cadenza-core.workspace = true
+cadenza-model.workspace = true
+cadenza-engine.workspace = true
+cadenza-mcp.workspace = true
+cadenza-agent.workspace = true
+cadenza-plugin-host.workspace = true
+cadenza-midi-io.workspace = true
+cadenza-dsp.workspace = true
+cadenza-library.workspace = true
+cadenza-theory.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+cadenza-audio-io.workspace = true

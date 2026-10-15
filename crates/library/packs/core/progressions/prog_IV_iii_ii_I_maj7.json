@@ -1,0 +1,16 @@
+{
+	"id": "prog_IV_iii_ii_I_maj7",
+	"kind": "progression",
+	"name": "IVmaj7-iii7-ii7-Imaj7",
+	"summary": "Descending neo-soul sevenths (Fmaj7 Em7 Dm7 Cmaj7).",
+	"mode": "major",
+	"numerals": "IVmaj7 iii7 ii7 Imaj7",
+	"genres": [
+		"neo_soul",
+		"rnb",
+		"lofi"
+	],
+	"sections": [
+		"any"
+	]
+}

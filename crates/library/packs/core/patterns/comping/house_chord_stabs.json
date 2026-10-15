@@ -1,0 +1,30 @@
+{
+	"id": "house_chord_stabs",
+	"kind": "pattern",
+	"name": "House chord stabs",
+	"summary": "Short piano/organ stabs in the 3-3-4-3-3 house rhythm.",
+	"role": "comping",
+	"genres": [
+		"house",
+		"deep_house",
+		"dance"
+	],
+	"sections": [
+		"drop",
+		"chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		118,
+		128
+	],
+	"harmony": "chord",
+	"voicing": "close",
+	"lanes": {
+		"chord": "x..x ..x. ..x. .x.."
+	},
+	"pairs_with": [
+		"core/house_four_floor"
+	]
+}

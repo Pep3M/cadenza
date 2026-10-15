@@ -1,0 +1,141 @@
+{
+	"id": "form_latin_pop_radio",
+	"kind": "form",
+	"name": "Latin pop radio form",
+	"summary": "Intro-V-Pre-C-Post-V-Pre-C-Post-Bridge-C-Outro, about 3:10 at 94 bpm.",
+	"genres": [
+		"latin_pop",
+		"reggaeton"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"guitar",
+				"perc"
+			]
+		},
+		{
+			"name": "Verse 1",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"drums",
+				"bass",
+				"guitar"
+			]
+		},
+		{
+			"name": "Pre",
+			"bars": 4,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			],
+			"ending": "drop"
+		},
+		{
+			"name": "Chorus 1",
+			"bars": 8,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar",
+				"keys"
+			]
+		},
+		{
+			"name": "Post-chorus",
+			"bars": 4,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"hook"
+			]
+		},
+		{
+			"name": "Verse 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar"
+			]
+		},
+		{
+			"name": "Pre",
+			"bars": 4,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			],
+			"ending": "drop"
+		},
+		{
+			"name": "Chorus 2",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar",
+				"keys",
+				"hook"
+			]
+		},
+		{
+			"name": "Post-chorus",
+			"bars": 4,
+			"energy": 4,
+			"roles": [
+				"drums",
+				"bass",
+				"hook"
+			]
+		},
+		{
+			"name": "Bridge",
+			"bars": 8,
+			"energy": 2,
+			"roles": [
+				"keys",
+				"guitar"
+			],
+			"ending": "riser"
+		},
+		{
+			"name": "Chorus 3",
+			"bars": 8,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"perc",
+				"bass",
+				"guitar",
+				"keys",
+				"hook"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 4,
+			"energy": 2,
+			"roles": [
+				"guitar",
+				"perc"
+			]
+		}
+	]
+}

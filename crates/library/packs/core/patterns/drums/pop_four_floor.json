@@ -1,0 +1,27 @@
+{
+	"id": "pop_four_floor",
+	"kind": "pattern",
+	"name": "Dance-pop four on the floor",
+	"summary": "Dance-pop drive: kick on every beat, clap on 2 and 4, open hats on the offbeats.",
+	"role": "drums",
+	"genres": [
+		"pop",
+		"dance_pop",
+		"disco"
+	],
+	"sections": [
+		"chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		100,
+		128
+	],
+	"family": "pop_dance",
+	"lanes": {
+		"kick": "x... x... x... x...",
+		"clap": ".... x... .... x...",
+		"open_hat": "..x. ..x. ..x. ..x."
+	}
+}

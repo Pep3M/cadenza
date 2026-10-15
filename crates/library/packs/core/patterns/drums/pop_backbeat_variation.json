@@ -1,0 +1,32 @@
+{
+	"id": "pop_backbeat_variation",
+	"kind": "pattern",
+	"name": "Pop backbeat variation",
+	"summary": "Lifted pop backbeat: extra kick on the a of 2, snare ghost pickup and an open hat on the & of 4.",
+	"role": "drums",
+	"genres": [
+		"pop",
+		"pop_rock",
+		"rock"
+	],
+	"sections": [
+		"chorus"
+	],
+	"energy": 4,
+	"bars": 1,
+	"tempo": [
+		80,
+		130
+	],
+	"family": "pop",
+	"variant": "variation",
+	"lanes": {
+		"kick": "x... ...x x.x. ....",
+		"snare": ".... x... .... x..o",
+		"closed_hat": "x.x. x.x. x.x. x...",
+		"open_hat": ".... .... .... ..x."
+	},
+	"pairs_with": [
+		"core/bass_pop_syncopated"
+	]
+}

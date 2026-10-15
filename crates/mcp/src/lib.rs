@@ -1,14 +1,17 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Cadenza's AI hands: an MCP server (stdio) exposing the project command API as
+//! well-designed tools for an LLM arranger/mix engineer.
+//!
+//! Tool logic lives in plain, testable functions in [`tools`] (each taking a
+//! [`session::Session`] and a typed args struct); [`server`] is a thin `rmcp` adapter
+//! over them.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod convert;
+pub mod error;
+pub mod player;
+pub mod server;
+pub mod session;
+pub mod tools;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::{McpError, ServeError};
+pub use server::{CadenzaServer, ToolDefinition, serve_stdio};
+pub use session::{ChangeKey, Session, SharedSession};

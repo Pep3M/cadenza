@@ -1,0 +1,30 @@
+{
+	"id": "hook_pluck_minor",
+	"kind": "pattern",
+	"name": "Minor pluck hook",
+	"summary": "Two-bar pluck motif on 5-4-3-1 (minor pentatonic friendly), answered with a variation that resolves home.",
+	"role": "lead",
+	"genres": [
+		"latin_pop",
+		"reggaeton",
+		"pop"
+	],
+	"sections": [
+		"post_chorus",
+		"chorus",
+		"intro"
+	],
+	"energy": 3,
+	"bars": 2,
+	"harmony": "scale",
+	"lanes": {
+		"^5": "x=.. .... .... .... x==. .... .... ....",
+		"^4": "...x .... .... ..x= ...x ==.. x=.. ....",
+		"^3": ".... ..x= .... x=.. .... ..x= ..x= ....",
+		"^1": ".... .... x=== .... .... .... .... x==="
+	},
+	"tags": [
+		"hook",
+		"motif"
+	]
+}

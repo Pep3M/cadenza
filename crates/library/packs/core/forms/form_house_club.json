@@ -1,0 +1,81 @@
+{
+	"id": "form_house_club",
+	"kind": "form",
+	"name": "House club form",
+	"summary": "DJ-friendly house: 16-bar intro, build, drop, breakdown, build, drop, 16-bar outro.",
+	"genres": [
+		"house",
+		"deep_house",
+		"edm"
+	],
+	"sections": [
+		{
+			"name": "Intro",
+			"bars": 16,
+			"energy": 2,
+			"roles": [
+				"drums"
+			]
+		},
+		{
+			"name": "Build 1",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"bass",
+				"arp"
+			],
+			"ending": "riser"
+		},
+		{
+			"name": "Drop 1",
+			"bars": 16,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"bass",
+				"keys"
+			]
+		},
+		{
+			"name": "Breakdown",
+			"bars": 16,
+			"energy": 2,
+			"roles": [
+				"keys",
+				"pad"
+			]
+		},
+		{
+			"name": "Build 2",
+			"bars": 8,
+			"energy": 3,
+			"roles": [
+				"drums",
+				"arp",
+				"pad"
+			],
+			"ending": "riser"
+		},
+		{
+			"name": "Drop 2",
+			"bars": 16,
+			"energy": 5,
+			"roles": [
+				"drums",
+				"bass",
+				"keys",
+				"arp"
+			]
+		},
+		{
+			"name": "Outro",
+			"bars": 16,
+			"energy": 2,
+			"roles": [
+				"drums"
+			]
+		}
+	]
+}

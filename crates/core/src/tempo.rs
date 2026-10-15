@@ -28,7 +28,10 @@ impl TimeSignature {
 
 impl Default for TimeSignature {
 	fn default() -> Self {
-		Self { numerator: 4, denominator: 4 }
+		Self {
+			numerator: 4,
+			denominator: 4,
+		}
 	}
 }
 
@@ -41,7 +44,12 @@ pub struct TempoMap {
 
 impl TempoMap {
 	pub fn constant(bpm: f64) -> Self {
-		Self { points: vec![TempoPoint { tick: Tick::ZERO, bpm }] }
+		Self {
+			points: vec![TempoPoint {
+				tick: Tick::ZERO,
+				bpm,
+			}],
+		}
 	}
 
 	pub fn points(&self) -> &[TempoPoint] {
@@ -74,7 +82,10 @@ impl TempoMap {
 			if point.tick >= tick {
 				break;
 			}
-			let end = self.points.get(i + 1).map_or(tick, |next| next.tick.min(tick));
+			let end = self
+				.points
+				.get(i + 1)
+				.map_or(tick, |next| next.tick.min(tick));
 			seconds += seconds_for_ticks(end.0 - point.tick.0, point.bpm);
 		}
 		seconds
@@ -83,7 +94,10 @@ impl TempoMap {
 	pub fn seconds_to_tick(&self, seconds: f64) -> Tick {
 		let mut elapsed = 0.0;
 		for (i, point) in self.points.iter().enumerate() {
-			let segment = self.points.get(i + 1).map(|next| seconds_for_ticks(next.tick.0 - point.tick.0, point.bpm));
+			let segment = self
+				.points
+				.get(i + 1)
+				.map(|next| seconds_for_ticks(next.tick.0 - point.tick.0, point.bpm));
 			match segment {
 				Some(len) if elapsed + len <= seconds => elapsed += len,
 				_ => {

@@ -1,0 +1,18 @@
+{
+	"id": "prog_i_iv_V_iv",
+	"kind": "progression",
+	"name": "i-iv-V-iv",
+	"summary": "Minor montuno vamp (Am Dm E Dm), two beats per chord: salsa and son.",
+	"mode": "minor",
+	"numerals": "i iv V iv",
+	"beats_per_chord": 2,
+	"genres": [
+		"salsa",
+		"son",
+		"latin"
+	],
+	"sections": [
+		"montuno",
+		"any"
+	]
+}

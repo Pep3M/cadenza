@@ -8,7 +8,17 @@ use uuid::Uuid;
 macro_rules! typed_id {
 	($name:ident) => {
 		#[derive(
-			Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+			Debug,
+			Clone,
+			Copy,
+			PartialEq,
+			Eq,
+			Hash,
+			PartialOrd,
+			Ord,
+			Serialize,
+			Deserialize,
+			JsonSchema,
 		)]
 		#[serde(transparent)]
 		pub struct $name(pub Uuid);
@@ -45,3 +55,4 @@ typed_id!(TrackId);
 typed_id!(ClipId);
 typed_id!(NoteId);
 typed_id!(DeviceId);
+typed_id!(TakeGroupId);

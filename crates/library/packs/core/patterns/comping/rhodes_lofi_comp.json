@@ -1,0 +1,26 @@
+{
+	"id": "rhodes_lofi_comp",
+	"kind": "pattern",
+	"name": "Lo-fi Rhodes",
+	"summary": "Lazy Rhodes chords: long chord on 1, soft re-attack on the & of 3. Drop-2 voicings for 7th chords.",
+	"role": "comping",
+	"genres": [
+		"lofi",
+		"neo_soul",
+		"jazz"
+	],
+	"sections": [
+		"any"
+	],
+	"energy": 2,
+	"feel": "swing:0.5",
+	"bars": 1,
+	"harmony": "chord",
+	"voicing": "drop2",
+	"lanes": {
+		"chord": "x=== ===. ..o= ===="
+	},
+	"pairs_with": [
+		"core/lofi_boom_bap"
+	]
+}

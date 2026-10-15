@@ -1,0 +1,29 @@
+{
+	"id": "house_minimal",
+	"kind": "pattern",
+	"name": "House minimal",
+	"summary": "Intro/break house beat: kick on every beat and offbeat closed hats only.",
+	"role": "drums",
+	"genres": [
+		"house",
+		"deep_house",
+		"dance"
+	],
+	"sections": [
+		"intro",
+		"break",
+		"outro"
+	],
+	"energy": 2,
+	"bars": 1,
+	"tempo": [
+		118,
+		128
+	],
+	"family": "house",
+	"variant": "intro",
+	"lanes": {
+		"kick": "x... x... x... x...",
+		"closed_hat": "..x. ..x. ..x. ..x."
+	}
+}

@@ -1,0 +1,18 @@
+{
+	"id": "prog_i_VI_III_VII",
+	"kind": "progression",
+	"name": "i-VI-III-VII",
+	"summary": "The minor-key pop loop (Am F C G in A minor): latin pop, reggaeton, EDM.",
+	"mode": "minor",
+	"numerals": "i VI III VII",
+	"genres": [
+		"latin_pop",
+		"reggaeton",
+		"pop",
+		"edm",
+		"trap"
+	],
+	"sections": [
+		"any"
+	]
+}

@@ -1,6 +1,8 @@
 # Release artifacts per platform: Linux tar.gz + AppImage, Windows zip, macOS universal
-# .app in a dmg (unsigned). Tags `v*` also get a draft GitHub Release with every file;
-# manual runs only upload workflow artifacts unless `draft_release` names a tag.
+# .app in a dmg (unsigned), plus SHA256SUMS and the install scripts (install.sh,
+# install.ps1), which download from `releases/latest`. Tags `v*` publish a GitHub
+# Release (a prerelease when the version has a suffix such as `-beta.1`); manual runs
+# only upload workflow artifacts unless `draft_release` names a tag (draft, no tag).
 #
 # TODO(signing): macOS Developer ID signing + notarization and Windows Authenticode
 # signing need certificates stored as repository secrets; until then the macOS app is
@@ -75,6 +77,7 @@ jobs:
         run: |
           mkdir -p "dist/$NAME"
           cp target/release/{cadenza,cadenza-app,cadenza-plugin-sandbox,cadenza-plugin-scanner} "dist/$NAME/"
+          cp LICENSE README.md packaging/linux/cadenza.desktop packaging/linux/cadenza.svg "dist/$NAME/"
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
       - name: AppImage
         run: |
@@ -82,6 +85,8 @@ jobs:
           mkdir -p "$app/usr/bin"
           cp target/release/{cadenza,cadenza-app,cadenza-plugin-sandbox,cadenza-plugin-scanner} "$app/usr/bin/"
           cp packaging/linux/cadenza.desktop packaging/linux/cadenza.svg "$app/"
+          mkdir -p "$app/usr/share/doc/cadenza"
+          cp LICENSE README.md "$app/usr/share/doc/cadenza/"
           printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/cadenza-app" "$@"\n' > "$app/AppRun"
           chmod +x "$app/AppRun"
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
@@ -119,6 +124,7 @@ jobs:
           foreach ($b in "cadenza", "cadenza-app", "cadenza-plugin-scanner") {
             Copy-Item "target/release/$b.exe" "dist/$env:NAME/"
           }
+          Copy-Item LICENSE, README.md "dist/$env:NAME/"
           Compress-Archive -Path "dist/$env:NAME" -DestinationPath "dist/$env:NAME.zip"
       - uses: actions/upload-artifact@v4
         with:
@@ -156,6 +162,9 @@ jobs:
           done
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
           plutil -lint "$app/Contents/Info.plist"
+          mkdir -p "$app/Contents/Resources"
+          cp LICENSE README.md "$app/Contents/Resources/"
+          cp LICENSE "dist/$NAME/"
           codesign --force --deep --sign - "$app"
           ln -s /Applications "dist/$NAME/Applications"
           hdiutil create -volname Cadenza -srcfolder "dist/$NAME" -ov -format UDZO "dist/$NAME.dmg"
@@ -172,15 +181,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Draft release
+      - name: Install scripts and checksums
+        run: |
+          cp install.sh install.ps1 dist/
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+      - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.draft_release }}
         run: |
-          ls -l dist
-          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+          flags=()
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            flags+=(--draft)
+          elif [[ "$TAG" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
             --target "$GITHUB_SHA" --title "Cadenza $TAG" --generate-notes

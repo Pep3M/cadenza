@@ -179,6 +179,12 @@ pub enum FileAction {
 	PackArchive,
 	/// A reference track for the mix assistant.
 	MixReference,
+	/// A drum sampler pad's sample (`InstrumentView::dialog`).
+	PadSample,
+	/// One more layer of a drum sampler pad.
+	PadLayer,
+	/// A folder of drum samples mapped onto the pads by name.
+	KitFolder,
 }
 
 impl FileAction {
@@ -193,6 +199,9 @@ impl FileAction {
 			Self::RelinkFolder => "Search for missing files in",
 			Self::PackArchive => "Export project archive",
 			Self::MixReference => "Choose a reference track",
+			Self::PadSample => "Load a sample into the pad",
+			Self::PadLayer => "Add a layer to the pad",
+			Self::KitFolder => "Map a folder of drum samples onto the pads",
 		}
 	}
 }
@@ -220,13 +229,17 @@ pub fn file_dialog(
 				.add_filter("Cadenza project", &["json"])
 				.set_file_name(suggested_name)
 				.save_file(),
-			FileAction::ImportAudio | FileAction::MixReference => dialog
+			FileAction::ImportAudio
+			| FileAction::MixReference
+			| FileAction::PadSample
+			| FileAction::PadLayer => dialog
 				.add_filter("Audio", crate::state::AUDIO_EXTENSIONS)
 				.pick_file(),
 			FileAction::ImportMidi => dialog.add_filter("MIDI", &["mid", "midi"]).pick_file(),
-			FileAction::ExportFolder | FileAction::UnpackFolder | FileAction::RelinkFolder => {
-				dialog.pick_folder()
-			}
+			FileAction::ExportFolder
+			| FileAction::UnpackFolder
+			| FileAction::RelinkFolder
+			| FileAction::KitFolder => dialog.pick_folder(),
 			FileAction::PackArchive => dialog
 				.add_filter("Cadenza project archive", &["zip", "cadenzapack"])
 				.set_file_name(suggested_name)

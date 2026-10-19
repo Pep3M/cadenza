@@ -17,22 +17,45 @@ const N_PARAMS: usize = 7;
 
 const MAX_DELAY_MS: f32 = 4_000.0;
 
-/// Note values for `sync`, in quarter-note beats (index 0 = free time in ms).
-const SYNC_BEATS: [f64; 13] = [
-	0.0,
-	0.125,
-	1.0 / 6.0,
-	0.25,
-	0.375,
-	1.0 / 3.0,
-	0.5,
-	0.75,
-	2.0 / 3.0,
-	1.0,
-	1.5,
-	2.0,
-	4.0,
+/// Tempo-sync steps for `sync`: `(display name, quarter notes)`, index 0 =
+/// free time (uses `time` instead). The single source for the step list and
+/// [`delay_time_seconds`], so the UI's picture of the steps and the
+/// processor's timing cannot drift apart.
+const SYNC_STEPS: [(&str, f64); 13] = [
+	("Free", 0.0),
+	("1/32", 0.125),
+	("1/16 triplet", 1.0 / 6.0),
+	("1/16", 0.25),
+	("dotted 1/16", 0.375),
+	("1/8 triplet", 1.0 / 3.0),
+	("1/8", 0.5),
+	("dotted 1/8", 0.75),
+	("1/4 triplet", 2.0 / 3.0),
+	("1/4", 1.0),
+	("dotted 1/4", 1.5),
+	("1/2", 2.0),
+	("1 bar (4/4)", 4.0),
 ];
+
+/// The tempo-sync steps for `sync`, as `(name, quarter notes)`; index 0 is
+/// free time (uses `time` instead of a tempo-synced step).
+pub fn delay_sync_steps() -> &'static [(&'static str, f64)] {
+	&SYNC_STEPS
+}
+
+/// Echo time in seconds for the given plain parameter values and tempo
+/// (quarter notes per minute), matching what the processor feeds its delay
+/// line. `params` are the plain values in [`INFO`]'s param order.
+pub fn delay_time_seconds(params: &[f32], bpm: f64) -> f64 {
+	let p = |i: usize| params.get(i).copied().unwrap_or(PARAMS[i].default);
+	let sync = (p(P_SYNC).round().max(0.0) as usize).min(SYNC_STEPS.len() - 1);
+	let ms = if sync == 0 || !(bpm.is_finite() && bpm > 0.0) {
+		p(P_TIME) as f64
+	} else {
+		SYNC_STEPS[sync].1 * 60_000.0 / bpm
+	};
+	ms.clamp(1.0, MAX_DELAY_MS as f64) * 0.001
+}
 
 static PARAMS: [ParamInfo; N_PARAMS] = [
 	ParamInfo::new(
@@ -154,13 +177,7 @@ impl Delay {
 
 	/// Delay time in samples for the current settings and tempo.
 	fn time_samples(&self, bpm: f64) -> f32 {
-		let sync = self.params.choice(P_SYNC).min(SYNC_BEATS.len() - 1);
-		let ms = if sync == 0 || !(bpm.is_finite() && bpm > 0.0) {
-			self.params.get(P_TIME)
-		} else {
-			(SYNC_BEATS[sync] * 60_000.0 / bpm) as f32
-		};
-		ms.clamp(1.0, MAX_DELAY_MS) * 0.001 * self.sample_rate
+		(delay_time_seconds(self.params.values(), bpm) * self.sample_rate as f64) as f32
 	}
 
 	fn update_filters(&mut self) {
@@ -341,5 +358,34 @@ mod tests {
 		assert!(
 			r[960..980].iter().any(|x| x.abs() > 0.3) && l[960..980].iter().all(|x| x.abs() < 0.05)
 		);
+	}
+
+	#[test]
+	fn sync_steps_round_trip_the_processor() {
+		let mut params = [0.0_f32; N_PARAMS];
+		for (i, p) in params.iter_mut().enumerate() {
+			*p = PARAMS[i].default;
+		}
+		let bpm = 120.0;
+		for (step, &(_name, quarters)) in delay_sync_steps().iter().enumerate() {
+			params[P_SYNC] = step as f32;
+			params[P_TIME] = 375.0;
+			let got = delay_time_seconds(&params, bpm);
+			let want = if step == 0 {
+				0.375
+			} else {
+				(quarters * 60.0 / bpm).clamp(0.001, MAX_DELAY_MS as f64 * 0.001)
+			};
+			assert!((got - want).abs() < 1e-9, "step {step}: {got} != {want}");
+
+			// Matches what `Delay::time_samples` actually uses.
+			let d = delay_with(&[("sync", step as f32), ("time", 375.0)]);
+			let sr = 48_000.0_f64;
+			let samples = d.time_samples(bpm);
+			assert!(
+				(samples as f64 - got * sr).abs() < 1.0,
+				"step {step}: {samples} samples != {got} s"
+			);
+		}
 	}
 }

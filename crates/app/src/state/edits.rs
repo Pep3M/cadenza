@@ -8,10 +8,7 @@ use cadenza_model::{
 };
 
 /// Default colors for new tracks (cycled).
-pub const TRACK_PALETTE: [&str; 10] = [
-	"#E0603A", "#E8A33A", "#D8CF4A", "#7CC655", "#3FB98E", "#3BB3D0", "#4F86E8", "#8A6CE0",
-	"#C65CC9", "#E05C8C",
-];
+pub const TRACK_PALETTE: [&str; 16] = crate::theme::TRACK_COLORS;
 
 /// Shortest clip a resize can produce.
 pub const MIN_CLIP_LENGTH: Tick = Tick(PPQ / 16);

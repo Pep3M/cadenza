@@ -266,6 +266,40 @@ pub static INFO: DeviceInfo = DeviceInfo {
 	params: &PARAMS,
 };
 
+/// Static magnitude response of the filter stage alone (no envelope, key
+/// tracking or pressure, which modulate `cutoff_hz` live), in dB. Uses the
+/// same [`SvfCoeffs::new`] and cascade/level-compensation the voice applies
+/// (`res_comp`, `coeffs_flat` in the 24 dB/oct mode) so the picture matches
+/// the sound exactly.
+pub fn poly_synth_filter_response_db(
+	cutoff_hz: f32,
+	resonance: f32,
+	slope_24: bool,
+	sample_rate: f32,
+	freq_hz: f32,
+) -> f32 {
+	let res = (resonance * 0.01).clamp(0.0, 1.0);
+	let coeffs = SvfCoeffs::new(cutoff_hz, res, sample_rate);
+	let mut db = crate::util::svf::svf_magnitude_db(
+		&coeffs,
+		crate::util::svf::SvfOutput::Low,
+		freq_hz,
+		sample_rate,
+	);
+	if slope_24 {
+		let flat = SvfCoeffs::new(cutoff_hz, 0.3, sample_rate);
+		db += crate::util::svf::svf_magnitude_db(
+			&flat,
+			crate::util::svf::SvfOutput::Low,
+			freq_hz,
+			sample_rate,
+		);
+	}
+	// Resonance thins the low end; the voice trims its input to keep loudness
+	// even (`res_comp` in `process`).
+	db + crate::util::gain_to_db(1.0 - 0.45 * res)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Voice {
 	slot: VoiceSlot,
@@ -647,5 +681,78 @@ impl Processor for PolySynth {
 
 	fn tail_seconds(&self) -> f32 {
 		self.params.get(P_AMP_R) * 0.001 * 1.4
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn synth_with(params: &[(&str, f32)]) -> PolySynth {
+		let mut s = PolySynth::new();
+		s.prepare(48_000.0, 512);
+		for &(id, v) in params {
+			s.set_param(INFO.param_index(id).unwrap(), v);
+		}
+		s.reset();
+		s
+	}
+
+	/// Plays a sine-wave note through one voice (no unison/noise/envelope
+	/// modulation) and measures the filter's steady-state RMS gain, for
+	/// comparison against `poly_synth_filter_response_db`'s closed form.
+	fn voice_filter_gain_db(cutoff: f32, resonance: f32, slope_24: bool, pitch: u8) -> f32 {
+		let mut s = synth_with(&[
+			("osc1_wave", 0.0), // sine
+			("osc_mix", 0.0),
+			("unison", 1.0),
+			("noise", 0.0),
+			("filter_cutoff", cutoff),
+			("filter_resonance", resonance),
+			("filter_slope", if slope_24 { 1.0 } else { 0.0 }),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 0.0),
+			("velocity_sensitivity", 0.0),
+			("glide", 0.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+		]);
+		s.handle(&MidiEvent::NoteOn {
+			offset: 0,
+			pitch,
+			velocity: 1.0,
+		});
+		let n_samples = 96_000;
+		let mut left = vec![0.0_f32; n_samples];
+		let mut right = vec![0.0_f32; n_samples];
+		for (l, r) in left.chunks_mut(256).zip(right.chunks_mut(256)) {
+			s.process(l, r, &[], &Transport::default());
+		}
+		let settled = &left[n_samples / 2..];
+		let sum_sq: f64 = settled.iter().map(|&x| (x as f64) * (x as f64)).sum();
+		let rms = (sum_sq / settled.len() as f64).sqrt() as f32;
+		// Input sine amplitude 1.0 (RMS 1/sqrt(2)) times the fixed voice gain
+		// (velocity_sensitivity 0, amp envelope settled at sustain 100%).
+		let input_rms = std::f32::consts::FRAC_1_SQRT_2 * VOICE_GAIN;
+		crate::util::gain_to_db(rms / input_rms)
+	}
+
+	#[test]
+	fn filter_response_matches_voice_output() {
+		let pitch = 69; // A4, 440 Hz
+		let freq = crate::util::midi_to_hz(pitch as f32);
+		for &(cutoff, resonance, slope_24) in &[
+			(1_000.0, 20.0, false),
+			(300.0, 70.0, true),
+			(2_000.0, 0.0, false),
+		] {
+			let formula =
+				poly_synth_filter_response_db(cutoff, resonance, slope_24, 48_000.0, freq);
+			let measured = voice_filter_gain_db(cutoff, resonance, slope_24, pitch);
+			assert!(
+				(formula - measured).abs() < 0.5,
+				"cutoff {cutoff} res {resonance} slope_24 {slope_24}: formula {formula}, measured {measured}"
+			);
+		}
 	}
 }

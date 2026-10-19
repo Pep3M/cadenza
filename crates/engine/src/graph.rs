@@ -19,6 +19,7 @@ use crate::metronome::{
 	Click, MAX_CLICKS, MeterSegment, Metronome, MetronomeSettings, clicks_between, meter_at,
 	meter_clicks,
 };
+use crate::probe::DeviceProbe;
 use crate::schedule::MidiSchedule;
 
 /// Which tracks are heard while auditioning (see [`Graph::set_audition`]): written by the
@@ -373,9 +374,54 @@ pub(crate) struct Device {
 	pub sidechain: Option<Box<Sidechain>>,
 }
 
+/// The audio side of the device probe (see [`crate::probe`]): the shared ring the player
+/// attached and the device it follows. Allocation free after [`ProbeTap::new`].
+pub(crate) struct ProbeTap {
+	probe: Option<Arc<DeviceProbe>>,
+	target: Option<DeviceId>,
+	input: StereoBuf,
+	readings: [f32; cadenza_dsp::readings::MAX],
+	/// The target ran in the quantum being rendered.
+	hit: bool,
+}
+
+impl ProbeTap {
+	pub fn new() -> Self {
+		Self {
+			probe: None,
+			target: None,
+			input: StereoBuf::new(),
+			readings: [0.0; cadenza_dsp::readings::MAX],
+			hit: false,
+		}
+	}
+
+	fn wants(&self, device: DeviceId) -> bool {
+		self.probe.is_some() && self.target == Some(device)
+	}
+
+	fn capture(&mut self, device: &Device, buf: &StereoBuf) {
+		let Some(p) = &self.probe else {
+			return;
+		};
+		p.push(&self.input.l, &self.input.r, &buf.l, &buf.r);
+		self.readings.fill(0.0);
+		let n = device.processor.readings(&mut self.readings);
+		p.publish_readings(&self.readings[..n.min(self.readings.len())]);
+		self.hit = true;
+	}
+}
+
 impl Device {
 	/// Runs one quantum: aligns and hands over the key (if any), then processes `buf`.
-	fn run(&mut self, buf: &mut StereoBuf, events: &[MidiEvent], t: &Transport, done: &[Node]) {
+	fn run(
+		&mut self,
+		buf: &mut StereoBuf,
+		events: &[MidiEvent],
+		t: &Transport,
+		done: &[Node],
+		probe: &mut ProbeTap,
+	) {
 		if let Some(sc) = &mut self.sidechain
 			&& let Some(src) = done.get(sc.source)
 		{
@@ -386,7 +432,15 @@ impl Device {
 			sc.main_delay.process(buf);
 			self.processor.set_sidechain(&sc.key.l, &sc.key.r);
 		}
+		let probed = probe.wants(self.id);
+		if probed {
+			probe.input.l.copy_from_slice(&buf.l);
+			probe.input.r.copy_from_slice(&buf.r);
+		}
 		self.processor.process(&mut buf.l, &mut buf.r, events, t);
+		if probed {
+			probe.capture(self, buf);
+		}
 	}
 
 	fn reset(&mut self) {
@@ -583,11 +637,36 @@ pub struct Graph {
 	/// What the last `process` call played (see [`Graph::segments`]).
 	pub(crate) segments: [Segment; MAX_SEGMENTS],
 	pub(crate) segment_count: usize,
+	pub(crate) probe: ProbeTap,
 }
 
 impl Graph {
 	pub fn sample_rate(&self) -> u32 {
 		self.sample_rate
+	}
+
+	/// Attaches the probe ring the graph writes the probed device into (control side,
+	/// before the graph goes to the audio thread).
+	pub fn attach_probe(&mut self, probe: Option<Arc<DeviceProbe>>) {
+		self.probe.probe = probe;
+	}
+
+	/// The device whose input/output and readings go to the attached probe (`None` =
+	/// idle). A different target restarts the probe. Realtime safe.
+	pub fn set_probe_target(&mut self, device: Option<DeviceId>) {
+		if self.probe.target == device {
+			return;
+		}
+		self.probe.target = device;
+		if let Some(p) = &self.probe.probe {
+			p.restart();
+		}
+	}
+
+	/// Like [`Graph::set_probe_target`] for a graph replacing one that already followed
+	/// `device`: frames not read yet are kept.
+	pub(crate) fn continue_probe(&mut self, device: Option<DeviceId>) {
+		self.probe.target = device;
 	}
 
 	/// Total plugin latency at the master output, in samples (compensated internally).
@@ -1452,8 +1531,10 @@ impl Graph {
 			audition,
 			input_block,
 			metronome,
+			probe,
 			..
 		} = self;
+		probe.hit = false;
 		for i in 0..nodes.len() {
 			let (done, rest) = nodes.split_at_mut(i);
 			let node = &mut rest[0];
@@ -1523,7 +1604,7 @@ impl Graph {
 						}
 					}
 					if let Some(d) = device {
-						d.run(buf, events, &transport, done);
+						d.run(buf, events, &transport, done, probe);
 						for e in &mut node.aux_edges {
 							let Some((l, r)) = d.processor.aux_output(e.port) else {
 								continue;
@@ -1573,7 +1654,7 @@ impl Graph {
 				}
 			}
 			for d in &mut node.inserts {
-				d.run(buf, &[], &transport, done);
+				d.run(buf, &[], &transport, done, probe);
 			}
 			if node.tap_pre {
 				node.pre.l.copy_from_slice(&buf.l);
@@ -1612,7 +1693,10 @@ impl Graph {
 		master.buf.l.copy_from_slice(&master_in.l);
 		master.buf.r.copy_from_slice(&master_in.r);
 		for d in &mut master.inserts {
-			d.run(&mut master.buf, &[], &transport, nodes);
+			d.run(&mut master.buf, &[], &transport, nodes, probe);
+		}
+		if let Some(p) = &probe.probe {
+			p.set_active(probe.hit);
 		}
 		master.fader.apply(&mut master.buf);
 		meters.measure(None, &master.buf.l, &master.buf.r);

@@ -19,7 +19,7 @@ use crate::ui::widgets;
 /// Paints a round record-arm button.
 pub fn paint_arm(p: &Painter, rect: Rect, armed: bool, hovered: bool) {
 	let bg = if armed {
-		theme::mix(theme::RECORD, theme::BG_DEEP, 0.35)
+		theme::RECORD_SOFT
 	} else if hovered {
 		theme::BG_HOVER
 	} else {
@@ -30,7 +30,12 @@ pub fn paint_arm(p: &Painter, rect: Rect, armed: bool, hovered: bool) {
 	if armed {
 		p.circle_filled(rect.center(), r, theme::RECORD);
 	} else {
-		p.circle_stroke(rect.center(), r, Stroke::new(1.5, theme::RECORD));
+		let ring = if hovered {
+			theme::RECORD
+		} else {
+			theme::TEXT_DIM
+		};
+		p.circle_stroke(rect.center(), r, Stroke::new(1.5, ring));
 	}
 }
 

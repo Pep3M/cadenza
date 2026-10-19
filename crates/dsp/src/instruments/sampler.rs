@@ -256,6 +256,27 @@ pub static INFO: DeviceInfo = DeviceInfo {
 	params: &PARAMS,
 };
 
+/// Static magnitude response of the filter stage alone (no envelope, velocity
+/// or key tracking, which modulate `cutoff_hz` live), in dB. `filter_type`:
+/// 0 off (returns 0 dB), 1 low-pass, 2 high-pass, 3 band-pass. Uses the same
+/// [`SvfCoeffs::new`] the voice applies so the picture matches the sound.
+pub fn sampler_filter_response_db(
+	filter_type: usize,
+	cutoff_hz: f32,
+	resonance: f32,
+	sample_rate: f32,
+	freq_hz: f32,
+) -> f32 {
+	let output = match filter_type {
+		0 => return 0.0,
+		1 => crate::util::svf::SvfOutput::Low,
+		2 => crate::util::svf::SvfOutput::High,
+		_ => crate::util::svf::SvfOutput::Band,
+	};
+	let coeffs = SvfCoeffs::new(cutoff_hz, (resonance * 0.01).clamp(0.0, 1.0), sample_rate);
+	crate::util::svf::svf_magnitude_db(&coeffs, output, freq_hz, sample_rate)
+}
+
 /// Voice slots: the polyphony maximum plus room for voices fading out after a steal.
 const SLOTS: usize = MAX_POLYPHONY + 16;
 /// Samples between pitch/filter coefficient updates.
@@ -920,5 +941,36 @@ mod tests {
 		assert!(bright(0.0) > 0.45);
 		assert!(bright(1.0) < 0.05);
 		assert!(bright(2.0) > 0.4);
+	}
+
+	#[test]
+	fn filter_response_matches_voice_output() {
+		let pitch = 69u8;
+		let freq = 440.0;
+		for &(filter_type, cutoff, resonance) in
+			&[(1.0, 1_000.0, 20.0), (2.0, 300.0, 50.0), (3.0, 800.0, 70.0)]
+		{
+			let mut s = sampler(vec![Zone::new(sine(freq, SR, 2.0), 0, 127, pitch)]);
+			s.set_param(P_FILTER_TYPE, filter_type);
+			s.set_param(P_FILTER_CUTOFF, cutoff);
+			s.set_param(P_FILTER_RESONANCE, resonance);
+			s.set_param(P_AMP_ATTACK, 0.0);
+			s.set_param(P_AMP_SUSTAIN, 100.0);
+			let out = run(&mut s, &[(0, on(pitch, 0))], 96_000);
+			let settled = &out[48_000..];
+			let sum_sq: f64 = settled.iter().map(|&x| (x as f64) * (x as f64)).sum();
+			let rms = (sum_sq / settled.len() as f64).sqrt() as f32;
+			// The source sine has amplitude 0.5 (RMS 0.5/sqrt(2)); with
+			// velocity sensitivity and zone gain/pan all neutral the voice
+			// otherwise passes it through unchanged.
+			let input_rms = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+			let measured = crate::util::gain_to_db(rms / input_rms);
+			let formula =
+				sampler_filter_response_db(filter_type as usize, cutoff, resonance, SR, freq);
+			assert!(
+				(formula - measured).abs() < 0.5,
+				"filter {filter_type} cutoff {cutoff} res {resonance}: formula {formula}, measured {measured}"
+			);
+		}
 	}
 }

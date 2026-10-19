@@ -145,6 +145,13 @@ fn graph_process_does_not_allocate() {
 	let mut right = vec![0.0f32; 1024];
 	graph.play();
 	assert!(graph.set_monitor_track(Some(source)));
+	// The probe follows an insert, then an instrument, then a master insert.
+	let probe = std::sync::Arc::new(cadenza_engine::DeviceProbe::new(48_000));
+	graph.attach_probe(Some(probe.clone()));
+	let duck = p.tracks[last].channel.inserts.last().unwrap().id;
+	let master_insert = p.master.inserts[0].id;
+	graph.set_probe_target(Some(duck));
+	let mut probed = Vec::with_capacity(probe.capacity());
 	// Live parameter changes and automation edits, prepared off the audio thread.
 	let info = cadenza_dsp::device_info("electric_piano").unwrap();
 	let param = info.params[0].id;
@@ -180,7 +187,15 @@ fn graph_process_does_not_allocate() {
 		if i % 100 == 0 {
 			graph.swap_automation(&mut edited);
 		}
+		match i {
+			100 => graph.set_probe_target(Some(keys)),
+			300 => graph.set_probe_target(Some(master_insert)),
+			_ => {}
+		}
 		graph.process(&mut left[..block], &mut right[..block]);
+		probed.clear();
+		probe.drain(&mut probed);
+		let _ = probe.readings();
 	}
 	graph.seek(beats(3.0));
 	graph.process(&mut left, &mut right);
@@ -191,6 +206,12 @@ fn graph_process_does_not_allocate() {
 	TRACKING.with(|t| t.set(false));
 
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(probe.is_active());
+	assert!(
+		probe
+			.reading(cadenza_dsp::readings::GAIN_REDUCTION_DB)
+			.is_some()
+	);
 }
 
 #[test]
@@ -355,6 +376,7 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 
 	let mut p = mini_song();
 	let keys = p.tracks[2].id;
+	let keys_instrument = p.tracks[2].instrument.as_ref().unwrap().id;
 	let drums = p.tracks[0].id;
 	let mut vox = Track::new("Vox", TrackKind::Audio);
 	vox.input = Some(TrackInput {
@@ -401,6 +423,10 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 	);
 	setup.count_in_bars = 1;
 	player.start_recording(&setup).unwrap();
+	let comp = p.tracks.last().unwrap().channel.inserts[0].id;
+	player.set_probe(Some(comp)).unwrap();
+	let probe = player.probe().unwrap();
+	let mut probed = Vec::with_capacity(probe.capacity());
 	let mut out = vec![0.0f32; 2 * 1024];
 	let input: Vec<f32> = (0..2 * 1024)
 		.map(|i| ((i as f32) * 0.01).sin() * 0.3)
@@ -431,10 +457,16 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 		if i % 60 == 35 {
 			player.preview_note_off(drums, 38).unwrap();
 		}
+		if i == 450 {
+			player.set_probe(Some(keys_instrument)).unwrap();
+		}
 		dev.process(&mut out[..2 * block], &input[..2 * block]);
+		probed.clear();
+		probe.drain(&mut probed);
 	}
 	TRACKING.with(|t| t.set(false));
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(probe.is_active());
 
 	player.request_stop_recording().unwrap();
 	dev.process(&mut out, &input);

@@ -9,6 +9,10 @@ pub mod audio_editor;
 pub mod automation;
 pub mod browser;
 pub mod chat;
+pub mod device_ai;
+pub mod device_editor;
+pub mod device_kit;
+pub mod devices;
 pub mod dnd;
 pub mod inspector;
 pub mod instrument_editor;
@@ -18,6 +22,7 @@ pub mod mixer;
 pub mod piano_roll;
 pub mod project_dialogs;
 pub mod record;
+pub mod start;
 pub mod transport;
 pub mod widgets;
 
@@ -47,10 +52,9 @@ pub struct CadenzaApp {
 	browser: browser::BrowserUi,
 	piano: piano_roll::PianoUi,
 	audio_editor: audio_editor::AudioEditorUi,
-	instrument: instrument_editor::InstrumentEditorUi,
+	device: device_editor::DeviceEditorUi,
 	chat: chat::ChatUi,
 	title: String,
-	themed: bool,
 	/// Whether the piano roll was visible last frame (to release previews on hide).
 	piano_was_visible: bool,
 }
@@ -83,7 +87,6 @@ impl CadenzaApp {
 			}
 		}
 		theme::apply(ctx);
-		app.themed = true;
 		app
 	}
 
@@ -95,10 +98,9 @@ impl CadenzaApp {
 			browser: browser::BrowserUi::default(),
 			piano: piano_roll::PianoUi::default(),
 			audio_editor: audio_editor::AudioEditorUi::default(),
-			instrument: instrument_editor::InstrumentEditorUi::default(),
+			device: device_editor::DeviceEditorUi::default(),
 			chat: chat::ChatUi::default(),
 			title: String::new(),
-			themed: false,
 			piano_was_visible: false,
 		}
 	}
@@ -120,12 +122,28 @@ impl CadenzaApp {
 
 	/// Waveform of the instrument editor in the last frame (headless tests).
 	pub fn instrument_wave(&self) -> Option<Rect> {
-		self.instrument.wave_rect
+		self.device.instrument.wave_rect
+	}
+
+	/// The device editor's body in the last frame (headless tests).
+	pub fn device_body_rect(&self) -> Option<Rect> {
+		self.device.body_rect
+	}
+
+	/// The sampler editor's zone map and the window it showed in the last frame
+	/// (headless tests).
+	pub fn zone_map(&self) -> Option<(Rect, crate::state::sampler_editor::MapWindow)> {
+		self.device.instrument.zones.map
 	}
 
 	/// Pad grid of the drum sampler editor in the last frame (headless tests).
 	pub fn pad_grid(&self) -> Option<Rect> {
-		self.instrument.pad_rect
+		self.device.instrument.pad_rect
+	}
+
+	/// The floating device editor in the last frame (headless tests).
+	pub fn device_popout_rect(&self) -> Option<Rect> {
+		self.device.popout_rect
 	}
 
 	/// Note grid of the piano roll in the last frame (headless tests).
@@ -163,9 +181,11 @@ impl CadenzaApp {
 
 	/// Draws the whole window into `ui`.
 	pub fn ui(&mut self, ui: &mut Ui) {
-		if !self.themed {
+		if !theme::applied(ui.ctx()) {
 			theme::apply(ui.ctx());
-			self.themed = true;
+			// The weight families exist from the next pass on: draw nothing with this one.
+			ui.ctx().request_discard("Cadenza fonts");
+			return;
 		}
 		self.shortcuts(ui.ctx());
 		let state = &mut self.state;
@@ -178,11 +198,22 @@ impl CadenzaApp {
 					.inner_margin(Margin::symmetric(6, 2)),
 			)
 			.show(ui, |ui| menu_bar(ui, state));
+		// The start screen is a page of its own: no workspace behind it.
+		if state.view.start_screen {
+			egui::CentralPanel::no_frame().show(ui, |ui| start::show(ui, state));
+			toasts(ui.ctx(), state);
+			unsaved_prompt(ui.ctx(), state);
+			project_dialogs::show(ui.ctx(), state);
+			record::audio_settings(ui.ctx(), state);
+			help_overlay(ui.ctx(), state);
+			busy_overlay(ui.ctx(), state);
+			return;
+		}
 		Panel::top("transport")
 			.exact_size(theme::TRANSPORT_HEIGHT)
 			.frame(
 				Frame::new()
-					.fill(theme::BG_RAISED)
+					.fill(theme::BG_PANEL)
 					.inner_margin(Margin::symmetric(6, 4))
 					.stroke(egui::Stroke::new(1.0, theme::BORDER)),
 			)
@@ -224,7 +255,7 @@ impl CadenzaApp {
 		if docked(PanelKind::PianoRoll) {
 			let piano = &mut self.piano;
 			let audio = &mut self.audio_editor;
-			let instrument = &mut self.instrument;
+			let device = &mut self.device;
 			let r = Panel::bottom("piano-roll")
 				.resizable(true)
 				.default_size(360.0)
@@ -234,8 +265,8 @@ impl CadenzaApp {
 					if locked {
 						ui.disable();
 					}
-					if state.view.instrument_editor {
-						instrument.show(ui, state)
+					if state.view.device_editor {
+						device.show(ui, state)
 					} else if state.view.audio_editor {
 						audio.show(ui, state)
 					} else {
@@ -302,7 +333,7 @@ impl CadenzaApp {
 		let arrange = &mut self.arrange;
 		let piano = &mut self.piano;
 		let audio = &mut self.audio_editor;
-		let instrument = &mut self.instrument;
+		let device = &mut self.device;
 		let browser = &mut self.browser;
 		let chat = &mut self.chat;
 		let central = egui::CentralPanel::no_frame().show(ui, |ui| {
@@ -311,9 +342,7 @@ impl CadenzaApp {
 			}
 			match center {
 				Some(PanelKind::Arrange) => arrange.show(ui, state),
-				Some(PanelKind::PianoRoll) if state.view.instrument_editor => {
-					instrument.show(ui, state)
-				}
+				Some(PanelKind::PianoRoll) if state.view.device_editor => device.show(ui, state),
 				Some(PanelKind::PianoRoll) if state.view.audio_editor => audio.show(ui, state),
 				Some(PanelKind::PianoRoll) => piano.show(ui, state),
 				Some(PanelKind::Mixer) => {
@@ -346,16 +375,19 @@ impl CadenzaApp {
 		if let Some(c) = center {
 			rects.push((c, central.response.rect));
 		}
+		self.device.popout(ui.ctx(), state, locked);
 		// A view that moved the focus itself this frame (double-click opening the piano
-		// roll) wins over the click position.
-		if state.view.panels.focus == focus_before {
+		// roll) wins over the click position; a click in the floating editor is its own.
+		if state.view.panels.focus == focus_before && !self.device.popout_focused(state) {
 			track_focus(ui.ctx(), state, &rects);
 		}
 
 		let piano_visible = state.view.panels.visible(PanelKind::PianoRoll);
 		if self.piano_was_visible && !piano_visible {
 			self.piano.release(state);
-			self.instrument.release(state);
+			if !state.view.device_popout {
+				self.device.release(state);
+			}
 		}
 		self.piano_was_visible = piano_visible;
 
@@ -385,11 +417,8 @@ impl CadenzaApp {
 		}
 		let pointer = ctx.pointer_latest_pos();
 		let editor_target = pointer
-			.and_then(|p| self.instrument.target_at(p))
-			.filter(|_| {
-				self.state.view.instrument_editor
-					&& self.state.view.panels.visible(PanelKind::PianoRoll)
-			});
+			.and_then(|p| self.device.target_at(p))
+			.filter(|_| self.state.device_editor_target().is_some());
 		let arrange_target = pointer
 			.and_then(|p| self.arrange.target_at(&self.state, p))
 			.filter(|_| self.state.view.panels.visible(PanelKind::Arrange));
@@ -468,14 +497,20 @@ impl CadenzaApp {
 			}
 			return;
 		}
-		let piano_focused = self.state.view.panels.focus == Some(PanelKind::PianoRoll)
+		let popout_focused = self.device.popout_focused(&self.state);
+		let piano_focused = !popout_focused
+			&& self.state.view.panels.focus == Some(PanelKind::PianoRoll)
 			&& self.state.view.panels.visible(PanelKind::PianoRoll);
-		if piano_focused && !self.state.view.instrument_editor {
+		if popout_focused {
+			self.device.shortcuts(ctx, &mut self.state);
+		} else if piano_focused && !self.state.view.device_editor {
 			if self.state.view.audio_editor {
 				self.audio_editor.shortcuts(ctx, &mut self.state);
 			} else {
 				self.piano.shortcuts(ctx, &mut self.state);
 			}
+		} else if piano_focused {
+			self.device.shortcuts(ctx, &mut self.state);
 		}
 		let s = &mut self.state;
 		if pressed(Modifiers::NONE, Key::Space) {
@@ -526,7 +561,7 @@ impl CadenzaApp {
 		} else if pressed(Modifiers::NONE, Key::Z) {
 			arrange::zoom_to_selection(s, width, height);
 		}
-		if piano_focused {
+		if piano_focused || popout_focused {
 			return;
 		}
 		if pressed(cmd, Key::D) {
@@ -1011,33 +1046,43 @@ fn shortcut_button(ui: &mut Ui, label: &str, shortcut: &str) -> bool {
 
 fn status_bar(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal_centered(|ui| {
-		let dirty = if state.dirty {
-			"unsaved changes"
+		let (dirty, color) = if state.dirty {
+			("● Unsaved", theme::WARNING)
 		} else {
-			"saved"
+			("● Saved", theme::PLAYING)
 		};
-		ui.label(
-			RichText::new(dirty)
-				.font(theme::small())
-				.color(if state.dirty {
-					theme::WARNING
-				} else {
-					theme::TEXT_FAINT
-				}),
-		);
-		ui.separator();
+		ui.label(RichText::new(dirty).font(theme::small()).color(color));
+		ui.add_space(6.0);
 		if let Some(n) = state.notices.last() {
 			let color = match n.level {
 				Level::Info => theme::TEXT_DIM,
 				Level::Warning => theme::WARNING,
 				Level::Error => theme::ERROR,
 			};
-			ui.add(
-				egui::Label::new(RichText::new(&n.text).font(theme::small()).color(color))
-					.truncate(),
+			let label = ui.add(
+				egui::Label::new(
+					RichText::new(crate::state::notices::short_paths(&n.text))
+						.font(theme::small())
+						.color(color),
+				)
+				.truncate(),
 			);
+			if label.hovered() {
+				label.on_hover_text(&n.text);
+			}
 		}
 		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+			let p = state.project();
+			ui.label(
+				RichText::new(format!(
+					"{} tracks · {} clips · {} undo steps",
+					p.tracks.len(),
+					p.tracks.iter().map(|t| t.clips.len()).sum::<usize>(),
+					state.document().history_labels().len()
+				))
+				.font(theme::small())
+				.color(theme::TEXT_FAINT),
+			);
 			let warnings = state.load_warnings.len();
 			if warnings > 0 {
 				let r = ui.label(
@@ -1050,24 +1095,76 @@ fn status_bar(ui: &mut Ui, state: &mut AppState) {
 				);
 				r.on_hover_text(state.load_warnings.join("\n"));
 			}
-			let p = state.project();
-			ui.label(
-				RichText::new(format!(
-					"{} tracks · {} clips · {} undo steps",
-					p.tracks.len(),
-					p.tracks.iter().map(|t| t.clips.len()).sum::<usize>(),
-					state.document().history_labels().len()
-				))
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
-			);
+			ui.add_space(8.0);
+			// The F-key panels as chips, filled while open (right to left).
+			for (panel, key, name) in [
+				(PanelKind::Chat, "F10", "AI"),
+				(PanelKind::Mixer, "F9", "Mixer"),
+				(PanelKind::Inspector, "F8", "Inspector"),
+				(PanelKind::PianoRoll, "F7", "Editor"),
+				(PanelKind::Browser, "F6", "Browser"),
+				(PanelKind::Arrange, "F5", "Arrange"),
+			] {
+				let open = state.view.panels.visible(panel);
+				if panel_chip(ui, open, key, name)
+					.on_hover_text(format!("Show / hide the {name} panel ({key})"))
+					.clicked()
+				{
+					state.view.panels.toggle(panel);
+				}
+			}
 		});
 	});
 }
 
+/// A status bar chip naming a panel and its key; accent-tinted while the panel is open.
+fn panel_chip(ui: &mut Ui, open: bool, key: &str, name: &str) -> egui::Response {
+	let key_g = ui
+		.painter()
+		.layout_no_wrap(key.to_owned(), theme::mono(10.0), theme::TEXT_FAINT);
+	let name_g = ui
+		.painter()
+		.layout_no_wrap(name.to_owned(), theme::small(), theme::TEXT_DIM);
+	let size = vec2(key_g.size().x + name_g.size().x + 14.0, 16.0);
+	let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+	resp.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::Checkbox,
+			true,
+			open,
+			format!("{name} panel"),
+		)
+	});
+	let p = ui.painter();
+	let fill = if open {
+		theme::ACCENT_DIM
+	} else if resp.hovered() {
+		theme::BG_WIDGET
+	} else {
+		egui::Color32::TRANSPARENT
+	};
+	p.rect_filled(rect, egui::CornerRadius::same(theme::RADIUS), fill);
+	let (kc, nc) = if open {
+		(theme::ACCENT_TEXT, theme::TEXT)
+	} else {
+		(theme::TEXT_FAINT, theme::TEXT_FAINT)
+	};
+	let y = rect.center().y;
+	let kx = rect.left() + 5.0;
+	p.galley(egui::pos2(kx, y - key_g.size().y * 0.5), key_g.clone(), kc);
+	p.galley(
+		egui::pos2(kx + key_g.size().x + 4.0, y - name_g.size().y * 0.5),
+		name_g,
+		nc,
+	);
+	resp
+}
+
 fn toasts(ctx: &egui::Context, state: &AppState) {
 	let now = Instant::now();
-	let list = state.notices.toasts(now, 4);
+	// Info notices live in the status bar only; toasts are for what needs attention.
+	let mut list = state.notices.toasts(now, 4);
+	list.retain(|n| n.level != Level::Info);
 	if list.is_empty() {
 		return;
 	}
@@ -1086,15 +1183,19 @@ fn toasts(ctx: &egui::Context, state: &AppState) {
 					Frame::new()
 						.fill(theme::BG_RAISED)
 						.stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.7)))
-						.corner_radius(4)
+						.corner_radius(theme::RADIUS_LG)
+						.shadow(ui.visuals().popup_shadow)
 						.inner_margin(Margin::symmetric(10, 6))
 						.show(ui, |ui| {
 							ui.set_max_width(440.0);
 							ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
 								ui.label(RichText::new(icon).color(accent));
 								ui.add(
-									egui::Label::new(RichText::new(&n.text).color(theme::TEXT))
-										.wrap(),
+									egui::Label::new(
+										RichText::new(crate::state::notices::short_paths(&n.text))
+											.color(theme::TEXT),
+									)
+									.wrap(),
 								);
 							});
 						});

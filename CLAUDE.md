@@ -94,7 +94,7 @@ Agent modes (`cadenza-agent`): `Agent::run(brief)` composes a whole song into a 
 (`cadenza compose`). `SessionAgent::run_request(request, &AppContext, observer, &CancelToken)`
 works on a `SharedSession` (app chat, `cadenza chat`): `SESSION_SYSTEM_PROMPT` (incremental
 edits, no save/render unless asked), request message = request + app context (selection,
-playhead, loop, open clip, files root, armed tracks/metronome/count-in — recording itself stays with the
+playhead, loop, open clip, open device editor, files root, armed tracks/metronome/count-in — recording itself stays with the
 user: no recording tools) + `get_project` summary only when the project changed
 since the model last saw it; append-only history across requests (prompt caches stay warm),
 condensed into a hand-off note past `compact_at_input_tokens` (default 60k); each request is
@@ -400,6 +400,12 @@ pub fn factory_presets(id: &str) -> &'static [FactoryPreset { name, description,
 	fn set_zones(&mut self, zones: Vec<Zone>) -> bool  // sample built-ins; non-realtime, after prepare
 pub trait SampleData: Send + Sync { sample_rate, num_channels, channel(i) -> &[f32] } // Arc<dyn SampleData> per zone
 ```
+`response` module (device editor pictures, pure/allocation-light, reusing each processor's own
+coefficient/shaping code so the picture and the sound cannot drift): `eq_response_db`/
+`eq_band_response_db`/`EqBands` (7-band EQ magnitude), `poly_synth_filter_response_db`/
+`sampler_filter_response_db` (`util::svf::svf_magnitude_db`: exact SVF transfer function),
+`saturator_shape` (static waveshaping curve), `delay_sync_steps`/`delay_time_seconds`,
+`compressor_curve_db`.
 Sample instruments (phase 13): `sampler` (multi-zone; amp ADSR, SVF LP/HP/BP with its own ADSR,
 velocity/key tracking, velocity sensitivity + curve, gate/one-shot, glide + mono legato,
 transpose, polyphony 1..64) and `drum_sampler` (16 GM pads `instruments::drum_sampler::PADS`,
@@ -425,6 +431,10 @@ ride bell) and synthesized hand percussion in `instruments::percussion` (rim, ta
 cowbell, bongos, congas, timbales, agogo, cabasa, shaker, whistles, guiro, claves, woodblocks,
 cuica, triangle; 8-voice pool, choke pairs; params `perc_tune/perc_decay/perc_level`);
 `drum_machine::plays(note)` drives the MCP silent-lane warnings.
+`drum_sampler` publishes one note-on counter per pad of `PADS` (`readings::DRUM_PAD_TRIGGERS_START`,
+`DRUM_PADS`; `readings::MAX` = 16) for the editor's pad flashes.
+`drum_machine` readings: one trigger counter per voice (`readings::DRUM_VOICE_TRIGGERS_START`,
+`DRUM_VOICES` = 7 in `DRUM_VOICE_NAMES` order kick..perc), +1 per note-on (percussion notes count as perc).
 Instruments receive silence in `left/right` and must write (not add) their output.
 Events are sorted by `offset` within the block.
 
@@ -650,6 +660,14 @@ Metering: every graph measures each track's post-fader signal and the master per
 publishes at the end of each `Graph::process` into a `MeterBank` of atomics (peak via `fetch_max`
 on the float bits, readers take-and-reset it; RMS with 300 ms ballistics is a plain store):
 wait-free, no allocation (covered by the `no_alloc` test). Peak hold/fall-off is the UI's job.
+Device probe (redesign D1, `engine::probe`): `Player::set_probe(Option<DeviceId>)` (kept across
+loads, `Cmd::Probe`; any device: instrument, insert, master insert) -> `Player::probe() ->
+Option<Arc<DeviceProbe>>` (one per player, attached to every loaded graph): `Device::run` copies
+the target's in/out per quantum into a preallocated 0.5 s SPSC ring of atomics (full = drop +
+`dropped_frames`; `drain(&mut Vec<ProbeFrame { input, output }>)`, `is_active`) and its
+`Processor::readings(&mut [f32]) -> usize` (dsp `readings::{MAX, GAIN_REDUCTION_DB}`: compressor,
+limiter) as `readings()/reading(i)`. App: `AudioEngine::probe` -> `AudioEvent::Probe`,
+`AppState::set_probe/probe_target/probe`. Covered by `no_alloc`.
 Live parameter path: every compiled graph carries a `Resolver` (address -> node/device slot/
 param index/send edge, built at compile time, used only off the audio thread). The `Player`
 keeps the resolver of the loaded graph; `set_live_param`/`set_live_send` resolve on the control
@@ -854,8 +872,15 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   `ui::project_dialogs`): File menu New / Open (projects and `.cadenza.zip`/`.cadenzapack`
   archives, extracted into a chosen folder) / Open Recent (persisted, 10) / Start Screen / Save /
   Save As / Import / Export… (Ctrl+E) / Collect Project Files / Locate Missing Files / Export
-  Project Archive / Autosave interval. Start screen (no project on the command line): New,
-  Open, Demo song (bundled `examples/first_light`, written to the state folder), recent list.
+  Project Archive / Autosave interval. Start screen (no project on the command line;
+  `ui::start`, a full page under the menu bar, no workspace behind it): recovery banner
+  (instead of the modal), "Describe it to the producer" (new project + chat request),
+  "From a style" (new project + the style's first form via `apply_library_form`), Empty
+  project, Demo song (bundled `examples/first_light`, written to the state folder), recent
+  list with tempo/signature/style, track count, age and a clip thumbnail (`state::start`:
+  summaries read on a worker, cached per path, invalidated on save), footer (F1, plugin
+  count + Rescan, version). An empty project shows a centered "Add your first track" target
+  (+ Instrument/Audio/Bus/Folder) and "Or ask the producer" (input + chips) in the arrange.
   Export dialog: range (whole song, loop region, selected clips, bars) + tail, mixdown, stems
   (every track, buses + direct tracks, chosen tracks; through the master, pre-fader), format
   (WAV 16/24/32f, FLAC 16/24, MP3 when built), dither, sample rate, normalization (peak or LUFS
@@ -880,6 +905,16 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   (borrowing the mixer's place, given back on close); with the arrange hidden it takes the
   center. Layout, zooms, snap, follow mode, scale, bookmarks persist per user in eframe storage
   (`layout::Prefs`, key `cadenza-prefs`; panel sizes via egui memory).
+- Inspector (F8, `ui::inspector` + pure `state::inspector`): header (colour chip, name, what it is) over a
+  TRACK | CLIP | DEVICE tab strip (`InspectorView::follow`: the tab follows the selection's `Focus`
+  until the user clicks another, which holds until the selection changes; `Targets`: track or master,
+  one clip, selected device else the track's instrument; empty tabs dimmed with a hint). Track = name,
+  16 colours, kind, instrument, input/monitor, output, volume/pan, M/S/arm, sends, inserts (click =
+  Device tab, double-click = editor), delete; Clip = name, start/length typed in bars.beats.ticks
+  (`parse_position`/`parse_length`), track, notes/pitch/velocity ranges or file/offset/gain/fades,
+  a notes/waveform preview, open piano roll / audio editor, the instrument's compact form inline;
+  Device = the compact bodies (or generic sliders + Edit for plugins). History is a fixed footer
+  (numbered, AI steps badged, foldable, ~30 % of a short panel). One command per edit.
 - Navigation (arrange and piano roll alike, math in `state::timeline`): wheel vertical,
   Shift+wheel horizontal, Ctrl+wheel zoom at the mouse, Alt+wheel track/key height,
   middle-drag pan (Space stays play/stop), themed scrollbars, song overview strip with a
@@ -949,14 +984,47 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/I, Ctrl+E (export dialog), Ctrl+D, S
   split, Del (automation points first, then clips), A lanes; arrange: drag empty lane =
   rubber band, drag a clip's left edge = trim start. Dirty state is confirmed on new/open/close.
-- Sampler editors (`state::samples` pure builders + `ui::instrument_editor`): the bottom editor
-  dock shows them when `view.instrument_editor` (opened by the inspector "Edit pads/zones",
-  double-click on the instrument in a track header or mixer strip; "Piano roll" goes back).
-  Drum sampler: 4x4 pad grid (pad 1 bottom-left; click auditions through the preview path,
-  higher = harder), selected pad's waveform (`WaveformPeaks`) with draggable start/end, pad
-  knobs (`widgets::knob`, one command per drag) and the device's param knobs (live). Sampler:
-  keyboard zone map (click selects, keys audition), start/end/loop markers, zone knobs, loop
-  mode toggles, global knobs. Audio file drops (browser Files or OS) on a pad / zone / the
+- Sampler editors (`state::samples` pure builders; `ui::instrument_editor` keeps the drop hit areas): the device
+  editor's body for `sampler` / `drum_sampler` (inspector "Edit pads/zones", double-click on
+  the instrument in a track header or mixer strip). Drum sampler (redesign 17d,
+  `ui::devices::drum_sampler` + pure `state::drum_sampler_editor`; `InstrumentEditorUi`
+  keeps its `PadHits` for drops): KIT · ALL PADS column (gain, velocity, polyphony, kit
+  tune; "Map folder…" / a folder dropped on the kit or a pad (OS or browser Files folder
+  rows, `DropTarget::Kit`, `DropAction::MapKit`) = `map_kit` by file / folder names
+  (`kit_slot` keywords; kick/snare overflow to Kick 2/Snare 2; loaded pads keep their
+  settings) as ONE step "Map kit from folder", unplaced files named in a notice); 4x4 pads
+  (pad 1 bottom-left; name, C1 = 36 note, mini waveform in the pad colour, tags C1 choke /
+  →2 output / L3 RR3, "Empty · Drop sample", a dragged file shows a blue dashed "Drop to
+  replace"; click auditions + selects, higher = harder; drag a pad onto another = swap,
+  Alt = copy (`move_pad`, one step); right-click choke group / output / reverse / replace /
+  add layer / clear / locate file (browser Files tab); double-click an empty pad = file
+  dialog; keys 1–8, Shift+1–8 = pads 9–16 while focused; pads flash from the processor's
+  `readings::DRUM_PAD_TRIGGERS_START` counters); selected pad: file menu, layer chips
+  (velocity split or round-robin, `set_round_robin` / `add_layer` / `remove_layer`), ⇆
+  Reverse, waveform (decoded samples when zoomed in) with start/end flags per layer
+  (double-click resets; wheel zooms, Shift scrolls) under the A/D envelope the processor
+  plays (draggable nodes), tune / gain / pan / attack / decay knobs, choke / output pickers;
+  every gesture one `SetSampleZones` step. <1080 px stacked, <700 px and the inspector the
+  compact form (small pads + pad knobs). Sampler (redesign 17e, `ui::devices::sampler` +
+  pure `state::sampler_editor`): ZONE MAP (x = key with a piano strip that auditions, y =
+  velocity with a labelled axis; `MapWindow` wheel zooms keys, Shift velocity): zones are
+  boxes coloured per key range ("C3–B3 / 80–127", root dot); drag the body = keys +
+  velocity (root follows), edges resize, the dot ⇔ = root (`drag_zone`, one step each);
+  double-click an empty spot = a zone of the last loaded file (`InstrumentView.last_sample`,
+  else the selected zone's) filling it (`new_zone` / `fit`), double-click a zone =
+  `fit_to_neighbours`; right-click auto-map by file name (`auto_map`), split velocity,
+  duplicate, fit, round-robin group, locate, delete; arrows nudge the selected zone while
+  focused; preview notes light the map and keys; a file dropped on an empty spot adds a
+  zone (`DropTarget::ZoneArea`, `SampleSlot::Area`). Selected zone: name + range, Off /
+  Forward / Ping-pong, ⇆ Rev, waveform with start / end / loop flags and the crossfade ramp
+  foot (`effective_crossfade`: forward only, as the processor clamps it), "Loop 1.42 – 2.36
+  s · xfade 120 ms", root key readout (note names), tune / gain / pan / crossfade knobs.
+  GLOBAL · ALL ZONES: amp ADSR, filter Off/LP/HP/BP + `FreqDisplay` with
+  `sampler_filter_response_db` (node ⇔ cutoff ⇕ resonance, wheel env amount), cutoff /
+  reso / env / filter velocity knobs or the "▸ Filter envelope" ADSR; bottom row trigger
+  Gate | One-shot, polyphony / transpose / glide readouts (type or drag ⇕), legato,
+  velocity + curve presets, key track. <1360 px map above zone | globals, <560 px stacked
+  (both scroll); the inspector shows the compact form (small map + zone knobs). Audio file drops (browser Files or OS) on a pad / zone / the
   keyboard go through the shared `load_sample` tool; Alt+drop below the tracks or the Files
   context menu "Load into new sampler" adds a sampler track auto-mapped to the file.
 - Style library (phase 18a; `state::library` pure builders + `ui::library`): browser
@@ -992,13 +1060,82 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   MASKING; each folds (`MixSection`, `mix.folded`; header summary while folded). Until the user
   folds anything, panels shorter than `MixSection::COMPACT_HEIGHT` fold tone/channels/masking.
   Library style documents show the mix profile and role levels.
-- Fonts: `theme::fonts()` appends egui's bundled Hack to the proportional family (arrows,
-  geometric shapes, block elements: `← → ◆ ● ⊘ ▍`); `proportional_fonts_cover_the_app_symbols`
-  scans the sources for non-ASCII symbols and checks each against the faces' charmaps.
+- Mixer (`ui::mixer`, options in `state::mixer::MixerView`, persisted in `Prefs.mixer`):
+  toolbar (Normal 124 px | Narrow 76 px strips, Input/Inserts/Sends/Routing rows on/off,
+  + Bus), a left gutter naming the rows once plus the fader's dB scale (every strip shares
+  one `StripLayout`), strips typed by look (tracks raised, buses cooler after a vertical
+  BUSES divider or a dashed "+ Bus" ghost strip, folders as VCA, master accent-tinted and
+  wider), input row, inserts with status dot / struck-through bypass, sends as mini-faders
+  (PRE tag), output menu with "New bus from this track" (`mixer::new_bus_from`, one undo
+  step), pan knob (`widgets::pan_knob`), long fader with a light cap.
+- Look: the Graphite design system (`docs/design/redesign-brief`; tokens in `theme`: 7 surfaces,
+  text/accent/semantic `*_SOFT` states, meters, 16 `TRACK_COLORS`, clip tint alphas, radii,
+  metrics). Fonts: IBM Plex Sans/Mono (OFL-1.1, `crates/app/assets/fonts`, embedded) with one
+  egui family per weight (`theme::medium/semibold/mono_medium`, `heading()`), egui's faces as
+  fallbacks and Hack last in proportional (arrows, shapes, blocks: `← → ◆ ● ⊘ ▍`);
+  `theme::applied(ctx)` re-themes fresh contexts (the first pass is discarded so the weight
+  families exist); `proportional_fonts_cover_the_app_symbols` checks every non-ASCII symbol.
+- Device kit (redesign D0, `ui::device_kit` + pure `state::device`: `parse_value` with units/
+  shorthand/note names, `format_value`, `KnobSpec`): display surface `theme::DISPLAY_BG`, 8
+  `BAND_COLORS`, automation violet / GR coral / L-R teal-orange, glow strokes; `Knob` S/M/L/XL
+  (uni/bipolar, automation + AI rings, floating value, 200 px drag, wheel), `param_knob`/
+  `param_toggle` (read the automated value, one `SetParam` per gesture, `control_menu`:
+  Automate/Reset/Copy/Paste), typed `readout`, toggle, segmented, grid selector, mode cards,
+  level/GR/IO meters with peak hold;
+  displays (pure math in `state::device_display`): `adsr` (cube-root time axis, per-stage
+  `Gesture`s, D = decay + sustain, voice dots), `FreqDisplay` builder (log 20 Hz-20 kHz, ±12/±24/
+  filter dB ranges, sum glow + band fills, pre/post analyzer from `spectrum_bins` (FFT, 1/6 oct,
+  `AnalyzerState` 12 dB/s fall), nodes -> `FreqEvent`s, piano strip + note hint, one mesh per
+  fill), `LevelHistory` (min/max columns from probe frames) + `LevelHistoryView` (input fill,
+  output line, GR from the top, draggable threshold, `stopped` dims); `gallery` is rendered by
+  `render_device_kit`.
+- Device editors (redesign D2, `ui::device_editor` + `state::device`): every built-in opens in
+  the bottom editor dock (`view.device_editor`, device in `view.instrument.device`;
+  `open/toggle/close_device_editor`) from a mixer insert / instrument double-click, the
+  track header's instrument name or the inspector "Edit"; plugins keep their windows. Shared
+  header: power (`SetDeviceBypass`), name, track chip, preset ‹ › ▾ over factory + user
+  presets (MCP `list_presets` / `load_preset`, one undo step; amber dot = `preset_status`
+  dirty), Save (MCP `save_preset`, name prompt), IN/OUT `io_meters` from the probe
+  (`IoLevels`), Mix slider when the device has `mix`, close; below 800 px the compact
+  two-row header (Save in ⋯, 34 px meters, Mix in the body). The probe follows the open
+  editor (`sync_editor_probe`). Bodies are functions dispatched by device id in
+  `DeviceEditorUi::body` (`BodyCx`: ref, info, rect, drained probe frames, compact); the
+  default `generic_body` draws every param (`param_groups`, `param_control`: knobs M,
+  segmented / grid choices, toggles) in packed rows on a display panel.
+  Header extras (D2b, `state::device_ab`): A | B compare per device (view state; the active
+  slot is the live params, switching = one Batch "Compare B" of `SetDeviceState { params }`,
+  undo/redo flips the slot back; A→B copies; A key while the editor has focus), undo hint
+  "Ctrl+Z <step>" when the last step touched the device (`StepTouches`; both only >= 1600 px);
+  pop-out (`view.device_popout`): an egui `Window` (own bar: Dock, Keep on top, ×; size and
+  position per device kind in egui memory), the dock goes back to the piano roll, the probe follows.
+  EQ (`ui::devices::eq` + pure `state::eq_editor`): `FreqDisplay` with exact `EqBands` curves,
+  pre/post analyzer, 7 nodes (drag/curve-drag = one Batch "Peak 2 freq and gain" via
+  `AppState::commit_params`; wheel Q/slope, double-click reset/wake, Ctrl gain only), chips,
+  band readouts, Range; compact form also replaces the inspector's sliders; keys 1-7 / Del.
+  Compressor (`ui::devices::compressor` + pure `state::compressor_editor`): level history (key trace from
+  the key track's meter, threshold tag drag), transfer curve (dot = threshold, above the knee = ratio, wheel = knee,
+  double-click -24/4:1), GR meter, auto makeup (GR at -18 dBFS) chip, key picker (`SetSidechain`); compact in the inspector.
+  AI on the device (D2c, `ui::device_ai` + pure `state::ai_changes`): header "Ask AI" (before pop-out) opens a
+  prompt popover (Enter sends, per-device suggestion chips) -> `ask_ai_about_device` = `send_ai("<text> (<Device> on
+  '<Track>')")` + chat opened; `AppContext.open_device` names the editor's device. Every request snapshots built-in
+  params; when it ends `AiChanges { label, request, depth, devices: {param, before, after} }` (view state): `ParamKnob`
+  draws the blue ring + delta tag ("+3.0 dB") by itself, toggles/readouts (`ReadoutState::Ai`)/EQ nodes (`FreqNode::ai`)
+  turn blue, EQ draws the before response dashed; card "AI changed N params" with Keep, Undo (only while it is the
+  last step) and Hold to hear before (`hear_before`: live params only, never a command). Cleared by Keep, undoing the
+  step, a new request; a commit / later step on a changed param drops it.
+  Limiter (`ui::devices::limiter` + pure `state::limiter_editor`): waveform history (`LevelHistoryView::waveform`, ceiling line on both halves, drag = input gain, wheel = release), IN/GR/OUT meters, LOUDNESS from `state::loudness_meter::LiveLoudness` (UI thread, output frames: short-term per 100 ms, `LoudnessMeter::integrated_since` reset (R), true peak, 30 s trace, view-only target chips); compact in the inspector.
+  Reverb (`ui::devices::reverb` + pure `state::reverb_editor`): a custom time/dB tail picture (early reflections, lows/highs decay curves, highs fall faster with damping) with 3 hand-drawn draggable nodes (pre-delay/decay ⇔, damping ⇕; wheel over the tail = decay, double-click resets), a Space box (corner drag = size, right edge = width, wheel = size), a `FreqDisplay` low-cut strip and a wet-output `level_meter`; compact in the inspector.
+  Delay (`ui::devices::delay` + pure `state::delay_editor`): echo taps on a real time axis (`n * echo_ms`, `response::delay_time_seconds` shared with the processor) with a true beat/ms grid, alternating L/R when ping-pong is on, darker per repeat from the feedback filter; the first echo's drag snaps to `Sync` (`TimeChange::Sync`/`Free`), `Sync | Free` + the 12-step note `grid_selector`, `⇄ Ping-pong`, a `FreqDisplay` feedback-filter strip (two x-only nodes); S/P keys toggle sync/ping-pong while focused; compact in the inspector.
+  Chorus / Saturator / Gain (`ui::devices::{chorus,saturator,gain}` + pure `state::{chorus,saturator,gain}_editor`; shared `ui::devices::{commit_changes, KnobDef, knob_grid, compact_scroll, footer}`, kit `Knob::wheel_step` for 0.5 dB wheels): chorus = both voices' LFO delay scrolling at the real rate (UI phase, repaints only while visible and playing/audio passes, else frozen + 50 % dim; drag ⇕ depth ⇔ rate = one step) + width fan; saturator = mode cards (keys 1/2/3), `saturator_shape` curve scaled to fit (drag ⇕ drive in 0.5 dB, double-click 0, 150 ms morph), test-sine or probe before/after scope, harmonics by DFT of the curve; gain = goniometer of the probe output (⇔ pan ⇕ width, M mono), correlation meter, XL gain, Ø toggles, 900 px centred; compact forms in the inspector.
+  Poly Synth (`ui::devices::poly_synth` + pure `state::poly_synth_editor`): OSC (wave cards, right-click copy to the other osc; semi/cents readouts dragged ⇕; unison 1-4) → FILTER (`FreqDisplay` with `poly_synth_filter_response_db`, node ⇔ cutoff ⇕ resonance = one Batch, wheel env amount, dashed env peak) → AMP/FILTER ENVELOPE (kit `adsr`, D = one Batch) → OUTPUT (300-point `scope_window` of the probe, flat when idle, held notes); on-screen keyboard via `preview_note_on/off`, A-K/Z-X only while the editor has focus (`SynthKeys`, released on key up/focus loss/close); wraps into two rows below 1000 px, stacks below 560; compact in the inspector.
+  Electric Piano (`ui::devices::electric_piano` + pure `state::electric_piano_editor`): tone bars of a held C4 (`partials`: brightness tilts, bell lifts 7-9 pale) over a Mellow ↔ Bright slider bound to brightness, face card (L/XL Brightness/Bell/Decay, S Velocity/Release/Gain), tremolo picture (one note over 3 s from the DSP's envelope, L up / R down × the auto-pan, LFO lines); the keyboard (`ui::devices::keyboard`: `SynthKeys`, `keyboard_row`) is shared with the Poly Synth; compact in the inspector.
+  Drum Machine (`ui::devices::drum_machine` + pure `state::drum_machine_editor`): 7 voice strips in `BAND_COLORS` (pad click = audition via `preview_note_on/off` + select, Ctrl/Cmd-click selects only, double-click resets the voice; envelope from the voice's params, 2 summaries, level bar drag ⇔ / wheel = one step), selected voice (kick waveform with its real pitch sweep, dashed amp envelope, L knobs), KIT tone/gain, ← → voices; strips flash 150 ms on the DSP trigger counters (`Flashes` over `probe().readings()`); <1100 px two rows, <700 px compact; compact in the inspector.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
   including automation lanes, the audio editor, an empty project, (`render_sampler_screens`)
-  the sampler editors, (`render_project_screens`) the start screen, export dialog/progress/
+  the sampler editors, (`render_sampler_editor_screens`) the Sampler (12-zone felt piano: dock, filter
+  envelope, 1280, 540 stacked, compact), (`render_device_editor_screens`) the device editor (reverb, compact
+  compressor, poly synth, drum sampler), (`render_project_screens`) the start screen, export dialog/progress/
   result, Locate missing files and the recovery prompt, and (`render_recording_screens`) armed
   tracks with take lanes, a recording in progress (fed by the engine's virtual device) and the
   audio settings dialog, and (`render_phase17_screens`) time signature changes + the signature

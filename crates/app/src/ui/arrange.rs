@@ -29,7 +29,9 @@ use crate::ui::widgets::{self, Gesture};
 
 /// Width of the clip edge that resizes instead of moving.
 const RESIZE_HANDLE: f32 = 7.0;
-const CLIP_HEADER: f32 = 14.0;
+const CLIP_HEADER: f32 = 16.0;
+/// Track headers at least this tall get a third row (buttons + volume).
+const TALL_HEADER: f32 = 62.0;
 /// Room below the last track (add buttons and the "new track" drop zone).
 const BELOW_TRACKS: f32 = 72.0;
 
@@ -95,6 +97,8 @@ pub struct ArrangeUi {
 	pub auto: super::automation::AutoUi,
 	/// Alt held this frame (an audio file dropped below the tracks becomes a sampler).
 	alt: bool,
+	/// The empty project's "Or ask the producer" request.
+	ask: String,
 }
 
 /// Header indentation per folder level.
@@ -198,6 +202,9 @@ impl ArrangeUi {
 		}
 		scrollbars(ui, state, &layout, full);
 		self.drop_zone(ui, state, &layout);
+		if state.project().tracks.is_empty() {
+			self.empty_state(ui, state, &layout);
+		}
 
 		loop_overlay(ui, state, &layout);
 		// Playhead over everything in the timeline.
@@ -354,11 +361,7 @@ impl ArrangeUi {
 				.max_rect(row1)
 				.layout(egui::Layout::left_to_right(egui::Align::Center)),
 		);
-		top.label(
-			egui::RichText::new("ARRANGE")
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
-		);
+		widgets::panel_title(&mut top, "Arrange", Some("F5"));
 		top.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 			if ui
 				.small_button("−")
@@ -407,9 +410,161 @@ impl ArrangeUi {
 				.font(theme::small())
 				.color(theme::TEXT_DIM),
 		);
-		child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-			follow_menu(ui, state);
+	}
+
+	/// No tracks yet: one centered drop target with the add buttons, and the producer.
+	fn empty_state(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
+		let lanes = layout.lanes;
+		let w = 640.0f32.min(lanes.width() - 32.0);
+		if w < 280.0 || lanes.height() < 260.0 {
+			return;
+		}
+		let top = lanes.center().y - 150.0;
+		let target = Rect::from_min_size(pos2(lanes.center().x - w / 2.0, top), vec2(w, 156.0));
+		let p = ui.painter_at(lanes);
+		p.rect_filled(
+			target,
+			CornerRadius::same(theme::RADIUS_LG),
+			theme::BG_PANEL,
+		);
+		dashed_rect(&p, target.shrink(0.5), theme::BORDER_STRONG);
+		p.text(
+			pos2(target.center().x, target.top() + 38.0),
+			Align2::CENTER_CENTER,
+			"Add your first track",
+			theme::semibold(15.0),
+			theme::TEXT,
+		);
+		p.text(
+			pos2(target.center().x, target.top() + 66.0),
+			Align2::CENTER_CENTER,
+			"Drop a device, audio or MIDI file, or a library pattern here, or start with one \
+			 of these.",
+			theme::small(),
+			theme::TEXT_DIM,
+		);
+		let buttons = [
+			("+ Instrument", "I", TrackKind::Instrument),
+			("+ Audio", "", TrackKind::Audio),
+			("+ Bus", "", TrackKind::Bus),
+			("+ Folder", "", TrackKind::Folder),
+		];
+		let row =
+			Rect::from_center_size(pos2(target.center().x, target.top() + 108.0), vec2(w, 30.0));
+		let mut child = ui.new_child(
+			egui::UiBuilder::new()
+				.max_rect(row)
+				.layout(egui::Layout::left_to_right(egui::Align::Center)),
+		);
+		// Center the row: measure once with a fixed width per button.
+		let bw = [118.0, 82.0, 66.0, 82.0];
+		let total: f32 = bw.iter().sum::<f32>() + 8.0 * 3.0;
+		child.add_space(((w - total) / 2.0).max(0.0));
+		child.spacing_mut().item_spacing.x = 8.0;
+		for (i, (label, key, kind)) in buttons.into_iter().enumerate() {
+			let primary = i == 0;
+			let mut button =
+				egui::Button::new(egui::RichText::new(label).font(theme::medium(12.0)).color(
+					if primary {
+						theme::TEXT_ON_ACCENT
+					} else {
+						theme::TEXT
+					},
+				))
+				.min_size(vec2(bw[i], 28.0));
+			if primary {
+				button = button.fill(theme::ACCENT);
+			}
+			if !key.is_empty() {
+				button = button.right_text(
+					egui::RichText::new(key)
+						.font(theme::mono(10.5))
+						.color(theme::TEXT_ON_ACCENT.gamma_multiply(0.7)),
+				);
+			}
+			if child.add(button).clicked() {
+				add_track(state, kind);
+			}
+		}
+
+		// The producer, right under it.
+		let ask = Rect::from_min_size(pos2(target.left(), target.bottom() + 14.0), vec2(w, 116.0));
+		p.rect_filled(
+			ask,
+			CornerRadius::same(theme::RADIUS_LG),
+			theme::mix(theme::BG_PANEL, theme::ACCENT, 0.06),
+		);
+		p.rect_stroke(
+			ask,
+			CornerRadius::same(theme::RADIUS_LG),
+			Stroke::new(1.0, theme::ACCENT_BORDER),
+			StrokeKind::Inside,
+		);
+		let mut inner = ui.new_child(
+			egui::UiBuilder::new()
+				.max_rect(ask.shrink(14.0))
+				.layout(egui::Layout::top_down(egui::Align::Min)),
+		);
+		inner.horizontal(|ui| {
+			super::start::avatar(ui);
+			ui.label(
+				egui::RichText::new("Or ask the producer")
+					.font(theme::semibold(12.5))
+					.color(theme::TEXT),
+			);
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				ui.label(
+					egui::RichText::new("F10")
+						.font(theme::mono(10.5))
+						.color(theme::TEXT_FAINT),
+				);
+			});
 		});
+		let id = Id::new("empty-project-ask");
+		let focused = inner.memory(|m| m.has_focus(id));
+		let enter =
+			focused && inner.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+		inner.add(
+			egui::TextEdit::singleline(&mut self.ask)
+				.id(id)
+				.desired_width(f32::INFINITY)
+				.margin(egui::Margin::symmetric(8, 6))
+				.hint_text("Make a 16-bar house groove with a bassline and chords"),
+		);
+		let mut request = None;
+		if enter && !self.ask.trim().is_empty() {
+			request = Some(std::mem::take(&mut self.ask));
+		}
+		inner.horizontal_wrapped(|ui| {
+			ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+			for chip in [
+				"Add drums at 120 bpm",
+				"Start from a house groove",
+				"Write chords in A minor",
+			] {
+				let b = egui::Button::new(
+					egui::RichText::new(chip)
+						.font(theme::small())
+						.color(theme::ACCENT_TEXT),
+				)
+				.fill(theme::BG_PANEL)
+				.stroke(Stroke::new(1.0, theme::ACCENT_BORDER))
+				.corner_radius(99);
+				if ui.add(b).clicked() {
+					request = Some(chip.to_owned());
+				}
+			}
+		});
+		if let Some(request) = request
+			&& !state.ai.busy()
+		{
+			state
+				.view
+				.panels
+				.set(crate::state::layout::PanelKind::Chat, true);
+			state.mix.open = false;
+			state.send_ai(request.trim());
+		}
 	}
 
 	/// The whole song in a strip above the ruler; the visible part is a draggable box.
@@ -776,7 +931,7 @@ impl ArrangeUi {
 		}
 		// Add-track buttons under the last track.
 		let below = layout.body_top + self.rows.height - scroll + 8.0;
-		if below + 24.0 < clip.bottom() && below > clip.top() - 24.0 {
+		if !tracks.is_empty() && below + 24.0 < clip.bottom() && below > clip.top() - 24.0 {
 			let rect = Rect::from_min_size(
 				pos2(clip.left() + 8.0, below),
 				vec2(clip.width() - 16.0, 22.0),
@@ -788,7 +943,7 @@ impl ArrangeUi {
 			);
 			child.set_clip_rect(clip);
 			add_track_buttons(&mut child, state);
-			if tracks.is_empty() || below + 52.0 < clip.bottom() {
+			if below + 52.0 < clip.bottom() {
 				ui.painter_at(clip).text(
 					pos2(clip.left() + 12.0, below + 36.0),
 					Align2::LEFT_CENTER,
@@ -822,13 +977,13 @@ impl ArrangeUi {
 			rect,
 			0.0,
 			if selected {
-				theme::LANE_SELECTED
+				theme::BG_RAISED
 			} else {
 				theme::BG_PANEL
 			},
 		);
 		p.rect_filled(
-			Rect::from_min_size(rect.min, vec2(5.0, rect.height())),
+			Rect::from_min_size(rect.min, vec2(4.0, rect.height())),
 			0.0,
 			color,
 		);
@@ -858,19 +1013,39 @@ impl ArrangeUi {
 		let left = rect.left() + 12.0 + folders.len() as f32 * FOLDER_INDENT;
 		let meter_w = 8.0;
 		let right = rect.right() - meter_w - 10.0;
-		// Row 1: number, name, mute, solo.
+		// Tall headers (the default): name, device, then one row of buttons and the volume
+		// field. Short ones keep the buttons next to the name.
+		let tall = rect.height() >= TALL_HEADER;
 		let row1 = rect.top() + 6.0;
 		p.text(
 			pos2(left, row1 + 8.0),
 			Align2::LEFT_CENTER,
 			format!("{}", index + 1),
-			theme::small(),
+			theme::mono(10.5),
 			theme::TEXT_FAINT,
 		);
-		let solo_rect = Rect::from_min_size(pos2(right - 18.0, row1), vec2(18.0, 16.0));
-		let mute_rect = solo_rect.translate(vec2(-21.0, 0.0));
-		let auto_rect = mute_rect.translate(vec2(-21.0, 0.0));
-		let record_left = super::record::header_buttons(ui, state, track, id, auto_rect);
+		// `record::header_buttons` puts arm and takes left of the automation toggle, 21 px
+		// apart: tall rows read M S arm T A.
+		let button = vec2(18.0, 18.0);
+		let pitch = 21.0;
+		let (auto_rect, mute_rect, solo_rect) = if tall {
+			let extra = usize::from(matches!(
+				track.kind,
+				TrackKind::Audio | TrackKind::Instrument
+			)) + usize::from(crate::state::rows::take_lanes(track) > 0);
+			let m = Rect::from_min_size(pos2(left, rect.top() + 42.0), button);
+			let a = m.translate(vec2((2 + extra) as f32 * pitch, 0.0));
+			(a, m, m.translate(vec2(pitch, 0.0)))
+		} else {
+			let s = Rect::from_min_size(pos2(right - button.x, row1 - 1.0), button);
+			(
+				s.translate(vec2(-2.0 * pitch, 0.0)),
+				s.translate(vec2(-pitch, 0.0)),
+				s,
+			)
+		};
+		let buttons_left = super::record::header_buttons(ui, state, track, id, auto_rect);
+		let record_left = if tall { right } else { buttons_left };
 		let mut name_left = left + 16.0;
 		if track.kind == TrackKind::Folder {
 			// Collapse / expand toggle before the name.
@@ -901,7 +1076,7 @@ impl ArrangeUi {
 			Some((t, text)) if *t == track.id => {
 				let edit = ui.put(
 					name_rect,
-					egui::TextEdit::singleline(text).font(FontId::proportional(12.5)),
+					egui::TextEdit::singleline(text).font(theme::heading()),
 				);
 				if !edit.has_focus() && !edit.lost_focus() {
 					edit.request_focus();
@@ -928,7 +1103,7 @@ impl ArrangeUi {
 					pos2(name_rect.left(), name_rect.center().y),
 					Align2::LEFT_CENTER,
 					&track.name,
-					FontId::proportional(12.5),
+					theme::heading(),
 					if selected {
 						Color32::WHITE
 					} else {
@@ -981,7 +1156,7 @@ impl ArrangeUi {
 
 		// Row 2: instrument / kind and volume.
 		if rect.height() >= 46.0 {
-			let row2 = row1 + 22.0;
+			let row2 = row1 + 20.0;
 			let what = match track.kind {
 				TrackKind::Instrument => track
 					.instrument
@@ -994,8 +1169,10 @@ impl ArrangeUi {
 					format!("Folder · {n} track{}", if n == 1 { "" } else { "s" })
 				}
 			};
-			let instrument_rect =
-				Rect::from_min_max(pos2(left, row2), pos2(right - 62.0, row2 + 14.0));
+			let instrument_rect = Rect::from_min_max(
+				pos2(left, row2),
+				pos2(if tall { right } else { right - 62.0 }, row2 + 14.0),
+			);
 			let ir = ui.interact(instrument_rect, id.with("instrument"), Sense::click());
 			if track.kind == TrackKind::Audio {
 				super::record::input_controls(ui, state, track, id, instrument_rect);
@@ -1003,7 +1180,7 @@ impl ArrangeUi {
 				ui.painter_at(instrument_rect).text(
 					pos2(left, row2 + 7.0),
 					Align2::LEFT_CENTER,
-					format!("{} {what}", kind_glyph(track.kind)),
+					what,
 					theme::small(),
 					if ir.hovered() {
 						theme::TEXT
@@ -1020,24 +1197,34 @@ impl ArrangeUi {
 					device: d.id,
 				});
 			}
-			// Double-click the instrument: its editor window (plugins) or the piano roll.
+			// Double-click the instrument: its editor window (plugins), the device editor
+			// (built-ins) or the piano roll.
 			if ir.double_clicked() {
-				let sampler = track.instrument.as_ref().map(|d| DeviceRef {
-					track: Some(track.id),
-					device: d.id,
-				});
-				match &track.instrument {
-					Some(d) if state.is_plugin(d.id) => state.toggle_plugin_editor(d.id),
-					Some(_) if sampler.is_some_and(|r| state.is_sample_device(r)) => {
-						state.toggle_instrument_editor(sampler.expect("checked"));
-					}
+				let builtin = track
+					.instrument
+					.as_ref()
+					.map(|d| DeviceRef {
+						track: Some(track.id),
+						device: d.id,
+					})
+					.filter(|r| state.has_device_editor(*r));
+				match (&track.instrument, builtin) {
+					(Some(d), _) if state.is_plugin(d.id) => state.toggle_plugin_editor(d.id),
+					(Some(_), Some(r)) => state.toggle_device_editor(r),
 					_ if track.kind == TrackKind::Instrument => {
 						state.open_track_in_piano_roll(track.id);
 					}
 					_ => {}
 				}
 			}
-			let vol_rect = Rect::from_min_size(pos2(right - 58.0, row2), vec2(58.0, 14.0));
+			let vol_rect = if tall {
+				Rect::from_min_max(
+					pos2(auto_rect.right() + 6.0, solo_rect.top()),
+					pos2(right, solo_rect.bottom()),
+				)
+			} else {
+				Rect::from_min_size(pos2(right - 58.0, row2), vec2(58.0, 14.0))
+			};
 			let (gesture, vol) = widgets::volume_slider(
 				ui,
 				id.with("volume"),
@@ -1840,13 +2027,11 @@ pub fn follow_menu(ui: &mut Ui, state: &mut AppState) {
 	egui::ComboBox::from_id_salt("follow-mode")
 		.width(78.0)
 		.selected_text(
-			egui::RichText::new(format!("Follow: {}", mode.name()))
-				.font(theme::small())
-				.color(if mode == FollowMode::Off {
-					theme::TEXT_FAINT
-				} else {
-					theme::TEXT_DIM
-				}),
+			egui::RichText::new(mode.name()).color(if mode == FollowMode::Off {
+				theme::TEXT_FAINT
+			} else {
+				theme::TEXT_DIM
+			}),
 		)
 		.show_ui(ui, |ui| {
 			for m in [FollowMode::Off, FollowMode::Page, FollowMode::Continuous] {
@@ -1868,15 +2053,6 @@ pub(crate) fn grid_name(step: Tick, bar: Tick) -> String {
 	}
 	let denom = (PPQ * 4) / step.0.max(1);
 	format!("Grid 1/{denom}")
-}
-
-fn kind_glyph(kind: TrackKind) -> &'static str {
-	match kind {
-		TrackKind::Instrument => "♪",
-		TrackKind::Audio => "~",
-		TrackKind::Bus => "»",
-		TrackKind::Folder => "",
-	}
 }
 
 fn set_channel(state: &mut AppState, track: TrackId, patch: ChannelPatch) {
@@ -2377,28 +2553,29 @@ fn paint_clip(
 	xfs: &[edits::Crossfade],
 ) {
 	let color = theme::track_color(track.color.as_deref());
-	let body = theme::mix(color, theme::BG_DEEP, 0.62);
+	// Graphite clips: a tint of the track color with a 2 px color edge; the notes and the
+	// waveform carry the full color. Selected = a stronger tint, white outline and name.
+	let tint = if selected {
+		theme::CLIP_FILL_ALPHA_SELECTED
+	} else {
+		theme::CLIP_FILL_ALPHA
+	};
+	let body = theme::mix(theme::LANE, color, tint);
 	let r = CornerRadius::same(theme::RADIUS);
 	let p = p.with_clip_rect(area.intersect(rect.expand(1.0)));
 	p.rect_filled(rect, r, body);
 	let header = Rect::from_min_size(rect.min, vec2(rect.width(), CLIP_HEADER.min(rect.height())));
-	p.rect_filled(
-		header,
-		CornerRadius {
-			nw: theme::RADIUS,
-			ne: theme::RADIUS,
-			sw: 0,
-			se: 0,
-		},
-		theme::mix(color, theme::BG_DEEP, 0.15),
-	);
-	let text_x = rect.left().max(area.left()) + 4.0;
+	let text_x = rect.left().max(area.left()) + 6.0;
 	p.with_clip_rect(header.intersect(area)).text(
-		pos2(text_x, header.center().y),
+		pos2(text_x, header.center().y + 1.0),
 		Align2::LEFT_CENTER,
 		&clip.name,
-		FontId::proportional(10.5),
-		theme::text_on(color),
+		theme::semibold(10.5),
+		if selected {
+			Color32::WHITE
+		} else {
+			theme::mix(color, Color32::WHITE, 0.15)
+		},
 	);
 	let content = Rect::from_min_max(
 		pos2(rect.left(), header.bottom() + 1.0),
@@ -2501,20 +2678,30 @@ fn paint_clip(
 		rect,
 		r,
 		if selected {
-			Stroke::new(1.5, Color32::WHITE)
+			Stroke::new(1.0, Color32::WHITE)
 		} else {
-			Stroke::new(1.0, theme::mix(color, theme::BG_DEEP, 0.35))
+			Stroke::new(1.0, theme::mix(theme::LANE, color, 0.3))
 		},
 		StrokeKind::Inside,
+	);
+	p.rect_filled(
+		Rect::from_min_max(rect.min, pos2(rect.left() + 2.0, rect.bottom())),
+		CornerRadius {
+			nw: theme::RADIUS,
+			sw: theme::RADIUS,
+			ne: 0,
+			se: 0,
+		},
+		color,
 	);
 	if editing {
 		// Open in the piano roll: a small pencil badge in the header.
 		p.text(
-			pos2(rect.right() - 5.0, header.center().y),
+			pos2(rect.right() - 5.0, header.center().y + 1.0),
 			Align2::RIGHT_CENTER,
 			"✏",
 			FontId::proportional(10.0),
-			theme::text_on(color),
+			color,
 		);
 	}
 }
@@ -2538,7 +2725,7 @@ fn paint_notes(
 	let pad = 3.0;
 	let usable = content.height() - 2.0 * pad;
 	let row = (usable / (span + 1.0)).clamp(1.0, 6.0);
-	let note_color = theme::mix(color, Color32::WHITE, 0.35);
+	let note_color = color;
 	let left = area.left() - content.left();
 	for n in notes {
 		let x0 = content.left() + tl.ticks_to_px(n.start);
@@ -2559,7 +2746,7 @@ fn paint_notes(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_waveform(
+pub(crate) fn paint_waveform(
 	p: &Painter,
 	project: &Project,
 	clip: &Clip,
@@ -2653,7 +2840,7 @@ fn paint_waveform(
 	);
 }
 
-fn paint_fades(
+pub(crate) fn paint_fades(
 	p: &Painter,
 	project: &Project,
 	clip: &Clip,
@@ -2682,5 +2869,20 @@ fn paint_fades(
 		let tri = vec![pos2(x, rect.top()), rect.right_top(), rect.right_bottom()];
 		p.add(Shape::convex_polygon(tri, shade, Stroke::NONE));
 		p.line_segment([pos2(x, rect.top()), rect.right_bottom()], stroke);
+	}
+}
+
+/// A 1 px dashed outline (drop targets).
+fn dashed_rect(p: &Painter, r: Rect, color: Color32) {
+	let stroke = Stroke::new(1.0, color);
+	let corners = [
+		r.left_top(),
+		r.right_top(),
+		r.right_bottom(),
+		r.left_bottom(),
+		r.left_top(),
+	];
+	for pair in corners.windows(2) {
+		p.add(Shape::dashed_line(pair, stroke, 5.0, 4.0));
 	}
 }

@@ -149,40 +149,116 @@ pub fn fader(ui: &mut Ui, id: Id, db: f32, size: Vec2) -> (Gesture, Response) {
 				theme::TEXT_FAINT
 			};
 			p.hline(
-				rect.left() + 2.0..=groove.left() - 3.0,
-				y,
-				Stroke::new(1.0, c),
-			);
-			p.hline(
-				groove.right() + 3.0..=rect.right() - 2.0,
+				groove.left() - 7.0..=groove.left() - 3.0,
 				y,
 				Stroke::new(1.0, c),
 			);
 		}
 		let y = groove.bottom() - db_to_fader(shown) * travel;
-		let cap = Rect::from_center_size(pos2(rect.center().x, y), vec2(rect.width() - 6.0, 16.0));
+		let cap = Rect::from_center_size(pos2(rect.center().x, y), vec2(rect.width() - 6.0, 14.0));
 		let active = response.dragged() || response.hovered();
 		p.rect(
 			cap,
 			CornerRadius::same(2),
 			if active {
-				theme::BG_HOVER
+				Color32::WHITE
 			} else {
-				theme::BG_WIDGET
+				theme::KEY_WHITE
 			},
-			Stroke::new(1.0, theme::BORDER_STRONG),
-			StrokeKind::Inside,
+			Stroke::new(1.0, theme::BG_DEEP),
+			StrokeKind::Outside,
 		);
 		p.hline(
 			cap.left() + 3.0..=cap.right() - 3.0,
 			cap.center().y,
-			Stroke::new(2.0, if active { theme::ACCENT } else { theme::TEXT }),
+			Stroke::new(
+				1.5,
+				if active {
+					theme::ACCENT
+				} else {
+					theme::BG_DEEP
+				},
+			),
 		);
 	}
 	(gesture, response)
 }
 
 /// Horizontal pan control (-1..1). Drag, double-click: center.
+/// Pan as a small knob with its L/R readout beside it: drag up/right or down/left
+/// (Shift: fine), double-click: center.
+pub fn pan_knob(ui: &mut Ui, id: Id, pan: f32, size: Vec2) -> (Gesture, Response) {
+	let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+	let response = response.on_hover_cursor(CursorIcon::ResizeVertical);
+	let fine = if ui.input(|i| i.modifiers.shift) {
+		0.2
+	} else {
+		1.0
+	};
+	let d = response.drag_delta();
+	let delta = (d.x - d.y) / 80.0 * fine;
+	let gesture = match drag_value(&response, id, pan, delta) {
+		_ if response.double_clicked() => Gesture::Commit(0.0),
+		Gesture::Preview(p) => Gesture::Preview(p.clamp(-1.0, 1.0)),
+		Gesture::Commit(p) => Gesture::Commit(p.clamp(-1.0, 1.0)),
+		Gesture::Idle => Gesture::Idle,
+	};
+	let shown = match gesture {
+		Gesture::Preview(v) | Gesture::Commit(v) => v,
+		Gesture::Idle => pan,
+	};
+	if ui.is_rect_visible(rect) {
+		let p = ui.painter();
+		let active = response.dragged() || response.hovered();
+		let radius = (rect.height() * 0.5 - 3.0).min(10.0);
+		let center = pos2(rect.left() + radius + 4.0, rect.center().y);
+		p.circle_filled(
+			center,
+			radius,
+			if active {
+				theme::BG_PRESSED
+			} else {
+				theme::BG_HOVER
+			},
+		);
+		// 270° travel, the arc filling from the center.
+		let start = std::f32::consts::PI * 0.75;
+		let sweep = std::f32::consts::PI * 1.5;
+		let pos = (shown + 1.0) * 0.5;
+		let arc = |from: f32, to: f32, color: Color32| {
+			let steps = 16;
+			let pts: Vec<Pos2> = (0..=steps)
+				.map(|i| {
+					let a = start + sweep * (from + (to - from) * i as f32 / steps as f32);
+					center + vec2(a.cos(), a.sin()) * (radius + 2.5)
+				})
+				.collect();
+			p.add(egui::Shape::line(pts, Stroke::new(1.5, color)));
+		};
+		arc(0.0, 1.0, theme::BG_DEEP);
+		arc(pos.min(0.5), pos.max(0.5), theme::ACCENT);
+		let a = start + sweep * pos;
+		p.line_segment(
+			[
+				center + vec2(a.cos(), a.sin()) * 2.0,
+				center + vec2(a.cos(), a.sin()) * (radius - 1.5),
+			],
+			Stroke::new(1.5, if active { theme::ACCENT } else { theme::TEXT }),
+		);
+		p.text(
+			pos2(center.x + radius + 8.0, rect.center().y),
+			Align2::LEFT_CENTER,
+			format_pan(shown),
+			theme::mono(10.5),
+			if active { theme::TEXT } else { theme::TEXT_DIM },
+		);
+	}
+	(
+		gesture,
+		response.on_hover_text("Pan: drag (Shift: fine), double-click: center"),
+	)
+}
+
 pub fn pan(ui: &mut Ui, id: Id, pan: f32, size: Vec2) -> (Gesture, Response) {
 	let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 	let response = response.on_hover_cursor(CursorIcon::ResizeHorizontal);
@@ -334,24 +410,29 @@ pub fn paint_toggle(
 	on_color: Color32,
 	hovered: bool,
 ) {
-	let fill = if on {
-		on_color
+	// On = a soft fill of the state color with the label in that color (Graphite `*-soft`).
+	let (fill, text) = if on {
+		(theme::mix(theme::BG_PANEL, on_color, 0.24), on_color)
 	} else if hovered {
-		theme::BG_HOVER
+		(theme::BG_HOVER, theme::TEXT)
 	} else {
-		theme::BG_WIDGET
+		(theme::BG_WIDGET, theme::TEXT_DIM)
 	};
-	p.rect_filled(rect, CornerRadius::same(2), fill);
+	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
+	if on {
+		p.rect_stroke(
+			rect,
+			CornerRadius::same(theme::RADIUS),
+			egui::Stroke::new(1.0, on_color.gamma_multiply(0.45)),
+			egui::StrokeKind::Inside,
+		);
+	}
 	p.text(
 		rect.center(),
 		Align2::CENTER_CENTER,
 		label,
-		egui::FontId::proportional(10.5),
-		if on {
-			theme::text_on(on_color)
-		} else {
-			theme::TEXT_DIM
-		},
+		theme::semibold(10.5),
+		text,
 	);
 }
 
@@ -387,38 +468,42 @@ pub fn volume_slider(
 	if ui.is_rect_visible(rect) {
 		let p = ui.painter();
 		let active = response.dragged() || response.hovered();
-		p.rect_filled(rect, CornerRadius::same(2), theme::METER_BG);
+		let r = CornerRadius::same(theme::RADIUS);
+		p.rect_filled(rect, r, theme::BG_DEEP);
 		let x = rect.left() + 2.0 + db_to_fader(shown) * travel;
 		p.rect_filled(
 			Rect::from_min_max(rect.min, pos2(x, rect.bottom())),
-			CornerRadius::same(2),
-			color.gamma_multiply(if active { 0.5 } else { 0.32 }),
+			r,
+			if active {
+				theme::mix(theme::BG_HOVER, color, 0.3)
+			} else {
+				theme::BG_WIDGET
+			},
 		);
 		let zero = rect.left() + 2.0 + db_to_fader(0.0) * travel;
 		p.vline(
 			zero,
 			rect.bottom() - 3.0..=rect.bottom(),
-			Stroke::new(1.0, theme::TEXT_DIM),
+			Stroke::new(1.0, theme::TEXT_FAINT),
 		);
+		// The unit goes before the value ever truncates.
+		let value = format_db(shown);
+		let text = if rect.width() >= 100.0 {
+			format!("{value} dB")
+		} else {
+			value
+		};
 		p.text(
-			Pos2::new(rect.center().x, rect.center().y),
-			Align2::CENTER_CENTER,
-			format!("{} dB", format_db(shown)),
-			egui::FontId::proportional(9.5),
+			pos2(rect.right() - 5.0, rect.center().y),
+			Align2::RIGHT_CENTER,
+			text,
+			theme::mono(10.5),
 			theme::TEXT,
-		);
-		let handle = Rect::from_center_size(pos2(x, rect.center().y), vec2(4.0, rect.height()));
-		p.rect(
-			handle,
-			CornerRadius::same(1),
-			if active { theme::ACCENT } else { theme::TEXT },
-			Stroke::new(1.0, theme::BG_DEEP),
-			StrokeKind::Outside,
 		);
 		if active {
 			p.rect_stroke(
 				rect,
-				CornerRadius::same(2),
+				r,
 				Stroke::new(1.0, theme::BORDER_STRONG),
 				StrokeKind::Inside,
 			);
@@ -507,94 +592,7 @@ pub fn scrollbar(
 	new
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn fader_law_round_trips_and_spreads_the_top() {
-		for db in [-60.0f32, -24.0, -6.0, 0.0, 3.0, 6.0] {
-			let back = fader_to_db(db_to_fader(db));
-			assert!((back - db).abs() < 1e-3, "{db} -> {back}");
-		}
-		assert_eq!(db_to_fader(FADER_MIN_DB), 0.0);
-		assert_eq!(db_to_fader(6.0), 1.0);
-		assert_eq!(fader_to_db(0.0), FADER_MIN_DB);
-		let zero = db_to_fader(0.0);
-		assert!(zero > 0.8 && zero < 0.86, "{zero}");
-		// The mixing range (0 to -12 dB) gets a quarter of the travel.
-		assert!(db_to_fader(0.0) - db_to_fader(-12.0) > 0.24);
-	}
-
-	#[test]
-	fn labels() {
-		assert_eq!(format_db(0.01), "0.0");
-		assert_eq!(format_db(-3.26), "-3.3");
-		assert_eq!(format_db(FADER_MIN_DB), "-inf");
-		assert_eq!(format_db(4.0), "+4.0");
-		assert_eq!(format_pan(0.0), "C");
-		assert_eq!(format_pan(-0.25), "L25");
-		assert_eq!(format_pan(1.0), "R100");
-		assert_eq!(db_to_meter(FLOOR_DB), 0.0);
-		assert_eq!(db_to_meter(6.0), 1.0);
-	}
-}
-
-/// How a [`knob`] maps its travel to values and shows them.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct KnobSpec {
-	pub min: f32,
-	pub max: f32,
-	/// Double-click value.
-	pub default: f32,
-	/// Times (ms, Hz) feel natural on a logarithmic travel.
-	pub log: bool,
-	/// Whole numbers only (choices, groups, notes).
-	pub integer: bool,
-}
-
-impl KnobSpec {
-	pub fn new(min: f32, max: f32, default: f32) -> Self {
-		Self {
-			min,
-			max,
-			default,
-			log: false,
-			integer: false,
-		}
-	}
-
-	pub fn log(mut self) -> Self {
-		self.log = self.min > 0.0;
-		self
-	}
-
-	pub fn integer(mut self) -> Self {
-		self.integer = true;
-		self
-	}
-
-	/// Travel position 0..1 of `v`.
-	pub fn to_pos(&self, v: f32) -> f32 {
-		let v = v.clamp(self.min, self.max);
-		if self.log {
-			(v / self.min).ln() / (self.max / self.min).ln()
-		} else {
-			(v - self.min) / (self.max - self.min).max(f32::EPSILON)
-		}
-	}
-
-	/// Value at travel position `pos` (clamped, rounded for integer knobs).
-	pub fn from_pos(&self, pos: f32) -> f32 {
-		let p = pos.clamp(0.0, 1.0);
-		let v = if self.log {
-			self.min * (self.max / self.min).powf(p)
-		} else {
-			self.min + p * (self.max - self.min)
-		};
-		if self.integer { v.round() } else { v }
-	}
-}
+pub use crate::state::device::KnobSpec;
 
 /// FL-style rotary knob with its label under it and the value in a tooltip / while
 /// dragging. Vertical drag (Shift: fine), double-click: default. One commit per drag.
@@ -692,24 +690,6 @@ pub fn knob(
 	(gesture, response)
 }
 
-#[cfg(test)]
-mod knob_tests {
-	use super::KnobSpec;
-
-	#[test]
-	fn knob_travel_round_trips() {
-		let lin = KnobSpec::new(-1.0, 1.0, 0.0);
-		assert!((lin.to_pos(0.0) - 0.5).abs() < 1e-6);
-		assert!((lin.from_pos(0.75) - 0.5).abs() < 1e-6);
-		let log = KnobSpec::new(1.0, 10_000.0, 100.0).log();
-		assert!((log.to_pos(100.0) - 0.5).abs() < 1e-4);
-		assert!((log.from_pos(0.25) - 10.0).abs() < 1e-3);
-		let int = KnobSpec::new(0.0, 16.0, 0.0).integer();
-		assert_eq!(int.from_pos(0.49), 8.0);
-		assert_eq!(int.from_pos(2.0), 16.0);
-	}
-}
-
 /// A disclosure triangle (pointing down when `open`, right when folded).
 pub fn paint_disclosure(p: &egui::Painter, center: egui::Pos2, open: bool, color: Color32) {
 	let s = 4.0;
@@ -727,4 +707,104 @@ pub fn paint_disclosure(p: &egui::Painter, center: egui::Pos2, open: bool, color
 		]
 	};
 	p.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}
+
+/// A panel or section title: 13 / 600 text with its shortcut key (if any) faint beside it.
+pub fn panel_title(ui: &mut Ui, title: &str, key: Option<&str>) -> Response {
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 6.0;
+		ui.label(
+			egui::RichText::new(title)
+				.font(theme::heading())
+				.color(theme::TEXT),
+		);
+		if let Some(key) = key {
+			ui.label(
+				egui::RichText::new(key)
+					.font(theme::mono(10.5))
+					.color(theme::TEXT_FAINT),
+			);
+		}
+	})
+	.response
+}
+
+/// Equal-width segmented control over the available width; returns the clicked segment.
+pub fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
+	let width = ui.available_width();
+	segmented_sized(ui, labels, selected, width)
+}
+
+/// [`segmented`] with a fixed total width.
+pub fn segmented_sized(ui: &mut Ui, labels: &[&str], selected: usize, width: f32) -> Option<usize> {
+	let height = 24.0;
+	let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+	let p = ui.painter().clone();
+	p.rect_filled(rect, CornerRadius::same(theme::RADIUS_MD), theme::BG_DEEP);
+	let w = rect.width() / labels.len().max(1) as f32;
+	let mut clicked = None;
+	for (i, label) in labels.iter().enumerate() {
+		let r = Rect::from_min_size(
+			pos2(rect.left() + i as f32 * w, rect.top()),
+			vec2(w, height),
+		)
+		.shrink(2.0);
+		let resp = ui.interact(r, ui.id().with(("segment", *label)), Sense::click());
+		let on = i == selected;
+		resp.widget_info(|| {
+			egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, *label)
+		});
+		let (bg, fg) = if on {
+			(theme::BG_HOVER, theme::TEXT)
+		} else if resp.hovered() {
+			(theme::BG_WIDGET, theme::TEXT)
+		} else {
+			(theme::BG_DEEP, theme::TEXT_DIM)
+		};
+		p.rect_filled(r, CornerRadius::same(theme::RADIUS), bg);
+		p.text(
+			r.center(),
+			Align2::CENTER_CENTER,
+			*label,
+			theme::medium(12.0),
+			fg,
+		);
+		if resp.clicked() {
+			clicked = Some(i);
+		}
+	}
+	clicked
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn fader_law_round_trips_and_spreads_the_top() {
+		for db in [-60.0f32, -24.0, -6.0, 0.0, 3.0, 6.0] {
+			let back = fader_to_db(db_to_fader(db));
+			assert!((back - db).abs() < 1e-3, "{db} -> {back}");
+		}
+		assert_eq!(db_to_fader(FADER_MIN_DB), 0.0);
+		assert_eq!(db_to_fader(6.0), 1.0);
+		assert_eq!(fader_to_db(0.0), FADER_MIN_DB);
+		let zero = db_to_fader(0.0);
+		assert!(zero > 0.8 && zero < 0.86, "{zero}");
+		// The mixing range (0 to -12 dB) gets a quarter of the travel.
+		assert!(db_to_fader(0.0) - db_to_fader(-12.0) > 0.24);
+	}
+
+	#[test]
+	fn labels() {
+		assert_eq!(format_db(0.01), "0.0");
+		assert_eq!(format_db(-3.26), "-3.3");
+		assert_eq!(format_db(FADER_MIN_DB), "-inf");
+		assert_eq!(format_db(4.0), "+4.0");
+		assert_eq!(format_pan(0.0), "C");
+		assert_eq!(format_pan(-0.25), "L25");
+		assert_eq!(format_pan(1.0), "R100");
+		assert_eq!(db_to_meter(FLOOR_DB), 0.0);
+		assert_eq!(db_to_meter(6.0), 1.0);
+	}
 }

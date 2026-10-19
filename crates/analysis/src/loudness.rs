@@ -105,14 +105,15 @@ impl LoudnessMeter {
 		-0.691 + 10.0 * mean_square_sum.log10()
 	}
 
-	/// Mean-square (summed over channels) of every window of `steps` consecutive steps.
-	fn windows(&self, steps: usize) -> Vec<f64> {
-		if self.steps.len() < steps {
+	/// Mean-square (summed over channels) of every window of `steps` consecutive steps,
+	/// starting at step `from`.
+	fn windows(&self, steps: usize, from: usize) -> Vec<f64> {
+		let all = &self.steps[from.min(self.steps.len())..];
+		if all.len() < steps {
 			return Vec::new();
 		}
 		let len = (steps * self.step_len) as f64;
-		self.steps
-			.windows(steps)
+		all.windows(steps)
 			.map(|w| w.iter().sum::<f64>() / len)
 			.collect()
 	}
@@ -124,9 +125,21 @@ impl LoudnessMeter {
 
 	/// Gated integrated loudness in LUFS ([`FLOOR_DB`] for silence).
 	pub fn integrated(&self) -> f32 {
-		let mut blocks = self.windows(4);
+		self.integrated_since(0)
+	}
+
+	/// Gated integrated loudness of the steps from `step` on (a [`LoudnessMeter::steps`]
+	/// count taken earlier): a live meter's "reset integrated" that keeps the short-term
+	/// window.
+	pub fn integrated_since(&self, step: usize) -> f32 {
+		let mut blocks = self.windows(4, step);
 		if blocks.is_empty() {
-			blocks.extend(self.whole());
+			if step == 0 {
+				blocks.extend(self.whole());
+			} else if step < self.steps.len() {
+				let tail = &self.steps[step..];
+				blocks.push(tail.iter().sum::<f64>() / (tail.len() * self.step_len) as f64);
+			}
 		}
 		let abs_gated: Vec<f64> = blocks
 			.into_iter()
@@ -145,9 +158,30 @@ impl LoudnessMeter {
 		(Self::loudness(mean) as f32).max(FLOOR_DB)
 	}
 
+	/// Loudness of the last 3 s of completed 100 ms steps (fewer while the signal is
+	/// shorter): the live short-term reading. [`FLOOR_DB`] before the first step.
+	pub fn short_term(&self) -> f32 {
+		let n = self.steps.len().min(30);
+		if n == 0 {
+			return FLOOR_DB;
+		}
+		let energy: f64 = self.steps[self.steps.len() - n..].iter().sum();
+		let mean = energy / (n * self.step_len) as f64;
+		if mean <= 0.0 {
+			FLOOR_DB
+		} else {
+			(Self::loudness(mean) as f32).max(FLOOR_DB)
+		}
+	}
+
+	/// Completed 100 ms steps so far.
+	pub fn steps(&self) -> usize {
+		self.steps.len()
+	}
+
 	/// Highest 3 s short-term loudness; the whole signal when shorter than 3 s.
 	pub fn short_term_max(&self) -> f32 {
-		let mut windows = self.windows(30);
+		let mut windows = self.windows(30, 0);
 		if windows.is_empty() {
 			windows.extend(self.whole());
 		}
@@ -174,6 +208,31 @@ mod tests {
 		assert!((shelf.a2 - 0.73248077421585).abs() < 1e-9);
 		assert!((hp.a1 + 1.99004745483398).abs() < 1e-9);
 		assert!((hp.a2 - 0.99007225036621).abs() < 1e-9);
+	}
+
+	#[test]
+	fn short_term_follows_the_last_three_seconds() {
+		let rate = 48_000;
+		let sine = |amp: f32, n: usize| -> Vec<f32> {
+			(0..n)
+				.map(|i| amp * (std::f32::consts::TAU * 1000.0 * i as f32 / rate as f32).sin())
+				.collect()
+		};
+		let mut m = LoudnessMeter::new(rate);
+		assert_eq!(m.short_term(), FLOOR_DB);
+		let loud = sine(0.1, 4 * rate as usize);
+		m.push(&loud, &loud);
+		assert_eq!(m.steps(), 40);
+		assert!((m.short_term() + 20.0).abs() < 0.2, "{}", m.short_term());
+		let quiet = sine(0.01, 3 * rate as usize);
+		m.push(&quiet, &quiet);
+		assert!((m.short_term() + 40.0).abs() < 0.2, "{}", m.short_term());
+		assert!((m.integrated_since(40) + 40.0).abs() < 0.2);
+		assert_eq!(m.integrated_since(70), FLOOR_DB);
+		assert!(
+			m.integrated() > -24.0,
+			"gated: the quiet part is below -10 LU"
+		);
 	}
 
 	#[test]

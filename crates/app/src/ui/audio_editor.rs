@@ -131,11 +131,7 @@ impl AudioEditorUi {
 		);
 		let ui = &mut bar;
 		ui.spacing_mut().item_spacing.x = 5.0;
-		ui.label(
-			RichText::new("AUDIO EDITOR")
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
-		);
+		super::widgets::panel_title(ui, "Audio editor", Some("F7"));
 		let Some(r) = r else {
 			return;
 		};

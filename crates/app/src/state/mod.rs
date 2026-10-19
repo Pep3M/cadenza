@@ -11,31 +11,52 @@
 //! player follows live or through a debounced reload.
 
 pub mod ai;
+pub mod ai_changes;
 pub mod audio_edit;
 pub mod automation;
 pub mod autowrite;
 pub mod bounce;
 pub mod browser;
+pub mod chorus_editor;
+pub mod compressor_editor;
+pub mod delay_editor;
+pub mod device;
+pub mod device_ab;
+pub mod device_display;
 pub mod dnd;
+pub mod drum_machine_editor;
+pub mod drum_sampler_editor;
 pub mod editors;
 pub mod edits;
+pub mod electric_piano_editor;
+pub mod eq_editor;
 pub mod export;
 pub mod files;
 pub mod folders;
+pub mod gain_editor;
+pub mod inspector;
 pub mod layout;
 pub mod library;
+pub mod limiter_editor;
 pub mod live;
+pub mod loudness_meter;
 pub mod meter;
 pub mod meters;
 pub mod mix;
+pub mod mixer;
 pub mod notices;
 pub mod piano;
+pub mod poly_synth_editor;
 pub mod project_io;
 pub mod record;
+pub mod reverb_editor;
 pub mod rows;
 pub mod safety;
+pub mod sampler_editor;
 pub mod samples;
+pub mod saturator_editor;
 pub mod selection;
+pub mod start;
 pub mod timeline;
 pub mod transport;
 pub mod xruns;
@@ -47,7 +68,7 @@ use std::time::{Duration, Instant};
 
 use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TrackId};
 use cadenza_dsp::DeviceRole;
-use cadenza_engine::{MeterBank, PlayerClock};
+use cadenza_engine::{DeviceProbe, MeterBank, PlayerClock};
 use cadenza_mcp::{ChangeKey, McpError, Session, SharedSession};
 use cadenza_model::{ChannelPatch, Command, Document, Project, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, ScanReport};
@@ -85,7 +106,7 @@ pub fn pan_address(track: Option<TrackId>) -> ParamAddress {
 /// Edits within this window are compiled into the player once.
 pub const RELOAD_DEBOUNCE: Duration = Duration::from_millis(120);
 
-pub const DEFAULT_TRACK_HEIGHT: f32 = 64.0;
+pub const DEFAULT_TRACK_HEIGHT: f32 = 66.0;
 pub const MIN_TRACK_HEIGHT: f32 = 36.0;
 pub const MAX_TRACK_HEIGHT: f32 = 220.0;
 
@@ -111,10 +132,15 @@ pub struct ViewState {
 	pub audio: audio_edit::AudioEditorView,
 	/// The editor dock shows the audio editor instead of the piano roll.
 	pub audio_editor: bool,
-	/// The sampler / drum sampler editor (shares the bottom editor dock).
+	/// The device editor's device and the sampler / drum sampler selection (shares the
+	/// bottom editor dock).
 	pub instrument: samples::InstrumentView,
-	/// The editor dock shows the instrument editor (over the piano roll / audio editor).
-	pub instrument_editor: bool,
+	/// The editor dock shows the device editor (over the piano roll / audio editor).
+	pub device_editor: bool,
+	/// The device editor floats in a window over the workspace instead of the dock.
+	pub device_popout: bool,
+	/// The floating device editor stays above other windows.
+	pub popout_on_top: bool,
 	/// Pattern / Song mode and the arrange loop region.
 	pub transport: transport::TransportView,
 	/// The start screen (recent projects, new, open, demo) is shown.
@@ -123,6 +149,10 @@ pub struct ViewState {
 	pub takes: Vec<TrackId>,
 	/// Collapsed folder tracks (their contents hidden in the arrange and the mixer).
 	pub collapsed: std::collections::HashSet<TrackId>,
+	/// Mixer strip width and visible sections.
+	pub mixer: mixer::MixerView,
+	/// The inspector's active tab (Track | Clip | Device).
+	pub inspector: inspector::InspectorView,
 }
 
 impl Default for ViewState {
@@ -141,11 +171,15 @@ impl Default for ViewState {
 			audio: audio_edit::AudioEditorView::default(),
 			audio_editor: false,
 			instrument: samples::InstrumentView::default(),
-			instrument_editor: false,
+			device_editor: false,
+			device_popout: false,
+			popout_on_top: true,
 			transport: transport::TransportView::default(),
 			start_screen: false,
 			takes: Vec::new(),
 			collapsed: std::collections::HashSet::new(),
+			mixer: mixer::MixerView::default(),
+			inspector: inspector::InspectorView::default(),
 		}
 	}
 }
@@ -320,6 +354,8 @@ pub struct AppState {
 	pub ai: ai::AiChat,
 	/// The mix assistant (the AI panel's Mix tab).
 	pub mix: mix::MixAssistant,
+	/// Recent project summaries and the start screen's inputs.
+	pub start: start::StartScreen,
 	/// Plugin editor values and finished background edits that arrived while the AI was
 	/// editing: applied once it is done.
 	ai_queue: Vec<Command>,
@@ -343,6 +379,29 @@ pub struct AppState {
 	audio: Option<AudioEngine>,
 	clock: Option<PlayerClock>,
 	bank: Option<Arc<MeterBank>>,
+	/// The device whose live signal the engine probes, and the probe once the engine
+	/// answered (see [`AppState::set_probe`]).
+	probe_target: Option<DeviceId>,
+	probe: Option<Arc<DeviceProbe>>,
+	/// The device the open device editor pointed the probe at (see
+	/// [`AppState::sync_editor_probe`]).
+	editor_probe: Option<DeviceId>,
+	/// Presets of the device editor's device (factory + user), listed when it opens.
+	device_presets: Option<(DeviceRef, Vec<device::PresetEntry>)>,
+	/// The preset last loaded into (or saved from) each device, for the dirty dot.
+	loaded_presets: HashMap<DeviceId, device::LoadedPreset>,
+	/// A/B compare states of the devices opened in the editor (view state).
+	compares: HashMap<DeviceId, device_ab::Compare>,
+	/// The devices each undo / redo step changed (the editor's undo hint).
+	touches: device_ab::StepTouches,
+	/// An A/B switch is being applied (its own step is not an undo / redo to follow).
+	switching: bool,
+	/// Built-in params when the running AI request started, and the request.
+	ai_snapshot: Option<(ai_changes::Snapshot, String)>,
+	/// What the last AI request changed on built-in devices (rings, the editor's card).
+	pub ai_changes: Option<ai_changes::AiChanges>,
+	/// The device whose AI changes are heard reverted ("Hold to hear before").
+	hearing_before: Option<DeviceId>,
 	/// Playhead when there is no audio engine, or while stopped before it is ready.
 	position: Tick,
 	reload_since: Option<Instant>,
@@ -427,6 +486,7 @@ impl AppState {
 				waker.clone(),
 			),
 			mix: mix::MixAssistant::default(),
+			start: start::StartScreen::default(),
 			ai_queue: Vec::new(),
 			after_save: None,
 			export: export::ExportDialog::default(),
@@ -441,6 +501,17 @@ impl AppState {
 			audio: None,
 			clock: None,
 			bank: None,
+			probe_target: None,
+			probe: None,
+			editor_probe: None,
+			device_presets: None,
+			loaded_presets: HashMap::new(),
+			compares: HashMap::new(),
+			touches: device_ab::StepTouches::default(),
+			ai_snapshot: None,
+			ai_changes: None,
+			hearing_before: None,
+			switching: false,
 			position: Tick::ZERO,
 			reload_since: Some(Instant::now()),
 			generation: 0,
@@ -519,6 +590,7 @@ impl AppState {
 		let before = std::mem::replace(&mut self.doc, view);
 		self.session_key = key;
 		self.path = path;
+		self.follow_history(&before, epoch_changed);
 		// A different document (new/open) has nothing to diff against: reload.
 		self.after_edit((!epoch_changed).then_some(&before.project));
 		if clean {
@@ -647,14 +719,170 @@ impl AppState {
 			transport_mode: Some(self.view.transport.mode.name().to_lowercase()),
 			recording: self.recording_context(),
 			reference_file: None,
+			open_device: self.device_editor_target().and_then(|r| {
+				let d = self.device(r)?;
+				let kind = d
+					.builtin_id()
+					.and_then(cadenza_dsp::device_info)
+					.map_or_else(|| "plugin".to_owned(), |i| format!("{}, {}", i.name, i.id));
+				let on = match r.track.and_then(|t| p.track(t)) {
+					Some(t) => format!("track \"{}\" (track {})", t.name, t.id),
+					None => "the master channel".to_owned(),
+				};
+				Some(format!("\"{}\" (device {}, {kind}) on {on}", d.name, d.id))
+			}),
 		}
 	}
 
 	/// Sends `request` to the AI producer (with the app context).
 	pub fn send_ai(&mut self, request: &str) -> bool {
+		self.send_ai_as(request, request.trim())
+	}
+
+	/// [`AppState::send_ai`] remembering `shown` as the request on the AI change card.
+	fn send_ai_as(&mut self, request: &str, shown: &str) -> bool {
 		let context = self.ai_context();
 		let session = self.session.clone();
-		self.ai.send(request, context, &session)
+		if self.ai.busy() {
+			return false;
+		}
+		self.begin_ai_changes(shown);
+		let sent = self.ai.send(request, context, &session);
+		if !sent {
+			self.ai_snapshot = None;
+		}
+		sent
+	}
+
+	/// The device editor's "Ask AI": `text` about the device `r`, named in the request
+	/// (the context carries its id as the open device). Opens the chat so the reply shows.
+	pub fn ask_ai_about_device(&mut self, r: DeviceRef, text: &str) -> bool {
+		let text = text.trim();
+		let Some(d) = self.device(r) else {
+			return false;
+		};
+		if text.is_empty() {
+			return false;
+		}
+		let on = match r.track.and_then(|t| self.project().track(t)) {
+			Some(t) => format!("'{}'", t.name),
+			None => "the master".to_owned(),
+		};
+		let request = format!("{text} ({} on {on})", d.name);
+		let sent = self.send_ai_as(&request, text);
+		if sent {
+			self.view.panels.set(PanelKind::Chat, true);
+			self.mix.open = false;
+		}
+		sent
+	}
+
+	// --- AI changes on devices (design 15e) -------------------------------------------
+
+	/// A request starts: the built-ins' params are remembered and the last changes go.
+	fn begin_ai_changes(&mut self, request: &str) {
+		self.hear_before(None);
+		self.ai_changes = None;
+		self.ai_snapshot = Some((ai_changes::snapshot(self.project()), request.to_owned()));
+	}
+
+	fn finish_ai_changes(&mut self, finished: &ai::worker::Finished) {
+		let Some((before, request)) = self.ai_snapshot.take() else {
+			return;
+		};
+		if !finished.edited {
+			return;
+		}
+		let undo = &self.doc.undo;
+		if undo.last() != Some(&finished.undo_label) {
+			return;
+		}
+		self.ai_changes = ai_changes::AiChanges::new(
+			&finished.undo_label,
+			&request,
+			undo.len(),
+			&before,
+			&self.doc.project,
+		);
+	}
+
+	/// The AI change of `param` on `device`, if the last request moved it.
+	pub fn ai_change(&self, device: DeviceId, param: &str) -> Option<&ai_changes::Change> {
+		self.ai_changes.as_ref()?.change(device, param)
+	}
+
+	/// Every AI change on `device`.
+	pub fn ai_changes_of(&self, device: DeviceId) -> &[ai_changes::Change] {
+		self.ai_changes.as_ref().map_or(&[], |c| c.of(device))
+	}
+
+	/// Whether Undo would take back the AI step (it is still the last step).
+	pub fn ai_step_is_last(&self) -> bool {
+		self.ai_changes
+			.as_ref()
+			.is_some_and(|c| c.is_last_step(&self.doc.undo))
+	}
+
+	/// "Keep": the changes stay, their rings go.
+	pub fn keep_ai_changes(&mut self) {
+		self.hear_before(None);
+		self.ai_changes = None;
+	}
+
+	/// "Undo" on the card: undoes the AI step while it is the last one.
+	pub fn undo_ai_changes(&mut self) -> bool {
+		if !self.ai_step_is_last() {
+			return false;
+		}
+		self.hear_before(None);
+		self.undo();
+		self.ai_changes.is_none()
+	}
+
+	/// The user touched `param`: that AI change is kept and loses its ring.
+	fn touch_ai_change(&mut self, device: DeviceId, param: &str) {
+		if let Some(c) = &mut self.ai_changes {
+			c.touch(device, param);
+			if c.is_empty() {
+				self.ai_changes = None;
+			}
+		}
+	}
+
+	/// "Hold to hear before": `Some(device)` plays that device's params from before the AI
+	/// request through the live param path (no command), `None` puts the current values
+	/// back. The document never changes.
+	pub fn hear_before(&mut self, device: Option<DeviceId>) {
+		if self.hearing_before == device {
+			return;
+		}
+		if let Some(old) = self.hearing_before.take() {
+			self.send_ai_values(old, false);
+		}
+		if let Some(new) = device
+			&& !self.ai_changes_of(new).is_empty()
+		{
+			self.send_ai_values(new, true);
+			self.hearing_before = Some(new);
+		}
+	}
+
+	/// The device being heard as it was before the AI request.
+	pub fn hearing_before(&self) -> Option<DeviceId> {
+		self.hearing_before
+	}
+
+	fn send_ai_values(&self, device: DeviceId, before: bool) {
+		let Some(a) = &self.audio else { return };
+		let track = self.device_track(device).flatten();
+		for c in self.ai_changes_of(device) {
+			let value = if before {
+				c.before
+			} else {
+				self.param_value(track, device, &c.param).unwrap_or(c.after)
+			};
+			a.live_param(device, &c.param, value);
+		}
 	}
 
 	/// Quick requests for the chat, from the selection.
@@ -671,6 +899,7 @@ impl AppState {
 	fn poll_ai(&mut self) {
 		for finished in self.ai.poll() {
 			self.sync_session(true);
+			self.finish_ai_changes(&finished);
 			if finished.undo_label == cadenza_agent::ENGINEER_UNDO_LABEL {
 				self.mix_pass_finished(&finished);
 			}
@@ -732,8 +961,12 @@ impl AppState {
 		self.view.instrument.prune(&self.doc.project);
 		self.prune_record();
 		if self.view.instrument.device.is_none() {
-			self.view.instrument_editor = false;
+			self.view.device_editor = false;
+			self.view.device_popout = false;
 		}
+		let devices = device_ab::devices(&self.doc.project);
+		self.compares.retain(|id, _| devices.contains_key(id));
+		self.sync_editor_probe();
 		let project = &self.doc.project;
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
@@ -1472,11 +1705,52 @@ impl AppState {
 		value: f32,
 	) {
 		self.previews.params.remove(&(device, param.to_owned()));
+		self.touch_ai_change(device, param);
 		let address = ParamAddress::device(track, device, param);
 		if self.release_write(&address) {
 			return;
 		}
 		self.set_param(address, value);
+	}
+
+	/// Forgets a parameter preview without committing it (a gesture that ended where it
+	/// started).
+	pub fn drop_param_preview(&mut self, device: DeviceId, param: &str) {
+		self.previews.params.remove(&(device, param.to_owned()));
+	}
+
+	/// Several device parameters let go together (a node dragged in freq and gain): ONE
+	/// undo step named `label` holding the values that changed. Returns whether it applied.
+	pub fn commit_params(
+		&mut self,
+		track: Option<TrackId>,
+		device: DeviceId,
+		values: &[(&str, f32)],
+		label: &str,
+	) -> bool {
+		let mut commands = Vec::new();
+		for &(param, value) in values {
+			self.previews.params.remove(&(device, param.to_owned()));
+			self.touch_ai_change(device, param);
+			let address = ParamAddress::device(track, device, param);
+			if self.release_write(&address) {
+				continue;
+			}
+			let current = self
+				.project()
+				.device(track, device)
+				.and_then(|d| d.params.get(param).copied());
+			if current != Some(value) {
+				commands.push(Command::SetParam { address, value });
+			}
+		}
+		if commands.is_empty() {
+			return false;
+		}
+		self.apply(Command::Batch {
+			label: label.to_owned(),
+			commands,
+		})
 	}
 
 	/// One `SetParam` unless the value is already set.
@@ -2281,6 +2555,7 @@ impl AppState {
 				true
 			}
 			DropAction::LoadSample { device, path, slot } => self.load_sample(device, &path, slot),
+			DropAction::MapKit { device, folder } => self.map_kit_folder(device, &folder),
 			DropAction::NewSampler { path } => self.new_sampler_track(&path),
 			DropAction::AddPattern {
 				pattern, track, at, ..
@@ -2435,7 +2710,7 @@ impl AppState {
 		self.view.piano.clip = Some(clip);
 		self.view.piano.recent.insert(track, clip);
 		self.view.audio_editor = false;
-		self.view.instrument_editor = false;
+		self.view.device_editor = false;
 		self.selection.click_clip(track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
@@ -2489,7 +2764,7 @@ impl AppState {
 			.filter(|t| self.project().track(*t).map(|t| t.kind) == Some(TrackKind::Instrument));
 		if self.view.panels.visible(PanelKind::PianoRoll) {
 			// Another instrument track was selected since: show its clip instead of closing.
-			let editing = (!self.view.audio_editor && !self.view.instrument_editor)
+			let editing = (!self.view.audio_editor && !self.view.device_editor)
 				.then_some(self.view.piano.clip)
 				.flatten()
 				.and_then(|c| self.project().find_clip(c).map(|(t, _)| t.id));
@@ -2535,7 +2810,7 @@ impl AppState {
 		}
 		self.view.audio.clip = Some(clip);
 		self.view.audio_editor = true;
-		self.view.instrument_editor = false;
+		self.view.device_editor = false;
 		self.selection.click_clip(r.track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
@@ -2585,16 +2860,25 @@ impl AppState {
 		}));
 	}
 
-	// --- Sampler / drum sampler editor ---------------------------------------------
+	// --- Device editors ---------------------------------------------------------------
 
-	/// Whether `device` is a built-in sampler or drum sampler (it has the instrument editor).
+	/// Whether `device` is a built-in sampler or drum sampler (pads / zones body).
 	pub fn is_sample_device(&self, r: DeviceRef) -> bool {
 		self.device(r).and_then(samples::kind).is_some()
 	}
 
-	/// Shows `r`'s sampler editor in the bottom editor dock.
-	pub fn open_instrument_editor(&mut self, r: DeviceRef) -> bool {
-		if !self.is_sample_device(r) {
+	/// Whether `r` is a built-in device (it opens in the device editor; plugins have
+	/// their own windows).
+	pub fn has_device_editor(&self, r: DeviceRef) -> bool {
+		self.device(r)
+			.and_then(|d| d.builtin_id())
+			.is_some_and(|id| cadenza_dsp::device_info(id).is_some())
+	}
+
+	/// Shows built-in device `r` in the device editor: the floating window while it is
+	/// popped out (one device editor at a time), else the bottom editor dock.
+	pub fn open_device_editor(&mut self, r: DeviceRef) -> bool {
+		if !self.has_device_editor(r) {
 			return false;
 		}
 		self.release_previews();
@@ -2602,33 +2886,359 @@ impl AppState {
 			self.view.instrument.zone = 0;
 		}
 		self.view.instrument.device = Some(r);
-		self.view.instrument_editor = true;
+		if !self.view.device_popout {
+			self.view.device_editor = true;
+			self.view.panels.open_piano_roll();
+		}
 		self.selection.select_device(r);
-		self.view.panels.open_piano_roll();
+		self.sync_editor_probe();
 		true
 	}
 
-	/// Toggles the sampler editor of `r` (inspector button, double-clicks).
-	pub fn toggle_instrument_editor(&mut self, r: DeviceRef) {
-		let shown = self.view.instrument_editor
-			&& self.view.instrument.device == Some(r)
-			&& self.view.panels.visible(PanelKind::PianoRoll);
+	/// Toggles the device editor of `r` (inspector button, double-clicks).
+	pub fn toggle_device_editor(&mut self, r: DeviceRef) {
+		let here = self.view.instrument.device == Some(r);
+		if here && self.view.device_popout {
+			self.close_device_editor();
+			return;
+		}
+		let shown =
+			here && self.view.device_editor && self.view.panels.visible(PanelKind::PianoRoll);
 		if shown {
 			self.close_piano_roll();
 		} else {
-			self.open_instrument_editor(r);
+			self.open_device_editor(r);
 		}
 	}
 
-	/// Leaves the instrument editor for the piano roll / audio editor in the dock.
-	pub fn close_instrument_editor(&mut self) {
+	/// Leaves the device editor (the dock goes back to the piano roll / audio editor;
+	/// a floating one closes).
+	pub fn close_device_editor(&mut self) {
 		self.release_previews();
-		self.view.instrument_editor = false;
+		self.view.device_editor = false;
+		self.view.device_popout = false;
+		self.sync_editor_probe();
+	}
+
+	/// Pops the device editor out of the dock into a floating window; the dock shows
+	/// the piano roll / audio editor again.
+	pub fn pop_out_device_editor(&mut self) {
+		if self.view.instrument.device.is_none() {
+			return;
+		}
+		self.view.device_popout = true;
+		self.view.device_editor = false;
+		self.sync_editor_probe();
+	}
+
+	/// Puts the floating device editor back into the bottom dock.
+	pub fn dock_device_editor(&mut self) {
+		if !self.view.device_popout {
+			return;
+		}
+		self.view.device_popout = false;
+		self.view.device_editor = true;
+		self.view.panels.open_piano_roll();
+		self.sync_editor_probe();
+	}
+
+	/// The device the editor is showing (floating, or in the visible dock; device alive).
+	pub fn device_editor_target(&self) -> Option<DeviceRef> {
+		let r = self.view.instrument.device?;
+		let shown = self.view.device_popout
+			|| (self.view.device_editor && self.view.panels.visible(PanelKind::PianoRoll));
+		(shown && self.device(r).is_some()).then_some(r)
+	}
+
+	// --- A/B compare and the undo hint --------------------------------------------
+
+	fn device_params(&self, r: DeviceRef) -> device_ab::Params {
+		self.device(r).map(|d| d.params.clone()).unwrap_or_default()
+	}
+
+	/// The A/B state of `r`, both slots set to its current params the first time.
+	pub fn compare(&mut self, r: DeviceRef) -> &device_ab::Compare {
+		let current = self.device_params(r);
+		self.compares
+			.entry(r.device)
+			.or_insert_with(|| device_ab::Compare::new(&current))
+	}
+
+	/// The slot `r` is on (A until the editor switched it).
+	pub fn compare_slot(&self, r: DeviceRef) -> device_ab::Slot {
+		self.compares
+			.get(&r.device)
+			.map_or(device_ab::Slot::A, |c| c.active())
+	}
+
+	/// Switches `r` to `slot`: its params become that slot's in ONE undo step
+	/// ("Compare B"); nothing to undo when both slots are equal.
+	pub fn switch_compare(&mut self, r: DeviceRef, slot: device_ab::Slot) -> bool {
+		let current = self.device_params(r);
+		let Some(state) = self.device(r).map(|d| d.state.clone()) else {
+			return false;
+		};
+		let Some(apply) = self.compare(r).switch_to(slot, &current) else {
+			return false;
+		};
+		if let Some(params) = apply {
+			self.switching = true;
+			let ok = self.apply(Command::Batch {
+				label: slot.label(),
+				commands: vec![Command::SetDeviceState {
+					track: r.track,
+					device: r.device,
+					state,
+					params: Some(params),
+				}],
+			});
+			self.switching = false;
+			if !ok {
+				return false;
+			}
+		}
+		if let Some(c) = self.compares.get_mut(&r.device) {
+			c.flip(&current);
+		}
+		true
+	}
+
+	/// The other slot of `r` (the A/B key).
+	pub fn toggle_compare(&mut self, r: DeviceRef) -> bool {
+		let slot = self.compare_slot(r).other();
+		self.switch_compare(r, slot)
+	}
+
+	/// "A→B": the slot `r` is on is copied onto the other one (view state, no undo step).
+	pub fn copy_compare(&mut self, r: DeviceRef) {
+		let current = self.device_params(r);
+		self.compare(r);
+		if let Some(c) = self.compares.get_mut(&r.device) {
+			c.copy(&current);
+		}
+		let label = self.compares.get(&r.device).map(|c| c.copy_label());
+		if let Some(label) = label {
+			self.notices.info(format!("Copied {label}"));
+		}
+	}
+
+	/// The label of the step undo would revert, when that step touched `r`.
+	pub fn device_undo_label(&self, r: DeviceRef) -> Option<&str> {
+		self.touches
+			.last_touches(r.device)
+			.then(|| self.undo_label())
+			.flatten()
+	}
+
+	/// Follows a document change from `before`: which devices the new / undone step
+	/// touched, and A/B switches undone or redone (the slot flips back with them).
+	fn follow_history(&mut self, before: &DocView, epoch_changed: bool) {
+		if epoch_changed {
+			self.touches.clear();
+			self.compares.clear();
+			self.ai_changes = None;
+			self.hearing_before = None;
+			return;
+		}
+		let sizes = |d: &DocView| (d.undo.len(), d.redo.len());
+		let (b, a) = (sizes(before), sizes(&self.doc));
+		let touched = device_ab::touched_devices(&before.project, &self.doc.project);
+		let step = device_ab::step(b, a);
+		self.follow_ai_changes(before, step);
+		let label = match step {
+			device_ab::Step::Undo => before.undo.last(),
+			device_ab::Step::Redo => self.doc.undo.last(),
+			_ => None,
+		};
+		if !self.switching && label.is_some_and(|l| device_ab::is_compare_label(l)) {
+			let old = device_ab::devices(&before.project);
+			for id in &touched {
+				if let (Some(c), Some(d)) = (self.compares.get_mut(id), old.get(id)) {
+					c.flip(&d.params);
+				}
+			}
+		}
+		self.touches.update(b, a, touched);
+	}
+
+	/// AI changes after a document change: undoing the AI step clears them, a later user
+	/// step drops the params it moved.
+	fn follow_ai_changes(&mut self, before: &DocView, step: device_ab::Step) {
+		let Some(c) = &mut self.ai_changes else {
+			return;
+		};
+		if c.undone(&self.doc.undo) {
+			self.ai_changes = None;
+			self.hearing_before = None;
+			return;
+		}
+		if step == device_ab::Step::New && !self.ai.busy() {
+			c.touch_changed(&before.project, &self.doc.project);
+			if c.is_empty() {
+				self.ai_changes = None;
+				self.hearing_before = None;
+			}
+		}
+	}
+
+	/// Points the probe at the device editor's device (dock or popped-out window), and
+	/// away from it once the editor closes, switches or the dock hides. With no editor
+	/// open, falls back to the built-in device the inspector is showing (its compact
+	/// forms draw from the same probe), so their analyzers and meters stay live instead of
+	/// idle; only one consumer may drain the probe's frames a given frame, which is why the
+	/// editor always wins the device when both show one. A probe set by someone else is
+	/// left alone while neither needs it.
+	/// The inspector's active tab, after following a selection change.
+	pub fn inspector_tab(&mut self) -> inspector::InspectorTab {
+		self.view.inspector.follow(self.selection.focus())
+	}
+
+	/// What the inspector's tabs edit for the current selection.
+	pub fn inspector_targets(&self) -> inspector::Targets {
+		inspector::Targets::of(&self.selection, self.project())
+	}
+
+	/// The device the inspector's Device tab shows (when that tab is active).
+	pub fn inspector_device(&mut self) -> Option<DeviceRef> {
+		if self.inspector_tab() != inspector::InspectorTab::Device {
+			return None;
+		}
+		self.inspector_targets().device
+	}
+
+	pub fn sync_editor_probe(&mut self) {
+		let want = self
+			.device_editor_target()
+			.or_else(|| {
+				if !self.view.panels.visible(PanelKind::Inspector) {
+					return None;
+				}
+				self.inspector_device()
+					.filter(|r| self.has_device_editor(*r))
+			})
+			.map(|r| r.device);
+		if want != self.editor_probe {
+			self.editor_probe = want;
+			self.set_probe(want);
+		}
+	}
+
+	/// Factory and user presets of `r` (listed once per device through the MCP
+	/// `list_presets` tool; refreshed after a save).
+	pub fn device_presets(&mut self, r: DeviceRef) -> &[device::PresetEntry] {
+		if self.device_presets.as_ref().map(|(d, _)| *d) != Some(r) {
+			let list = self.list_device_presets(r);
+			self.device_presets = Some((r, list));
+		}
+		self.device_presets
+			.as_ref()
+			.map_or(&[], |(_, list)| list.as_slice())
+	}
+
+	fn list_device_presets(&mut self, r: DeviceRef) -> Vec<device::PresetEntry> {
+		let args = cadenza_mcp::tools::presets::ListPresetsArgs {
+			track_id: r.track,
+			device_id: r.device,
+		};
+		let listed = cadenza_mcp::tools::presets::list_presets(&mut self.session(), args);
+		match listed {
+			Ok(out) => out
+				.presets
+				.into_iter()
+				.map(|p| device::PresetEntry {
+					name: p.name,
+					user: p.source == cadenza_mcp::tools::presets::PresetSource::User,
+					description: p.description,
+				})
+				.collect(),
+			Err(e) => {
+				self.notices.error(e.to_string());
+				Vec::new()
+			}
+		}
+	}
+
+	/// Loads preset `entry` into `r` through the MCP `load_preset` tool (one undo step).
+	pub fn load_device_preset(&mut self, r: DeviceRef, entry: &device::PresetEntry) -> bool {
+		use cadenza_mcp::tools::presets::{LoadPresetArgs, PresetSource, load_preset};
+		let args = LoadPresetArgs {
+			track_id: r.track,
+			device_id: r.device,
+			name: entry.name.clone(),
+			source: Some(if entry.user {
+				PresetSource::User
+			} else {
+				PresetSource::Factory
+			}),
+		};
+		let Some(out) = self.edit_session(|s| load_preset(s, args)) else {
+			return false;
+		};
+		self.loaded_presets.insert(
+			r.device,
+			device::LoadedPreset {
+				name: out.name,
+				user: entry.user,
+				params: out.params,
+			},
+		);
+		true
+	}
+
+	/// Saves `r`'s current settings as user preset `name` through the MCP `save_preset`
+	/// tool (`overwrite` replaces one with that name).
+	pub fn save_device_preset(&mut self, r: DeviceRef, name: &str, overwrite: bool) -> bool {
+		use cadenza_mcp::tools::presets::{SavePresetArgs, save_preset};
+		let args = SavePresetArgs {
+			track_id: r.track,
+			device_id: r.device,
+			name: name.trim().to_owned(),
+			overwrite,
+		};
+		if self.edit_session(|s| save_preset(s, args)).is_none() {
+			return false;
+		}
+		let params = self.device(r).map(|d| d.params.clone()).unwrap_or_default();
+		self.loaded_presets.insert(
+			r.device,
+			device::LoadedPreset {
+				name: name.trim().to_owned(),
+				user: true,
+				params,
+			},
+		);
+		self.device_presets = None;
+		self.notices.info(format!("Saved preset '{}'", name.trim()));
+		true
+	}
+
+	/// The preset `r` is on and whether its params moved away from it: the one loaded
+	/// or saved here, else a factory preset with exactly these params.
+	pub fn preset_status(&self, r: DeviceRef) -> device::PresetStatus {
+		let Some(d) = self.device(r) else {
+			return device::PresetStatus::default();
+		};
+		let Some(info) = d.builtin_id().and_then(cadenza_dsp::device_info) else {
+			return device::PresetStatus::default();
+		};
+		device::preset_status(
+			info,
+			&d.params,
+			self.loaded_presets.get(&r.device),
+			cadenza_dsp::factory_presets(info.id),
+		)
 	}
 
 	/// Loads `path` into a pad, zone or the whole keyboard of a sample device (the shared
 	/// `load_sample` tool: root from the name or pitch, pad settings kept; one undo step).
 	pub fn load_sample(&mut self, r: DeviceRef, path: &Path, slot: samples::SampleSlot) -> bool {
+		if let samples::SampleSlot::Area { key, vel } = slot {
+			let ok = self.add_zone_at(r, path, key, vel);
+			if ok {
+				self.open_device_editor(r);
+			}
+			return ok;
+		}
 		let Some(track) = r.track else {
 			return false;
 		};
@@ -2640,9 +3250,14 @@ impl AppState {
 			match slot {
 				samples::SampleSlot::Pad(n) => self.view.instrument.pad = n,
 				samples::SampleSlot::Zone(i) => self.view.instrument.zone = i,
-				samples::SampleSlot::Keyboard => self.view.instrument.zone = 0,
+				samples::SampleSlot::Keyboard | samples::SampleSlot::Area { .. } => {
+					self.view.instrument.zone = 0
+				}
 			}
-			self.open_instrument_editor(r);
+			if self.device(r).and_then(samples::kind) == Some(samples::SampleKind::Sampler) {
+				self.view.instrument.last_sample = Some(path.to_path_buf());
+			}
+			self.open_device_editor(r);
 		}
 		ok
 	}
@@ -2666,7 +3281,8 @@ impl AppState {
 			return false;
 		}
 		self.selection.select_track(track_id);
-		self.open_instrument_editor(DeviceRef {
+		self.view.instrument.last_sample = Some(path.to_path_buf());
+		self.open_device_editor(DeviceRef {
 			track: Some(track_id),
 			device: r_device,
 		})
@@ -2686,6 +3302,32 @@ impl AppState {
 	pub fn piano_track(&self) -> Option<TrackId> {
 		let clip = self.view.piano.clip?;
 		self.project().find_clip(clip).map(|(t, _)| t.id)
+	}
+
+	/// Follows `device` (any built-in in the project: instrument, insert, master insert)
+	/// with the engine's probe, or stops (`None`). Device editors drain
+	/// [`AppState::probe`] once per frame for analyzers, meters and scopes.
+	pub fn set_probe(&mut self, device: Option<DeviceId>) {
+		if self.probe_target == device {
+			return;
+		}
+		self.probe_target = device;
+		if device.is_none() {
+			self.probe = None;
+		}
+		if let Some(a) = &self.audio {
+			a.probe(device);
+		}
+	}
+
+	pub fn probe_target(&self) -> Option<DeviceId> {
+		self.probe_target
+	}
+
+	/// The probe ring of the running player while a device is probed (`None` without an
+	/// audio engine or device, or until the engine answered).
+	pub fn probe(&self) -> Option<&Arc<DeviceProbe>> {
+		self.probe_target.and(self.probe.as_ref())
 	}
 
 	/// Starts sounding `pitch` on `track`'s instrument (also while stopped). Notes held
@@ -2907,6 +3549,7 @@ impl AppState {
 			export: self.export.settings.clone(),
 			audio: self.record.audio.clone(),
 			record: self.record.settings,
+			mixer: v.mixer,
 		}
 	}
 
@@ -2938,6 +3581,7 @@ impl AppState {
 		v.piano.snap = p.piano_snap;
 		v.piano.scale = cadenza_theory::Scale::parse(&p.piano_scale).ok();
 		v.bookmarks = p.bookmarks;
+		v.mixer = p.mixer;
 		self.ai.settings = p.ai.sanitized();
 		self.recent = p.recent;
 		self.recent.truncate(safety::RECENT_MAX);
@@ -3018,6 +3662,9 @@ impl AppState {
 			FileAction::ImportAudio => self.import_audio(&path),
 			FileAction::MixReference => self.mix.reference = Some(path),
 			FileAction::ImportMidi => self.import_midi(&path),
+			FileAction::PadSample | FileAction::PadLayer | FileAction::KitFolder => {
+				self.finish_sample_dialog(action, &path);
+			}
 			FileAction::ExportFolder
 			| FileAction::UnpackFolder
 			| FileAction::RelinkFolder
@@ -3074,6 +3721,7 @@ impl AppState {
 		self.sync_session(false);
 		self.poll_ai();
 		self.poll_audio();
+		self.sync_editor_probe();
 		if let Some(since) = self.reload_since
 			&& now.saturating_duration_since(since) >= RELOAD_DEBOUNCE
 		{
@@ -3134,6 +3782,7 @@ impl AppState {
 					self.schedule_reload();
 				}
 				AudioEvent::Unavailable(e) => {
+					self.probe = None;
 					self.notices.warn(format!("No audio output: {e}"));
 					self.audio_status = AudioStatus::Unavailable(e);
 				}
@@ -3167,6 +3816,9 @@ impl AppState {
 					if let Some(status) = &mut self.record.status {
 						status.audio_thread = Some(scheduling);
 					}
+				}
+				AudioEvent::Probe(probe) => {
+					self.probe = probe.filter(|_| self.probe_target.is_some());
 				}
 				AudioEvent::Xruns { device, plugins } => {
 					self.xruns.update(device, plugins, Instant::now());

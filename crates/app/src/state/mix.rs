@@ -326,6 +326,9 @@ impl AppState {
 			notes: Some(self.mix.notes.clone()).filter(|n| !n.trim().is_empty()),
 		};
 		let session = self.session.clone();
+		if !self.ai.busy() {
+			self.begin_ai_changes(ENGINEER_UNDO_LABEL);
+		}
 		let sent = self
 			.ai
 			.send_mix_pass(ENGINEER_UNDO_LABEL, brief, context, &session);

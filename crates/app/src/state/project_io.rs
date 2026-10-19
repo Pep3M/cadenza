@@ -324,6 +324,7 @@ impl AppState {
 			return;
 		};
 		safety::push_recent(&mut self.recent, &path);
+		self.start.invalidate(&path);
 		self.safety.autosaver.written(self.session_key);
 		if self.safety.enabled {
 			safety::clear_autosaves(&self.autosave_dir());

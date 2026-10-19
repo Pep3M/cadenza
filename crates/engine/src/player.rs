@@ -71,6 +71,7 @@ use crate::hosting::{PluginCrash, PluginEditorSlot, PluginHosting, PluginWatch, 
 use crate::input::{InputFifo, InputInfo, InputMode, InputReader, InputStats, MAX_INPUT_CHANNELS};
 use crate::meter::MeterBank;
 use crate::metronome::MetronomeSettings;
+use crate::probe::DeviceProbe;
 use crate::record::{RecordSession, RecordSetup, RecordTap, Recording, RecordingMonitor};
 use crate::schedule::MidiSchedule;
 
@@ -148,6 +149,8 @@ enum Cmd {
 	/// Play after a count-in of this many bars.
 	PlayCountIn(u32),
 	TestTone(bool),
+	/// Device followed by the probe (kept across loads).
+	Probe(Option<DeviceId>),
 }
 
 /// Something that happened in the editor of a plugin device (see [`Player::poll_editors`]).
@@ -208,6 +211,7 @@ struct AudioCore {
 	playing: bool,
 	position: Tick,
 	loop_range: Option<(Tick, Tick)>,
+	probe_target: Option<DeviceId>,
 	scratch_l: Vec<f32>,
 	scratch_r: Vec<f32>,
 	/// Live MIDI input queue, if a port is attached.
@@ -304,6 +308,7 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			playing: false,
 			position: Tick::ZERO,
 			loop_range: None,
+			probe_target: None,
 			scratch_l: vec![0.0; SCRATCH_FRAMES],
 			scratch_r: vec![0.0; SCRATCH_FRAMES],
 			midi: None,
@@ -339,6 +344,7 @@ impl AudioCore {
 			&& let Ok(mut next) = self.graphs.pop()
 		{
 			next.set_loop(self.loop_range);
+			next.continue_probe(self.probe_target);
 			next.seek(self.position);
 			if self.playing {
 				next.play();
@@ -418,6 +424,12 @@ impl AudioCore {
 					self.loop_range = range;
 					if let Some(g) = &mut self.graph {
 						g.set_loop(range);
+					}
+				}
+				Cmd::Probe(device) => {
+					self.probe_target = device;
+					if let Some(g) = &mut self.graph {
+						g.set_probe_target(device);
 					}
 				}
 				Cmd::Arm(track, on) => {
@@ -881,6 +893,9 @@ pub struct Player {
 	midi_input: Option<MidiInputConnection>,
 	/// Meters of the last loaded graph.
 	meters: Option<Arc<MeterBank>>,
+	/// Ring every loaded graph writes the probed device into, and that device.
+	probe: Arc<DeviceProbe>,
+	probe_target: Option<DeviceId>,
 	/// Address map of the last loaded graph (live parameters and automation).
 	resolver: Option<Resolver>,
 	/// Targets automated in the running graph.
@@ -1137,6 +1152,8 @@ impl Player {
 			watches: Vec::new(),
 			midi_input: None,
 			meters: None,
+			probe: Arc::new(DeviceProbe::new(sample_rate)),
+			probe_target: None,
 			resolver: None,
 			automated: HashSet::new(),
 			load_id: 0,
@@ -1576,6 +1593,7 @@ impl Player {
 			self.plugins.as_deref(),
 			&self.hosting,
 		)?;
+		graph.attach_probe(Some(self.probe.clone()));
 		let warnings = graph.warnings().to_vec();
 		let watches = graph.plugin_watches.clone();
 		let meters = graph.meters();
@@ -1750,6 +1768,28 @@ impl Player {
 	/// [`Player::load`]). The bank changes on every load; keep the `Arc` only until then.
 	pub fn meters(&self) -> Option<Arc<MeterBank>> {
 		self.meters.clone()
+	}
+
+	/// Follows `device` (a built-in or in-process plugin anywhere in the project: track
+	/// instrument, inserts, master inserts) with the probe, or stops (`None`). Kept across
+	/// loads; while the loaded graph lacks the device the probe is idle.
+	pub fn set_probe(&mut self, device: Option<DeviceId>) -> Result<(), EngineError> {
+		if self.probe_target == device {
+			return Ok(());
+		}
+		self.control.send(Cmd::Probe(device))?;
+		self.probe_target = device;
+		Ok(())
+	}
+
+	/// The probe ring while a device is probed (one per player: survives loads).
+	pub fn probe(&self) -> Option<Arc<DeviceProbe>> {
+		self.probe_target.map(|_| self.probe.clone())
+	}
+
+	/// The probed device.
+	pub fn probe_target(&self) -> Option<DeviceId> {
+		self.probe_target
 	}
 
 	/// Sets where plugin devices run on subsequent [`Player::load`] calls (default:

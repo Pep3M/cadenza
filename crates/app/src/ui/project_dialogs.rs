@@ -1,5 +1,5 @@
-//! Project-level dialogs: export (mixdown/stems with progress), the start screen,
-//! autosave recovery, "Locate missing files" and the collect prompt after "Save As".
+//! Project-level dialogs: export (mixdown/stems with progress), autosave recovery,
+//! "Locate missing files" and the collect prompt after "Save As".
 
 use egui::{Align, Frame, Id, Layout, Margin, RichText, Stroke, Ui, vec2};
 
@@ -19,16 +19,6 @@ fn modal_frame() -> Frame {
 		.inner_margin(Margin::same(16))
 }
 
-fn section(ui: &mut Ui, title: &str) {
-	ui.add_space(6.0);
-	ui.label(
-		RichText::new(title.to_uppercase())
-			.font(theme::small())
-			.color(theme::ACCENT),
-	);
-	ui.add_space(2.0);
-}
-
 fn hint(ui: &mut Ui, text: &str) {
 	ui.label(
 		RichText::new(text)
@@ -39,7 +29,6 @@ fn hint(ui: &mut Ui, text: &str) {
 
 /// Every project dialog, in stacking order.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
-	start_screen(ctx, state);
 	export_dialog(ctx, state);
 	relink_dialog(ctx, state);
 	collect_prompt(ctx, state);
@@ -426,85 +415,13 @@ fn rate_label(rate: u32) -> String {
 	}
 }
 
-// --- Start screen -----------------------------------------------------------------------
-
-fn start_screen(ctx: &egui::Context, state: &mut AppState) {
-	if !state.view.start_screen {
-		return;
-	}
-	let modal = egui::Modal::new(Id::new("start-screen"))
-		.frame(modal_frame().inner_margin(Margin::same(26)))
-		.show(ctx, |ui| {
-			ui.set_width(560.0);
-			ui.horizontal(|ui| {
-				ui.label(
-					RichText::new("CADENZA")
-						.size(26.0)
-						.strong()
-						.color(theme::ACCENT),
-				);
-				ui.add_space(8.0);
-				ui.label(RichText::new("DAW + AI producer").color(theme::TEXT_DIM));
-			});
-			ui.add_space(14.0);
-			ui.horizontal(|ui| {
-				let big = |t: &str| {
-					egui::Button::new(RichText::new(t).size(15.0)).min_size(vec2(120.0, 34.0))
-				};
-				if ui.add(big("New project")).clicked() {
-					state.new_project();
-				}
-				if ui.add(big("Open…")).clicked() {
-					state.view.start_screen = false;
-					state.file_dialog(FileAction::Open);
-				}
-				if ui.add(big("Demo song")).clicked() {
-					state.open_demo();
-				}
-			});
-			ui.add_space(14.0);
-			section(ui, "Recent projects");
-			let recent: Vec<_> = state.recent.iter().take(8).cloned().collect();
-			if recent.is_empty() {
-				hint(ui, "Projects you open or save show up here.");
-			}
-			for path in recent {
-				let exists = path.exists();
-				let name = cadenza_model::files::project_stem(&path);
-				let folder = path
-					.parent()
-					.map(|p| p.display().to_string())
-					.unwrap_or_default();
-				let r = ui.add_enabled(
-					exists,
-					egui::Button::new(RichText::new(format!("{name}   ")).color(theme::TEXT))
-						.right_text(
-							RichText::new(folder)
-								.font(theme::small())
-								.color(theme::TEXT_FAINT),
-						)
-						.frame(false)
-						.min_size(vec2(540.0, 24.0)),
-				);
-				if r.clicked() {
-					state.open(&path);
-				}
-			}
-			ui.add_space(10.0);
-			ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-				if ui.button("Start with an empty project").clicked() {
-					state.view.start_screen = false;
-				}
-			});
-		});
-	if modal.should_close() {
-		state.view.start_screen = false;
-	}
-}
-
 // --- Recovery -------------------------------------------------------------------------
 
 fn recovery_prompt(ctx: &egui::Context, state: &mut AppState) {
+	// The start screen shows it as a banner instead.
+	if state.view.start_screen {
+		return;
+	}
 	let Some(r) = state.recovery().cloned() else {
 		return;
 	};

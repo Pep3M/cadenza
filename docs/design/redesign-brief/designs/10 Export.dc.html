@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+
+<div style="display:flex;flex-direction:column;gap:14px;flex:none">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">10a · Export dialog (Ctrl Shift E)</div>
+<div data-screen-label="10a Export dialog" style="width:1920px;height:1080px;position:relative;background:#0e0f11;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="position:absolute;inset:0;display:grid;grid-template-rows:28px 56px minmax(0,1fr) 300px 24px;grid-template-columns:248px minmax(0,1fr) 300px;gap:1px;background:#1d1f23">
+<div style="grid-column:1 / span 3;background:#0e0f11"></div><div style="grid-column:1 / span 3;background:#15161a"></div>
+<div style="background:#15161a"></div><div style="background:#111215;background-image:repeating-linear-gradient(180deg,transparent 0 66px,#1d1f23 66px 67px)"></div><div style="background:#15161a;grid-row:3 / span 2"></div>
+<div style="grid-column:1 / span 2;background:#15161a"></div><div style="grid-column:1 / span 3;background:#0e0f11"></div>
+</div>
+<div style="position:absolute;inset:0;background:rgba(8,9,10,.62)"></div>
+<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:1040px;background:#1c1d21;border:1px solid #2a2c32;border-radius:8px;box-shadow:0 24px 64px rgba(0,0,0,.7);display:flex;flex-direction:column;overflow:hidden">
+<div style="height:48px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid #2a2c32"><span style="font-size:15px;font-weight:600">Export</span><span style="color:#a3a6ad">first_light</span><span style="flex:1"></span><span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 9px;background:#212328;border-radius:4px"><span style="color:#80848c">Preset</span>Streaming release ▾</span><span style="color:#a3a6ad;font-size:15px">✕</span></div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 340px">
+<div style="padding:16px 20px;display:flex;flex-direction:column;gap:18px">
+<sc-for list="{{ sections }}" as="s" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;align-items:start">
+<span style="font-weight:600;font-size:12.5px;padding-top:3px">{{ s.n }}</span>
+<div style="display:flex;flex-direction:column;gap:8px">
+<sc-for list="{{ s.rows }}" as="r" hint-placeholder-count="2">
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:24px;opacity:{{ r.op }}">
+<sc-if value="{{ r.seg }}" hint-placeholder-val="{{ false }}"><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><sc-for list="{{ r.opts }}" as="o" hint-placeholder-count="3"><span style="padding:2px 10px;border-radius:3px;background:{{ o.bg }};color:{{ o.fg }};font-weight:{{ o.w }}">{{ o.n }}</span></sc-for></div></sc-if>
+<sc-if value="{{ r.chk }}" hint-placeholder-val="{{ false }}"><span style="width:14px;height:14px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:{{ r.cb }};color:#0b1220;box-shadow:{{ r.cbd }}">{{ r.ck }}</span></sc-if>
+<span style="color:{{ r.lc }}">{{ r.label }}</span>
+<sc-for list="{{ r.fields }}" as="f" hint-placeholder-count="0"><span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:{{ f.bg }};border:1px solid {{ f.bd }};border-radius:3px;min-width:{{ f.w }}px;box-sizing:border-box;font-family:{{ f.ff }};font-size:11.5px;color:{{ f.fg }}">{{ f.v }}</span></sc-for>
+<span style="color:#80848c;font-size:11.5px">{{ r.hint }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="background:#15161a;border-left:1px solid #2a2c32;padding:16px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between"><span style="font-weight:600;font-size:12.5px">Will write</span><span style="color:#a3a6ad">9 files · ~74 MB</span></div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<sc-for list="{{ files }}" as="f" hint-placeholder-count="9"><div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 6px;border-radius:3px;background:{{ f.bg }}"><span style="width:8px;height:8px;border-radius:2px;background:{{ f.c }}"></span><span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'IBM Plex Mono',monospace;font-size:11px">{{ f.n }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">{{ f.s }}</span></div></sc-for>
+</div>
+<div style="flex:1"></div>
+<div style="padding:10px;background:#111215;border-radius:4px;display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:#a3a6ad;line-height:1.45"><span style="color:#e8e9ec;font-weight:500">Loudness</span><span>Mix measured at −11.8 LUFS last analysis. Export will apply about −2.2 dB to reach −14 LUFS with a −1.0 dBTP ceiling.</span></div>
+</div>
+</div>
+<div style="height:56px;display:flex;align-items:center;gap:8px;padding:0 20px;border-top:1px solid #2a2c32;background:#1a1b1f"><span style="color:#80848c">Renders offline, faster than real time. You can keep working.</span><span style="flex:1"></span><span style="height:28px;display:flex;align-items:center;padding:0 14px;background:#2a2c32;border-radius:4px;font-weight:500">Cancel</span><span style="height:28px;display:flex;align-items:center;gap:8px;padding:0 16px;background:#4c9cf5;color:#0b1220;border-radius:4px;font-weight:600">Export 9 files <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#1d3a63">Ctrl ↵</span></span></div>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:32px;flex:none">
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">10b · exporting</div>
+<div data-screen-label="10b Export progress" style="width:1040px;background:#1c1d21;border:1px solid #2a2c32;border-radius:8px;box-shadow:0 24px 64px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden;font-size:12px">
+<div style="height:48px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid #2a2c32"><span style="font-size:15px;font-weight:600">Exporting</span><span style="color:#a3a6ad">first_light · 4 of 9 files</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">×18 real time · ~6 s left</span></div>
+<div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
+<div style="height:8px;background:#0e0f11;border-radius:4px;overflow:hidden"><div style="width:42%;height:100%;background:#4c9cf5"></div></div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 16px">
+<sc-for list="{{ prog }}" as="p" hint-placeholder-count="9"><div style="height:24px;display:flex;align-items:center;gap:8px"><span style="width:14px;color:{{ p.ic }};font-weight:600">{{ p.i }}</span><span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ p.fg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.n }}</span><span style="width:48px;height:4px;background:#0e0f11;border-radius:2px;overflow:hidden"><span style="display:block;height:100%;width:{{ p.p }}%;background:{{ p.ic }}"></span></span></div></sc-for>
+</div>
+</div>
+<div style="height:52px;display:flex;align-items:center;gap:8px;padding:0 20px;border-top:1px solid #2a2c32;background:#1a1b1f"><span style="color:#80848c">Closing this dialog keeps the export running in the status bar.</span><span style="flex:1"></span><span style="height:28px;display:flex;align-items:center;padding:0 14px;background:#2a2c32;border-radius:4px;font-weight:500">Run in background</span><span style="height:28px;display:flex;align-items:center;padding:0 14px;background:#3a1a1b;color:#f0524f;border-radius:4px;font-weight:600;box-shadow:inset 0 0 0 1px #6b2a2a">Cancel export</span></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">10c · result</div>
+<div data-screen-label="10c Export result" style="width:1040px;background:#1c1d21;border:1px solid #2a2c32;border-radius:8px;box-shadow:0 24px 64px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden;font-size:12px">
+<div style="height:48px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid #2a2c32"><span style="color:#4fc38a;font-size:15px">✓</span><span style="font-size:15px;font-weight:600">Exported 9 files</span><span style="color:#a3a6ad">in 9.4 s · 73.8 MB · ~/Music/Cadenza/first_light/Renders</span><span style="flex:1"></span><span style="color:#a3a6ad;font-size:15px">✕</span></div>
+<div style="display:flex;align-items:center;gap:10px;margin:14px 20px 0;padding:8px 12px;background:#3a2c17;border-radius:4px;box-shadow:inset 0 0 0 1px #5a4422"><span style="color:#f2a944">⚠</span><span style="flex:1">2 warnings: Delay stem is almost silent; Lead stem peaked at −0.6 dBTP before the ceiling.</span></div>
+<div style="padding:12px 20px 16px;display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:22px minmax(0,1fr) 72px 80px 76px 76px 64px;gap:10px;padding:0 6px 6px;font-size:11px;color:#80848c;border-bottom:1px solid #2a2c32"><span></span><span>File</span><span style="text-align:right">Length</span><span style="text-align:right">LUFS-I</span><span style="text-align:right">True peak</span><span style="text-align:right">Gain</span><span style="text-align:right">Size</span></div>
+<sc-for list="{{ result }}" as="r" hint-placeholder-count="9"><div style="display:grid;grid-template-columns:22px minmax(0,1fr) 72px 80px 76px 76px 64px;gap:10px;padding:0 6px;height:28px;align-items:center;border-bottom:1px solid #222429;background:{{ r.bg }}"><span style="color:{{ r.ic }};font-weight:600">{{ r.i }}</span><span style="display:flex;align-items:center;gap:8px;min-width:0"><span style="width:8px;height:8px;border-radius:2px;background:{{ r.c }};flex:none"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.n }}</span></span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:#a3a6ad">0:43.9</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:{{ r.lc }}">{{ r.l }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:{{ r.pc }}">{{ r.p }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:#a3a6ad">{{ r.g }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:#80848c">{{ r.s }}</span></div></sc-for>
+</div>
+<div style="height:52px;display:flex;align-items:center;gap:8px;padding:0 20px;border-top:1px solid #2a2c32;background:#1a1b1f"><span style="height:28px;display:flex;align-items:center;padding:0 12px;background:#2a2c32;border-radius:4px;font-weight:500">Copy report</span><span style="height:28px;display:flex;align-items:center;padding:0 12px;background:#2a2c32;border-radius:4px;font-weight:500">Export again…</span><span style="flex:1"></span><span style="height:28px;display:flex;align-items:center;padding:0 14px;background:#2a2c32;border-radius:4px;font-weight:500">Show in folder</span><span style="height:28px;display:flex;align-items:center;padding:0 16px;background:#4c9cf5;color:#0b1220;border-radius:4px;font-weight:600">Done</span></div>
+</div>
+</div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd;padding-top:36px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 10</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Export</span><span style="color:#a3a6ad">Settings, progress and result. The same dialog changes state; it never stacks a second window.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    const seg = (opts, sel) => ({ seg: true, opts: opts.map(n => ({ n, bg: n === sel ? '#1d2a3d' : 'transparent', fg: n === sel ? '#7fb4ff' : '#a3a6ad', w: n === sel ? 500 : 400 })) });
+    const fld = (v, w = 0, o = {}) => ({ v, w, bg: o.dis ? '#18191d' : '#0e0f11', bd: o.focus ? '#4c9cf5' : '#2a2c32', ff: o.mono ? "'IBM Plex Mono',monospace" : "'IBM Plex Sans',sans-serif", fg: o.ph ? '#80848c' : '#e8e9ec' });
+    const dd = (v, w) => ({ ...fld(v + '  ▾', w), bg: '#212328', bd: '#212328' });
+    const row = (o) => ({ seg: false, opts: [], chk: false, label: '', fields: [], hint: '', lc: '#e8e9ec', op: 1, ...o });
+    const chk = (on, label, o = {}) => row({ chk: true, ck: on ? '✓' : '', cb: on ? '#4c9cf5' : 'transparent', cbd: on ? 'none' : 'inset 0 0 0 1.5px #363940', label, ...o });
+    const sections = [
+      { n: 'Range', rows: [row({ ...seg(['Whole song', 'Loop', 'Selection', 'Bars'], 'Whole song'), hint: '1.1 → 17.1 · 0:41.7' }), chk(1, 'Include the effect tail', { hint: '+2.2 s of reverb and delay decay' })] },
+      { n: 'What', rows: [chk(1, 'Stereo mixdown through the master'), chk(1, 'Stems', { fields: [dd('Buses + direct tracks', 190)] }), chk(0, 'Run stems through the master chain', { lc: '#a3a6ad' }), chk(0, 'Pre-fader (ignore volume and pan)', { lc: '#a3a6ad' })] },
+      { n: 'Format', rows: [row({ ...seg(['WAV', 'FLAC', 'MP3'], 'WAV'), fields: [] }), row({ label: 'Bit depth', lc: '#a3a6ad', fields: [dd('24-bit', 90)], hint: '' }), row({ label: 'Sample rate', lc: '#a3a6ad', fields: [dd('Engine · 48 kHz', 140)] }), chk(0, 'Dither', { lc: '#a3a6ad', hint: 'on automatically for 16-bit', op: .4 })] },
+      { n: 'Loudness', rows: [row({ ...seg(['Off', 'Peak', 'Loudness'], 'Loudness'), fields: [fld('−14.0 LUFS', 96, { mono: true, focus: true }), ], hint: 'Spotify, YouTube, Apple Music' }), row({ label: 'True-peak ceiling', lc: '#a3a6ad', fields: [fld('−1.0 dBTP', 90, { mono: true })] }), chk(0, 'Normalize each stem on its own', { lc: '#a3a6ad', hint: 'off: stems share the mix gain so they sum back to the mix' })] },
+      { n: 'Metadata', rows: [row({ fields: [fld('First Light', 200), fld('Cadenza', 160), fld('Album', 140, { ph: 1 }), fld('Genre', 110, { ph: 1 }), fld('Year', 64, { ph: 1 })] })] },
+      { n: 'Save to', rows: [row({ fields: [fld('~/Music/Cadenza/first_light/Renders', 300, { mono: true }), { ...fld('Choose…', 0), bg: '#2a2c32', bd: '#2a2c32' }] }), row({ label: 'File names', lc: '#a3a6ad', fields: [fld('{project} - {track}', 180, { mono: true })], hint: 'If a file exists: add a number' })] },
+    ];
+    const F = [['first_light.wav', '#4c9cf5', '15.9 MB', 1], ['first_light - Drums.wav', '#e8705f', '7.1 MB'], ['first_light - Bass.wav', '#5aa2f5', '7.1 MB'], ['first_light - Keys.wav', '#e3b24f', '7.1 MB'], ['first_light - Pad.wav', '#9a82ec', '7.1 MB'], ['first_light - Lead.wav', '#4fc3a1', '7.1 MB'], ['first_light - Vocal.wav', '#e07fb0', '7.1 MB'], ['first_light - Reverb.wav', '#8a93a3', '7.1 MB'], ['first_light - Delay.wav', '#8a93a3', '7.1 MB']];
+    const files = F.map(([n, c, s, m]) => ({ n, c, s, bg: m ? '#1d2a3d' : 'transparent' }));
+    const prog = F.map(([n], i) => i < 3 ? { n, i: '✓', ic: '#4fc38a', fg: '#a3a6ad', p: 100 } : i === 3 ? { n, i: '●', ic: '#4c9cf5', fg: '#e8e9ec', p: 64 } : { n, i: '·', ic: '#363940', fg: '#80848c', p: 0 });
+    const RS = [['−14.0', '−1.0', '−2.2 dB'], ['−17.9', '−3.4', '−2.2 dB'], ['−18.6', '−4.1', '−2.2 dB'], ['−20.3', '−6.0', '−2.2 dB'], ['−26.0', '−11.2', '−2.2 dB'], ['−21.4', '−0.6', '−2.2 dB', 'pk'], ['−17.1', '−2.8', '−2.2 dB'], ['−29.8', '−15.0', '−2.2 dB'], ['−41.2', '−24.5', '−2.2 dB', 'quiet']];
+    const result = F.map(([n, c, s], i) => { const [l, p, g, w] = RS[i]; return { n, c, s, l, p, g, i: w ? '⚠' : '✓', ic: w ? '#f2a944' : '#4fc38a', lc: w === 'quiet' ? '#f2a944' : (i === 0 ? '#e8e9ec' : '#a3a6ad'), pc: w === 'pk' ? '#f2a944' : '#a3a6ad', bg: i === 0 ? '#1d2a3d' : 'transparent' }; });
+    const ux = [
+      { h: 'What changed and why', items: [
+        'Two columns: settings on the left in labelled sections (Range, What, Format, Loudness, Metadata, Save to), and a live "Will write" list on the right. The old one-line hint "Writes first_light.wav, … + 4 more" becomes the full file list with sizes.',
+        'Options that don\u2019t apply are dimmed rather than hidden (Dither at 24-bit says it turns on automatically for 16-bit), so the layout doesn\u2019t jump when you change format.',
+        'Loudness explains itself: the target has a hint (which services use it) and the side panel says how much gain will be applied, based on the last analysis.',
+        'Presets at the top (Streaming release, Stems for mixing, Quick MP3 demo) fill every field in one step, which covers most exports.',
+        'The result is a table with loudness, true peak and applied gain per file, plus a warning bar that points at problem files (silent stem, peak before the ceiling) instead of a plain list.',
+      ]},
+      { h: 'Interaction', items: [
+        'Ctrl+Enter exports, Esc cancels. Tab moves through fields in reading order.',
+        'Export runs offline. "Run in background" closes the dialog and shows a progress chip in the status bar; clicking it reopens this view.',
+        'Rows in the result are clickable: Enter plays the file, Show in folder reveals it.',
+        'The last used settings are remembered per project; the preset menu shows "Modified" when you change something.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'Nothing to export (empty range): the Export button is disabled and Range says "Loop is empty; choose Whole song".',
+        'Folder not writable or disk full: a red bar above the footer with the folder and free space; Export stays disabled until it is fixed.',
+        'A plugin fails during render: that file gets ✗ with the plugin name, the other files finish, and the result offers "Retry with plugin bypassed".',
+      ]},
+    ];
+    this._v = { sections, files, prog, result, ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

@@ -34,18 +34,7 @@ impl BrowserUi {
 	pub fn show(&mut self, ui: &mut Ui, state: &mut AppState) {
 		ui.add_space(4.0);
 		ui.horizontal(|ui| {
-			for (tab, label) in [
-				(Tab::Devices, "Devices"),
-				(Tab::Files, "Files"),
-				(Tab::Library, "Library"),
-			] {
-				if ui
-					.selectable_label(self.tab == tab, RichText::new(label).font(theme::small()))
-					.clicked()
-				{
-					self.tab = tab;
-				}
-			}
+			super::widgets::panel_title(ui, "Browser", Some("F6"));
 			if self.tab != Tab::Devices {
 				return;
 			}
@@ -63,6 +52,16 @@ impl BrowserUi {
 				}
 			});
 		});
+		ui.add_space(2.0);
+		if std::mem::take(&mut state.view.instrument.files_tab) {
+			self.tab = Tab::Files;
+		}
+		let tabs = [Tab::Devices, Tab::Files, Tab::Library];
+		let current = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
+		if let Some(i) = super::widgets::segmented(ui, &["Devices", "Files", "Library"], current) {
+			self.tab = tabs[i];
+		}
+		ui.add_space(4.0);
 		match self.tab {
 			Tab::Files => return files_tab(ui, state),
 			Tab::Library => return super::library::show(ui, state),
@@ -101,7 +100,9 @@ impl BrowserUi {
 						continue;
 					}
 					CollapsingHeader::new(
-						RichText::new(format!("{title}  ({})", list.len())).font(theme::small()),
+						RichText::new(format!("{title}  ·  {}", list.len()))
+							.font(theme::semibold(11.5))
+							.color(theme::TEXT_DIM),
 					)
 					.id_salt(title)
 					.default_open(true)
@@ -129,30 +130,73 @@ impl BrowserUi {
 
 fn item_row(ui: &mut Ui, state: &mut AppState, item: &BrowserItem) {
 	let id = Id::new(("browser-item", &item.id));
-	let glyph = match item.role {
-		DeviceRole::Instrument => "♪",
-		DeviceRole::Effect => "ƒ",
+	let (badge_fg, badge_bg) = match item.role {
+		DeviceRole::Instrument => (theme::ACCENT_TEXT, theme::ACCENT_DIM),
+		DeviceRole::Effect => (theme::AUTOMATION, theme::AUTOMATION_SOFT),
 	};
+	let width = ui.available_width();
+	let name_font = egui::FontId::proportional(12.0);
+	let mut elided = false;
 	let response = ui
 		.dnd_drag_source(id, Payload::Device(item.clone()), |ui| {
-			ui.horizontal(|ui| {
-				ui.label(RichText::new(glyph).color(theme::TEXT_FAINT));
-				ui.add(egui::Label::new(&item.name).selectable(false).truncate());
-				if !item.detail.is_empty() {
-					ui.label(
-						RichText::new(&item.detail)
-							.font(theme::small())
-							.color(theme::TEXT_FAINT),
-					);
-				}
-			})
-			.response
+			let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 24.0), Sense::hover());
+			let p = ui.painter();
+			let badge = egui::Rect::from_min_size(
+				egui::pos2(rect.left() + 2.0, rect.center().y - 9.0),
+				egui::vec2(24.0, 18.0),
+			);
+			p.rect_filled(badge, theme::RADIUS, badge_bg);
+			p.text(
+				badge.center(),
+				egui::Align2::CENTER_CENTER,
+				initials(&item.name),
+				theme::semibold(9.5),
+				badge_fg,
+			);
+			let text = egui::Rect::from_min_max(
+				egui::pos2(badge.right() + 8.0, rect.top()),
+				egui::pos2(rect.right() - 4.0, rect.bottom()),
+			);
+			// Reserve the detail text's own width on the right so a long device name
+			// can never be drawn under it; elide the name to what is left.
+			let name_max_width = if item.detail.is_empty() {
+				text.width()
+			} else {
+				let detail_width = p
+					.layout_no_wrap(item.detail.clone(), theme::small(), theme::TEXT_FAINT)
+					.size()
+					.x;
+				p.text(
+					text.right_center(),
+					egui::Align2::RIGHT_CENTER,
+					&item.detail,
+					theme::small(),
+					theme::TEXT_FAINT,
+				);
+				(text.width() - detail_width - 6.0).max(0.0)
+			};
+			let (shown_name, name_elided) =
+				elide_text(ui, &item.name, name_font.clone(), name_max_width);
+			elided = name_elided;
+			p.text(
+				text.left_center(),
+				egui::Align2::LEFT_CENTER,
+				shown_name,
+				name_font.clone(),
+				theme::TEXT,
+			);
+			response
 		})
 		.response;
+	let name_line = if elided {
+		format!("{}\n", item.name)
+	} else {
+		String::new()
+	};
 	let response = ui
 		.interact(response.rect, id.with("click"), Sense::click())
 		.on_hover_text(format!(
-			"{}\n\nDouble-click: {}. Or drag onto a track, a mixer strip or below the tracks.",
+			"{name_line}{}\n\nDouble-click: {}. Or drag onto a track, a mixer strip or below the tracks.",
 			item.description,
 			match item.role {
 				DeviceRole::Instrument =>
@@ -161,21 +205,66 @@ fn item_row(ui: &mut Ui, state: &mut AppState, item: &BrowserItem) {
 			}
 		));
 	if response.hovered() {
-		ui.painter()
-			.rect_filled(response.rect, 2.0, theme::BG_HOVER.gamma_multiply(0.5));
+		ui.painter().rect_filled(
+			response.rect,
+			theme::RADIUS,
+			theme::BG_RAISED.gamma_multiply(0.8),
+		);
 	}
 	if response.double_clicked() {
 		state.use_device(item, None);
 	}
 }
 
+/// Shortens `text` with a trailing "…" so it lays out within `max_width` at `font`;
+/// returns the text to show and whether it was shortened.
+fn elide_text(ui: &Ui, text: &str, font: egui::FontId, max_width: f32) -> (String, bool) {
+	let painter = ui.painter();
+	let width = |s: &str| {
+		painter
+			.layout_no_wrap(s.to_owned(), font.clone(), theme::TEXT)
+			.size()
+			.x
+	};
+	if width(text) <= max_width {
+		return (text.to_owned(), false);
+	}
+	let mut chars: Vec<char> = text.chars().collect();
+	while !chars.is_empty() {
+		chars.pop();
+		let candidate: String = chars.iter().collect::<String>() + "…";
+		if width(&candidate) <= max_width {
+			return (candidate, true);
+		}
+	}
+	("…".to_owned(), true)
+}
+
+/// Two-letter badge of a device name: "Drum Machine" -> "DM", "Chorus" -> "CH".
+fn initials(name: &str) -> String {
+	let words: Vec<&str> = name
+		.split(|c: char| !c.is_alphanumeric())
+		.filter(|w| !w.is_empty())
+		.collect();
+	let letters: String = match words.as_slice() {
+		[] => "?".into(),
+		[one] => one.chars().take(2).collect(),
+		[a, b, ..] => a.chars().take(1).chain(b.chars().take(1)).collect(),
+	};
+	letters.to_uppercase()
+}
+
 /// Factory presets of the selected built-in device.
 fn presets(ui: &mut Ui, state: &mut AppState) {
-	ui.label(
-		RichText::new("PRESETS")
-			.font(theme::small())
-			.color(theme::TEXT_DIM),
-	);
+	let device_name = state
+		.selection
+		.device
+		.and_then(|r| state.device(r))
+		.map(|d| d.name.clone());
+	match &device_name {
+		Some(name) => super::widgets::panel_title(ui, &format!("Presets · {name}"), None),
+		None => super::widgets::panel_title(ui, "Presets", None),
+	};
 	let Some(r) = state.selection.device else {
 		ui.label(
 			RichText::new("Select a device to see its presets")
@@ -197,8 +286,6 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 	};
 	let list = cadenza_dsp::factory_presets(id);
 	let id = id.clone();
-	let name = device.name.clone();
-	ui.label(RichText::new(name).font(theme::small()).color(theme::TEXT));
 	egui::ScrollArea::vertical()
 		.id_salt("presets")
 		.auto_shrink([false, false])
@@ -345,12 +432,22 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 				let mut open: Option<PathBuf> = None;
 				for e in list {
 					if e.kind == FileKind::Folder {
-						let r = ui.add(
-							egui::Label::new(format!("{}  {}", e.kind.glyph(), e.name))
-								.selectable(false)
-								.truncate()
-								.sense(Sense::click()),
-						);
+						// Folders drag too: onto the drum sampler they map a whole kit.
+						let id = Id::new(("browser-folder", &e.path));
+						let r = ui
+							.dnd_drag_source(id, Payload::File(e.path.clone()), |ui| {
+								ui.add(
+									egui::Label::new(format!("{}  {}", e.kind.glyph(), e.name))
+										.selectable(false)
+										.truncate(),
+								)
+							})
+							.response;
+						let r = ui
+							.interact(r.rect, id.with("click"), Sense::click())
+							.on_hover_text(
+								"Click to open; drag onto the drum sampler to map the kit in it 								 onto its pads by name",
+							);
 						if r.hovered() {
 							ui.painter().rect_filled(
 								r.rect,

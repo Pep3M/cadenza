@@ -1,0 +1,64 @@
+CADENZA · DEVICES 16 · Limiter, Reverb, Delay, Chorus, Saturator, Gain Dock size, transport playing. Stereo convention used everywhere: left is teal, right is orange. Gain reduction is always coral and hangs from the top.
+16a · Limiter · on Master · hitting the −14 LUFS streaming target
+Input + gain Output Gain reduction
+⇕ Ceiling −1.0 dB
+{{ l.t }}
+6 s · now →
+{{ m.l }}
+{{ m.v }}
+LOUDNESS
+−13.8 LUFS short-term
+Integrated −14.2 LUFS
+True peak −1.0 dBTP ✓
+last 30 s −14
+Streaming −14 Loud −9 Broadcast −23
+Loudness meters are measured after the ceiling. Target chip only sets the green band, it never changes the sound.
+Reset integrated ▸ Display
+16b · Reverb · on the Reverb bus
+Early reflections Tail, lows Tail, highs (damped)
+Pre-delay 40 ms
+Decay 2.4 s
+Damping 40 %
+{{ l.t }}
+Space
+Size 62 % · Width 80 %
+Low cut on the wet signal 180 Hz
+WET OUT
+Drag the violet node for decay, the teal node for damping, the white node for pre-delay. Pre-delay is automated.
+Freeze tail idea
+16c · Delay · sync on, 1/8, ping-pong
+L R
+{{ l.t }}
+1/8 · 326 ms · drag to change
+feedback 60 % · 92 BPM
+Sync Free
+⇄ Ping-pong
+{{ n.t }}
+Feedback filter 200 Hz – 6 kHz
+Taps redraw as feedback and filter change: each repeat gets darker as the band-pass removes highs and lows. Free mode turns the grid into milliseconds.
+16d · Chorus · LFO is animated (both voices drift in real time)
+Voice L Voice R · 126° apart (width)
+modulated delay ±{{ ch.ms }} ms
+now
+rate 0.60 Hz · one cycle = 1.67 s
+Stereo width
+L R
+70 %
+Transport stopped: the traces keep moving if audio is passing, otherwise they freeze at their last phase and dim to 50 %.
+16e · Saturator · Tube mode, 12 dB drive
+{{ m.n }} {{ m.d }}
+Shaping curve · drag ⇕ for drive
+Drive +12.0 dB
+dotted = 6 dB
+Before After
+{{ h.n }}
+Harmonics added · even ■ odd ■
+Mode cards morph the curve over 150 ms. Harmonics are computed from the shaping curve with a test sine, so they also show when the transport is stopped.
+16f · Gain / Utility · natural width 900 (centred in the dock; also fits compact)
+M L R S
+−1
++1 +0.82
+Ø Invert L
+Ø Invert R · on
+Width 0 % = mono, 100 % = unchanged, 200 % = side doubled
+Correlation turns amber below 0 and coral below −0.5.

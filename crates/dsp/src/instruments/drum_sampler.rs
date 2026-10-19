@@ -3,7 +3,9 @@
 use super::sample_voice::{
 	KillFade, Playhead, SlotInfo, ZoneEnv, ZoneRt, pick_slot, select_zones, velocity_gain,
 };
-use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
+use crate::processor::{
+	DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport, readings,
+};
 use crate::sample::Zone;
 use crate::util::smoother::Smoother;
 use crate::util::{ParamValues, db_to_gain, event_spans};
@@ -131,6 +133,8 @@ pub struct DrumSampler {
 	longest: f32,
 	aux: Vec<[Vec<f32>; 2]>,
 	aux_len: usize,
+	/// Note-ons per pad of [`PADS`] (editor flashes, [`readings::DRUM_PAD_TRIGGERS_START`]).
+	triggers: [f32; readings::DRUM_PADS],
 }
 
 impl Default for DrumSampler {
@@ -155,6 +159,7 @@ impl DrumSampler {
 			longest: 0.0,
 			aux: (0..AUX_OUTPUTS).map(|_| [Vec::new(), Vec::new()]).collect(),
 			aux_len: 0,
+			triggers: [0.0; readings::DRUM_PADS],
 		}
 	}
 
@@ -189,10 +194,15 @@ impl DrumSampler {
 				v.slot.fading = true;
 			}
 		}
+		let mut sounded = false;
 		for &zone in &chosen[..n] {
 			if self.zones[zone].sample.is_some() {
 				self.start_voice(zone, pitch, velocity);
+				sounded = true;
 			}
+		}
+		if sounded && let Some(pad) = PADS.iter().position(|(note, _)| *note == pitch) {
+			self.triggers[pad] += 1.0;
 		}
 	}
 
@@ -365,6 +375,13 @@ impl Processor for DrumSampler {
 		self.longest.min(30.0)
 	}
 
+	fn readings(&self, out: &mut [f32]) -> usize {
+		let start = readings::DRUM_PAD_TRIGGERS_START;
+		let n = out.len().saturating_sub(start).min(readings::DRUM_PADS);
+		out[start..start + n].copy_from_slice(&self.triggers[..n]);
+		if n == 0 { 0 } else { start + n }
+	}
+
 	fn aux_output_count(&self) -> usize {
 		AUX_OUTPUTS
 	}
@@ -520,6 +537,41 @@ mod tests {
 		];
 		let (main, _) = run(&mut d, &events, 12);
 		assert!(rms(&main[2048..]) > 0.1, "kept playing after note-off");
+	}
+
+	#[test]
+	fn note_ons_count_per_pad() {
+		let mut d = kit(vec![
+			pad(36, noise(0.1)),
+			pad(38, noise(0.1)),
+			pad(60, noise(0.1)),
+		]);
+		let counters = |d: &DrumSampler| {
+			let mut out = [0.0; readings::MAX];
+			assert_eq!(d.readings(&mut out), readings::DRUM_PADS);
+			out
+		};
+		assert!(counters(&d).iter().all(|c| *c == 0.0));
+		// Two kicks, a snare, a note on no pad, a pad without a sample (closed hat).
+		run(
+			&mut d,
+			&[
+				(0, hit(36, 0)),
+				(0, hit(38, 10)),
+				(1, hit(36, 0)),
+				(1, hit(60, 5)),
+				(1, hit(42, 9)),
+			],
+			2,
+		);
+		let c = counters(&d);
+		let at = |note: u8| PADS.iter().position(|(n, _)| *n == note).unwrap();
+		assert_eq!(c[at(36)], 2.0);
+		assert_eq!(c[at(38)], 1.0);
+		assert_eq!(c.iter().sum::<f32>(), 3.0, "{c:?}");
+		// Reset and new zones keep counting up (readers compare with their last value).
+		d.reset();
+		assert_eq!(counters(&d)[at(36)], 2.0);
 	}
 
 	#[test]

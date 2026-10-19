@@ -109,6 +109,19 @@ fn gain_computer(level_db: f32, threshold: f32, ratio: f32, knee: f32) -> f32 {
 	}
 }
 
+/// Static compressor transfer curve: output level in dB for a steady input
+/// level in dB (after attack/release have settled), including makeup gain.
+/// Uses [`gain_computer`], the processor's own gain-reduction formula.
+pub fn compressor_curve_db(
+	threshold: f32,
+	ratio: f32,
+	knee: f32,
+	makeup: f32,
+	input_db: f32,
+) -> f32 {
+	input_db + gain_computer(input_db, threshold, ratio, knee) + makeup
+}
+
 pub struct Compressor {
 	params: ParamValues<N_PARAMS>,
 	sample_rate: f32,
@@ -244,6 +257,16 @@ impl Processor for Compressor {
 		self.key_active = true;
 	}
 
+	fn readings(&self, out: &mut [f32]) -> usize {
+		match out.get_mut(crate::readings::GAIN_REDUCTION_DB) {
+			Some(gr) => {
+				*gr = self.gr_meter;
+				1
+			}
+			None => 0,
+		}
+	}
+
 	fn reset(&mut self) {
 		self.key_active = false;
 		self.env_db = 0.0;
@@ -294,6 +317,48 @@ mod tests {
 		let out_db = gain_to_db(peak);
 		assert!(out_db < -10.0 && out_db > -18.0, "out {out_db} dB");
 		assert!(c.gain_reduction_db() > 10.0);
+		let mut readings = [0.0; crate::readings::MAX];
+		assert_eq!(c.readings(&mut readings), 1);
+		assert_eq!(
+			readings[crate::readings::GAIN_REDUCTION_DB],
+			c.gain_reduction_db()
+		);
+	}
+
+	#[test]
+	fn compressor_curve_matches_settled_sine() {
+		let (threshold, ratio, knee, makeup) = (-18.0, 4.0, 6.0, 3.0);
+		for input_amp in [0.025, 0.1, 0.25, 0.5, 1.0] {
+			let mut c = Compressor::new();
+			c.prepare(48_000.0, 256);
+			for (id, v) in [
+				("threshold", threshold),
+				("ratio", ratio),
+				("knee", knee),
+				("makeup", makeup),
+				("attack", 1.0),
+				("release", 50.0),
+			] {
+				c.set_param(INFO.param_index(id).unwrap(), v);
+			}
+			c.reset();
+			let sr = 48_000.0;
+			let mut l: Vec<f32> = (0..48_000)
+				.map(|n| (std::f32::consts::TAU * 200.0 * n as f32 / sr).sin() * input_amp)
+				.collect();
+			let mut r = l.clone();
+			for (a, b) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+				c.process(a, b, &[], &Transport::default());
+			}
+			let peak = l[40_000..].iter().fold(0.0_f32, |m, x| m.max(x.abs()));
+			let measured = gain_to_db(peak);
+			let input_db = gain_to_db(input_amp);
+			let formula = compressor_curve_db(threshold, ratio, knee, makeup, input_db);
+			assert!(
+				(formula - measured).abs() < 0.5,
+				"input {input_db} dB: formula {formula}, measured {measured}"
+			);
+		}
 	}
 
 	#[test]

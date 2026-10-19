@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div data-screen-label="03 Mixer" style="width:1920px;height:1080px;flex:none;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;position:relative;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="height:32px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid #24262b">
+<span style="font-weight:600;font-size:13px">Mixer</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">F9 · maximized F11</span>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:1px 8px;background:#2a2c32;border-radius:3px">Normal</span><span style="padding:1px 8px;color:#a3a6ad">Narrow</span></div>
+<div style="display:flex;gap:2px"><span style="padding:1px 8px;background:#212328;border-radius:3px">✓ Input</span><span style="padding:1px 8px;background:#212328;border-radius:3px">✓ Inserts</span><span style="padding:1px 8px;background:#212328;border-radius:3px">✓ Sends</span><span style="padding:1px 8px;background:#212328;border-radius:3px">✓ Routing</span></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:1px 8px;color:#a3a6ad">Peak</span><span style="padding:1px 8px;background:#2a2c32;border-radius:3px">Peak + RMS</span></div>
+<div style="flex:1"></div>
+<span style="display:flex;align-items:center;gap:6px;color:#4fc38a">▶ Playing</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">6.1.000 · 92.00</span>
+<span style="padding:1px 8px;background:#212328;border-radius:3px">+ Bus</span>
+</div>
+<div style="flex:1;display:flex;gap:4px;padding:6px 6px 6px 0;min-height:0">
+<!-- gutter -->
+<div style="width:64px;flex:none;display:flex;flex-direction:column;font-size:10.5px;color:#80848c;text-align:right;padding-right:8px">
+<div style="height:46px"></div>
+<div style="height:30px;display:flex;align-items:center;justify-content:flex-end">Input</div>
+<div style="height:138px;padding-top:6px">Inserts</div>
+<div style="height:72px;padding-top:6px">Sends</div>
+<div style="height:30px;display:flex;align-items:center;justify-content:flex-end">Output</div>
+<div style="height:56px;display:flex;align-items:center;justify-content:flex-end">Pan</div>
+<div style="flex:1;position:relative;font-family:'IBM Plex Mono',monospace;margin:8px 0 10px"><sc-for list="{{ scale }}" as="sc" hint-placeholder-count="7"><div style="position:absolute;right:0;bottom:{{ sc.p }}%;transform:translateY(50%);color:{{ sc.c }}">{{ sc.l }}</div></sc-for></div>
+<div style="height:24px"></div><div style="height:30px"></div>
+</div>
+<!-- folder VCA -->
+<div style="width:100px;flex:none;display:flex;flex-direction:column;background:#18191d;border-radius:4px;box-shadow:inset 0 0 0 1px #24262b;overflow:hidden">
+<div style="height:46px;padding:6px 8px;display:flex;flex-direction:column;gap:2px;border-bottom:1px solid #24262b"><div style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:10px;border:1.5px solid #a3a6ad;border-radius:2px;box-sizing:border-box"></span><span style="font-weight:600;font-size:13px">Rhythm</span></div><span style="font-size:10.5px;color:#80848c">VCA · 2 tracks ▸</span></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#80848c;font-size:11px;padding:0 8px;max-height:326px;line-height:1.4">Folder strips<br>control their<br>children only</div>
+<div style="flex:1;display:flex;gap:8px;justify-content:center;padding:8px 0 10px;position:relative"><div style="width:3px;background:#0e0f11;border-radius:2px;position:relative"><div style="position:absolute;bottom:80%;left:-12px;width:26px;height:12px;background:#a3a6ad;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.6);transform:translateY(50%)"></div></div></div>
+<div style="height:24px;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:11px">−1.5</div>
+<div style="height:30px;display:flex;gap:2px;padding:4px 6px 6px"><span style="flex:1;display:flex;align-items:center;justify-content:center;background:#2a2c32;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">M</span><span style="flex:1;display:flex;align-items:center;justify-content:center;background:#2a2c32;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">S</span></div>
+</div>
+<!-- strips -->
+<sc-for list="{{ strips }}" as="s" hint-placeholder-count="11">
+<sc-if value="{{ s.sep }}" hint-placeholder-val="{{ false }}"><div style="width:18px;flex:none;display:flex;flex-direction:column;align-items:center;padding-top:14px"><span style="writing-mode:vertical-rl;transform:rotate(180deg);font-size:10.5px;color:#80848c;letter-spacing:.06em">BUSES</span><div style="flex:1;width:1px;background:#24262b;margin-top:8px"></div></div></sc-if>
+<div style="width:124px;flex:none;display:flex;flex-direction:column;background:{{ s.bg }};border-radius:4px;box-shadow:{{ s.ring }};overflow:visible;position:relative">
+<div style="height:46px;display:flex;flex-direction:column;border-bottom:1px solid #24262b;border-radius:4px 4px 0 0;overflow:hidden">
+<div style="height:3px;background:{{ s.c }}"></div>
+<div style="padding:4px 8px;display:flex;flex-direction:column;gap:1px">
+<div style="display:flex;align-items:center;gap:5px"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">{{ s.n }}</span><span style="font-weight:600;font-size:13px;white-space:nowrap">{{ s.name }}</span><span style="flex:1"></span><sc-if value="{{ s.frz }}" hint-placeholder-val="{{ false }}"><span style="font-size:9px;font-weight:600;color:#8cc8f0;background:#17283a;padding:0 4px;border-radius:2px">❄ FRZ</span></sc-if></div>
+<span style="font-size:10.5px;color:#a3a6ad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.dev }}</span>
+</div>
+</div>
+<div style="height:30px;display:flex;align-items:center;gap:3px;padding:0 5px">
+<sc-if value="{{ s.audio }}" hint-placeholder-val="{{ false }}"><span style="flex:1;height:20px;display:flex;align-items:center;gap:4px;padding:0 6px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-size:11px">{{ s.inp }} <span style="flex:1"></span><span style="color:#80848c">▾</span></span><span style="width:22px;height:20px;display:flex;align-items:center;justify-content:center;background:{{ s.monBg }};color:{{ s.monFg }};border-radius:3px;font-size:10px">◉</span></sc-if>
+<sc-if value="{{ s.noInput }}" hint-placeholder-val="{{ true }}"><span style="font-size:11px;color:#80848c;padding-left:3px">{{ s.inp }}</span></sc-if>
+</div>
+<div style="height:138px;display:flex;flex-direction:column;gap:2px;padding:4px 5px;position:relative">
+<sc-for list="{{ s.ins }}" as="i" hint-placeholder-count="6">
+<div style="height:20px;flex:none;display:flex;align-items:center;gap:5px;padding:0 6px;background:{{ i.bg }};border:{{ i.bd }};border-radius:3px;font-size:11px;color:{{ i.fg }};box-sizing:border-box;white-space:nowrap;overflow:hidden">
+<span style="width:6px;height:6px;border-radius:50%;background:{{ i.dot }};flex:none"></span><span style="text-decoration:{{ i.deco }};overflow:hidden;text-overflow:ellipsis">{{ i.n }}</span><span style="flex:1"></span><span style="color:#a3a6ad;font-size:10px">{{ i.tools }}</span>
+</div>
+</sc-for>
+<sc-if value="{{ s.drag }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:3px;right:3px;top:26px;height:2px;background:#4c9cf5;border-radius:1px"></div><div style="position:absolute;left:30px;top:30px;width:110px;height:20px;display:flex;align-items:center;gap:5px;padding:0 6px;background:#2a2c32;border:1px solid #4c9cf5;border-radius:3px;font-size:11px;box-shadow:0 6px 16px rgba(0,0,0,.6);z-index:4"><span style="width:6px;height:6px;border-radius:50%;background:#4fc38a"></span>Chorus <span style="flex:1"></span><span style="color:#80848c">⠿</span></div></sc-if>
+</div>
+<div style="height:72px;display:flex;flex-direction:column;gap:2px;padding:4px 5px">
+<sc-for list="{{ s.sends }}" as="sd" hint-placeholder-count="1"><div style="height:20px;flex:none;position:relative;background:#0e0f11;border-radius:3px;overflow:hidden;font-size:11px"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ sd.p }}%;background:#2c3a4f"></div><span style="position:absolute;left:6px;top:2px">{{ sd.n }}</span><span style="position:absolute;right:6px;top:2px;display:flex;gap:4px;align-items:center"><sc-if value="{{ sd.pre }}" hint-placeholder-val="{{ false }}"><span style="font-size:9px;font-weight:600;color:#e8c94a;background:#37321a;padding:0 3px;border-radius:2px">PRE</span></sc-if><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">{{ sd.v }}</span></span></div></sc-for>
+<sc-if value="{{ s.canSend }}" hint-placeholder-val="{{ true }}"><div style="height:18px;flex:none;display:flex;align-items:center;padding:0 6px;color:#80848c;font-size:11px;border:1px dashed #2a2c32;border-radius:3px">+ Send</div></sc-if>
+</div>
+<div style="height:30px;display:flex;align-items:center;padding:0 5px;position:relative">
+<span style="flex:1;height:20px;display:flex;align-items:center;gap:4px;padding:0 6px;background:{{ s.outBg }};border:1px solid {{ s.outBd }};border-radius:3px;font-size:11px">→ {{ s.out }}<span style="flex:1"></span><span style="color:#80848c">▾</span></span>
+<sc-if value="{{ s.routeOpen }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;left:5px;top:28px;width:200px;background:#2a2c32;border:1px solid #363940;border-radius:6px;box-shadow:0 10px 30px rgba(0,0,0,.6);padding:4px;z-index:10;display:flex;flex-direction:column">
+<div style="padding:4px 8px;font-size:10.5px;color:#80848c">Output</div>
+<div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:3px;background:#1d2a3d;color:#7fb4ff"><span style="width:12px">✓</span>Master</div>
+<div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px"><span style="width:12px"></span>Drum Bus</div>
+<div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px"><span style="width:12px"></span>Reverb</div>
+<div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;background:#363940;border-radius:3px"><span style="width:12px"></span>Delay</div>
+<div style="height:1px;background:#363940;margin:4px 0"></div>
+<div style="padding:4px 8px;font-size:10.5px;color:#80848c">Sidechain to</div>
+<div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px"><span style="width:12px"></span>Compressor · Pad</div>
+<div style="height:1px;background:#363940;margin:4px 0"></div>
+<div style="height:24px;display:flex;align-items:center;gap:8px;padding:0 8px;color:#a3a6ad"><span style="width:12px">+</span>New bus from this track</div>
+</div>
+</sc-if>
+</div>
+<div style="height:56px;display:flex;align-items:center;justify-content:center;gap:10px">
+<div style="width:32px;height:32px;border-radius:50%;background:#2a2c32;box-shadow:0 0 0 2px #212328;position:relative;transform:rotate({{ s.pan }}deg)"><div style="position:absolute;left:15px;top:3px;width:2px;height:10px;background:#e8e9ec;border-radius:1px"></div></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a3a6ad;width:30px">{{ s.panL }}</span>
+</div>
+<div style="flex:1;display:flex;gap:10px;justify-content:center;padding:8px 0 10px;position:relative;min-height:0">
+<div style="width:4px;background:#0e0f11;border-radius:2px;position:relative">
+<sc-for list="{{ ticks }}" as="tk" hint-placeholder-count="7"><div style="position:absolute;left:-8px;width:5px;height:1px;bottom:{{ tk }}%;background:#363940"></div></sc-for>
+<div style="position:absolute;bottom:{{ s.f }}%;left:-12px;width:28px;height:14px;transform:translateY(50%);background:{{ s.capBg }};border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.7)"><div style="position:absolute;left:4px;right:4px;top:6px;height:2px;background:#15161a"></div></div>
+</div>
+<div style="display:flex;gap:2px">
+<sc-for list="{{ s.m }}" as="mm" hint-placeholder-count="2"><div style="width:8px;height:100%;background:#0e0f11;border-radius:1px;position:relative;overflow:hidden">
+<div style="position:absolute;bottom:0;left:0;right:0;height:{{ mm.pk }}%;background:linear-gradient(to top,#2f7a56 0%,#2f7a56 62%,#8a7a2e 82%,#8f3533 100%);background-size:100% {{ mm.bs }}%;background-position:bottom"></div>
+<div style="position:absolute;bottom:0;left:2px;right:2px;height:{{ mm.rms }}%;background:#4fc38a"></div>
+<div style="position:absolute;left:0;right:0;bottom:{{ mm.hold }}%;height:1px;background:#e8e9ec"></div>
+</div></sc-for>
+</div>
+</div>
+<div style="height:24px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-size:11px"><span>{{ s.db }}</span><span style="color:{{ s.pkC }}">{{ s.pkL }}</span></div>
+<div style="height:30px;display:flex;gap:2px;padding:4px 5px 6px">
+<span style="flex:1;display:flex;align-items:center;justify-content:center;background:{{ s.mBg }};color:{{ s.mFg }};box-shadow:{{ s.mBd }};border-radius:3px;font-size:10.5px;font-weight:600">M</span>
+<span style="flex:1;display:flex;align-items:center;justify-content:center;background:{{ s.sBg }};color:{{ s.sFg }};box-shadow:{{ s.sBd }};border-radius:3px;font-size:10.5px;font-weight:600">S</span>
+<sc-if value="{{ s.canArm }}" hint-placeholder-val="{{ true }}"><span style="flex:1;display:flex;align-items:center;justify-content:center;background:{{ s.aBg }};box-shadow:{{ s.aBd }};border-radius:3px"><span style="width:9px;height:9px;border-radius:50%;background:{{ s.aDot }};border:1.5px solid {{ s.aRing }};box-sizing:border-box"></span></span></sc-if>
+</div>
+</div>
+</sc-for>
+<div style="flex:1"></div>
+<!-- master -->
+<div style="width:196px;flex:none;display:flex;flex-direction:column;background:#1a2230;border-radius:4px;box-shadow:inset 0 0 0 1px #2c4a73">
+<div style="height:46px;display:flex;flex-direction:column;border-bottom:1px solid #2c4a73;border-radius:4px 4px 0 0;overflow:hidden"><div style="height:3px;background:#4c9cf5"></div><div style="padding:4px 10px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:14px">Master</span><span style="font-size:10.5px;color:#7fb4ff">Out 1–2</span></div></div>
+<div style="height:30px;display:flex;align-items:center;gap:6px;padding:0 10px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad"><span>M −11.2</span><span>S −11.8</span><span style="color:#7fb4ff">I −12.4</span></div>
+<div style="height:138px;display:flex;flex-direction:column;gap:2px;padding:4px 6px">
+<sc-for list="{{ masterIns }}" as="i" hint-placeholder-count="6"><div style="height:20px;flex:none;display:flex;align-items:center;gap:5px;padding:0 6px;background:{{ i.bg }};border:{{ i.bd }};border-radius:3px;font-size:11px;color:{{ i.fg }};box-sizing:border-box"><span style="width:6px;height:6px;border-radius:50%;background:{{ i.dot }}"></span>{{ i.n }}</div></sc-for>
+</div>
+<div style="height:72px;display:flex;flex-direction:column;justify-content:center;gap:4px;padding:0 10px;font-size:11px;color:#a3a6ad"><div style="display:flex;justify-content:space-between"><span>True peak</span><span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">−1.1 dBTP</span></div><div style="display:flex;justify-content:space-between"><span>Target</span><span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">−14 LUFS</span></div></div>
+<div style="height:30px;display:flex;align-items:center;padding:0 6px"><span style="flex:1;height:20px;display:flex;align-items:center;padding:0 6px;background:#0e0f11;border:1px solid #2c4a73;border-radius:3px;font-size:11px">→ Out 1–2 · USB Audio <span style="flex:1"></span><span style="color:#80848c">▾</span></span></div>
+<div style="height:56px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:#a3a6ad"><span style="padding:2px 8px;background:#26354b;border-radius:3px">Mono</span><span style="padding:2px 8px;background:#26354b;border-radius:3px">Dim −20</span></div>
+<div style="flex:1;display:flex;gap:12px;justify-content:center;padding:8px 0 10px">
+<div style="width:4px;background:#0e0f11;border-radius:2px;position:relative"><div style="position:absolute;bottom:86%;left:-14px;width:32px;height:14px;transform:translateY(50%);background:#e8e9ec;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.7)"><div style="position:absolute;left:4px;right:4px;top:6px;height:2px;background:#1a2230"></div></div></div>
+<div style="display:flex;gap:3px">
+<sc-for list="{{ masterM }}" as="mm" hint-placeholder-count="2"><div style="width:14px;height:100%;background:#0e0f11;border-radius:1px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;left:0;right:0;height:{{ mm.pk }}%;background:#2f7a56"></div><div style="position:absolute;bottom:62%;left:0;right:0;height:{{ mm.mid }}%;background:#8a7a2e"></div><div style="position:absolute;bottom:0;left:3px;right:3px;height:{{ mm.rms }}%;background:#4fc38a"></div><div style="position:absolute;left:0;right:0;bottom:{{ mm.hold }}%;height:1px;background:#e8e9ec"></div></div></sc-for>
+</div>
+<div style="width:30px;position:relative;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c"><sc-for list="{{ scale }}" as="sc" hint-placeholder-count="7"><div style="position:absolute;left:0;bottom:{{ sc.p }}%;transform:translateY(50%)">{{ sc.l }}</div></sc-for></div>
+</div>
+<div style="height:24px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;font-family:'IBM Plex Mono',monospace;font-size:11px"><span>0.0</span><span style="color:#e8c94a">−1.1</span></div>
+<div style="height:30px;display:flex;gap:2px;padding:4px 6px 6px"><span style="flex:1;display:flex;align-items:center;justify-content:center;background:#26354b;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">M</span><span style="flex:2;display:flex;align-items:center;justify-content:center;background:#26354b;border-radius:3px;font-size:10.5px;color:#a3a6ad">Reset peaks</span></div>
+</div>
+</div>
+<div style="height:24px;flex:none;display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid #1d1f23;font-size:11px;color:#a3a6ad;background:#0e0f11"><span style="color:#4fc38a">● Saved</span><span>Bypassed Chorus on Pad</span><span style="flex:1"></span><span style="color:#80848c">11 channels · 3 buses · DSP 18 %</span></div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 03</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Mixer</span><span style="color:#a3a6ad">Maximized with F11. Shows a folder VCA, a frozen track, an armed audio track, buses, the master, an insert being reordered and the output routing menu open.</span></div>
+<sc-for list="{{ notes }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    const SC = [['+6', 100], ['0', 86], ['−6', 72], ['−12', 58], ['−24', 38], ['−48', 16], ['−∞', 0]];
+    const scale = SC.map(([l, p]) => ({ l, p, c: l === '0' ? '#a3a6ad' : '#80848c' }));
+    const ins = (list, opt = {}) => {
+      const out = list.map(([n, st]) => ({
+        n, bg: '#2a2c32', bd: 'none', fg: st === 'byp' ? '#80848c' : st === 'frz' ? '#80848c' : '#e8e9ec',
+        dot: st === 'byp' ? '#7a7e86' : st === 'crash' ? '#f0524f' : st === 'frz' ? '#8cc8f0' : '#4fc38a',
+        deco: st === 'byp' ? 'line-through' : 'none', tools: st === 'hover' ? '⏻  ✕' : st === 'crash' ? '⚠' : '',
+      }));
+      if (opt.hoverBg) out.forEach(i => { if (i.tools === '⏻  ✕') i.bg = '#363940'; });
+      while (out.length < 6) out.push(out.length === list.length ? { n: '+ Insert', bg: 'transparent', bd: '1px dashed #2a2c32', fg: '#80848c', dot: 'transparent', deco: 'none', tools: '' } : { n: '', bg: '#18191d', bd: 'none', fg: '#80848c', dot: 'transparent', deco: 'none', tools: '' });
+      return out;
+    };
+    const S = [
+      { n: 1, name: 'Drums', dev: 'Drum Machine', c: '#e8705f', ins: [['Compressor'], ['Parametric EQ']], sends: [['Reverb', '−22', 30]], out: 'Drum Bus', pan: 0, panL: 'C', f: 78, db: '−6.0', pk: [72, 70], rms: [52, 50], pkL: '−4.8' },
+      { n: 2, name: 'Bass', dev: 'Poly Synth · frozen', c: '#5aa2f5', frz: true, ins: [['Parametric EQ', 'frz'], ['Compressor', 'frz']], sends: [], out: 'Master', pan: 0, panL: 'C', f: 75, db: '−8.0', pk: [66, 66], rms: [48, 48], pkL: '−9.1' },
+      { n: 3, name: 'Keys', dev: 'Electric Piano', c: '#e3b24f', sel: true, drag: true, ins: [['Parametric EQ'], ['Gain / Utility']], sends: [['Reverb', '−14', 52], ['Delay', '−20', 34, 1]], out: 'Master', pan: -40, panL: 'L15', f: 76, db: '−7.0', pk: [60, 56], rms: [42, 40], pkL: '−12.0' },
+      { n: 4, name: 'Pad', dev: 'Poly Synth', c: '#9a82ec', muted: true, ins: [['Parametric EQ'], ['Chorus', 'byp']], sends: [['Reverb', '−12', 58]], out: 'Master', pan: 0, panL: 'C', f: 66, db: '−12.0', pk: [0, 0], rms: [0, 0], pkL: '−∞' },
+      { n: 5, name: 'Lead', dev: 'Poly Synth', c: '#4fc3a1', routeOpen: true, ins: [['Chorus', 'hover'], ['Delay']], sends: [['Delay', '−10', 62]], out: 'Master', pan: 30, panL: 'R10', f: 72, db: '−9.5', pk: [58, 60], rms: [40, 42], pkL: '−13.2' },
+      { n: 6, name: 'Vocal', dev: 'Audio', audio: true, armed: true, inp: 'In 1', c: '#e07fb0', ins: [['Parametric EQ'], ['Compressor'], ['Vintage Verb', 'crash']], sends: [['Reverb', '−18', 42]], out: 'Master', pan: 0, panL: 'C', f: 84, db: '−3.0', pk: [80, 80], rms: [60, 60], pkL: '−2.4', solo: true },
+      { n: 7, name: 'Guitar', dev: 'Audio', audio: true, inp: 'In 2', c: '#ec8d4f', ins: [['Parametric EQ']], sends: [['Reverb', '−16', 46]], out: 'Master', pan: 50, panL: 'R25', f: 78, db: '−6.0', pk: [64, 62], rms: [46, 44], pkL: '−8.3' },
+      { n: 8, name: 'Strings', dev: 'Sampler', c: '#b97be0', ins: [['Parametric EQ']], sends: [['Reverb', '−8', 70]], out: 'Master', pan: -20, panL: 'L8', f: 68, db: '−10.5', pk: [50, 52], rms: [34, 36], pkL: '−15.4' },
+      { n: 'B1', name: 'Drum Bus', dev: 'Bus · 1 in', bus: true, sep: true, c: '#8a93a3', ins: [['Compressor'], ['Limiter']], sends: [], out: 'Master', pan: 0, panL: 'C', f: 86, db: '0.0', pk: [74, 72], rms: [56, 54], pkL: '−3.9' },
+      { n: 'B2', name: 'Reverb', dev: 'Bus · 5 in', bus: true, c: '#8a93a3', ins: [['Reverb'], ['Parametric EQ']], sends: [], out: 'Master', pan: 0, panL: 'C', f: 86, db: '0.0', pk: [44, 46], rms: [30, 32], pkL: '−20.5' },
+      { n: 'B3', name: 'Delay', dev: 'Bus · 2 in', bus: true, c: '#8a93a3', ins: [['Delay']], sends: [['Reverb', '−12', 50]], out: 'Master', pan: 0, panL: 'C', f: 86, db: '0.0', pk: [34, 30], rms: [22, 20], pkL: '−24.0' },
+    ];
+    const strips = S.map(s => {
+      const m = [0, 1].map(k => ({ pk: s.pk[k], rms: s.rms[k], hold: Math.min(100, s.pk[k] + (s.pk[k] ? 4 : 0)), bs: s.pk[k] ? 10000 / s.pk[k] : 100 }));
+      return {
+        ...s, sep: !!s.sep, frz: !!s.frz, audio: !!s.audio, noInput: !s.audio, inp: s.audio ? s.inp : (s.bus ? 'Bus input' : 'MIDI · All'),
+        monBg: s.armed ? '#1d2a3d' : '#212328', monFg: s.armed ? '#7fb4ff' : '#80848c',
+        bg: s.sel ? '#1f2026' : s.bus ? '#1a1b20' : '#1c1d21', ring: s.sel ? 'inset 0 0 0 1px #4c9cf5' : (s.armed ? 'inset 0 0 0 1px #6b2a2a' : 'none'),
+        ins: ins(s.ins, { hoverBg: true }), sends: s.sends.map(([n, v, p, pre]) => ({ n, v, p, pre: !!pre })), canSend: s.sends.length < 2,
+        drag: !!s.drag, routeOpen: !!s.routeOpen,
+        outBg: s.routeOpen ? '#1d2a3d' : '#0e0f11', outBd: s.routeOpen ? '#4c9cf5' : '#24262b',
+        m, capBg: s.sel ? '#e8e9ec' : '#c4c7cd', pkC: s.pkL === '−2.4' ? '#e8c94a' : '#80848c',
+        mBg: s.muted ? '#3a2617' : '#2a2c32', mFg: s.muted ? '#f08a4b' : '#a3a6ad', mBd: s.muted ? 'inset 0 0 0 1px #5c3a20' : 'none',
+        sBg: s.solo ? '#37321a' : '#2a2c32', sFg: s.solo ? '#ecd04f' : '#a3a6ad', sBd: s.solo ? 'inset 0 0 0 1px #5a5124' : 'none',
+        canArm: !s.bus, aBg: s.armed ? '#3a1a1b' : '#2a2c32', aBd: s.armed ? 'inset 0 0 0 1px #6b2a2a' : 'none', aDot: s.armed ? '#f0524f' : 'transparent', aRing: s.armed ? '#f0524f' : '#80848c',
+      };
+    });
+    const masterIns = ins([['Parametric EQ'], ['Compressor'], ['Limiter']]).map(i => i.n ? { ...i, bg: i.bg === '#2a2c32' ? '#26354b' : i.bg, bd: i.bd } : { ...i, bg: '#161d28' });
+    const masterM = [[74, 54, 78], [72, 52, 76]].map(([pk, rms, hold]) => ({ pk, rms, hold, mid: pk - 62 }));
+    const notes = [
+      { h: 'What changed and why', items: [
+        'Row labels live once in a left gutter (Input, Inserts, Sends, Output, Pan, plus the dB scale), so strips don’t repeat "INSERTS / SENDS" and every pixel inside a strip is content.',
+        'Strips are 124 px (76 px in Narrow). Insert names fit in full ("Parametric EQ"), with a status dot: green active, gray + strikethrough bypassed, ice blue frozen, red ⚠ crashed.',
+        'Sends are horizontal mini-faders with name, value and an amber PRE tag. Drag to set the level, click the name to open the target bus.',
+        'Real pan knob with an L/R readout and a long fader (about 580 px at 1080p) with dB ticks. The meter is a dim peak bar with a bright RMS core and a 1 px peak hold; the numeric peak sits under it and turns amber above −3 dB.',
+        'Strip types read differently: tracks have a color bar and arm button; buses are cooler gray, sit after a BUSES divider and have no arm; folder strips are outlined VCA strips with only a fader and M/S; the master is accent-tinted, wider, with LUFS M/S/I, true peak, Mono and Dim.',
+        'The selected strip gets an accent outline and a brighter fader cap. Armed strips get a red outline so you can find them while recording.',
+      ]},
+      { h: 'Interaction', items: [
+        'Inserts: hover shows bypass ⏻ and remove ✕. Drag to reorder (blue insertion line plus a ghost slot), Alt+drag copies to another strip, double-click opens the plugin window. Drag a device from the browser onto a slot to insert it there.',
+        'Output and sidechain routing share one menu: outputs on top, sidechain targets below, then "New bus from this track", which creates a bus and routes to it in one undo step.',
+        'Fader: drag, Shift fine, double-click to type, Ctrl+click 0 dB. Click a meter to reset its peak hold; Reset peaks on the master clears all.',
+        'Selecting a strip selects its track in the arrange and the inspector, and the other way round. Arrow keys move between strips when the mixer has focus.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'Plugin crash: the slot turns red with ⚠, audio passes through, and a toast offers Reload or Bypass. The slot keeps the ⚠ until you resolve it.',
+        'Frozen track: inserts are grayed with ice dots and can’t be edited; the fader, pan, sends and M/S still work. Clicking an insert offers "Unfreeze to edit".',
+        'No buses: the BUSES divider is replaced by a "+ Bus" ghost strip.',
+      ]},
+    ];
+    this._v = { scale, ticks: SC.map(s => s[1]), strips, masterIns, masterM, notes };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

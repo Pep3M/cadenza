@@ -108,6 +108,13 @@ impl<const N: usize> ParamValues<N> {
 		self.values[index]
 	}
 
+	/// Every plain value, in `DeviceInfo::params` order; for a UI or analysis
+	/// function that takes a plain `&[f32]` slice (e.g. `eq_response_db`).
+	#[inline]
+	pub fn values(&self) -> &[f32; N] {
+		&self.values
+	}
+
 	/// Integer-valued (switch/choice) parameter.
 	#[inline]
 	pub fn choice(&self, index: usize) -> usize {

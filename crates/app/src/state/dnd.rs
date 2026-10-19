@@ -64,12 +64,16 @@ pub enum DropTarget {
 	BelowSampler { at: Tick },
 	/// A pad of a drum_sampler's editor (its note).
 	Pad { device: DeviceRef, note: u8 },
+	/// The rest of a drum_sampler's editor (folders dropped there map a whole kit).
+	Kit { device: DeviceRef },
 	/// A sampler editor's zone map: a zone (replace its sample) or the keyboard
 	/// (`None`: map the file across it).
 	Zone {
 		device: DeviceRef,
 		zone: Option<usize>,
 	},
+	/// An empty spot of a sampler's zone map (a dropped file becomes a zone filling it).
+	ZoneArea { device: DeviceRef, key: u8, vel: u8 },
 	/// A mixer strip (`None` = master).
 	Strip(Option<TrackId>),
 	/// Between two inserts of a mixer strip: `slot` 0..=len, before the insert there.
@@ -87,7 +91,9 @@ impl DropTarget {
 			DropTarget::Strip(t) | DropTarget::InsertSlot { track: t, .. } => t,
 			DropTarget::Device(d)
 			| DropTarget::Pad { device: d, .. }
-			| DropTarget::Zone { device: d, .. } => d.track,
+			| DropTarget::Kit { device: d }
+			| DropTarget::Zone { device: d, .. }
+			| DropTarget::ZoneArea { device: d, .. } => d.track,
 			DropTarget::Below { .. } | DropTarget::BelowSampler { .. } | DropTarget::Window => None,
 		}
 	}
@@ -155,6 +161,11 @@ pub enum DropAction {
 		device: DeviceRef,
 		path: PathBuf,
 		slot: super::samples::SampleSlot,
+	},
+	/// A folder of drum samples mapped onto a drum_sampler's pads by their names.
+	MapKit {
+		device: DeviceRef,
+		folder: PathBuf,
 	},
 	/// A new instrument track with a sampler playing the file across the keyboard.
 	NewSampler {
@@ -246,8 +257,16 @@ impl DropAction {
 					super::samples::SampleSlot::Keyboard => {
 						format!("Map {name} across the keyboard")
 					}
+					super::samples::SampleSlot::Area { key, vel } => format!(
+						"Add a zone with {name} at {} \u{b7} vel {vel}",
+						cadenza_model::note_name(*key)
+					),
 				}
 			}
+			DropAction::MapKit { folder, .. } => format!(
+				"Map the kit in '{}' onto the pads by name",
+				folder.file_name().unwrap_or_default().to_string_lossy()
+			),
 			DropAction::NewSampler { path } => format!(
 				"New sampler track with {}",
 				path.file_name().unwrap_or_default().to_string_lossy()
@@ -375,7 +394,11 @@ fn resolve_device(project: &Project, item: &BrowserItem, target: DropTarget) -> 
 					index: None,
 				}
 			}
-			DropTarget::Window | DropTarget::Pad { .. } | DropTarget::Zone { .. } => {
+			DropTarget::Window
+			| DropTarget::Pad { .. }
+			| DropTarget::Kit { .. }
+			| DropTarget::Zone { .. }
+			| DropTarget::ZoneArea { .. } => {
 				DropAction::Reject("Drop effects on a track or a mixer strip".into())
 			}
 		},
@@ -433,7 +456,24 @@ fn resolve_preset(
 }
 
 fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -> DropAction {
-	let Some(kind) = classify(path) else {
+	let kind = classify(path).or_else(|| path.is_dir().then_some(FileKind::Folder));
+	if kind == Some(FileKind::Folder) {
+		return match target {
+			DropTarget::Pad { device, .. } | DropTarget::Kit { device } => DropAction::MapKit {
+				device,
+				folder: path.to_path_buf(),
+			},
+			_ => DropAction::Reject(
+				"Folders map a kit onto the drum sampler: drop it on its pads".into(),
+			),
+		};
+	}
+	if let DropTarget::Kit { .. } = target {
+		return DropAction::Reject(
+			"Drop audio files on a pad, or a folder here to map a whole kit".into(),
+		);
+	}
+	let Some(kind) = kind else {
 		return DropAction::Reject(format!(
 			"Cadenza cannot use {}",
 			path.file_name().unwrap_or_default().to_string_lossy()
@@ -450,6 +490,9 @@ fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -
 				super::samples::SampleSlot::Zone,
 			),
 		)),
+		DropTarget::ZoneArea { device, key, vel } => {
+			Some((device, super::samples::SampleSlot::Area { key, vel }))
+		}
 		_ => None,
 	};
 	if let Some((device, slot)) = sample_target {
@@ -735,5 +778,30 @@ mod tests {
 			)
 			.accepted()
 		);
+	}
+
+	#[test]
+	fn folders_map_a_kit_onto_the_drum_sampler_only() {
+		let fx = fixture();
+		let dir = tempfile::tempdir().unwrap();
+		let device = DeviceRef {
+			track: Some(fx.keys),
+			device: fx.eq,
+		};
+		let folder = Payload::File(dir.path().to_path_buf());
+		for target in [
+			DropTarget::Pad { device, note: 36 },
+			DropTarget::Kit { device },
+		] {
+			let action = resolve(&fx.p, &folder, target, false);
+			assert!(matches!(action, DropAction::MapKit { .. }), "{action:?}");
+			assert!(action.describe(&fx.p).starts_with("Map the kit in"));
+		}
+		for target in [DropTarget::Window, DropTarget::Zone { device, zone: None }] {
+			assert!(!resolve(&fx.p, &folder, target, false).accepted());
+		}
+		let wav = Payload::File("/x/kick.wav".into());
+		assert!(!resolve(&fx.p, &wav, DropTarget::Kit { device }, false).accepted());
+		assert!(resolve(&fx.p, &wav, DropTarget::Pad { device, note: 36 }, false).accepted());
 	}
 }

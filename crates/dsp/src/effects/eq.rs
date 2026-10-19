@@ -196,6 +196,110 @@ fn to_domain(index: usize, v: f32) -> f32 {
 	if is_log(index) { v.log2() } else { v }
 }
 
+/// Band indices for [`EqBands::band_response_db`] / [`eq_band_response_db`]:
+/// 0 high-pass, 1 low shelf, 2-4 peaking bands 1-3, 5 high shelf, 6 low-pass.
+pub const N_BANDS: usize = 7;
+
+/// Coefficients for every section, built once from plain parameter values
+/// (in [`INFO`]'s order) so a UI can sample many frequency points without
+/// recomputing any of them. Built by the same code [`Eq::update_coeffs`]
+/// uses, so the picture and the sound cannot drift.
+pub struct EqBands {
+	coeffs: [BiquadCoeffs; N_FILTERS],
+	active: [bool; N_FILTERS],
+	output_db: f32,
+	sample_rate: f32,
+}
+
+impl EqBands {
+	/// `params` holds the plain (unnormalized) values in [`INFO`]'s param
+	/// order; a short or missing slice falls back to each parameter's default.
+	pub fn new(params: &[f32], sample_rate: f32) -> Self {
+		let sr = sample_rate.max(1.0);
+		let p = |i: usize| params.get(i).copied().unwrap_or(PARAMS[i].default);
+		let mut coeffs = [BiquadCoeffs::IDENTITY; N_FILTERS];
+		let mut active = [false; N_FILTERS];
+		let hp_slope = (p(P_HP_SLOPE).round().max(0.0) as usize).min(3);
+		let lp_slope = (p(P_LP_SLOPE).round().max(0.0) as usize).min(3);
+		if hp_slope > 0 {
+			for (k, &q) in BUTTERWORTH_Q[hp_slope - 1].iter().enumerate() {
+				coeffs[k] = BiquadCoeffs::highpass(p(P_HP_FREQ), q, sr);
+				active[k] = true;
+			}
+		}
+		if lp_slope > 0 {
+			for (k, &q) in BUTTERWORTH_Q[lp_slope - 1].iter().enumerate() {
+				coeffs[9 + k] = BiquadCoeffs::lowpass(p(P_LP_FREQ), q, sr);
+				active[9 + k] = true;
+			}
+		}
+		coeffs[4] = BiquadCoeffs::low_shelf(p(P_LS_FREQ), p(P_LS_GAIN), sr);
+		active[4] = true;
+		for (slot, (f, g, q)) in [
+			(P_P1_FREQ, P_P1_GAIN, P_P1_Q),
+			(P_P2_FREQ, P_P2_GAIN, P_P2_Q),
+			(P_P3_FREQ, P_P3_GAIN, P_P3_Q),
+		]
+		.into_iter()
+		.enumerate()
+		{
+			coeffs[5 + slot] = BiquadCoeffs::peaking(p(f), p(q), p(g), sr);
+			active[5 + slot] = true;
+		}
+		coeffs[8] = BiquadCoeffs::high_shelf(p(P_HS_FREQ), p(P_HS_GAIN), sr);
+		active[8] = true;
+		Self {
+			coeffs,
+			active,
+			output_db: p(P_OUTPUT),
+			sample_rate: sr,
+		}
+	}
+
+	/// Summed magnitude response of the whole EQ at `freq_hz`, in dB
+	/// (includes output gain).
+	pub fn response_db(&self, freq_hz: f32) -> f32 {
+		let mut db = self.output_db;
+		for (c, &on) in self.coeffs.iter().zip(&self.active) {
+			if on {
+				db += c.magnitude_db(freq_hz, self.sample_rate);
+			}
+		}
+		db
+	}
+
+	/// Magnitude response of one band alone (output gain excluded). See
+	/// [`N_BANDS`] for the band order.
+	pub fn band_response_db(&self, band: usize, freq_hz: f32) -> f32 {
+		let slots: &[usize] = match band {
+			0 => &[0, 1, 2, 3],
+			1 => &[4],
+			2 => &[5],
+			3 => &[6],
+			4 => &[7],
+			5 => &[8],
+			6 => &[9, 10, 11, 12],
+			_ => &[],
+		};
+		slots
+			.iter()
+			.filter(|&&k| self.active[k])
+			.map(|&k| self.coeffs[k].magnitude_db(freq_hz, self.sample_rate))
+			.sum()
+	}
+}
+
+/// Summed magnitude response of the EQ at `freq_hz`, in dB (output gain
+/// included). `params` are the plain values in [`INFO`]'s param order.
+pub fn eq_response_db(params: &[f32], sample_rate: f32, freq_hz: f32) -> f32 {
+	EqBands::new(params, sample_rate).response_db(freq_hz)
+}
+
+/// Magnitude response of one band alone; see [`EqBands::band_response_db`].
+pub fn eq_band_response_db(params: &[f32], band: usize, sample_rate: f32, freq_hz: f32) -> f32 {
+	EqBands::new(params, sample_rate).band_response_db(band, freq_hz)
+}
+
 pub struct Eq {
 	params: ParamValues<N_PARAMS>,
 	sample_rate: f32,
@@ -240,44 +344,21 @@ impl Eq {
 	}
 
 	fn update_coeffs(&mut self) {
-		let sr = self.sample_rate;
-		let hp_slope = self.params.choice(P_HP_SLOPE).min(3);
-		let lp_slope = self.params.choice(P_LP_SLOPE).min(3);
-		let hp_f = self.value(P_HP_FREQ);
-		let lp_f = self.value(P_LP_FREQ);
-		for k in 0..4 {
-			self.active[k] = false;
-			self.active[9 + k] = false;
+		// Current plain values (smoothers already settled toward their
+		// targets); built through `EqBands` so the picture and the sound use
+		// exactly the same coefficient math.
+		let mut plain = [0.0_f32; N_PARAMS];
+		for (i, slot) in plain.iter_mut().enumerate() {
+			*slot = if SMOOTHED.contains(&i) {
+				self.value(i)
+			} else {
+				self.params.get(i)
+			};
 		}
-		if hp_slope > 0 {
-			for (k, &q) in BUTTERWORTH_Q[hp_slope - 1].iter().enumerate() {
-				self.coeffs[k] = BiquadCoeffs::highpass(hp_f, q, sr);
-				self.active[k] = true;
-			}
-		}
-		if lp_slope > 0 {
-			for (k, &q) in BUTTERWORTH_Q[lp_slope - 1].iter().enumerate() {
-				self.coeffs[9 + k] = BiquadCoeffs::lowpass(lp_f, q, sr);
-				self.active[9 + k] = true;
-			}
-		}
-		self.coeffs[4] = BiquadCoeffs::low_shelf(self.value(P_LS_FREQ), self.value(P_LS_GAIN), sr);
-		for (slot, (f, g, q)) in [
-			(P_P1_FREQ, P_P1_GAIN, P_P1_Q),
-			(P_P2_FREQ, P_P2_GAIN, P_P2_Q),
-			(P_P3_FREQ, P_P3_GAIN, P_P3_Q),
-		]
-		.into_iter()
-		.enumerate()
-		{
-			self.coeffs[5 + slot] =
-				BiquadCoeffs::peaking(self.value(f), self.value(q), self.value(g), sr);
-		}
-		self.coeffs[8] = BiquadCoeffs::high_shelf(self.value(P_HS_FREQ), self.value(P_HS_GAIN), sr);
-		for k in 4..9 {
-			self.active[k] = true;
-		}
-		self.output = db_to_gain(self.value(P_OUTPUT));
+		let bands = EqBands::new(&plain, self.sample_rate);
+		self.coeffs = bands.coeffs;
+		self.active = bands.active;
+		self.output = db_to_gain(bands.output_db);
 		// Sections that just got switched off must restart from silence.
 		for k in 0..N_FILTERS {
 			if !self.active[k] {
@@ -445,5 +526,71 @@ mod tests {
 		}
 		let peak = l[24_000..].iter().fold(0.0_f32, |m, x| m.max(x.abs()));
 		assert!((crate::util::gain_to_db(peak / 0.1) - 9.0).abs() < 0.2);
+	}
+
+	/// Builds `EqBands` straight from plain param values (bypassing the
+	/// smoothers entirely) and compares `eq_response_db` to a real processed
+	/// sine's steady-state RMS gain, for a few bands and frequencies.
+	#[test]
+	fn eq_response_db_matches_processed_sine() {
+		let sr = 48_000.0;
+		let settings: &[(&str, f32)] = &[
+			("hp_freq", 100.0),
+			("hp_slope", 2.0),
+			("low_shelf_freq", 150.0),
+			("low_shelf_gain", 4.0),
+			("peak1_freq", 400.0),
+			("peak1_gain", -6.0),
+			("peak1_q", 2.0),
+			("peak3_freq", 6_000.0),
+			("peak3_gain", 5.0),
+			("peak3_q", 3.0),
+			("output_gain", -3.0),
+		];
+		let mut params = [0.0_f32; N_PARAMS];
+		for (i, p) in params.iter_mut().enumerate() {
+			*p = PARAMS[i].default;
+		}
+		for &(id, v) in settings {
+			params[INFO.param_index(id).unwrap()] = v;
+		}
+		for freq in [50.0, 150.0, 400.0, 1_000.0, 6_000.0, 15_000.0] {
+			let formula = eq_response_db(&params, sr, freq);
+			let amp = 0.1;
+			let mut l: Vec<f32> = (0..48_000)
+				.map(|n| (std::f32::consts::TAU * freq * n as f32 / sr).sin() * amp)
+				.collect();
+			let mut r = l.clone();
+			let mut eq = eq_with(settings);
+			for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+				eq.process(cl, cr, &[], &Transport::default());
+			}
+			let settled = &l[24_000..];
+			let sum_sq: f64 = settled.iter().map(|&x| (x as f64) * (x as f64)).sum();
+			let rms = (sum_sq / settled.len() as f64).sqrt() as f32;
+			let input_rms = amp * std::f32::consts::FRAC_1_SQRT_2;
+			let measured = crate::util::gain_to_db(rms / input_rms);
+			assert!(
+				(formula - measured).abs() < 0.3,
+				"freq {freq}: formula {formula}, measured {measured}"
+			);
+		}
+	}
+
+	#[test]
+	fn eq_band_response_db_matches_band_alone() {
+		let sr = 48_000.0;
+		let mut params = [0.0_f32; N_PARAMS];
+		for (i, p) in params.iter_mut().enumerate() {
+			*p = PARAMS[i].default;
+		}
+		params[P_P2_FREQ] = 2_000.0;
+		params[P_P2_GAIN] = 7.0;
+		params[P_P2_Q] = 3.0;
+		params[P_OUTPUT] = 6.0; // excluded from the per-band response
+		assert!((eq_band_response_db(&params, 3, sr, 2_000.0) - 7.0).abs() < 0.1);
+		assert!(eq_band_response_db(&params, 3, sr, 50.0).abs() < 0.3);
+		// Other bands are flat (defaults): their response is 0 dB everywhere.
+		assert!(eq_band_response_db(&params, 1, sr, 150.0).abs() < 0.05);
 	}
 }

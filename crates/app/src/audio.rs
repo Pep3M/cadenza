@@ -19,6 +19,10 @@
 //! ([`AudioEvent::RecordingStarted`] hands the UI the live [`RecordingMonitor`]) and stops
 //! them ([`AudioEvent::Recorded`] carries the files and passes; the UI turns them into
 //! one undoable batch). Device lists are probed here too, never on the UI thread.
+//!
+//! Device probe: [`AudioEngine::probe`] picks the device whose editor shows live data;
+//! the thread answers with [`AudioEvent::Probe`] carrying the player's [`DeviceProbe`]
+//! (again after the devices reopen, since a new player has a new ring).
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
@@ -27,9 +31,9 @@ use std::time::{Duration, Instant};
 
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_engine::{
-	AudioConfig, AudioDevices, AuditionScope, EditorState, EditorUpdate, InputInfo, InputStats,
-	MeterBank, MetronomeSettings, Player, PlayerClock, PluginCrash, PluginHosting, PluginXruns,
-	RecordSetup, Recording, RecordingMonitor,
+	AudioConfig, AudioDevices, AuditionScope, DeviceProbe, EditorState, EditorUpdate, InputInfo,
+	InputStats, MeterBank, MetronomeSettings, Player, PlayerClock, PluginCrash, PluginHosting,
+	PluginXruns, RecordSetup, Recording, RecordingMonitor,
 };
 use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
@@ -99,6 +103,8 @@ enum Request {
 	/// Recording latency offset, frames.
 	LatencyOffset(i64),
 	TestTone(bool),
+	/// The device the probe follows (`None`: off).
+	Probe(Option<DeviceId>),
 	/// List audio devices and MIDI inputs (reported as `Devices`).
 	ListDevices,
 	StartRecording(Box<RecordSetup>),
@@ -163,6 +169,8 @@ pub enum AudioEvent {
 	},
 	/// The output thread's scheduling became known (after the device opened).
 	AudioThread(String),
+	/// The probe of the current player (`None` while no device is probed).
+	Probe(Option<Arc<DeviceProbe>>),
 	/// What happened in open plugin editors.
 	Editor(Vec<EditorUpdate>),
 	/// Live plugin states to store in the project (captured, or carried over by a load).
@@ -230,6 +238,11 @@ impl AudioEngine {
 
 	pub fn test_tone(&self, on: bool) {
 		self.send(Request::TestTone(on));
+	}
+
+	/// Follows `device` with the probe (answered by [`AudioEvent::Probe`]).
+	pub fn probe(&self, device: Option<DeviceId>) {
+		self.send(Request::Probe(device));
 	}
 
 	pub fn list_devices(&self) {
@@ -383,6 +396,7 @@ struct Kept {
 	armed: Vec<TrackId>,
 	metronome: Option<MetronomeSettings>,
 	latency_offset: i64,
+	probe: Option<DeviceId>,
 }
 
 fn status(player: &Player, kept: &Kept) -> DeviceStatus {
@@ -411,6 +425,7 @@ fn open(config: &AudioConfig, kept: &mut Kept) -> Result<Player, String> {
 		let _ = player.set_metronome(m);
 	}
 	player.set_latency_offset(kept.latency_offset);
+	let _ = player.set_probe(kept.probe);
 	Ok(player)
 }
 
@@ -493,6 +508,7 @@ fn run(
 						} => {
 							let _ = tx.send(Vec::new());
 						}
+						Request::Probe(device) => kept.probe = device,
 						_ => {}
 					}
 				}
@@ -507,6 +523,9 @@ fn run(
 		input: player.input_stats(),
 		status: status(&player, &kept),
 	});
+	if kept.probe.is_some() {
+		emit(AudioEvent::Probe(player.probe()));
+	}
 	let mut next_crash_poll = Instant::now() + CRASH_POLL;
 	let mut last_xruns: (u64, Vec<PluginXruns>) = (0, Vec::new());
 	let mut scheduling_sent = player.audio_scheduling().is_some();
@@ -697,6 +716,9 @@ fn run(
 						input: player.input_stats(),
 						status: status(&player, &kept),
 					});
+					if kept.probe.is_some() {
+						emit(AudioEvent::Probe(player.probe()));
+					}
 					Ok(())
 				}
 				Request::MidiInput(port) => {
@@ -730,6 +752,12 @@ fn run(
 					Ok(())
 				}
 				Request::TestTone(on) => player.set_test_tone(on),
+				Request::Probe(device) => {
+					kept.probe = device;
+					let result = player.set_probe(device);
+					emit(AudioEvent::Probe(player.probe()));
+					result
+				}
 				Request::ListDevices => {
 					let audio = cadenza_engine::audio_devices();
 					let midi = cadenza_engine::midi_input_ports()

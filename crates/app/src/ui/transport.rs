@@ -1,10 +1,11 @@
-//! Transport bar: play/stop, record (with record mode), return to start, metronome,
-//! count-in and punch, position, tempo, time signature, master meter and audio status.
+//! Transport bar, grouped in the order it is used: transport buttons, Pattern/Song, loop /
+//! click / count-in, the position cluster (position, time, tempo, signature), recording and
+//! automation modes, follow, then audio status and the master meter.
 
 use cadenza_core::{Tick, TimeSignature};
 use egui::{
-	Align, Align2, CornerRadius, Id, Layout, RichText, Sense, Shape, Stroke, StrokeKind, Ui, pos2,
-	vec2,
+	Align, Align2, CornerRadius, FontFamily, FontId, Id, Layout, Rect, RichText, Sense, Shape,
+	Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
 
 use crate::state::timeline::{format_bbt, format_time};
@@ -13,47 +14,61 @@ use crate::state::{AppState, AudioStatus};
 use crate::theme;
 use crate::ui::widgets::{self, Gesture};
 
+/// Space between transport groups.
+const GROUP_GAP: f32 = 12.0;
+/// Transport button size (`h-transport`).
+const BUTTON: Vec2 = vec2(34.0, 30.0);
+/// Height of the labelled controls (caption above).
+const FIELD: f32 = 22.0;
+
 pub fn show(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal_centered(|ui| {
 		ui.spacing_mut().item_spacing.x = 6.0;
 		ui.add_space(4.0);
-		let playing = state.is_playing();
-		if icon_button(ui, Icon::ToStart, false)
-			.on_hover_text("Return to start (Home)")
-			.clicked()
-		{
-			state.seek(Tick::ZERO);
-		}
-		if icon_button(ui, Icon::Stop, false)
-			.on_hover_text("Stop")
-			.clicked()
-		{
-			state.stop();
-		}
-		if icon_button(ui, Icon::Play, playing)
-			.on_hover_text("Play / stop (Space)")
-			.clicked()
-		{
-			state.toggle_play();
-		}
-		record_button(ui, state);
-		ui.add_space(4.0);
-		mode_switch(ui, state);
+		// Transport buttons as one joined group.
+		ui.scope(|ui| {
+			ui.spacing_mut().item_spacing.x = 2.0;
+			let playing = state.is_playing();
+			if icon_button(ui, Icon::ToStart, false)
+				.on_hover_text("Return to start (Home)")
+				.clicked()
+			{
+				state.seek(Tick::ZERO);
+			}
+			if icon_button(ui, Icon::Stop, false)
+				.on_hover_text("Stop")
+				.clicked()
+			{
+				state.stop();
+			}
+			if icon_button(ui, Icon::Play, playing)
+				.on_hover_text("Play / stop (Space)")
+				.clicked()
+			{
+				state.toggle_play();
+			}
+			record_button(ui, state);
+		});
+		ui.add_space(GROUP_GAP);
+		labeled(ui, "Mode", |ui| mode_switch(ui, state));
+		ui.add_space(GROUP_GAP);
 		loop_button(ui, state);
-		record_controls(ui, state);
-		automation_mode(ui, state);
-		ui.add_space(8.0);
+		metronome(ui, state);
+		labeled(ui, "Count-in", |ui| count_in(ui, state));
+		ui.add_space(GROUP_GAP);
 		position_display(ui, state);
-		ui.add_space(8.0);
 		tempo(ui, state);
 		time_signature(ui, state);
-		ui.add_space(8.0);
-		super::arrange::follow_menu(ui, state);
+		ui.add_space(GROUP_GAP);
+		labeled(ui, "MIDI record", |ui| midi_record(ui, state));
+		labeled(ui, "Punch", |ui| punch(ui, state));
+		labeled(ui, "Automation", |ui| automation_mode(ui, state));
+		labeled(ui, "Follow", |ui| super::arrange::follow_menu(ui, state));
 
 		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 			ui.add_space(6.0);
 			let levels = state.meters.get(None);
-			let (r, resp) = ui.allocate_exact_size(vec2(120.0, 22.0), Sense::click());
+			let (r, resp) = ui.allocate_exact_size(vec2(120.0, 18.0), Sense::click());
 			paint_horizontal_meter(ui, r, levels);
 			if resp
 				.on_hover_text("Master level (click to reset the clip lamp)")
@@ -61,22 +76,17 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			{
 				state.meters.reset_clip(None);
 			}
-			ui.label(
-				RichText::new("MASTER")
-					.font(theme::small())
-					.color(theme::TEXT_FAINT),
-			);
-			ui.add_space(10.0);
+			ui.add_space(8.0);
 			let (text, color) = match &state.audio_status {
 				AudioStatus::Ready { sample_rate } => (
 					format!("{:.1} kHz", *sample_rate as f32 / 1000.0),
 					theme::PLAYING,
 				),
-				AudioStatus::Starting => ("starting audio…".to_owned(), theme::TEXT_DIM),
-				AudioStatus::Unavailable(_) => ("no audio device".to_owned(), theme::ERROR),
-				AudioStatus::Off => ("audio off".to_owned(), theme::TEXT_FAINT),
+				AudioStatus::Starting => ("Starting audio…".to_owned(), theme::TEXT_DIM),
+				AudioStatus::Unavailable(_) => ("No audio device".to_owned(), theme::ERROR),
+				AudioStatus::Off => ("Audio off".to_owned(), theme::WARNING),
 			};
-			let r = ui.label(RichText::new(text).font(theme::small()).color(color));
+			let r = ui.label(RichText::new(text).font(theme::mono(11.0)).color(color));
 			let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
 			ui.painter().circle_filled(dot.center(), 3.5, color);
 			if let AudioStatus::Unavailable(e) = &state.audio_status {
@@ -85,6 +95,84 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 			xrun_indicator(ui, state);
 		});
 	});
+}
+
+/// A caption above `add`: dropdowns and fields read "label above, value inside".
+fn labeled<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+	ui.vertical(|ui| {
+		ui.spacing_mut().item_spacing.y = 1.0;
+		ui.label(
+			RichText::new(label)
+				.font(FontId::new(10.5, FontFamily::Proportional))
+				.color(theme::TEXT_FAINT),
+		);
+		add(ui)
+	})
+	.inner
+}
+
+/// A toggle with an icon and a word (and an optional dim detail), on = the state's soft
+/// fill, outline and color. `min_width` 0 = fit the text.
+fn state_button(
+	ui: &mut Ui,
+	on: bool,
+	icon: &str,
+	label: &str,
+	detail: Option<&str>,
+	color: egui::Color32,
+	min_width: f32,
+) -> egui::Response {
+	let font = theme::medium(12.0);
+	let fg = if on { color } else { theme::TEXT };
+	let text = ui
+		.painter()
+		.layout_no_wrap(label.to_owned(), font.clone(), fg);
+	let detail = detail.map(|d| {
+		ui.painter()
+			.layout_no_wrap(d.to_owned(), theme::small(), theme::TEXT_FAINT)
+	});
+	let detail_w = detail.as_ref().map_or(0.0, |g| g.size().x + 5.0);
+	let width = (28.0 + text.size().x + detail_w + 10.0).max(min_width);
+	let (rect, resp) = ui.allocate_exact_size(vec2(width, BUTTON.y), Sense::click());
+	let p = ui.painter();
+	let r = CornerRadius::same(theme::RADIUS_MD);
+	let bg = if on {
+		theme::mix(theme::BG_PANEL, color, 0.2)
+	} else if resp.hovered() {
+		theme::BG_HOVER
+	} else {
+		theme::BG_WIDGET
+	};
+	p.rect_filled(rect, r, bg);
+	if on {
+		p.rect_stroke(
+			rect,
+			r,
+			Stroke::new(1.0, color.gamma_multiply(0.5)),
+			StrokeKind::Inside,
+		);
+	}
+	let y = rect.center().y;
+	p.text(
+		pos2(rect.left() + 16.0, y),
+		Align2::CENTER_CENTER,
+		icon,
+		FontId::proportional(15.0),
+		if on { color } else { theme::TEXT_DIM },
+	);
+	let x = rect.left() + 28.0;
+	let text_size = text.size();
+	p.galley(pos2(x, y - text_size.y * 0.5), text, fg);
+	if let Some(d) = detail {
+		let h = d.size().y;
+		p.galley(
+			pos2(x + text_size.x + 5.0, y - h * 0.5),
+			d,
+			theme::TEXT_FAINT,
+		);
+	}
+	resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
+	resp
 }
 
 /// Dropouts since the last reset (audio device under/overruns, late plugin blocks):
@@ -131,98 +219,63 @@ fn xrun_indicator(ui: &mut Ui, state: &mut AppState) {
 	}
 }
 
-/// FL Studio-like "PAT | SONG" switch (L).
+/// "Pattern | Song" segmented switch (L).
 fn mode_switch(ui: &mut Ui, state: &mut AppState) {
 	let mode = state.view.transport.mode;
-	let (rect, _) = ui.allocate_exact_size(vec2(92.0, 28.0), Sense::hover());
+	let (rect, _) = ui.allocate_exact_size(vec2(118.0, FIELD), Sense::hover());
+	ui.painter()
+		.rect_filled(rect, CornerRadius::same(theme::RADIUS_MD), theme::BG_DEEP);
 	let half = rect.width() / 2.0;
 	for (i, (m, label, tip)) in [
 		(
 			PlayMode::Pattern,
-			"PAT",
+			"Pattern",
 			"Pattern mode (L): Play loops the clip open in the piano roll, heard alone",
 		),
 		(
 			PlayMode::Song,
-			"SONG",
+			"Song",
 			"Song mode (L): Play runs the whole arrangement",
 		),
 	]
 	.into_iter()
 	.enumerate()
 	{
-		let r = egui::Rect::from_min_size(
+		let r = Rect::from_min_size(
 			pos2(rect.left() + i as f32 * half, rect.top()),
 			vec2(half, rect.height()),
-		);
+		)
+		.shrink(2.0);
 		let resp = ui
 			.interact(r, Id::new(("play-mode", label)), Sense::click())
 			.on_hover_text(tip);
 		let on = mode == m;
-		let color = match m {
-			PlayMode::Pattern => theme::PATTERN,
-			PlayMode::Song => theme::PLAYING,
+		// Song on = a raised segment; Pattern on = its violet, so the mode reads at a glance.
+		let (bg, fg) = match (on, m) {
+			(true, PlayMode::Pattern) => (theme::PATTERN_SOFT, theme::PATTERN),
+			(true, PlayMode::Song) => (theme::BG_HOVER, theme::TEXT),
+			(false, _) if resp.hovered() => (theme::BG_WIDGET, theme::TEXT),
+			(false, _) => (theme::BG_DEEP, theme::TEXT_DIM),
 		};
-		let corner = if i == 0 {
-			CornerRadius {
-				nw: theme::RADIUS,
-				sw: theme::RADIUS,
-				..CornerRadius::ZERO
-			}
-		} else {
-			CornerRadius {
-				ne: theme::RADIUS,
-				se: theme::RADIUS,
-				..CornerRadius::ZERO
-			}
-		};
-		let bg = if on {
-			theme::mix(color, theme::BG_DEEP, 0.6)
-		} else if resp.hovered() {
-			theme::BG_HOVER
-		} else {
-			theme::BG_WIDGET
-		};
-		ui.painter().rect_filled(r, corner, bg);
+		ui.painter()
+			.rect_filled(r, CornerRadius::same(theme::RADIUS), bg);
 		ui.painter().text(
 			r.center(),
 			Align2::CENTER_CENTER,
 			label,
-			theme::mono(11.0),
-			if on { color } else { theme::TEXT_DIM },
+			theme::medium(11.5),
+			fg,
 		);
 		if resp.clicked() {
 			state.set_play_mode(m);
 		}
 	}
-	ui.painter().vline(
-		rect.center().x,
-		rect.y_range(),
-		Stroke::new(1.0, theme::BG_DEEP),
-	);
 }
 
 /// Loop region on/off (Ctrl+L).
 fn loop_button(ui: &mut Ui, state: &mut AppState) {
 	let on = state.view.transport.loop_on;
-	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
-	let p = ui.painter();
-	let bg = if on {
-		theme::mix(theme::LOOP, theme::BG_DEEP, 0.55)
-	} else if resp.hovered() {
-		theme::BG_HOVER
-	} else {
-		theme::BG_WIDGET
-	};
-	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
-	p.text(
-		rect.center(),
-		Align2::CENTER_CENTER,
-		"⟲",
-		egui::FontId::proportional(17.0),
-		if on { theme::LOOP } else { theme::TEXT },
-	);
-	if resp
+	if state_button(ui, on, "⟲", "Loop", None, theme::LOOP, 0.0)
 		.on_hover_text(
 			"Loop the region marked on the arrange ruler (Ctrl+L); drag the ruler's top \
 			 half to set it",
@@ -235,32 +288,28 @@ fn loop_button(ui: &mut Ui, state: &mut AppState) {
 
 /// The red record button: filled while recording, outlined in record mode (R).
 fn record_button(ui: &mut Ui, state: &mut AppState) {
-	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
+	let (rect, resp) = ui.allocate_exact_size(BUTTON, Sense::click());
 	resp.widget_info(|| {
 		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Record (Ctrl+R)")
 	});
 	let recording = state.is_recording();
 	let p = ui.painter();
+	let r = CornerRadius::same(theme::RADIUS_MD);
 	let bg = if recording {
-		theme::mix(theme::RECORD, theme::BG_DEEP, 0.45)
+		theme::RECORD_SOFT
 	} else if resp.hovered() {
 		theme::BG_HOVER
 	} else {
 		theme::BG_WIDGET
 	};
-	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
-	if state.record.mode && !recording {
-		p.rect_stroke(
-			rect.shrink(1.0),
-			CornerRadius::same(theme::RADIUS),
-			Stroke::new(1.5, theme::RECORD),
-			egui::StrokeKind::Inside,
-		);
+	p.rect_filled(rect, r, bg);
+	if state.record.mode || recording {
+		p.rect_stroke(rect, r, Stroke::new(1.0, theme::RECORD), StrokeKind::Inside);
 	}
 	let c = rect.center();
-	p.circle_filled(c, 6.0, theme::RECORD);
+	p.circle_filled(c, 5.5, theme::RECORD);
 	if recording {
-		p.circle_stroke(c, 8.5, Stroke::new(1.0, theme::RECORD));
+		p.circle_stroke(c, 8.0, Stroke::new(1.0, theme::RECORD));
 	}
 	let resp = resp.on_hover_text(
 		"Record the armed tracks (Ctrl+R; again to stop). R: record mode, so Play records",
@@ -278,43 +327,20 @@ fn record_button(ui: &mut Ui, state: &mut AppState) {
 	});
 }
 
-/// Metronome toggle, count-in and punch, and the recording options menu.
-fn record_controls(ui: &mut Ui, state: &mut AppState) {
+/// Metronome: the button switches the click on/off for playing and recording alike (the
+/// menu can still limit it to one of them, which the button then says).
+fn metronome(ui: &mut Ui, state: &mut AppState) {
 	let mut s = state.record.settings;
-	// Metronome: the button switches the click on/off for playing and recording alike
-	// (the menu can still limit it to one of them).
-	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
-	resp.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::Checkbox,
-			true,
-			s.metronome.on_play || s.metronome.on_record,
-			"Metronome",
-		)
-	});
 	let on = s.metronome.on_play || s.metronome.on_record;
-	let p = ui.painter();
-	let bg = if on {
-		theme::mix(theme::ACCENT, theme::BG_DEEP, 0.55)
-	} else if resp.hovered() {
-		theme::BG_HOVER
-	} else {
-		theme::BG_WIDGET
+	let detail = match (s.metronome.on_play, s.metronome.on_record) {
+		(true, false) => Some("on play"),
+		(false, true) => Some("on rec"),
+		_ => None,
 	};
-	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
-	let c = rect.center();
-	let fg = if on { theme::ACCENT } else { theme::TEXT };
-	let body = [
-		pos2(c.x - 6.0, c.y + 8.0),
-		pos2(c.x - 2.5, c.y - 8.0),
-		pos2(c.x + 2.5, c.y - 8.0),
-		pos2(c.x + 6.0, c.y + 8.0),
-	];
-	p.add(Shape::closed_line(body.to_vec(), Stroke::new(1.3, fg)));
-	p.line_segment(
-		[pos2(c.x, c.y + 5.0), pos2(c.x + 5.0, c.y - 6.0)],
-		Stroke::new(1.3, fg),
-	);
+	let resp = state_button(ui, on, "♩", "Click", detail, theme::ACCENT, 0.0);
+	resp.widget_info(|| {
+		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, "Metronome")
+	});
 	let resp =
 		resp.on_hover_text("Metronome on/off (right-click: only while playing / recording, level)");
 	if resp.clicked() {
@@ -333,12 +359,17 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 				.suffix(" dB"),
 		);
 	});
+	state.set_record_settings(s);
+}
+
+fn count_in(ui: &mut Ui, state: &mut AppState) {
+	let mut s = state.record.settings;
 	egui::ComboBox::from_id_salt("count-in")
-		.width(84.0)
+		.width(64.0)
 		.selected_text(match s.count_in_bars {
-			0 => "No count-in".to_owned(),
-			1 => "Count-in 1 bar".to_owned(),
-			n => format!("Count-in {n} bars"),
+			0 => "Off".to_owned(),
+			1 => "1 bar".to_owned(),
+			n => format!("{n} bars"),
 		})
 		.show_ui(ui, |ui| {
 			for n in crate::state::record::COUNT_IN_CHOICES {
@@ -352,7 +383,13 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 		})
 		.response
 		.on_hover_text("Metronome bars before recording starts");
-	if widgets::toggle(ui, s.punch, "PUNCH", theme::RECORD, vec2(48.0, 22.0))
+	state.set_record_settings(s);
+}
+
+fn punch(ui: &mut Ui, state: &mut AppState) {
+	let mut s = state.record.settings;
+	let label = if s.punch { "On" } else { "Off" };
+	if widgets::toggle(ui, s.punch, label, theme::RECORD, vec2(40.0, FIELD))
 		.on_hover_text(
 			"Punch in/out: record only inside the loop region (with the loop on: a take per \
 			 pass)",
@@ -361,7 +398,20 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 	{
 		s.punch = !s.punch;
 	}
-	ui.menu_button("MIDI rec", |ui| {
+	state.set_record_settings(s);
+}
+
+/// MIDI recording options; the button names the current mode.
+fn midi_record(ui: &mut Ui, state: &mut AppState) {
+	let mut s = state.record.settings;
+	let mode = if !s.midi_merge {
+		"New clip"
+	} else if s.midi_overdub {
+		"Overdub"
+	} else {
+		"Replace"
+	};
+	ui.menu_button(mode, |ui| {
 		ui.set_min_width(240.0);
 		ui.checkbox(&mut s.midi_merge, "Merge into the clip under the playhead");
 		ui.add_enabled_ui(s.midi_merge, |ui| {
@@ -378,7 +428,9 @@ fn record_controls(ui: &mut Ui, state: &mut AppState) {
 					}
 				});
 		});
-	});
+	})
+	.response
+	.on_hover_text("MIDI recording: merge / overdub, takes per loop pass, input quantize");
 	state.set_record_settings(s);
 }
 
@@ -393,13 +445,15 @@ fn automation_mode(ui: &mut Ui, state: &mut AppState) {
 	} else {
 		theme::AUTOMATION
 	};
-	let resp = widgets::toggle(
-		ui,
-		writing,
-		&format!("A: {}", mode.name()),
-		color,
-		vec2(64.0, 22.0),
-	);
+	let label = format!("● {}", mode.name());
+	let resp = widgets::toggle(ui, writing, &label, color, vec2(64.0, 22.0));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Button,
+			true,
+			format!("Automation: {}", mode.name()),
+		)
+	});
 	let resp = resp.on_hover_text(
 		"Automation mode. Read: lanes play. Touch: moving a fader, knob or plugin control \
 		 while playing writes its lane until you let go. Latch: keeps writing the last value \
@@ -431,25 +485,35 @@ enum Icon {
 }
 
 fn icon_button(ui: &mut Ui, icon: Icon, active: bool) -> egui::Response {
-	let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), Sense::click());
+	let (rect, resp) = ui.allocate_exact_size(BUTTON, Sense::click());
 	let p = ui.painter();
+	let r = CornerRadius::same(theme::RADIUS_MD);
+	// Playing = the green soft fill with a green outline, readable from across the room.
 	let bg = if active {
-		theme::mix(theme::PLAYING, theme::BG_DEEP, 0.55)
+		theme::PLAYING_SOFT
 	} else if resp.hovered() {
 		theme::BG_HOVER
 	} else {
 		theme::BG_WIDGET
 	};
-	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
+	p.rect_filled(rect, r, bg);
+	if active {
+		p.rect_stroke(
+			rect,
+			r,
+			Stroke::new(1.0, theme::PLAYING),
+			StrokeKind::Inside,
+		);
+	}
 	let c = rect.center();
 	let fg = if active { theme::PLAYING } else { theme::TEXT };
 	match icon {
 		Icon::Play => {
 			p.add(Shape::convex_polygon(
 				vec![
-					pos2(c.x - 5.0, c.y - 7.0),
-					pos2(c.x + 7.0, c.y),
-					pos2(c.x - 5.0, c.y + 7.0),
+					pos2(c.x - 4.5, c.y - 6.5),
+					pos2(c.x + 6.5, c.y),
+					pos2(c.x - 4.5, c.y + 6.5),
 				],
 				fg,
 				Stroke::NONE,
@@ -457,22 +521,22 @@ fn icon_button(ui: &mut Ui, icon: Icon, active: bool) -> egui::Response {
 		}
 		Icon::Stop => {
 			p.rect_filled(
-				egui::Rect::from_center_size(c, vec2(11.0, 11.0)),
+				Rect::from_center_size(c, vec2(10.0, 10.0)),
 				CornerRadius::same(1),
 				fg,
 			);
 		}
 		Icon::ToStart => {
 			p.rect_filled(
-				egui::Rect::from_center_size(pos2(c.x - 6.0, c.y), vec2(2.5, 12.0)),
+				Rect::from_center_size(pos2(c.x - 5.5, c.y), vec2(2.0, 11.0)),
 				0.0,
 				fg,
 			);
 			p.add(Shape::convex_polygon(
 				vec![
-					pos2(c.x + 6.0, c.y - 6.0),
-					pos2(c.x + 6.0, c.y + 6.0),
-					pos2(c.x - 4.0, c.y),
+					pos2(c.x + 5.5, c.y - 5.5),
+					pos2(c.x + 5.5, c.y + 5.5),
+					pos2(c.x - 3.5, c.y),
 				],
 				fg,
 				Stroke::NONE,
@@ -494,112 +558,121 @@ fn position_display(ui: &mut Ui, state: &mut AppState) {
 		time = "COUNT-IN".into();
 		ui.ctx().request_repaint();
 	}
-	let (rect, _) = ui.allocate_exact_size(vec2(210.0, 34.0), Sense::hover());
-	let p = ui.painter();
-	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), theme::BG_DEEP);
 	let recording = state.is_recording();
-	if recording {
-		p.rect_stroke(
-			rect,
-			CornerRadius::same(theme::RADIUS),
-			Stroke::new(1.0, theme::RECORD),
-			egui::StrokeKind::Inside,
-		);
-	}
+	let (rect, _) = ui.allocate_exact_size(vec2(150.0, 36.0), Sense::hover());
+	let p = ui.painter();
+	let r = CornerRadius::same(theme::RADIUS_MD);
+	p.rect_filled(rect, r, theme::BG_DEEP);
+	p.rect_stroke(
+		rect,
+		r,
+		Stroke::new(
+			1.0,
+			if recording {
+				theme::RECORD
+			} else {
+				theme::BORDER
+			},
+		),
+		StrokeKind::Inside,
+	);
 	p.text(
-		pos2(rect.left() + 10.0, rect.center().y),
-		Align2::LEFT_CENTER,
+		rect.center(),
+		Align2::CENTER_CENTER,
 		bbt,
-		theme::mono(19.0),
+		theme::mono_medium(24.0),
 		if recording {
 			theme::RECORD
 		} else {
-			theme::ACCENT
+			theme::TEXT
 		},
 	);
-	p.text(
-		pos2(rect.right() - 8.0, rect.center().y),
-		Align2::RIGHT_CENTER,
-		time,
-		theme::mono(11.5),
-		theme::TEXT_DIM,
-	);
+	labeled(ui, "Time", |ui| {
+		ui.add_sized(
+			[78.0, FIELD],
+			egui::Label::new(
+				RichText::new(time)
+					.font(theme::mono(13.0))
+					.color(theme::TEXT_DIM),
+			),
+		)
+	});
 }
 
 fn tempo(ui: &mut Ui, state: &mut AppState) {
 	// The tempo in effect at the playhead; editing it changes that segment.
 	let bpm = state.project().tempo.bpm_at(state.position()) as f32;
-	ui.label(
-		RichText::new("BPM")
-			.font(theme::small())
-			.color(theme::TEXT_FAINT),
-	);
-	let (g, _) = widgets::edit_value(ui, Id::new("tempo"), bpm, |ui, v| {
-		ui.add_sized(
-			[58.0, 22.0],
-			egui::DragValue::new(v)
-				.range(20.0..=400.0)
-				.speed(0.25)
-				.max_decimals(2),
-		)
+	labeled(ui, "Tempo", |ui| {
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 2.0;
+			let (g, _) = widgets::edit_value(ui, Id::new("tempo"), bpm, |ui, v| {
+				ui.add_sized(
+					[54.0, FIELD],
+					egui::DragValue::new(v)
+						.range(20.0..=400.0)
+						.speed(0.25)
+						.fixed_decimals(2),
+				)
+			});
+			if let Gesture::Commit(v) = g
+				&& (f64::from(v) - f64::from(bpm)).abs() > 1e-6
+			{
+				state.set_tempo_at_playhead(f64::from(v));
+			}
+			let tempo_lane = state.view.automation.tempo;
+			if widgets::toggle(ui, tempo_lane, "♩", theme::TEMPO, vec2(20.0, FIELD))
+				.on_hover_text("Show the tempo and time signature lanes")
+				.clicked()
+			{
+				state.view.automation.tempo = !tempo_lane;
+			}
+		});
 	});
-	if let Gesture::Commit(v) = g
-		&& (f64::from(v) - f64::from(bpm)).abs() > 1e-6
-	{
-		state.set_tempo_at_playhead(f64::from(v));
-	}
-	let tempo_lane = state.view.automation.tempo;
-	if ui
-		.selectable_label(tempo_lane, "♩")
-		.on_hover_text("Show the tempo and time signature lanes")
-		.clicked()
-	{
-		state.view.automation.tempo = !tempo_lane;
-	}
 }
 
 /// The time signature in effect at the playhead; editing it changes that segment (the
 /// song's first signature, or the change governing the playhead).
 fn time_signature(ui: &mut Ui, state: &mut AppState) {
 	let ts = state.project().meter().signature_at(state.position());
-	ui.label(
-		RichText::new("TIME")
-			.font(theme::small())
-			.color(theme::TEXT_FAINT),
-	);
-	let (g, _) = widgets::edit_value(ui, Id::new("ts-num"), ts.numerator as f32, |ui, v| {
-		ui.add_sized(
-			[30.0, 22.0],
-			egui::DragValue::new(v)
-				.range(1.0..=32.0)
-				.speed(0.1)
-				.max_decimals(0),
-		)
-	});
 	let mut next = None;
-	if let Gesture::Commit(v) = g {
-		next = Some(TimeSignature {
-			numerator: v.round() as u32,
-			denominator: ts.denominator,
-		});
-	}
-	ui.label("/");
-	egui::ComboBox::from_id_salt("ts-den")
-		.width(38.0)
-		.selected_text(ts.denominator.to_string())
-		.show_ui(ui, |ui| {
-			for d in [2u32, 4, 8, 16] {
-				if ui
-					.selectable_label(d == ts.denominator, d.to_string())
-					.clicked()
-				{
-					next = Some(TimeSignature {
-						numerator: ts.numerator,
-						denominator: d,
-					});
-				}
+	labeled(ui, "Signature", |ui| {
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 2.0;
+			let (g, _) =
+				widgets::edit_value(ui, Id::new("ts-num"), ts.numerator as f32, |ui, v| {
+					ui.add_sized(
+						[26.0, FIELD],
+						egui::DragValue::new(v)
+							.range(1.0..=32.0)
+							.speed(0.1)
+							.max_decimals(0),
+					)
+				});
+			if let Gesture::Commit(v) = g {
+				next = Some(TimeSignature {
+					numerator: v.round() as u32,
+					denominator: ts.denominator,
+				});
 			}
+			ui.label(RichText::new("/").color(theme::TEXT_FAINT));
+			egui::ComboBox::from_id_salt("ts-den")
+				.width(34.0)
+				.selected_text(ts.denominator.to_string())
+				.show_ui(ui, |ui| {
+					for d in [2u32, 4, 8, 16] {
+						if ui
+							.selectable_label(d == ts.denominator, d.to_string())
+							.clicked()
+						{
+							next = Some(TimeSignature {
+								numerator: ts.numerator,
+								denominator: d,
+							});
+						}
+					}
+				});
 		});
+	});
 	if let Some(n) = next
 		&& n != ts
 		&& let Some(cmd) = crate::state::meter::set_at(state.project(), state.position(), n)

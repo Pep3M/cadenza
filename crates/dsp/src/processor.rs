@@ -287,6 +287,42 @@ pub trait Processor: Send {
 	fn load_preset(&mut self, _key: &str) -> bool {
 		false
 	}
+	/// Live readings of the last `process` call (e.g. gain reduction) written into
+	/// `out` (at most [`readings::MAX`] values; index meanings in [`readings`]).
+	/// Returns how many were written. Realtime-safe: called on the audio thread.
+	fn readings(&self, _out: &mut [f32]) -> usize {
+		0
+	}
+}
+
+/// Index meanings of [`Processor::readings`].
+pub mod readings {
+	/// Most readings a device publishes.
+	pub const MAX: usize = 16;
+	/// `compressor`, `limiter`: largest gain reduction of the last block, positive dB.
+	pub const GAIN_REDUCTION_DB: usize = 0;
+	/// `drum_machine`: first of [`DRUM_VOICES`] trigger counters, one per voice in
+	/// [`DRUM_VOICE_NAMES`] order (kick, snare, clap, hats, toms, cymbals, perc). Each
+	/// grows by one per note-on of that voice; readers compare against the last value.
+	pub const DRUM_VOICE_TRIGGERS_START: usize = 0;
+	/// Number of `drum_machine` trigger counters.
+	pub const DRUM_VOICES: usize = 7;
+	/// `drum_machine` voice order of the trigger counters.
+	pub const DRUM_VOICE_NAMES: [&str; DRUM_VOICES] =
+		["kick", "snare", "clap", "hats", "toms", "cymbals", "perc"];
+	pub const DRUM_KICK: usize = 0;
+	pub const DRUM_SNARE: usize = 1;
+	pub const DRUM_CLAP: usize = 2;
+	pub const DRUM_HATS: usize = 3;
+	pub const DRUM_TOMS: usize = 4;
+	pub const DRUM_CYMBALS: usize = 5;
+	pub const DRUM_PERC: usize = 6;
+	/// `drum_sampler`: first of [`DRUM_PADS`] trigger counters, one per pad of
+	/// `instruments::drum_sampler::PADS` (in that order). Each grows by one per note-on of
+	/// the pad's note that starts a sample.
+	pub const DRUM_PAD_TRIGGERS_START: usize = 0;
+	/// Number of `drum_sampler` pad trigger counters.
+	pub const DRUM_PADS: usize = 16;
 }
 
 /// A factory preset exposed by a device (see [`Processor::presets`]).

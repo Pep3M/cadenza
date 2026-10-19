@@ -386,6 +386,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		"Split / delete the selected range",
 	),
 	sc("Audio editor", "Ctrl+A / Esc", "Select all / clear"),
+	sc(
+		"Device editor",
+		"A",
+		"Switch the A/B compare (editor focused)",
+	),
 	sc("Audio editor", "Ctrl+Wheel", "Zoom down to samples"),
 	sc("Automation", "A", "Show / hide the selected track's lanes"),
 	sc("Automation", "Click lane", "Add a point"),
@@ -570,6 +575,8 @@ pub struct Prefs {
 	pub audio: super::record::AudioPrefs,
 	/// Metronome, count-in, punch and MIDI recording options.
 	pub record: super::record::RecordSettings,
+	/// Mixer strip width and visible sections.
+	pub mixer: super::mixer::MixerView,
 }
 
 impl Default for Prefs {
@@ -595,6 +602,7 @@ impl Default for Prefs {
 			export: super::export::ExportSettings::default(),
 			audio: super::record::AudioPrefs::default(),
 			record: super::record::RecordSettings::default(),
+			mixer: super::mixer::MixerView::default(),
 		}
 	}
 }

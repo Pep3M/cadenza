@@ -362,6 +362,16 @@ impl Processor for Limiter {
 		self.gr_meter = -gain_to_db(min_gain);
 	}
 
+	fn readings(&self, out: &mut [f32]) -> usize {
+		match out.get_mut(crate::readings::GAIN_REDUCTION_DB) {
+			Some(gr) => {
+				*gr = self.gr_meter;
+				1
+			}
+			None => 0,
+		}
+	}
+
 	fn reset(&mut self) {
 		self.delay_l.clear();
 		self.delay_r.clear();

@@ -69,8 +69,14 @@ impl ChatUi {
 					empty(ui);
 				}
 				let mut open_settings = false;
+				let mut after_user = false;
 				for (i, item) in state.ai.items.iter().enumerate() {
-					open_settings |= item_ui(ui, i, item);
+					open_settings |= item_ui(ui, i, item, after_user);
+					after_user = match item {
+						ChatItem::User(_) => true,
+						ChatItem::Notice(_) => after_user,
+						_ => false,
+					};
 				}
 				if open_settings {
 					state.ai.settings_open = true;
@@ -290,24 +296,38 @@ fn key_section(ui: &mut Ui, state: &mut AppState) {
 
 fn header(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 2.0;
 		for (mix, label, hint) in [
-			(false, "AI PRODUCER", "Chat with the AI producer"),
+			(false, "Producer", "Chat with the AI producer"),
 			(
 				true,
-				"MIX",
+				"Mix",
 				"Mix assistant: analysis, fixes and the AI mix pass",
 			),
 		] {
 			let on = state.mix.open == mix;
-			let text = RichText::new(label)
-				.font(theme::small())
-				.strong()
-				.color(if on { theme::ACCENT } else { theme::TEXT_FAINT });
-			if ui
-				.add(egui::Label::new(text).sense(egui::Sense::click()))
-				.on_hover_text(hint)
-				.clicked()
-			{
+			let button =
+				egui::Button::new(RichText::new(label).font(theme::medium(12.5)).color(if on {
+					theme::TEXT
+				} else {
+					theme::TEXT_DIM
+				}))
+				.fill(if on {
+					theme::BG_HOVER
+				} else {
+					egui::Color32::TRANSPARENT
+				})
+				.min_size(vec2(0.0, 24.0));
+			let resp = ui.add(button).on_hover_text(hint);
+			resp.widget_info(|| {
+				egui::WidgetInfo::selected(
+					egui::WidgetType::SelectableLabel,
+					true,
+					on,
+					if mix { "MIX" } else { "AI PRODUCER" },
+				)
+			});
+			if resp.clicked() {
 				state.mix.open = mix;
 			}
 		}
@@ -344,6 +364,12 @@ fn header(ui: &mut Ui, state: &mut AppState) {
 			if ui.button("⚙").on_hover_text("AI settings").clicked() {
 				state.ai.settings_open = true;
 			}
+			ui.label(
+				RichText::new(format!("session ${:.4}", state.ai.total_usd))
+					.font(theme::mono(10.5))
+					.color(theme::TEXT_FAINT),
+			)
+			.on_hover_text("What this conversation has cost so far");
 		});
 	});
 }
@@ -365,10 +391,10 @@ fn running_bar(ui: &mut Ui, state: &mut AppState) {
 		return;
 	};
 	Frame::new()
-		.fill(theme::BG_RAISED)
-		.stroke(Stroke::new(1.0, theme::ACCENT_DIM))
-		.corner_radius(theme::RADIUS)
-		.inner_margin(Margin::symmetric(8, 4))
+		.fill(theme::ACCENT_DIM)
+		.stroke(Stroke::new(1.0, theme::ACCENT_BORDER))
+		.corner_radius(theme::RADIUS_LG)
+		.inner_margin(Margin::symmetric(10, 6))
 		.show(ui, |ui| {
 			ui.horizontal(|ui| {
 				ui.spinner();
@@ -376,15 +402,20 @@ fn running_bar(ui: &mut Ui, state: &mut AppState) {
 					"Stopping…".to_owned()
 				} else {
 					format!(
-						"Working… {:.0} s · ${:.4}{}",
+						"Producer working · {:.0} s · ${:.4}{} so far",
 						running.started.elapsed().as_secs_f32(),
 						running.cost_usd,
 						if running.estimated { " est." } else { "" }
 					)
 				};
-				ui.label(RichText::new(text).font(theme::small()).color(theme::TEXT));
+				ui.label(
+					RichText::new(text)
+						.font(theme::small())
+						.color(theme::ACCENT_TEXT),
+				);
 				ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 					let stop = egui::Button::new(RichText::new("■ Stop").color(theme::ERROR))
+						.fill(theme::ERROR_SOFT)
 						.stroke(Stroke::new(1.0, theme::ERROR.gamma_multiply(0.6)));
 					if ui
 						.add_enabled(!running.stopping, stop)
@@ -405,9 +436,14 @@ fn chips(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal_wrapped(|ui| {
 		ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
 		for (label, request) in actions {
-			let chip = egui::Button::new(RichText::new(label).font(theme::small()))
-				.fill(theme::BG_WIDGET)
-				.corner_radius(9);
+			let chip = egui::Button::new(
+				RichText::new(label)
+					.font(theme::small())
+					.color(theme::ACCENT_TEXT),
+			)
+			.fill(theme::BG_PANEL)
+			.stroke(Stroke::new(1.0, theme::ACCENT_BORDER))
+			.corner_radius(99);
 			if ui.add(chip).on_hover_text(&request).clicked() {
 				state.send_ai(&request);
 			}
@@ -437,7 +473,19 @@ fn input(ui: &mut Ui, state: &mut AppState) {
 		let clicked = ui
 			.add_enabled(
 				can_send,
-				egui::Button::new(RichText::new("Send").strong()).min_size(vec2(44.0, 36.0)),
+				egui::Button::new(RichText::new("Send").font(theme::medium(12.0)).color(
+					if can_send {
+						theme::TEXT_ON_ACCENT
+					} else {
+						theme::TEXT_FAINT
+					},
+				))
+				.fill(if can_send {
+					theme::ACCENT
+				} else {
+					theme::BG_WIDGET
+				})
+				.min_size(vec2(44.0, 36.0)),
 			)
 			.on_hover_text("Send (Enter)")
 			.clicked();
@@ -449,16 +497,38 @@ fn input(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Draws one chat row; returns true when its "AI settings" button was clicked.
-fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem) -> bool {
+/// The producer's avatar and name over its first reply to a request.
+fn producer_header(ui: &mut Ui) {
+	ui.add_space(4.0);
+	ui.horizontal(|ui| {
+		let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
+		ui.painter().circle_filled(r.center(), 9.0, theme::ACCENT);
+		ui.painter().text(
+			r.center(),
+			egui::Align2::CENTER_CENTER,
+			"C",
+			theme::semibold(10.5),
+			theme::TEXT_ON_ACCENT,
+		);
+		ui.label(
+			RichText::new("Producer")
+				.font(theme::semibold(12.0))
+				.color(theme::TEXT),
+		);
+	});
+}
+
+fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem, after_user: bool) -> bool {
 	let mut open_settings = false;
 	match item {
 		ChatItem::User(text) => {
 			ui.add_space(6.0);
 			ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
 				Frame::new()
-					.fill(theme::BG_WIDGET)
-					.corner_radius(6)
-					.inner_margin(Margin::symmetric(9, 6))
+					.fill(theme::ACCENT_DIM)
+					.stroke(Stroke::new(1.0, theme::ACCENT_BORDER))
+					.corner_radius(theme::RADIUS_LG)
+					.inner_margin(Margin::symmetric(10, 7))
 					.show(ui, |ui| {
 						ui.set_max_width(ui.available_width() * 0.85);
 						ui.add(egui::Label::new(RichText::new(text).color(theme::TEXT)).wrap());
@@ -466,12 +536,18 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem) -> bool {
 			});
 		}
 		ChatItem::Assistant { text, streaming } => {
+			if after_user {
+				producer_header(ui);
+			}
 			markdown_ui(ui, text);
 			if *streaming {
 				ui.label(RichText::new("▍").color(theme::ACCENT));
 			}
 		}
 		ChatItem::Thinking { text, streaming } => {
+			if after_user {
+				producer_header(ui);
+			}
 			egui::CollapsingHeader::new(
 				RichText::new(if *streaming {
 					"thinking…"
@@ -498,8 +574,11 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem) -> bool {
 			ok,
 			summary,
 		} => {
+			if after_user {
+				producer_header(ui);
+			}
 			let (icon, color) = match ok {
-				None => ("…", theme::TEXT_DIM),
+				None => ("○", theme::ACCENT),
 				Some(true) => ("✔", theme::PLAYING),
 				Some(false) => ("✖", theme::ERROR),
 			};
@@ -507,13 +586,13 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem) -> bool {
 			let id = ui.make_persistent_id(("ai-tool", index));
 			egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
 				.show_header(ui, |ui| {
-					ui.label(RichText::new(icon).font(theme::mono(11.0)).color(color));
+					ui.label(RichText::new(icon).font(theme::small()).color(color));
 					ui.add(
-						egui::Label::new(RichText::new(headline).font(theme::mono(11.0)).color(
-							if *ok == Some(false) {
-								theme::ERROR
-							} else {
-								theme::TEXT_DIM
+						egui::Label::new(RichText::new(headline).font(theme::small()).color(
+							match ok {
+								Some(false) => theme::ERROR,
+								Some(true) => theme::TEXT,
+								None => theme::ACCENT_TEXT,
 							},
 						))
 						.truncate(),
@@ -542,10 +621,10 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem) -> bool {
 		}
 		ChatItem::Error { text, settings } => {
 			Frame::new()
-				.fill(theme::mix(theme::BG_PANEL, theme::ERROR, 0.08))
+				.fill(theme::ERROR_SOFT)
 				.stroke(Stroke::new(1.0, theme::ERROR.gamma_multiply(0.6)))
-				.corner_radius(theme::RADIUS)
-				.inner_margin(Margin::symmetric(8, 6))
+				.corner_radius(theme::RADIUS_LG)
+				.inner_margin(Margin::symmetric(10, 7))
 				.show(ui, |ui| {
 					ui.add(egui::Label::new(RichText::new(text).color(theme::TEXT)).wrap());
 					if *settings && ui.button("AI settings…").clicked() {
@@ -560,20 +639,65 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem) -> bool {
 			total_usd,
 			undo_label,
 		} => {
-			let mut text = format!(
-				"{status} · ${cost_usd:.4}{} · session ${total_usd:.4}",
-				if *estimated { " est." } else { "" }
-			);
-			if let Some(label) = undo_label {
-				text.push_str(&format!(" · undo: {label}"));
-			}
-			ui.label(
-				RichText::new(text)
-					.font(theme::small())
-					.color(theme::TEXT_FAINT),
-			);
-			ui.add_space(2.0);
-			ui.separator();
+			// The result of a request: what it cost and the one undo step it became.
+			let ok = status == "done";
+			Frame::new()
+				.fill(theme::BG_RAISED)
+				.stroke(Stroke::new(
+					1.0,
+					if ok {
+						theme::ACCENT_BORDER
+					} else {
+						theme::BORDER
+					},
+				))
+				.corner_radius(theme::RADIUS_LG)
+				.inner_margin(Margin::symmetric(10, 6))
+				.show(ui, |ui| {
+					ui.set_width(ui.available_width());
+					ui.horizontal_wrapped(|ui| {
+						ui.spacing_mut().item_spacing.x = 6.0;
+						let (mark, color) = if ok {
+							("✔", theme::PLAYING)
+						} else {
+							("■", theme::WARNING)
+						};
+						ui.label(RichText::new(mark).font(theme::small()).color(color));
+						ui.label(
+							RichText::new(status)
+								.font(theme::semibold(11.5))
+								.color(theme::TEXT),
+						);
+						ui.label(
+							RichText::new(format!(
+								"${cost_usd:.4}{} · session ${total_usd:.4}",
+								if *estimated { " est." } else { "" }
+							))
+							.font(theme::mono(10.5))
+							.color(theme::TEXT_FAINT),
+						);
+					});
+					if let Some(label) = undo_label {
+						// One label (one widget) so the whole line reads together.
+						let mut job = LayoutJob::default();
+						let part = |job: &mut LayoutJob, text: &str, font: egui::FontId, color| {
+							job.append(
+								text,
+								0.0,
+								egui::TextFormat {
+									font_id: font,
+									color,
+									..Default::default()
+								},
+							);
+						};
+						part(&mut job, "Undo step: ", theme::small(), theme::TEXT_FAINT);
+						part(&mut job, label, theme::small(), theme::ACCENT_TEXT);
+						part(&mut job, "  Ctrl+Z", theme::mono(10.0), theme::TEXT_FAINT);
+						ui.add(egui::Label::new(job).wrap());
+					}
+				});
+			ui.add_space(6.0);
 		}
 	}
 	open_settings

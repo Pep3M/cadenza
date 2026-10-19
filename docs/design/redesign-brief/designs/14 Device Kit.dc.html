@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="./device-viz.js"></script>
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;flex-direction:column;gap:40px;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec;width:1920px;box-sizing:border-box">
+<div style="display:flex;flex-direction:column;gap:8px;max-width:1100px"><span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5;font-size:13px">CADENZA · DEVICES</span><span style="font-size:34px;font-weight:600;letter-spacing:-0.015em">14 · Device component kit</span><span style="font-size:15px;color:#a3a6ad;line-height:1.6;text-wrap:pretty">Extends the Graphite system. Displays sit on #0b0c0e, one step darker than the panel (#15161a). Curves are 1.5–1.75 px polylines; the glow is one extra 5–8 px stroke at 15–20 % alpha. Fills under curves are polygons at 7–20 % alpha.</span></div>
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px">
+
+<div style="display:flex;flex-direction:column;gap:16px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Knob · sizes</span>
+<div style="display:flex;align-items:flex-end;gap:18px">
+<dc-import name="Knob" v="0.6" size="28" label="XS 28" value="60 %" hint-size="52px,64px"></dc-import>
+<dc-import name="Knob" v="0.6" size="40" label="S 40" value="60 %" hint-size="52px,80px"></dc-import>
+<dc-import name="Knob" v="0.6" size="56" label="M 56" value="60 %" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.6" size="72" label="L 72" value="60 %" hint-size="90px,110px"></dc-import>
+<dc-import name="Knob" v="0.6" size="96" label="XL 96" value="60 %" hint-size="110px,140px"></dc-import>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">S for compact views and secondary parameters. M and L for main parameters. XL for the one control that defines the device (Drive, Input gain). 270° sweep, arc stroke 2.5 / 3 / 4 px.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:16px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Knob · polarity, modulation, automation</span>
+<div style="display:flex;align-items:flex-end;gap:18px">
+<dc-import name="Knob" v="0.25" size="56" label="Unipolar" value="25 %" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.3" bip="{{ true }}" size="56" label="Bipolar" value="−9.6 dB" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.4" size="56" label="Mod range" value="40 % +20" mod="0.2" color="#9d8cff" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.42" size="56" label="Automated" value="58 %" auto="0.58" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.42" size="56" label="Disabled" value="—" disabled="{{ true }}" hint-size="70px,92px"></dc-import>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Bipolar arcs start at 12 o'clock. The automation ring is violet (#c884e8): its dot shows the value now playing, the pointer shows the written value, and the readout turns violet.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:16px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Knob · states and floating value</span>
+<div style="display:flex;align-items:flex-end;gap:22px;padding-top:28px;padding-left:24px">
+<dc-import name="Knob" v="0.5" size="56" label="Rest" value="120 ms" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.5" size="56" label="Hover" value="120 ms" state="hover" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.62" size="56" label="Drag" value="184 ms" state="drag" tip="184 ms" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.5" size="56" label="Focus" value="120 ms" state="focus" hint-size="70px,92px"></dc-import>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Drag vertically: 200 px covers the full range, Shift ×0.1. The tooltip sits 2 px above the knob and never under the pointer.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Value readout</span>
+<div style="display:grid;grid-template-columns:repeat(4,auto);justify-content:start;column-gap:12px;row-gap:6px;align-items:center">
+<span style="height:24px;width:84px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:12px">2.80 kHz</span>
+<span style="height:24px;width:84px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;background:#0e0f11;border:1px solid #3c3f46;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:12px">2.80 kHz</span>
+<span style="height:24px;width:84px;display:flex;align-items:center;padding:0 7px;background:#0b0c0e;border:1px solid #4c9cf5;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:12px;box-shadow:0 0 0 3px rgba(76,156,245,.18)"><span style="background:#2c4a73">3.2k</span><span style="width:1px;height:14px;background:#7fb4ff"></span></span>
+<span style="height:24px;width:84px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;background:#2a1b1d;border:1px solid #f0524f;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#ff8a87">40 kHz</span>
+<span style="font-size:11px;color:#80848c">Rest</span><span style="font-size:11px;color:#80848c">Hover</span><span style="font-size:11px;color:#80848c">Typing</span><span style="font-size:11px;color:#80848c">Out of range</span>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Click to type. Units and shorthand are accepted: “3.2k”, “-6”, “1/8”, “C4”. Enter commits, Esc cancels, and an out-of-range value flashes red, then clamps.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Toggle, segmented selector, A/B, preset bar</span>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+<span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 9px;background:#212328;border-radius:4px;color:#a3a6ad;font-weight:500">⇄ Ping-pong</span>
+<span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 9px;background:#15323a;color:#5ac8d8;border-radius:4px;box-shadow:inset 0 0 0 1px #24525d;font-weight:500">⇄ Ping-pong</span>
+<span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 9px;background:#3a2c17;border-radius:4px;color:#f2a944;font-weight:500;box-shadow:inset 0 0 0 1px #5c4520">Ø Invert R</span>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><span style="padding:2px 9px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#80848c">Off</span><span style="padding:2px 9px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#80848c">12</span><span style="padding:2px 9px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;border-radius:3px;background:#363940">24</span><span style="padding:2px 9px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#80848c">48</span></div>
+</div>
+<div style="display:flex;gap:8px;align-items:center">
+<span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">‹</span><span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:#212328;color:#a3a6ad;margin-left:-6px">›</span>
+<span style="height:22px;width:230px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:0 4px 4px 0;box-sizing:border-box;margin-left:-6px;white-space:nowrap;overflow:hidden"><span style="font-weight:500;overflow:hidden;text-overflow:ellipsis">Vocal · air and body</span><span style="color:#f2a944">●</span><div style="flex:1"></div><span style="color:#80848c">▾</span></span>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><span style="height:18px;width:22px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-weight:600;font-size:11px;background:#363940">A</span><span style="height:18px;width:22px;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;color:#80848c">B</span></div>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">An on toggle gets a tinted fill and a 1 px ring in its function colour: teal for stereo, amber for phase and warnings. Segments are for 5 choices or fewer; above that, use a grid (delay note values) or a dropdown. The amber dot means the preset has unsaved changes. A/B keeps two full states, and A→B copies one onto the other.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Wave and mode picker cards</span>
+<div style="display:flex;gap:6px">
+<sc-for list="{{ waves }}" as="c" hint-placeholder-count="4"><div style="width:64px;height:50px;border-radius:5px;background:{{ c.bg }};box-shadow:{{ c.ring }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="48" height="22"><path d="{{ c.d }}" stroke="{{ c.c }}" stroke-width="1.6" fill="none"></path></svg><span style="font-size:10.5px;color:{{ c.fg }}">{{ c.t }}</span></div></sc-for>
+</div>
+<div style="display:flex;gap:6px">
+<sc-for list="{{ modes }}" as="m" hint-placeholder-count="3"><div style="flex:1;display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:{{ m.bg }};box-shadow:{{ m.ring }}"><svg width="36" height="36" style="background:#0b0c0e;border-radius:3px;flex:none"><path d="M3 33 L33 3" stroke="#24262b"></path><path d="{{ m.d }}" stroke="{{ m.c }}" stroke-width="1.5" fill="none"></path></svg><span style="font-size:12px;font-weight:600;color:{{ m.fg }}">{{ m.n }}</span></div></sc-for>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">The picture is the label. A selected card gets a 1.5 px ring and stroke in the device accent, on a raised fill (#2a2c32).</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">ADSR editor</span>
+<div style="position:relative;height:150px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="540" height="150" style="position:absolute;inset:0"><path d="{{ adsr.fill }}" fill="#4fc38a" fill-opacity="0.13"></path><path d="{{ adsr.line }}" stroke="#4fc38a" stroke-opacity="0.2" stroke-width="6" fill="none"></path><path d="{{ adsr.line }}" stroke="#4fc38a" stroke-width="1.75" fill="none"></path><circle cx="{{ adsr.a.0 }}" cy="{{ adsr.a.1 }}" r="7" fill="#4fc38a" stroke="#0b0c0e" stroke-width="1.75"></circle><circle cx="{{ adsr.d.0 }}" cy="{{ adsr.d.1 }}" r="7" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.75"></circle><circle cx="{{ adsr.s.0 }}" cy="{{ adsr.s.1 }}" r="7" fill="#4fc38a" stroke="#0b0c0e" stroke-width="1.75"></circle><circle cx="{{ adsr.r.0 }}" cy="{{ adsr.r.1 }}" r="7" fill="#4fc38a" stroke="#0b0c0e" stroke-width="1.75"></circle></svg>
+<span style="position:absolute;left:{{ adsrTag.x }}px;top:{{ adsrTag.y }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;box-shadow:inset 0 0 0 1px #363940;white-space:nowrap">D 400 ms · S 62 %</span>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">A moves horizontally. D moves both ways and also sets sustain. S moves vertically, R horizontally. The time axis is cube-root, so 1 ms and 10 s are both easy to grab. The white node is the one being dragged.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b;grid-column:span 2">
+<span style="font-size:13px;font-weight:600">Frequency display · grid, labels, analyzer, nodes, piano strip</span>
+<dc-import name="EQ Display" bands="{{ bands }}" w="1140" h="220" range="12" sel="3" hint-size="1140px,220px"></dc-import>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Log scale, 20 Hz–20 kHz. Labelled lines at 50, 100, 200, 500 Hz and so on up to 10k; unlabelled lines in between. The pre analyzer is a solid fill; the post analyzer is a translucent blue fill with a line on top. Nodes are 20 px circles labelled with the band id, and a dormant band is a hollow ring in its colour. On the piano strip, the hovered key lights up in the band colour. The same component draws the Poly Synth and Sampler filters, the Reverb low cut and the Delay feedback filter.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Meters</span>
+<div style="display:flex;gap:28px;height:180px">
+<sc-for list="{{ meters }}" as="m" hint-placeholder-count="3"><div style="display:flex;flex-direction:column;align-items:center;gap:5px"><span style="font-size:10.5px;color:#80848c;font-weight:500">{{ m.l }}</span><div style="flex:1;display:flex;gap:2px"><sc-for list="{{ m.bars }}" as="b" hint-placeholder-count="2"><div style="width:12px;background:#0e0f11;border-radius:2px;position:relative;overflow:hidden"><div style="position:absolute;left:0;right:0;top:{{ b.t }};bottom:{{ b.b }};height:{{ b.p }}%;background:{{ b.bg }}"></div><div style="position:absolute;left:0;right:0;top:{{ b.hold }}%;height:1px;background:#f4f5f7"></div></div></sc-for></div><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ m.c }}">{{ m.v }}</span></div></sc-for>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;justify-content:center">
+<span style="font-size:10.5px;color:#80848c;font-weight:500">HEADER PAIR (IN / OUT)</span>
+<div style="display:flex;flex-direction:column;gap:2px;width:100%"><div style="height:3px;border-radius:1px;background:linear-gradient(90deg,#4fc38a 0 72%,#e8c94a 72% 90%,#f0524f 90%);position:relative;overflow:hidden"><div style="position:absolute;top:0;bottom:0;right:0;left:74%;background:#0e0f11"></div></div><div style="height:3px;border-radius:1px;background:linear-gradient(90deg,#4fc38a 0 72%,#e8c94a 72% 90%,#f0524f 90%);position:relative;overflow:hidden"><div style="position:absolute;top:0;bottom:0;right:0;left:70%;background:#0e0f11"></div></div></div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Green up to −9 dBFS, yellow up to −3, red above that. The white tick holds the peak for 1.5 s. Gain reduction is coral (#ff7a5c) and always hangs from the top.</span>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Level history display</span>
+<div style="position:relative;height:140px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="540" height="140" style="position:absolute;inset:0"><path d="{{ hist.inA }}" fill="#3a3e46" fill-opacity="0.6"></path><path d="{{ hist.outL }}" stroke="#8cc8f0" stroke-width="1.25" fill="none"></path><path d="{{ hist.grA }}" fill="#ff7a5c" fill-opacity="0.16"></path><path d="{{ hist.grL }}" stroke="#ff7a5c" stroke-width="1.5" fill="none"></path><path d="M0 52 H540" stroke="#f4f5f7" stroke-opacity="0.5" stroke-dasharray="6 4"></path></svg>
+<span style="position:absolute;right:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">now →</span>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Scrolls right to left, with new data entering at the right edge. The engine sends one min/max pair per column at 30–60 fps, and the display is one polygon plus two polylines. When the transport stops, the trace freezes and dims to 50 %.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b">
+<span style="font-size:13px;font-weight:600">Band / voice palette · 8 colours on #0b0c0e</span>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+<sc-for list="{{ palette }}" as="p" hint-placeholder-count="8"><div style="display:flex;flex-direction:column;gap:4px;padding:8px;background:#0b0c0e;border-radius:4px"><div style="height:22px;border-radius:3px;background:{{ p.c }}"></div><span style="font-size:11.5px;font-weight:600">{{ p.n }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ p.c }}</span></div></sc-for>
+</div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Ordered by hue and assigned left to right (EQ bands HP→LP, drum voices). Equal lightness, so no band looks more important than another. Function colours sit outside the palette: blue for AI and selection, violet for automation, coral for gain reduction, teal and orange for L and R.</span>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b;grid-column:span 2">
+<span style="font-size:13px;font-weight:600">Device header · dock and compact</span>
+<dc-import name="Device Header" title="Compressor" track="Bass" tc="#5aa2f5" preset="Sidechain pump · 1/4" in-db="{{ -12.6 }}" out-db="{{ -14.1 }}" mix="100 %" extra="Kick" hint-size="100%,37px"></dc-import>
+<div style="display:flex;gap:16px;align-items:flex-start">
+<div style="width:360px;flex:none"><dc-import name="Device Header" compact="{{ true }}" title="Compressor" track="Bass" tc="#5aa2f5" preset="Sidechain pump · 1/4" in-db="{{ -12.6 }}" out-db="{{ -14.1 }}" hint-size="100%,66px"></dc-import></div>
+<span style="font-size:12px;color:#a3a6ad;line-height:1.5;text-wrap:pretty">Left to right: power, name, track chip, preset ‹ › ▾, Save, A/B, undo hint, sidechain source (only on devices that have one), IN/OUT meters, Mix (only on devices that have mix), Ask AI, pop-out, close. In the compact header, Save, A→B, Mix and the undo hint move into the ⋯ menu. Mix becomes a knob in the body, and the meters shrink to a 34 px pair.</span>
+</div>
+</div>
+
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  componentDidMount() { if (!window.DV) { const t = setInterval(() => { if (window.DV) { clearInterval(t); this.forceUpdate(); } }, 30); } }
+  renderVals() {
+    if (!window.DV) return {};
+    if (this._v) return this._v;
+    const r1 = n => Math.round(n * 10) / 10;
+    const waves = [['sine', 'Sine'], ['saw', 'Saw'], ['square', 'Square'], ['triangle', 'Triangle']].map(([w, t]) => { const s = w === 'saw'; return { t, d: DV.wave(w, 44, 18, 1.5, { x0: 2, y0: 2, amp: 0.85 }), c: s ? '#c3b8ff' : '#80848c', bg: s ? '#2a2c32' : '#1c1d21', ring: s ? 'inset 0 0 0 1.5px #9d8cff' : 'inset 0 0 0 1px #24262b', fg: s ? '#e8e9ec' : '#80848c' }; });
+    const cp = (fn, S) => { let d = ''; for (let i = 0; i <= 60; i++) { const x = -1 + 2 * i / 60, y = Math.max(-1, Math.min(1, fn(x))); d += (i ? 'L' : 'M') + r1(3 + (x + 1) / 2 * (S - 6)) + ' ' + r1(S - 3 - (y + 1) / 2 * (S - 6)) + ' '; } return d; };
+    const modes = [['Tape', x => Math.tanh(3 * x) / Math.tanh(3), '#ffa94d'], ['Tube', x => (x >= 0 ? Math.tanh(3 * x) : Math.tanh(1.8 * x) * 0.85) / Math.tanh(3), '#ff7b6e'], ['Hard clip', x => Math.max(-1, Math.min(1, x * 1.8)), '#e884d6']].map(([n, f, c], i) => ({ n, d: cp(f, 36), c, bg: i === 1 ? '#2a2c32' : '#1c1d21', ring: i === 1 ? `inset 0 0 0 1.5px ${c}` : 'inset 0 0 0 1px #24262b', fg: i === 1 ? c : '#e8e9ec' }));
+    const adsr = DV.adsr(0.04, 0.16, 0.62, 0.3, 520, 150, { pad: 10, hold: 0.22 });
+    const bands = [
+      { id: 'HP', type: 'hp', f: 60, slope: 12, c: '#ff7b6e', fmin: 20, fmax: 2000 }, { id: 'LS', type: 'ls', f: 120, g: 0, c: '#ffa94d', fmin: 20, fmax: 1000 },
+      { id: '1', type: 'peak', f: 300, g: -3, q: 1.2, c: '#f2d45c', fmin: 20, fmax: 20000 }, { id: '2', type: 'peak', f: 2500, g: 3, q: 0.9, c: '#7ddc7a', fmin: 20, fmax: 20000 },
+      { id: '3', type: 'peak', f: 7000, g: 0, q: 2, c: '#4fd6c8', fmin: 20, fmax: 20000 }, { id: 'HS', type: 'hs', f: 11000, g: 2.5, c: '#9d8cff', fmin: 1000, fmax: 20000 },
+      { id: 'LP', type: 'lp', f: 18000, slope: 0, c: '#e884d6', fmin: 1000, fmax: 20000 },
+    ];
+    const grad = 'linear-gradient(0deg,#4fc38a 0 70%,#e8c94a 70% 90%,#f0524f 90%)';
+    const meters = [
+      { l: 'L / R', bars: [{ p: 78, hold: 14, t: 'auto', b: '0', bg: grad }, { p: 72, hold: 20, t: 'auto', b: '0', bg: grad }], v: '−6.2', c: '#e8e9ec' },
+      { l: 'GR', bars: [{ p: 34, hold: 42, t: '0', b: 'auto', bg: '#ff7a5c' }], v: '−6.2', c: '#ff9a80' },
+      { l: 'CLIP', bars: [{ p: 98, hold: 1, t: 'auto', b: '0', bg: grad }, { p: 96, hold: 2, t: 'auto', b: '0', bg: grad }], v: '+0.4', c: '#f0524f' },
+    ];
+    const rnd = DV.rand(3), N = 180, W = 540, H = 140; let inA = '', outL = '', grL = ''; const gr = [];
+    for (let i = 0; i <= N; i++) { const ph = (i % 30) / 30, lv = 0.75 - ph * 0.5 + rnd() * 0.08, x = r1(i / N * W); inA += (i ? 'L' : 'M') + x + ' ' + r1(H - lv * H) + ' '; const g = Math.max(0, lv - 0.63) * 120; gr.push(g); outL += (i ? 'L' : 'M') + x + ' ' + r1(H - (lv * H) + g * 0.8) + ' '; grL += (i ? 'L' : 'M') + x + ' ' + r1(g) + ' '; }
+    const hist = { inA: inA + `L${W} ${H} L0 ${H} Z`, outL, grL, grA: grL + `L${W} 0 L0 0 Z` };
+    const palette = [['Coral', '#ff7b6e'], ['Orange', '#ffa94d'], ['Yellow', '#f2d45c'], ['Green', '#7ddc7a'], ['Teal', '#4fd6c8'], ['Sky', '#5aa2f5'], ['Violet', '#9d8cff'], ['Pink', '#e884d6']].map(([n, c]) => ({ n, c }));
+    this._v = { waves, modes, adsr, adsrTag: { x: adsr.d[0] + 14, y: adsr.d[1] - 28 }, bands, meters, hist, palette };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

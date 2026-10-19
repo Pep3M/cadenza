@@ -1,6 +1,7 @@
 //! `drum_machine`: synthesized, GM-mapped drum kit.
 
 use super::percussion::{PercParams, Percussion};
+use crate::processor::readings;
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::biquad::{Biquad, BiquadCoeffs};
 use crate::util::envelope::{DecayEnv, decay_coeff};
@@ -374,6 +375,7 @@ pub struct DrumMachine {
 	tone_coeffs: BiquadCoeffs,
 	tone_coeffs_db: f32,
 	tone_counter: u32,
+	triggers: [f32; readings::DRUM_VOICES],
 }
 
 impl Default for DrumMachine {
@@ -414,11 +416,25 @@ impl DrumMachine {
 			tone_coeffs: BiquadCoeffs::IDENTITY,
 			tone_coeffs_db: f32::NAN,
 			tone_counter: 0,
+			triggers: [0.0; readings::DRUM_VOICES],
 			params,
 		}
 	}
 
 	fn trigger(&mut self, pitch: u8, velocity: f32) {
+		let voice = match pitch {
+			35 | 36 => Some(readings::DRUM_KICK),
+			38 | 40 => Some(readings::DRUM_SNARE),
+			39 => Some(readings::DRUM_CLAP),
+			42 | 44 | 46 => Some(readings::DRUM_HATS),
+			41 | 43 | 45 | 47 | 48 | 50 => Some(readings::DRUM_TOMS),
+			49 | 51..=53 | 55 | 57 | 59 => Some(readings::DRUM_CYMBALS),
+			n if Percussion::plays(n) => Some(readings::DRUM_PERC),
+			_ => None,
+		};
+		if let Some(v) = voice {
+			self.triggers[v] += 1.0;
+		}
 		let sr = self.sample_rate;
 		let vel = velocity_gain(velocity);
 		let p = &self.params;
@@ -799,6 +815,16 @@ impl Processor for DrumMachine {
 		self.tone_counter = 0;
 	}
 
+	fn readings(&self, out: &mut [f32]) -> usize {
+		let start = readings::DRUM_VOICE_TRIGGERS_START;
+		let n = out.len().saturating_sub(start).min(readings::DRUM_VOICES);
+		if n == 0 {
+			return 0;
+		}
+		out[start..start + n].copy_from_slice(&self.triggers[..n]);
+		start + n
+	}
+
 	fn tail_seconds(&self) -> f32 {
 		let p = &self.params;
 		let longest = p
@@ -810,5 +836,50 @@ impl Processor for DrumMachine {
 			.max(1_500.0 * p.get(P_PERC_DECAY) * 0.01)
 			.max(250.0);
 		longest * 0.001 * 1.3
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn hit(dm: &mut DrumMachine, pitch: u8) {
+		let mut l = [0.0; 64];
+		let mut r = [0.0; 64];
+		let ev = [MidiEvent::NoteOn {
+			offset: 0,
+			pitch,
+			velocity: 0.9,
+		}];
+		dm.process(&mut l, &mut r, &ev, &Transport::default());
+	}
+
+	fn counters(dm: &DrumMachine) -> [f32; readings::MAX] {
+		let mut out = [0.0; readings::MAX];
+		assert_eq!(dm.readings(&mut out), readings::DRUM_VOICES);
+		out
+	}
+
+	#[test]
+	fn note_ons_count_per_voice() {
+		let mut dm = DrumMachine::new();
+		dm.prepare(48_000.0, 64);
+		assert_eq!(counters(&dm)[readings::DRUM_KICK], 0.0);
+		hit(&mut dm, 36);
+		let c = counters(&dm);
+		assert_eq!(c[readings::DRUM_KICK], 1.0);
+		assert_eq!(c[readings::DRUM_SNARE], 0.0);
+		hit(&mut dm, 35);
+		hit(&mut dm, 46);
+		hit(&mut dm, 56);
+		hit(&mut dm, 53);
+		let c = counters(&dm);
+		assert_eq!(c[readings::DRUM_KICK], 2.0);
+		assert_eq!(c[readings::DRUM_HATS], 1.0);
+		assert_eq!(c[readings::DRUM_PERC], 1.0);
+		assert_eq!(c[readings::DRUM_CYMBALS], 1.0);
+		// A note the kit cannot play counts nowhere.
+		hit(&mut dm, 100);
+		assert_eq!(counters(&dm).iter().sum::<f32>(), 5.0);
 	}
 }

@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="./device-viz.js"></script>
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;flex-direction:column;gap:64px;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div style="display:flex;flex-direction:column;gap:8px;max-width:1100px"><span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5;font-size:13px">CADENZA · DEVICES</span><span style="font-size:34px;font-weight:600;letter-spacing:-0.015em">16 · Limiter, Reverb, Delay, Chorus, Saturator, Gain</span><span style="font-size:15px;color:#a3a6ad;line-height:1.6;text-wrap:pretty">Dock size, transport playing. Stereo convention used everywhere: left is teal, right is orange. Gain reduction is always coral and hangs from the top.</span></div>
+
+<!-- LIMITER -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">16a · Limiter · on Master · hitting the −14 LUFS streaming target</div>
+<div data-screen-label="16a Limiter" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Limiter" track="Master" tc="#8a93a3" preset="Streaming · −14 LUFS" in-db="{{ -7.4 }}" out-db="{{ -1.1 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="position:relative;width:1060px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="1060" height="318" style="position:absolute;inset:0">
+<path d="{{ lim.beats }}" stroke="#16181b" stroke-width="1" fill="none"></path>
+<path d="{{ lim.mid }}" stroke="#1f2125" stroke-width="1" fill="none"></path>
+<path d="{{ lim.inA }}" fill="#4a4f59" fill-opacity="0.55"></path>
+<path d="{{ lim.outA }}" fill="#8cc8f0" fill-opacity="0.38"></path>
+<path d="{{ lim.grA }}" fill="#ff7a5c" fill-opacity="0.16"></path>
+<path d="{{ lim.grL }}" stroke="#ff7a5c" stroke-opacity="0.2" stroke-width="5" fill="none"></path>
+<path d="{{ lim.grL }}" stroke="#ff7a5c" stroke-width="1.6" fill="none"></path>
+<path d="{{ lim.ceil }}" stroke="#f4f5f7" stroke-opacity="0.7" stroke-width="1" stroke-dasharray="6 4" fill="none"></path>
+</svg>
+<div style="position:absolute;left:8px;top:8px;display:flex;gap:14px;font-size:10.5px;color:#a3a6ad"><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:6px;background:#4a4f59"></span>Input + gain</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:6px;background:#8cc8f0;opacity:.6"></span>Output</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:#ff7a5c"></span>Gain reduction</span></div>
+<div style="position:absolute;right:10px;top:{{ lim.ceilY }}px;transform:translateY(-50%);display:flex;align-items:center;gap:6px;padding:2px 8px 2px 6px;background:#212328;border-radius:3px;box-shadow:inset 0 0 0 1px #363940;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:ns-resize"><span style="color:#80848c">⇕</span>Ceiling −1.0 dB</div>
+<sc-for list="{{ lim.grLab }}" as="l" hint-placeholder-count="0"><span style="position:absolute;left:8px;top:{{ l.y }}px;transform:translateY(-50%);font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#ff9a80">{{ l.t }}</span></sc-for>
+<span style="position:absolute;right:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">6 s · now →</span>
+</div>
+<div style="width:196px;flex:none;display:flex;gap:10px;justify-content:center;padding:4px 0 8px">
+<sc-for list="{{ limMeters }}" as="m" hint-placeholder-count="3"><div style="display:flex;flex-direction:column;align-items:center;gap:5px"><span style="font-size:10.5px;font-weight:500;color:#80848c;letter-spacing:.06em">{{ m.l }}</span><div style="flex:1;display:flex;gap:2px"><sc-for list="{{ m.bars }}" as="b" hint-placeholder-count="2"><div style="width:14px;background:#0e0f11;border-radius:2px;position:relative;overflow:hidden"><div style="position:absolute;left:0;right:0;top:{{ b.t }};bottom:{{ b.b }};height:{{ b.p }}%;background:{{ b.bg }}"></div><div style="position:absolute;left:0;right:0;top:{{ b.hold }}%;height:1px;background:#f4f5f7"></div></div></sc-for></div><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:{{ m.c }}">{{ m.v }}</span></div></sc-for>
+</div>
+<div style="width:300px;flex:none;display:flex;flex-direction:column;gap:10px;padding:4px 12px 8px;border-left:1px solid #1d1f23;border-right:1px solid #1d1f23">
+<span style="font-size:10.5px;font-weight:500;color:#80848c;letter-spacing:.06em">LOUDNESS</span>
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-family:'IBM Plex Mono',monospace;font-size:34px;font-weight:500;color:#f4f5f7">−13.8</span><span style="color:#a3a6ad">LUFS short-term</span></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+<div style="display:flex;flex-direction:column;gap:2px;padding:6px 8px;background:#111215;border-radius:4px"><span style="font-size:11px;color:#80848c">Integrated</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px">−14.2 <span style="font-size:11px;color:#80848c">LUFS</span></span></div>
+<div style="display:flex;flex-direction:column;gap:2px;padding:6px 8px;background:#111215;border-radius:4px"><span style="font-size:11px;color:#80848c">True peak</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#4fc38a">−1.0 <span style="font-size:11px;color:#80848c">dBTP ✓</span></span></div>
+</div>
+<div style="position:relative;height:78px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden"><svg width="276" height="78" style="position:absolute;inset:0"><rect x="0" y="{{ lim.tgtY }}" width="276" height="{{ lim.tgtH }}" fill="#4fc38a" fill-opacity="0.10"></rect><path d="{{ lim.tgtL }}" stroke="#4fc38a" stroke-opacity="0.6" stroke-width="1" stroke-dasharray="3 3"></path><path d="{{ lim.lufs }}" stroke="#f4f5f7" stroke-width="1.4" fill="none"></path></svg><span style="position:absolute;left:6px;top:4px;font-size:10px;color:#80848c">last 30 s</span><span style="position:absolute;right:6px;top:{{ lim.tgtLab }}px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4fc38a">−14</span></div>
+<div style="display:flex;gap:4px"><span style="flex:1;height:24px;display:flex;align-items:center;justify-content:center;border-radius:4px;background:#1d3a2b;color:#4fc38a;box-shadow:inset 0 0 0 1px #2d5a40;font-weight:500;font-size:11.5px">Streaming −14</span><span style="flex:1;height:24px;display:flex;align-items:center;justify-content:center;border-radius:4px;background:#212328;color:#a3a6ad;font-size:11.5px">Loud −9</span><span style="flex:1;height:24px;display:flex;align-items:center;justify-content:center;border-radius:4px;background:#212328;color:#a3a6ad;font-size:11.5px">Broadcast −23</span></div>
+</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:space-around">
+<dc-import name="Knob" v="0.25" size="96" label="Input gain" value="+6.0 dB" color="#f4f5f7" state="drag" tip="+6.0 dB · Shift fine" hint-size="110px,140px"></dc-import>
+<dc-import name="Knob" v="0.958" size="72" label="Ceiling" value="−1.0 dB" color="#8cc8f0" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.4" size="56" label="Release" value="80 ms" color="#ff7a5c" hint-size="80px,92px"></dc-import>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:4px;color:#a3a6ad"><span>Loudness meters are measured after the ceiling. Target chip only sets the green band, it never changes the sound.</span><div style="flex:1"></div><span style="height:22px;display:flex;align-items:center;padding:0 8px;background:#212328;border-radius:4px">Reset integrated</span><span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="font-family:'IBM Plex Mono',monospace">▸</span>Display</span></div>
+</div>
+</div>
+
+<!-- REVERB -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">16b · Reverb · on the Reverb bus</div>
+<div data-screen-label="16b Reverb" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Reverb" track="Reverb bus" tc="#8a93a3" preset="Plate · medium" in-db="{{ -22 }}" out-db="{{ -19.5 }}" mix="100 %" mix-v="{{ 1 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="position:relative;width:900px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="900" height="318" style="position:absolute;inset:0">
+<path d="{{ rv.grid }}" stroke="#16181b" stroke-width="1" fill="none"></path>
+<path d="{{ rv.lowA }}" fill="#9d8cff" fill-opacity="0.22"></path>
+<path d="{{ rv.lowL }}" stroke="#9d8cff" stroke-width="1.5" fill="none"></path>
+<path d="{{ rv.hiA }}" fill="#4fd6c8" fill-opacity="0.18"></path>
+<path d="{{ rv.hiL }}" stroke="#4fd6c8" stroke-width="1.5" fill="none"></path>
+<path d="{{ rv.er }}" stroke="#f4f5f7" stroke-width="1.5" fill="none"></path>
+<path d="{{ rv.pd }}" stroke="#f4f5f7" stroke-opacity="0.5" stroke-width="1" fill="none"></path>
+<path d="{{ rv.decayM }}" stroke="#9d8cff" stroke-opacity="0.7" stroke-width="1" stroke-dasharray="4 3" fill="none"></path>
+<circle cx="{{ rv.dx }}" cy="{{ rv.dy }}" r="7" fill="#9d8cff" stroke="#0b0c0e" stroke-width="1.5"></circle>
+<circle cx="{{ rv.hx }}" cy="{{ rv.hy }}" r="7" fill="#4fd6c8" stroke="#0b0c0e" stroke-width="1.5"></circle>
+<circle cx="{{ rv.px }}" cy="{{ rv.py }}" r="6" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.5"></circle>
+</svg>
+<div style="position:absolute;left:8px;top:8px;display:flex;gap:14px;font-size:10.5px;color:#a3a6ad"><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:#f4f5f7"></span>Early reflections</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:6px;background:#9d8cff"></span>Tail, lows</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:6px;background:#4fd6c8"></span>Tail, highs (damped)</span></div>
+<span style="position:absolute;left:{{ rv.pdTagX }}px;top:{{ rv.pdTagY }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;box-shadow:inset 0 0 0 1px #363940">Pre-delay 40 ms</span>
+<span style="position:absolute;left:{{ rv.dTagX }}px;top:{{ rv.dTagY }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#c3b8ff;box-shadow:inset 0 0 0 1px #363940">Decay 2.4 s</span>
+<span style="position:absolute;left:{{ rv.hTagX }}px;top:{{ rv.hTagY }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8ff0e4;box-shadow:inset 0 0 0 1px #363940">Damping 40 %</span>
+<sc-for list="{{ rv.tl }}" as="l" hint-placeholder-count="0"><span style="position:absolute;left:{{ l.x }}px;bottom:6px;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">{{ l.t }}</span></sc-for>
+</div>
+<div style="position:relative;width:300px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="300" height="318" style="position:absolute;inset:0">
+<sc-for list="{{ rv.rings }}" as="r" hint-placeholder-count="0"><circle cx="150" cy="170" r="{{ r.r }}" fill="none" stroke="#9d8cff" stroke-opacity="{{ r.o }}" stroke-width="1"></circle></sc-for>
+<rect x="{{ rv.room.x }}" y="{{ rv.room.y }}" width="{{ rv.room.w }}" height="{{ rv.room.h }}" rx="6" fill="#9d8cff" fill-opacity="0.06" stroke="#9d8cff" stroke-opacity="0.7" stroke-width="1.5"></rect>
+<path d="{{ rv.spread }}" fill="#f4f5f7" fill-opacity="0.07" stroke="none"></path>
+<circle cx="{{ rv.sl }}" cy="128" r="5" fill="#4fd6c8"></circle><circle cx="{{ rv.sr }}" cy="128" r="5" fill="#ffa94d"></circle>
+<circle cx="150" cy="212" r="6" fill="#f4f5f7"></circle>
+</svg>
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c">Space</span>
+<span style="position:absolute;left:0;right:0;bottom:8px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a3a6ad">Size 62 % · Width 80 %</span>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:10px;padding:2px 8px 8px">
+<div style="display:flex;gap:12px;align-items:center">
+<div style="position:relative;width:300px;height:64px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden"><svg width="300" height="64" style="position:absolute;inset:0"><path d="{{ rv.lcGrid }}" stroke="#16181b" fill="none"></path><path d="{{ rv.lcA }}" fill="#f4f5f7" fill-opacity="0.06"></path><path d="{{ rv.lcL }}" stroke="#f4f5f7" stroke-width="1.5" fill="none"></path><circle cx="{{ rv.lcX }}" cy="{{ rv.lcY }}" r="5" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.5"></circle></svg><span style="position:absolute;left:6px;top:4px;font-size:10px;color:#80848c">Low cut on the wet signal</span><span style="position:absolute;right:6px;bottom:4px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">180 Hz</span></div>
+<div style="flex:1"></div>
+<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px"><span style="font-size:10.5px;color:#80848c;font-weight:500;letter-spacing:.06em">WET OUT</span><div style="width:140px;height:6px;background:#0e0f11;border-radius:2px;overflow:hidden;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:58%;background:linear-gradient(90deg,#4fc38a,#4fc38a 80%,#e8c94a)"></div></div><div style="width:140px;height:6px;background:#0e0f11;border-radius:2px;overflow:hidden;position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:54%;background:#4fc38a"></div></div></div>
+</div>
+<div style="flex:1;display:grid;grid-template-columns:repeat(4,1fr);align-content:center;row-gap:14px">
+<dc-import name="Knob" v="0.62" size="72" label="Size" value="62 %" color="#9d8cff" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.11" size="72" label="Decay" value="2.4 s" color="#9d8cff" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.4" size="72" label="Damping" value="40 %" color="#4fd6c8" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.16" size="72" label="Pre-delay" value="40 ms" color="#f4f5f7" auto="0.3" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.8" size="56" label="Width" value="80 %" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+<dc-import name="Knob" v="0.37" size="56" label="Low cut" value="180 Hz" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+</div>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:4px;color:#a3a6ad"><span>Drag the violet node for decay, the teal node for damping, the white node for pre-delay. Pre-delay is automated.</span><div style="flex:1"></div><span style="height:22px;display:flex;align-items:center;padding:0 8px;background:#212328;border-radius:4px">Freeze tail <span style="font-family:'IBM Plex Mono',monospace;color:#80848c;margin-left:6px;font-size:10.5px">idea</span></span></div>
+</div>
+</div>
+
+<!-- DELAY -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">16c · Delay · sync on, 1/8, ping-pong</div>
+<div data-screen-label="16c Delay" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Delay" track="Delay bus" tc="#8a93a3" preset="Ping-pong eighths" dirty="{{ true }}" in-db="{{ -20 }}" out-db="{{ -21 }}" mix="35 %" mix-v="{{ 0.35 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="position:relative;width:1040px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="1040" height="318" style="position:absolute;inset:0">
+<path d="{{ dl.minor }}" stroke="#141619" stroke-width="1" fill="none"></path>
+<path d="{{ dl.beat }}" stroke="#1c1e22" stroke-width="1" fill="none"></path>
+<path d="{{ dl.bar }}" stroke="#2a2c32" stroke-width="1" fill="none"></path>
+<path d="{{ dl.mid }}" stroke="#2a2c32" stroke-width="1" fill="none"></path>
+<path d="{{ dl.env }}" stroke="#a3a6ad" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="3 3" fill="none"></path>
+<sc-for list="{{ dl.taps }}" as="t" hint-placeholder-count="0"><rect x="{{ t.x }}" y="{{ t.y }}" width="{{ t.w }}" height="{{ t.h }}" rx="2" fill="{{ t.c }}" fill-opacity="{{ t.o }}"></rect></sc-for>
+</svg>
+<span style="position:absolute;left:8px;top:8px;font-size:10.5px;color:#4fd6c8">L</span><span style="position:absolute;left:8px;bottom:22px;font-size:10.5px;color:#ffa94d">R</span>
+<sc-for list="{{ dl.bl }}" as="l" hint-placeholder-count="0"><span style="position:absolute;left:{{ l.x }}px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c;padding-left:4px">{{ l.t }}</span></sc-for>
+<span style="position:absolute;left:{{ dl.tagX }}px;top:{{ dl.tagY }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;box-shadow:inset 0 0 0 1px #363940;white-space:nowrap">1/8 · 326 ms · drag to change</span>
+<span style="position:absolute;right:8px;top:8px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">feedback 60 % · 92 BPM</span>
+</div>
+<div style="width:336px;flex:none;display:flex;flex-direction:column;gap:8px;padding:2px 4px">
+<div style="display:flex;align-items:center;gap:8px"><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><span style="padding:2px 12px;border-radius:3px;background:#363940;font-weight:500">Sync</span><span style="padding:2px 12px;color:#80848c">Free</span></div><div style="flex:1"></div><span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 9px;background:#15323a;color:#5ac8d8;border-radius:4px;box-shadow:inset 0 0 0 1px #24525d;font-weight:500">⇄ Ping-pong</span></div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+<sc-for list="{{ dl.notes }}" as="n" hint-placeholder-count="12"><span style="height:30px;display:flex;align-items:center;justify-content:center;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:12px;background:{{ n.bg }};color:{{ n.fg }};box-shadow:{{ n.ring }}">{{ n.t }}</span></sc-for>
+</div>
+<div style="position:relative;height:110px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;margin-top:2px"><svg width="328" height="110" style="position:absolute;inset:0"><path d="{{ dl.fGrid }}" stroke="#16181b" fill="none"></path><path d="{{ dl.fA }}" fill="#f4f5f7" fill-opacity="0.07"></path><path d="{{ dl.fL }}" stroke="#f4f5f7" stroke-width="1.5" fill="none"></path><circle cx="{{ dl.lcx }}" cy="{{ dl.fy }}" r="5.5" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.5"></circle><circle cx="{{ dl.hcx }}" cy="{{ dl.fy }}" r="5.5" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.5"></circle></svg><span style="position:absolute;left:6px;top:4px;font-size:10px;color:#80848c">Feedback filter</span><span style="position:absolute;right:6px;bottom:4px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">200 Hz – 6 kHz</span></div>
+</div>
+<div style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);align-content:center;row-gap:16px;padding-left:8px">
+<dc-import name="Knob" v="0.42" size="72" label="Time" value="1/8 · 326 ms" color="#f4f5f7" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.63" size="72" label="Feedback" value="60 %" color="#f4f5f7" state="hover" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.35" size="72" label="Mix" value="35 %" color="#f4f5f7" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.34" size="56" label="Low cut" value="200 Hz" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+<dc-import name="Knob" v="0.66" size="56" label="High cut" value="6.0 kHz" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:4px;color:#a3a6ad"><span>Taps redraw as feedback and filter change: each repeat gets darker as the band-pass removes highs and lows. Free mode turns the grid into milliseconds.</span></div>
+</div>
+</div>
+
+<!-- CHORUS + SATURATOR -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">16d · Chorus · LFO is animated (both voices drift in real time)</div>
+<div data-screen-label="16d Chorus" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Chorus" track="Keys" tc="#e3b24f" preset="Wide and slow" in-db="{{ -16 }}" out-db="{{ -16.4 }}" mix="50 %" mix-v="{{ 0.5 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="position:relative;width:1000px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="1000" height="318" style="position:absolute;inset:0">
+<path d="{{ ch.grid }}" stroke="#16181b" stroke-width="1" fill="none"></path>
+<path d="M0 159 H1000" stroke="#2a2c32" stroke-width="1"></path>
+<rect x="0" y="{{ ch.dTop }}" width="1000" height="{{ ch.dH }}" fill="#f4f5f7" fill-opacity="0.025"></rect>
+<g ref="{{ lfoRef }}">
+<path d="{{ ch.l }}" stroke="#4fd6c8" stroke-opacity="0.18" stroke-width="7" fill="none"></path>
+<path d="{{ ch.l }}" stroke="#4fd6c8" stroke-width="1.75" fill="none"></path>
+<path d="{{ ch.r }}" stroke="#ffa94d" stroke-opacity="0.18" stroke-width="7" fill="none"></path>
+<path d="{{ ch.r }}" stroke="#ffa94d" stroke-width="1.75" fill="none"></path>
+</g>
+<path d="M750 0 V318" stroke="#f4f5f7" stroke-opacity="0.25" stroke-width="1"></path>
+<circle ref="{{ dotLRef }}" cx="750" cy="159" r="6" fill="#4fd6c8" stroke="#0b0c0e" stroke-width="1.5"></circle>
+<circle ref="{{ dotRRef }}" cx="750" cy="159" r="6" fill="#ffa94d" stroke="#0b0c0e" stroke-width="1.5"></circle>
+</svg>
+<div style="position:absolute;left:8px;top:8px;display:flex;gap:14px;font-size:10.5px;color:#a3a6ad"><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:#4fd6c8"></span>Voice L</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:#ffa94d"></span>Voice R · 126° apart (width)</span></div>
+<span style="position:absolute;right:8px;top:8px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">modulated delay ±{{ ch.ms }} ms</span>
+<span style="position:absolute;left:760px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">now</span>
+<span style="position:absolute;left:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">rate 0.60 Hz · one cycle = 1.67 s</span>
+</div>
+<div style="position:relative;width:320px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="320" height="318" style="position:absolute;inset:0">
+<path d="{{ ch.arcBg }}" stroke="#24262b" stroke-width="1" fill="none"></path>
+<path d="{{ ch.wedge }}" fill="#f4f5f7" fill-opacity="0.07"></path>
+<path d="{{ ch.arc }}" stroke="#f4f5f7" stroke-opacity="0.6" stroke-width="2" fill="none"></path>
+<path d="M160 250 V60" stroke="#24262b" stroke-width="1" stroke-dasharray="3 3"></path>
+<circle cx="{{ ch.vl.x }}" cy="{{ ch.vl.y }}" r="7" fill="#4fd6c8"></circle><circle cx="{{ ch.vr.x }}" cy="{{ ch.vr.y }}" r="7" fill="#ffa94d"></circle>
+<circle cx="160" cy="250" r="5" fill="#f4f5f7"></circle>
+</svg>
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c">Stereo width</span>
+<span style="position:absolute;left:24px;top:238px;font-size:11px;color:#80848c">L</span><span style="position:absolute;right:24px;top:238px;font-size:11px;color:#80848c">R</span>
+<span style="position:absolute;left:0;right:0;bottom:10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a3a6ad">70 %</span>
+</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:space-around;padding:0 12px">
+<dc-import name="Knob" v="0.53" size="72" label="Rate" value="0.60 Hz" color="#f4f5f7" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.45" size="72" label="Depth" value="45 %" color="#f4f5f7" hint-size="100px,110px"></dc-import>
+<dc-import name="Knob" v="0.22" size="56" label="Feedback" value="20 %" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+<dc-import name="Knob" v="0.7" size="56" label="Width" value="70 %" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+<dc-import name="Knob" v="0.5" size="56" label="Mix" value="50 %" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:4px;color:#a3a6ad"><span>Transport stopped: the traces keep moving if audio is passing, otherwise they freeze at their last phase and dim to 50 %.</span></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">16e · Saturator · Tube mode, 12 dB drive</div>
+<div data-screen-label="16e Saturator" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Saturator" track="Bass" tc="#5aa2f5" preset="Warm tube" in-db="{{ -14 }}" out-db="{{ -12.5 }}" mix="100 %" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="width:210px;flex:none;display:flex;flex-direction:column;gap:6px">
+<sc-for list="{{ sat.modes }}" as="m" hint-placeholder-count="3"><div style="flex:1;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:6px;background:{{ m.bg }};box-shadow:{{ m.ring }}"><svg width="56" height="56" style="flex:none;background:#0b0c0e;border-radius:4px"><path d="M4 52 L52 4" stroke="#24262b" stroke-width="1"></path><path d="{{ m.path }}" stroke="{{ m.c }}" stroke-width="1.75" fill="none"></path></svg><div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:600;font-size:13px;color:{{ m.fg }}">{{ m.n }}</span><span style="font-size:11px;color:#a3a6ad;line-height:1.3">{{ m.d }}</span></div></div></sc-for>
+</div>
+<div style="position:relative;width:318px;height:318px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;flex:none">
+<svg width="318" height="318" style="position:absolute;inset:0">
+<path d="{{ sat.grid }}" stroke="#17191c" stroke-width="1" fill="none"></path>
+<path d="M0 318 L318 0" stroke="#2a2c32" stroke-width="1" stroke-dasharray="3 3"></path>
+<path d="{{ sat.ghost }}" stroke="#ff7b6e" stroke-opacity="0.3" stroke-width="1" fill="none" stroke-dasharray="2 3"></path>
+<path d="{{ sat.curve }}" stroke="#ff7b6e" stroke-opacity="0.18" stroke-width="8" fill="none"></path>
+<path d="{{ sat.curve }}" stroke="#ff9a8e" stroke-width="1.75" fill="none"></path>
+<circle cx="{{ sat.dx }}" cy="{{ sat.dy }}" r="7" fill="#ff7b6e" stroke="#0b0c0e" stroke-width="1.5"></circle>
+</svg>
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c">Shaping curve · drag ⇕ for drive</span>
+<span style="position:absolute;left:{{ sat.tagX }}px;top:{{ sat.tagY }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;box-shadow:inset 0 0 0 1px #363940;white-space:nowrap">Drive +12.0 dB</span>
+<span style="position:absolute;right:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">dotted = 6 dB</span>
+</div>
+<div style="width:600px;flex:none;display:flex;flex-direction:column;gap:8px">
+<div style="position:relative;flex:1;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden"><svg width="600" height="155" style="position:absolute;inset:0"><path d="M0 77.5 H600" stroke="#1f2125"></path><path d="{{ sat.wIn }}" stroke="#80848c" stroke-width="1.25" fill="none"></path><path d="{{ sat.wOut }}" stroke="#ff9a8e" stroke-width="1.75" fill="none"></path></svg><span style="position:absolute;left:8px;top:6px;display:flex;gap:12px;font-size:10.5px;color:#a3a6ad"><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:#80848c"></span>Before</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:#ff9a8e"></span>After</span></span></div>
+<div style="position:relative;flex:1;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;display:flex;align-items:flex-end;gap:6px;padding:24px 14px 20px">
+<sc-for list="{{ sat.harm }}" as="h" hint-placeholder-count="12"><div style="flex:1;height:{{ h.p }}%;background:{{ h.c }};border-radius:2px 2px 0 0;position:relative"><span style="position:absolute;left:50%;bottom:-16px;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">{{ h.n }}</span></div></sc-for>
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#a3a6ad">Harmonics added · even <span style="color:#ffa94d">■</span> odd <span style="color:#ff7b6e">■</span></span>
+</div>
+</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:space-around">
+<dc-import name="Knob" v="0.333" size="96" label="Drive" value="+12.0 dB" color="#ff7b6e" hint-size="110px,140px"></dc-import>
+<dc-import name="Knob" v="0.6" bip="{{ true }}" size="56" label="Tone" value="+20 % bright" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+<dc-import name="Knob" v="0.61" bip="{{ false }}" size="56" label="Output" value="−1.5 dB" color="#f4f5f7" hint-size="100px,92px"></dc-import>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:4px;color:#a3a6ad"><span>Mode cards morph the curve over 150 ms. Harmonics are computed from the shaping curve with a test sine, so they also show when the transport is stopped.</span></div>
+</div>
+</div>
+
+<!-- GAIN -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">16f · Gain / Utility · natural width 900 (centred in the dock; also fits compact)</div>
+<div data-screen-label="16f Gain Utility" style="width:900px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Gain" track="Pad" tc="#9a82ec" preset="Default" in-db="{{ -15 }}" out-db="{{ -18 }}" undo="" narrow="{{ true }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:12px;padding:8px 8px 0;min-height:0">
+<div style="display:flex;flex-direction:column;gap:6px;flex:none">
+<div style="position:relative;width:290px;height:290px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="290" height="290" style="position:absolute;inset:0">
+<path d="M145 10 L280 145 L145 280 L10 145 Z" fill="none" stroke="#1f2125" stroke-width="1"></path>
+<path d="M145 10 V280 M10 145 H280 M77.5 77.5 L212.5 212.5 M212.5 77.5 L77.5 212.5" stroke="#1a1c20" stroke-width="1"></path>
+<path d="{{ gn.dots }}" fill="#8cc8f0" fill-opacity="0.55"></path>
+</svg>
+<span style="position:absolute;left:139px;top:12px;font-size:10px;color:#80848c">M</span><span style="position:absolute;left:62px;top:62px;font-size:10px;color:#4fd6c8">L</span><span style="position:absolute;right:62px;top:62px;font-size:10px;color:#ffa94d">R</span><span style="position:absolute;right:12px;top:139px;font-size:10px;color:#80848c">S</span>
+</div>
+<div style="display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c"><span>−1</span><div style="flex:1;height:6px;background:#0e0f11;border-radius:2px;position:relative"><div style="position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:#363940"></div><div style="position:absolute;left:50%;width:41%;top:0;bottom:0;background:#4fc38a;border-radius:0 2px 2px 0"></div></div><span>+1</span><span style="color:#e8e9ec;width:36px;text-align:right">+0.82</span></div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:18px">
+<div style="display:flex;align-items:center;justify-content:space-around">
+<dc-import name="Knob" v="0.643" size="96" label="Gain" value="−3.0 dB" color="#f4f5f7" hint-size="110px,140px"></dc-import>
+<dc-import name="Knob" v="0.5" bip="{{ true }}" size="56" label="Pan" value="C" color="#f4f5f7" hint-size="80px,92px"></dc-import>
+<dc-import name="Knob" v="0.6" size="56" label="Width" value="120 %" color="#f4f5f7" auto="0.45" hint-size="80px,92px"></dc-import>
+</div>
+<div style="display:flex;gap:8px;justify-content:center">
+<span style="height:28px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#212328;border-radius:4px;color:#a3a6ad;font-weight:500"><span style="font-family:'IBM Plex Mono',monospace">Ø</span> Invert L</span>
+<span style="height:28px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#3a2c17;border-radius:4px;color:#f2a944;font-weight:500;box-shadow:inset 0 0 0 1px #5c4520"><span style="font-family:'IBM Plex Mono',monospace">Ø</span> Invert R · on</span>
+</div>
+<span style="text-align:center;color:#80848c;font-size:11px">Width 0 % = mono, 100 % = unchanged, 200 % = side doubled</span>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:4px;color:#a3a6ad"><span>Correlation turns amber below 0 and coral below −0.5.</span></div>
+</div>
+</div>
+
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  componentDidMount() {
+    if (!window.DV) { const t = setInterval(() => { if (window.DV) { clearInterval(t); this.forceUpdate(); } }, 30); }
+    const t0 = performance.now();
+    const loop = now => {
+      this.raf = requestAnimationFrame(loop);
+      if (!this.lfoG || !this._ch) return;
+      const c = this._ch, sec = (now - t0) / 1000, cyc = sec * 0.6;
+      const off = (cyc % 1) * c.per;
+      this.lfoG.setAttribute('transform', `translate(${-off} 0)`);
+      const ph = (750 + off) / c.per;
+      const yL = 159 - c.A * Math.sin(2 * Math.PI * ph), yR = 159 - c.A * Math.sin(2 * Math.PI * ph + c.phi);
+      this.dL && this.dL.setAttribute('cy', yL); this.dR && this.dR.setAttribute('cy', yR);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+  componentWillUnmount() { cancelAnimationFrame(this.raf); }
+  limiter() {
+    const W = 1060, H = 318, N = 420, rnd = DV.rand(9), c = Math.pow(10, -1 / 20), max = 1.6, r1 = n => Math.round(n * 10) / 10;
+    const Y = a => r1(H / 2 - a / max * H / 2 * 0.96), Yb = a => r1(H / 2 + a / max * H / 2 * 0.96);
+    let env = 0, grS = 0; const IN = [], OUT = [], GR = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N * 6, ph = (t % 0.652) / 0.652;
+      const base = 0.42 + 0.12 * Math.sin(t * 1.3) + 0.08 * rnd();
+      const hit = ph < 0.08 ? 0.75 * (1 - ph / 0.08) : 0;
+      const sn = (Math.floor(t / 0.652) % 2 === 1 && ph < 0.06) ? 0.45 : 0;
+      const a = (base + hit + sn) * 1.55;
+      const target = a > c ? 20 * Math.log10(c / a) : 0;
+      grS += (target - grS) * (target < grS ? 1 : 0.18);
+      const out = a * Math.pow(10, grS / 20);
+      IN.push(a); OUT.push(Math.min(c, out)); GR.push(grS);
+    }
+    const X = i => r1(i / N * W);
+    const sym = arr => arr.map((a, i) => (i ? 'L' : 'M') + X(i) + ' ' + Y(a)).join(' ') + ' ' + arr.slice().reverse().map((a, j) => 'L' + X(N - j) + ' ' + Yb(a)).join(' ') + ' Z';
+    const G = g => r1(-g / 12 * H * 0.38);
+    const grL = GR.map((g, i) => (i ? 'L' : 'M') + X(i) + ' ' + G(g)).join(' ');
+    let beats = ''; for (let t = 0; t < 6; t += 0.652) beats += `M${r1(W - t / 6 * W)} 0 V${H} `;
+    const lu = []; const rr = DV.rand(4); let v = -14.5;
+    for (let i = 0; i <= 60; i++) { v += (rr() - 0.5) * 0.9; v = Math.max(-16.5, Math.min(-12.5, v * 0.9 + -14 * 0.1)); lu.push(v); }
+    const LY = d => r1((-12 - d) / 6 * 78 + 4);
+    return {
+      inA: sym(IN), outA: sym(OUT), grL, grA: grL + ` L${W} 0 L0 0 Z`, beats, mid: `M0 ${H / 2} H${W}`,
+      ceil: `M0 ${Y(c)} H${W} M0 ${Yb(c)} H${W}`, ceilY: Y(c),
+      grLab: [-3, -6, -9].map(g => ({ y: G(g), t: String(g).replace('-', '−') })),
+      lufs: lu.map((d, i) => (i ? 'L' : 'M') + r1(i / 60 * 276) + ' ' + LY(d)).join(' '),
+      tgtY: LY(-13), tgtH: LY(-15) - LY(-13), tgtL: `M0 ${LY(-14)} H276`, tgtLab: LY(-14) - 14,
+    };
+  }
+  reverb() {
+    const W = 900, H = 318, T = 3.2, pd = 0.04, dec = 2.4, damp = 0.4, rnd = DV.rand(3), r1 = n => Math.round(n * 10) / 10;
+    const X = t => r1(t / T * W), Y = d => r1(28 + (-d / 66) * (H - 52));
+    const tail = (rt) => { const P = []; for (let i = 0; i <= 200; i++) { const t = pd + i / 200 * (T - pd); const build = Math.min(1, (t - pd) / 0.06); let d = -60 * (t - pd) / rt - (1 - build) * 18 - 4 + (rnd() - 0.5) * 3; P.push([X(t), Y(Math.max(-66, d))]); } return P; };
+    const lo = tail(dec), hi = tail(dec * (1 - damp * 0.7));
+    const base = Y(-66);
+    const ar = P => DV.line(P) + ` L${P[P.length - 1][0]} ${base} L${P[0][0]} ${base} Z`;
+    let er = ''; for (let k = 0; k < 11; k++) { const t = pd + 0.004 + k * 0.009 + rnd() * 0.004, d = -2 - k * 1.4 - rnd() * 3; er += `M${X(t)} ${base} V${Y(d)} `; }
+    let grid = ''; for (let d = -12; d > -66; d -= 12) grid += `M0 ${Y(d)} H${W} `; for (let t = 0.5; t < T; t += 0.5) grid += `M${X(t)} 0 V${H} `;
+    const room = { w: 60 + 0.62 * 170, h: 40 + 0.62 * 120 }; room.x = 150 - room.w / 2; room.y = 170 - room.h / 2;
+    const wd = 0.8 * 70;
+    const lcP = DV.pts(f => DV.bandDb({ type: 'hp', f: 180, slope: 12 }, f), 300, 64, 24, 80, 14);
+    const lcY = r1(DV.fy(-3, 64, 24) + 14);
+    const hiAt = 1.2, hiIdx = Math.round((hiAt - pd) / (T - pd) * 200);
+    return {
+      lowA: ar(lo), lowL: DV.line(lo), hiA: ar(hi), hiL: DV.line(hi), er, grid,
+      pd: `M0 ${Y(-2)} H${X(pd)} M${X(pd)} ${Y(-2) - 5} V${Y(-2) + 5}`, px: X(pd), py: Y(-2), pdTagX: X(pd) + 12, pdTagY: Y(-2) + 40,
+      decayM: `M${X(pd + dec)} 30 V${base}`, dx: X(pd + dec), dy: Y(-60) - 6, dTagX: X(pd + dec) + 12, dTagY: Y(-60) - 30,
+      hx: hi[hiIdx][0], hy: hi[hiIdx][1], hTagX: hi[hiIdx][0] + 12, hTagY: hi[hiIdx][1] + 10,
+      tl: [0.5, 1, 1.5, 2, 2.5, 3].map(t => ({ x: X(t), t: t + ' s' })),
+      room: { x: r1(room.x), y: r1(room.y), w: r1(room.w), h: r1(room.h) },
+      rings: [1, 2, 3].map(k => ({ r: 30 + k * 26 * (0.6 + 0.62), o: 0.35 / k })),
+      spread: `M150 212 L${150 - wd} 128 L${150 + wd} 128 Z`, sl: 150 - wd, sr: 150 + wd,
+      lcA: DV.area(lcP, 64), lcL: DV.line(lcP), lcX: r1(DV.fx(180, 300)), lcY,
+      lcGrid: [100, 1000, 10000].map(f => `M${r1(DV.fx(f, 300))} 0 V64`).join(' '),
+    };
+  }
+  delay() {
+    const W = 1040, H = 318, beats = 8, X = b => Math.round(b / beats * W * 10) / 10, mid = H / 2 - 8, r1 = n => Math.round(n * 10) / 10;
+    let minor = '', beat = '', bar = '';
+    for (let s = 1; s < beats * 4; s++) { const x = X(s / 4); if (s % 16 === 0) bar += `M${x} 0 V${H} `; else if (s % 4 === 0) beat += `M${x} 0 V${H} `; else minor += `M${x} 0 V${H} `; }
+    const taps = [{ x: X(0.15) - 4, y: mid - 130, w: 8, h: 260, c: '#f4f5f7', o: 0.95 }];
+    let env = `M${X(0.15)} ${mid - 130}`;
+    for (let n = 1; n <= 15; n++) {
+      const a = Math.pow(0.6, n - 1) * 0.92, h = Math.max(3, a * 130), left = n % 2 === 1, x = X(0.15 + n * 0.5);
+      taps.push({ x: x - 4, y: left ? mid - h : mid, w: 8, h, c: left ? '#4fd6c8' : '#ffa94d', o: Math.max(0.35, 1 - n * 0.045) });
+      env += ` L${x} ${mid - h}`;
+    }
+    const notes = ['1/32', '1/16T', '1/16', '1/8T', '1/8', '1/4T', '1/4', '1/2T', '1/2', '1 bar', '2 bars', '4 bars'].map(t => ({ t, bg: t === '1/8' ? '#1d2a3d' : '#1c1d21', fg: t === '1/8' ? '#7fb4ff' : '#c4c7cd', ring: t === '1/8' ? 'inset 0 0 0 1px #4c9cf5' : 'inset 0 0 0 1px #24262b' }));
+    const fW = 328, fH = 110, band = f => DV.bandDb({ type: 'hp', f: 200, slope: 12 }, f) + DV.bandDb({ type: 'lp', f: 6000, slope: 12 }, f);
+    const fp = DV.pts(band, fW, fH - 20, 24, 100, 10);
+    return {
+      minor, beat, bar, mid: `M0 ${mid} H${W}`, taps, env,
+      bl: [0, 1].map(k => ({ x: X(k * 4), t: String(5 + k) })).concat([1, 2, 3, 5, 6, 7].map(b => ({ x: X(b), t: '·' + (b % 4 + 1) }))),
+      tagX: X(0.65) + 10, tagY: mid - 60, notes,
+      fA: DV.area(fp, fH), fL: DV.line(fp), fy: r1(DV.fy(-3, fH - 20, 24) + 10), lcx: r1(DV.fx(200, fW)), hcx: r1(DV.fx(6000, fW)),
+      fGrid: [100, 1000, 10000].map(f => `M${r1(DV.fx(f, fW))} 0 V${fH}`).join(' '),
+    };
+  }
+  chorus() {
+    const per = 500, W = 1000, A = 0.45 * 130, phi = 126 * Math.PI / 180, r1 = n => Math.round(n * 10) / 10;
+    const sine = ph => { let d = ''; for (let i = 0; i <= 600; i++) { const x = i / 600 * (W + per * 1.2); d += (i ? 'L' : 'M') + r1(x) + ' ' + r1(159 - A * Math.sin(2 * Math.PI * x / per + ph)) + ' '; } return d; };
+    let grid = ''; for (let x = per / 4; x < W; x += per / 4) grid += `M${x} 0 V318 `;
+    const cx = 160, cy = 250, R = 150, w = 0.7 * 80;
+    const pt = a => DV.pt(cx, cy, R, a).map(r1);
+    const vl = pt(-w), vr = pt(w);
+    this._ch = { per, A, phi };
+    return {
+      l: sine(0), r: sine(phi), grid, dTop: 159 - A, dH: 2 * A, ms: '3.2',
+      arcBg: DV.arc(cx, cy, R, -90, 90), arc: DV.arc(cx, cy, R, -w, w),
+      wedge: `M${cx} ${cy} L${vl[0]} ${vl[1]} A${R} ${R} 0 0 1 ${vr[0]} ${vr[1]} Z`,
+      vl: { x: vl[0], y: vl[1] }, vr: { x: vr[0], y: vr[1] },
+    };
+  }
+  saturator() {
+    const r1 = n => Math.round(n * 10) / 10;
+    const shp = { tape: (x, k) => Math.tanh(k * x) / Math.tanh(k), tube: (x, k) => { const y = x >= 0 ? Math.tanh(k * x) : Math.tanh(k * 0.6 * x) * 0.85; return y / Math.tanh(k); }, hard: (x, k) => Math.max(-1, Math.min(1, x * k * 0.6)) };
+    const k = Math.pow(10, 12 / 20) * 0.9;
+    const curveP = (fn, kk, S, pad = 0) => { let d = ''; for (let i = 0; i <= 120; i++) { const x = -1 + 2 * i / 120, y = Math.max(-1, Math.min(1, fn(x, kk))); d += (i ? 'L' : 'M') + r1(pad + (x + 1) / 2 * (S - 2 * pad)) + ' ' + r1(S - pad - (y + 1) / 2 * (S - 2 * pad)) + ' '; } return d; };
+    const modes = [['tape', 'Tape', 'Soft, smooth top', '#ffa94d'], ['tube', 'Tube', 'Warm, uneven, 2nd harmonic', '#ff7b6e'], ['hard', 'Hard clip', 'Flat top, odd harmonics', '#e884d6']].map(([id, n, d, c]) => ({ n, d, c, path: curveP(shp[id], 3, 56, 4), bg: id === 'tube' ? '#2a2c32' : '#1c1d21', ring: id === 'tube' ? `inset 0 0 0 1.5px ${c}` : 'inset 0 0 0 1px #24262b', fg: id === 'tube' ? c : '#e8e9ec' }));
+    let grid = ''; [0.25, 0.5, 0.75].forEach(f => { grid += `M${318 * f} 0 V318 M0 ${318 * f} H318 `; });
+    const W = 600, H = 155, wIn = [], wOut = [];
+    for (let i = 0; i <= 300; i++) { const t = i / 300 * 2.5, x = Math.sin(2 * Math.PI * t) * 0.85; wIn.push([i / 300 * W, H / 2 - x * H * 0.42]); wOut.push([i / 300 * W, H / 2 - shp.tube(x, k) * H * 0.42]); }
+    const NS = 256, sig = Array.from({ length: NS }, (_, i) => shp.tube(0.85 * Math.sin(2 * Math.PI * i / NS), k));
+    const harm = [];
+    for (let h = 1; h <= 12; h++) { let re = 0, im = 0; sig.forEach((v, i) => { re += v * Math.cos(2 * Math.PI * h * i / NS); im += v * Math.sin(2 * Math.PI * h * i / NS); }); harm.push(Math.sqrt(re * re + im * im) / (NS / 2)); }
+    const h1 = harm[0];
+    const xd = 0.3, yd = shp.tube(xd, k);
+    return {
+      modes, grid, curve: curveP(shp.tube, k, 318), ghost: curveP(shp.tube, Math.pow(10, 6 / 20) * 0.9, 318),
+      dx: r1((xd + 1) / 2 * 318), dy: r1(318 - (yd + 1) / 2 * 318), tagX: r1((xd + 1) / 2 * 318) - 128, tagY: Math.max(28, r1(318 - (yd + 1) / 2 * 318) + 8),
+      wIn: DV.line(wIn), wOut: DV.line(wOut),
+      harm: harm.map((a, i) => { const db = 20 * Math.log10(Math.max(1e-6, a / h1)); return { n: 'H' + (i + 1), p: Math.max(2, Math.round((1 + db / 80) * 100)), c: i === 0 ? '#80848c' : i % 2 === 1 ? '#ffa94d' : '#ff7b6e' }; }),
+    };
+  }
+  gonio() {
+    const rnd = DV.rand(21); let d = '';
+    for (let i = 0; i < 520; i++) { const m = (rnd() + rnd() + rnd() - 1.5) * 1.3, s = (rnd() + rnd() - 1) * 0.42 * 1.2; const x = 145 + s * 95, y = 145 - m * 70; d += `M${x.toFixed(1)} ${y.toFixed(1)}h1.6v1.6h-1.6z`; }
+    return { dots: d };
+  }
+  renderVals() {
+    const refs = { lfoRef: el => { this.lfoG = el; }, dotLRef: el => { this.dL = el; }, dotRRef: el => { this.dR = el; } };
+    if (!window.DV) return refs;
+    if (!this._v) {
+      const m = (l, bars, v, c) => ({ l, bars, v, c });
+      this._v = {
+        lim: this.limiter(), rv: this.reverb(), dl: this.delay(), ch: this.chorus(), sat: this.saturator(), gn: this.gonio(),
+        limMeters: [
+          m('IN', [{ p: 96, hold: 2, t: 'auto', b: '0', bg: 'linear-gradient(0deg,#4fc38a 0 70%,#e8c94a 70% 90%,#f0524f 90%)' }, { p: 93, hold: 4, t: 'auto', b: '0', bg: 'linear-gradient(0deg,#4fc38a 0 70%,#e8c94a 70% 90%,#f0524f 90%)' }], '+1.8', '#f0524f'),
+          m('GR', [{ p: 38, hold: 46, t: '0', b: 'auto', bg: '#ff7a5c' }], '−4.6', '#ff9a80'),
+          m('OUT', [{ p: 88, hold: 11, t: 'auto', b: '0', bg: 'linear-gradient(0deg,#4fc38a 0 70%,#e8c94a 70% 90%,#f0524f 90%)' }, { p: 87, hold: 11, t: 'auto', b: '0', bg: 'linear-gradient(0deg,#4fc38a 0 70%,#e8c94a 70% 90%,#f0524f 90%)' }], '−1.0', '#e8e9ec'),
+        ],
+      };
+    }
+    return { ...this._v, ...refs };
+  }
+}
+</script>
+</body>
+</html>

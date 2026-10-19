@@ -934,6 +934,7 @@ impl<'a> Compiler<'a> {
 			count_in: crate::graph::CountIn::default(),
 			segments: [crate::graph::Segment::default(); crate::graph::MAX_SEGMENTS],
 			segment_count: 0,
+			probe: crate::graph::ProbeTap::new(),
 		})
 	}
 

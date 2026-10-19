@@ -477,11 +477,7 @@ impl PianoUi {
 		);
 		let ui = &mut bar;
 		ui.spacing_mut().item_spacing.x = 5.0;
-		ui.label(
-			RichText::new("PIANO ROLL")
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
-		);
+		super::widgets::panel_title(ui, "Piano roll", Some("F7"));
 		if let Some(t) = t {
 			let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
 			ui.painter()

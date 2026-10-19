@@ -170,7 +170,7 @@ pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, 
 # How Cadenza works
 - Positions and lengths are in beats (quarter notes); pitches are note names ("C4") or MIDI numbers (60 = C4); velocity is 0..1; volume is in dB; pan is -1..1.
 - Every edit is an undoable command. Everything you change for one request becomes a single undo step named after the request, so the user can take the whole request back with one Ctrl+Z. Inside a request you can use undo for your own steps only.
-- Ids for tracks, clips, devices and sends are in get_project and in tool results; keep track of them. Each request message carries the app context: the selection, the playhead, the loop range and the clip open in the piano roll, plus the project summary whenever the project changed since you last saw it (the user edits too). Call get_project when you need fresh details.
+- Ids for tracks, clips, devices and sends are in get_project and in tool results; keep track of them. Each request message carries the app context: the selection, the playhead, the loop range, the clip open in the piano roll and the device open in the device editor ("it", "this EQ" and requests asked from the editor mean that device: change its params with set_device_params), plus the project summary whenever the project changed since you last saw it (the user edits too). Call get_project when you need fresh details.
 - Calls that don't depend on each other can go in the same response; a call that needs an id from another result must wait for that result.
 - Tool errors are written for you: read them and fix the call.
 
@@ -229,6 +229,9 @@ pub struct AppContext {
 	/// A reference track the user chose (readable by compare_to_reference even outside the
 	/// project folder).
 	pub reference_file: Option<String>,
+	/// The device open in the device editor: "Parametric EQ \"EQ\" (device 4c1d..., eq) on
+	/// track \"Vox\" (track 9a0b...)".
+	pub open_device: Option<String>,
 }
 
 impl AppContext {
@@ -272,6 +275,9 @@ impl AppContext {
 		}
 		if let Some(recording) = &self.recording {
 			out.push_str(&format!("- Recording setup: {recording}\n"));
+		}
+		if let Some(device) = &self.open_device {
+			out.push_str(&format!("- Open in the device editor: {device}\n"));
 		}
 		if let Some(reference) = &self.reference_file {
 			out.push_str(&format!(
@@ -388,6 +394,7 @@ mod tests {
 			loop_beats: Some((16.0, 32.0)),
 			transport_mode: Some("song".into()),
 			recording: Some("Vox (audio, In 1, monitor auto) armed".into()),
+			open_device: Some("Parametric EQ \"EQ\" (device d1, eq) on track \"Vox\"".into()),
 			..AppContext::default()
 		};
 		let with =
@@ -397,6 +404,7 @@ mod tests {
 		assert!(with.contains("Selected clips: none"));
 		assert!(with.contains("Loop: beats 16.00 to 32.00"));
 		assert!(with.contains("Recording setup: Vox (audio, In 1, monitor auto) armed"));
+		assert!(with.contains("Open in the device editor: Parametric EQ \"EQ\" (device d1"));
 		assert!(with.contains("$0.25"));
 		assert!(with.contains("{\"name\":\"x\"}"));
 		let without = session_request_message("again", &context, 0.25, None);

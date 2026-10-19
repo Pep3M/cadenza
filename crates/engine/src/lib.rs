@@ -22,6 +22,7 @@ mod meter;
 pub mod metronome;
 mod pdc;
 mod player;
+mod probe;
 pub mod record;
 mod render;
 mod samples;
@@ -54,6 +55,7 @@ pub use player::{
 	EditorState, EditorUpdate, Player, PlayerClock, VirtualDevice, find_midi_input,
 	midi_input_ports,
 };
+pub use probe::{DeviceProbe, ProbeFrame};
 pub use record::{
 	LiveRecording, MidiItem, RecordOptions, RecordSetup, RecordTrack, RecordedAudio, RecordedPass,
 	Recording, RecordingMonitor, record_commands,

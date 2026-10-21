@@ -4,7 +4,7 @@ from mcpclient import Client
 CADENZA = os.environ.get('CADENZA', '../../target/release/cadenza')
 c = Client(CADENZA)
 C = c.call
-C('open_project', path='first_light.cadenza.json')
+C('open_project', path='first_light.cdz')
 p = C('get_project')
 T = {t['name']: t for t in p['tracks']}
 master_ins = {d['name'].lower(): d['id'] for d in p['master']['inserts']} if p['master']['inserts'] and 'name' in p['master']['inserts'][0] else None

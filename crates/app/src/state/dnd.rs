@@ -782,7 +782,7 @@ mod tests {
 		let at = Tick(1920);
 		let wav = Payload::File("/x/kick.wav".into());
 		let mid = Payload::File("/x/riff.mid".into());
-		let song = Payload::File("/x/song.cadenza.json".into());
+		let song = Payload::File("/x/song.cdz".into());
 		assert_eq!(
 			resolve(
 				&fx.p,
@@ -826,7 +826,7 @@ mod tests {
 		);
 		assert_eq!(
 			resolve(&fx.p, &song, DropTarget::Window, false),
-			DropAction::OpenProject("/x/song.cadenza.json".into())
+			DropAction::OpenProject("/x/song.cdz".into())
 		);
 		assert!(
 			!resolve(

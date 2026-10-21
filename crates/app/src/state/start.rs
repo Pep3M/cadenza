@@ -38,7 +38,7 @@ pub struct RecentInfo {
 	pub clips: Vec<ThumbClip>,
 }
 
-/// Reads `path` (a `.cadenza.json`) into its start screen summary.
+/// Reads `path` (a `.cdz`) into its start screen summary.
 pub fn recent_info(path: &Path) -> Result<RecentInfo, String> {
 	let project = Project::load_json(path).map_err(|e| e.to_string())?;
 	let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
@@ -211,9 +211,9 @@ mod tests {
 	#[test]
 	fn recent_projects_load_on_a_worker() {
 		let tmp = tempfile::tempdir().unwrap();
-		let file = tmp.path().join("Sketch").join("Sketch.cadenza.json");
+		let file = tmp.path().join("Sketch").join("Sketch.cdz");
 		Project::new("Sketch").save_json(&file).unwrap();
-		let gone = tmp.path().join("gone.cadenza.json");
+		let gone = tmp.path().join("gone.cdz");
 		let recent = vec![file.clone(), gone.clone()];
 		let mut s = StartScreen::default();
 		for _ in 0..500 {

@@ -40,7 +40,7 @@
 ", same clock as the output" = ", та же синхронизация, что у выхода"
 ", {n} duplicate shared" = [", {n} общая копия", ", {n} общие копии", ", {n} общих копий"]
 "-inf dB" = "-inf дБ"
-".cadenza.json → window" = ".cadenza.json → окно"
+".cdz → window" = ".cdz → окно"
 "1 = sparse … 5 = full" = "1 = редко … 5 = плотно"
 "1 undo step" = "1 шаг отмены"
 "1 week ago" = "1 неделю назад"

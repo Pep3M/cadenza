@@ -132,7 +132,7 @@ impl AgentConfig {
 	}
 
 	pub fn project_file_name(&self) -> String {
-		format!("{}.cadenza.json", self.slug)
+		format!("{}.cdz", self.slug)
 	}
 
 	pub fn wav_file_name(&self) -> String {

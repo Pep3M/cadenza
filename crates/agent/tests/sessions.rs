@@ -41,7 +41,7 @@ async fn full_session_writes_parts_and_renders_with_correct_wire_format() {
 					r#"{"name":"Keys","kind":"instrument","instrument":{"device":"electric_piano"}}"#,
 				),
 				("c4", "create_track", r#"{"name": "Pad", "#),
-				("c5", "save_project", r#"{"path":"/etc/evil.cadenza.json"}"#),
+				("c5", "save_project", r#"{"path":"/etc/evil.cdz"}"#),
 				(
 					"c6",
 					"create_track",
@@ -61,7 +61,7 @@ async fn full_session_writes_parts_and_renders_with_correct_wire_format() {
 			None,
 			None,
 			&[
-				("c8", "save_project", r#"{"path":"rain.cadenza.json"}"#),
+				("c8", "save_project", r#"{"path":"rain.cdz"}"#),
 				("c9", "render", r#"{"path":"rain.wav"}"#),
 			],
 			"tool_calls",
@@ -94,10 +94,10 @@ async fn full_session_writes_parts_and_renders_with_correct_wire_format() {
 	);
 	assert_eq!(
 		outcome.project_path.as_deref(),
-		Some(out.join("rain.cadenza.json").as_path())
+		Some(out.join("rain.cdz").as_path())
 	);
 	assert!(file_exists(&out.join("rain.wav")));
-	assert!(file_exists(&out.join("rain.cadenza.json")));
+	assert!(file_exists(&out.join("rain.cdz")));
 	assert!(
 		outcome
 			.loudness
@@ -110,7 +110,7 @@ async fn full_session_writes_parts_and_renders_with_correct_wire_format() {
 		outcome.budget.cache_read_tokens,
 		2900 + 3400 + 4100 + 4500 + 4600
 	);
-	assert!(!out.join("..").join("evil.cadenza.json").exists());
+	assert!(!out.join("..").join("evil.cdz").exists());
 
 	let requests = server.requests();
 	assert_eq!(requests.len(), 6);
@@ -390,7 +390,7 @@ async fn truncated_tool_calls_get_error_results_and_unfinished_sessions_are_nudg
 	for request in &requests[2..] {
 		let last = Recorded::text_of(request.messages().last().unwrap());
 		assert!(
-			last.contains("still needs to be saved as \"rain.cadenza.json\""),
+			last.contains("still needs to be saved as \"rain.cdz\""),
 			"{last}"
 		);
 	}

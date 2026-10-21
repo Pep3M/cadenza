@@ -39,7 +39,7 @@
 ", same clock as the output" = ", 출력과 같은 클록"
 ", {n} duplicate shared" = [", 공유된 복제본 {n}개"]
 "-inf dB" = "-inf dB"
-".cadenza.json → window" = ".cadenza.json → 창"
+".cdz → window" = ".cdz → 창"
 "1 = sparse … 5 = full" = "1 = 단순 … 5 = 풍성"
 "1 undo step" = "실행 취소 1단계"
 "1 week ago" = "1주 전"

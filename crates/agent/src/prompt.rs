@@ -408,7 +408,7 @@ mod tests {
 	#[test]
 	fn session_requests_carry_context_and_the_summary_only_when_needed() {
 		let context = AppContext {
-			project_path: Some("/music/song.cadenza.json".into()),
+			project_path: Some("/music/song.cdz".into()),
 			files_root: "/music".into(),
 			selected_tracks: vec!["Bass (track t1, instrument)".into()],
 			playhead_beats: 16.0,
@@ -432,7 +432,7 @@ mod tests {
 		assert!(with.contains("{\"name\":\"x\"}"));
 		let without = session_request_message("again", &context, 0.25, None);
 		assert!(without.contains("unchanged since your last reply"));
-		assert!(!SESSION_SYSTEM_PROMPT.contains("song.cadenza.json"));
+		assert!(!SESSION_SYSTEM_PROMPT.contains("song.cdz"));
 	}
 
 	#[test]
@@ -476,7 +476,7 @@ mod tests {
 		config.genre = Some("lo-fi".into());
 		let message = initial_user_message("sad piano", &config);
 		assert!(message.starts_with("Brief: sad piano"));
-		assert!(message.contains("\"my-song.cadenza.json\""));
+		assert!(message.contains("\"my-song.cdz\""));
 		assert!(message.contains("\"my-song.wav\""));
 		assert!(message.contains("-14 LUFS"));
 		assert!(message.contains("genre_profile \"hiphop\""));

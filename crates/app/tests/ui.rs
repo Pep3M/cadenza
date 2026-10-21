@@ -14,7 +14,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 fn example() -> PathBuf {
-	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/first_light.cadenza.json")
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/first_light.cdz")
 }
 
 fn app() -> CadenzaApp {
@@ -686,7 +686,7 @@ fn audio_editor_trims_fades_and_processes_through_commands() {
 	let wav = cadenza_core::paths::real_path(tone_wav(dir.path())).unwrap();
 	let mut a = app();
 	// Saved in the temp dir, so processed copies land in "song audio" there.
-	assert!(a.state.save_as(dir.path().join("song.cadenza.json")));
+	assert!(a.state.save_as(dir.path().join("song.cdz")));
 	a.state.import_audio_at(&wav, None, Some(Tick::ZERO));
 	let clip = *a
 		.state
@@ -3454,7 +3454,7 @@ fn missing_files_open_the_locate_dialog() {
 		tmp.path().join("gone").join("vox take.wav"),
 	));
 	p.tracks.push(t);
-	let file = tmp.path().join("Lost").join("Lost.cadenza.json");
+	let file = tmp.path().join("Lost").join("Lost.cdz");
 	p.save_json(&file).unwrap();
 	let mut state = AppState::headless();
 	assert!(state.open(&file));
@@ -3485,7 +3485,7 @@ fn render_project_screens() {
 	state.view.start_screen = true;
 	state.recent = vec![
 		example(),
-		PathBuf::from("/home/me/Music/Night Drive/Night Drive.cadenza.json"),
+		PathBuf::from("/home/me/Music/Night Drive/Night Drive.cdz"),
 	];
 	let mut h = Harness::builder()
 		.with_size(vec2(1600.0, 1000.0))
@@ -3547,7 +3547,7 @@ fn render_project_screens() {
 		));
 	}
 	p.tracks.push(t);
-	let file = tmp.path().join("Lost").join("Lost.cadenza.json");
+	let file = tmp.path().join("Lost").join("Lost.cdz");
 	p.save_json(&file).unwrap();
 	assert!(h.state_mut().state.open(&file));
 	shot(&mut h, "locate_missing_files");

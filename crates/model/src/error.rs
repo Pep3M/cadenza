@@ -153,6 +153,8 @@ pub enum ModelError {
 	Json(String),
 	#[error("I/O error on '{path}': {message}")]
 	Io { path: String, message: String },
+	#[error("'{path}' is not a Cadenza project file: project files end in .cdz (e.g. 'Song.cdz')")]
+	NotAProjectFile { path: String },
 }
 
 impl ModelError {

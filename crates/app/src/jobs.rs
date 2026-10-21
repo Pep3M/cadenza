@@ -226,11 +226,11 @@ pub fn file_dialog(
 			FileAction::Open => dialog
 				.add_filter(
 					tr("Cadenza project or archive"),
-					&["json", "zip", "cadenzapack"],
+					&["cdz", "cdzpack", "cadenzapack", "zip"],
 				)
 				.pick_file(),
 			FileAction::SaveAs => dialog
-				.add_filter("Cadenza project", &["json"])
+				.add_filter("Cadenza project", &["cdz"])
 				.set_file_name(suggested_name)
 				.save_file(),
 			FileAction::ImportAudio
@@ -246,7 +246,7 @@ pub fn file_dialog(
 			| FileAction::RelinkFolder
 			| FileAction::KitFolder => dialog.pick_folder(),
 			FileAction::PackArchive => dialog
-				.add_filter("Cadenza project archive", &["zip", "cadenzapack"])
+				.add_filter("Cadenza project archive", &["cdzpack"])
 				.set_file_name(suggested_name)
 				.save_file(),
 		}

@@ -19,7 +19,7 @@ use super::{AppState, Pending};
 use crate::jobs::{FileAction, Job};
 
 /// The demo project offered on the start screen.
-pub const DEMO_PROJECT: &str = include_str!("../../../../examples/first_light.cadenza.json");
+pub const DEMO_PROJECT: &str = include_str!("../../../../examples/first_light.cdz");
 
 /// What the "Locate missing files" dialog shows.
 #[derive(Debug, Clone, Default)]
@@ -333,7 +333,7 @@ impl AppState {
 			.state_dir
 			.join("demo")
 			.join("First Light")
-			.join("First Light.cadenza.json");
+			.join("First Light.cdz");
 		let written = Project::from_json_str(DEMO_PROJECT)
 			.and_then(|p| p.save_json(&file))
 			.map_err(|e| e.to_string());
@@ -432,11 +432,11 @@ impl AppState {
 				.warn(tr("Save the project first: the archive packs its folder"));
 			return;
 		};
-		let out = if portable::is_archive(&out) {
+		let out = if portable::has_archive_suffix(&out) {
 			out
 		} else {
 			let mut s = out.into_os_string();
-			s.push(".cadenza.zip");
+			s.push(cadenza_model::files::ARCHIVE_SUFFIX);
 			PathBuf::from(s)
 		};
 		let project = self.project().clone();

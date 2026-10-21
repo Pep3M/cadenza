@@ -39,7 +39,7 @@
 ", same clock as the output" = ", stesso clock dell'uscita"
 ", {n} duplicate shared" = [", {n} duplicato condiviso", ", {n} duplicati condivisi"]
 "-inf dB" = "-inf dB"
-".cadenza.json → window" = ".cadenza.json → finestra"
+".cdz → window" = ".cdz → finestra"
 "1 = sparse … 5 = full" = "1 = scarso … 5 = pieno"
 "1 undo step" = "1 passaggio di annullamento"
 "1 week ago" = "1 settimana fa"

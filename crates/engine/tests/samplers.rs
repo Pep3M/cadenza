@@ -121,7 +121,7 @@ fn pads_on_extra_outputs_reach_their_bus() {
 #[test]
 fn projects_with_samples_round_trip() {
 	let p = beat_project(kit());
-	let path = tmp_path("samplers-roundtrip.cadenza.json");
+	let path = tmp_path("samplers-roundtrip.cdz");
 	p.save_json(&path).unwrap();
 	let loaded = Project::load_json(&path).unwrap();
 	assert_eq!(loaded, p);

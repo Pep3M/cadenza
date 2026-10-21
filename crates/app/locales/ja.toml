@@ -39,7 +39,7 @@
 ", same clock as the output" = "、出力と同じクロック"
 ", {n} duplicate shared" = [", 重複{n}件を共有"]
 "-inf dB" = "-inf dB"
-".cadenza.json → window" = ".cadenza.json → ウィンドウ"
+".cdz → window" = ".cdz → ウィンドウ"
 "1 = sparse … 5 = full" = "1 = 疎 … 5 = 密"
 "1 undo step" = "元に戻す操作1件"
 "1 week ago" = "1週間前"

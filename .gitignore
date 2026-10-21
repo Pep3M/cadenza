@@ -9,3 +9,4 @@ __pycache__/
 # Cadenza project caches and autosaves
 .cadenza/
 .DS_Store
+packaging/windows/ChineseSimplified.isl

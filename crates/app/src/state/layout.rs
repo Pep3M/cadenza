@@ -1046,7 +1046,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	),
 	sc(
 		mark("Drag & drop"),
-		mark(".cadenza.json → window"),
+		mark(".cdz → window"),
 		mark("Open the project"),
 	),
 	sc(mark("AI producer"), "F10", mark("Show / hide the chat")),

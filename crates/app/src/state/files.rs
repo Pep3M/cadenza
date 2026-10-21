@@ -12,7 +12,7 @@ pub enum FileKind {
 	Folder,
 	Audio,
 	Midi,
-	/// A `.cadenza.json` project.
+	/// A `.cdz` project.
 	Project,
 }
 
@@ -30,7 +30,7 @@ impl FileKind {
 /// The kind of a file by its name (folders are not looked up here).
 pub fn classify(path: &Path) -> Option<FileKind> {
 	let name = path.file_name()?.to_str()?.to_lowercase();
-	if name.ends_with(".cadenza.json") {
+	if name.ends_with(cadenza_model::files::PROJECT_SUFFIX) {
 		return Some(FileKind::Project);
 	}
 	let ext = path.extension()?.to_str()?.to_lowercase();
@@ -181,10 +181,7 @@ mod tests {
 
 	#[test]
 	fn files_are_classified_by_name() {
-		assert_eq!(
-			classify(Path::new("a/Song.cadenza.json")),
-			Some(FileKind::Project)
-		);
+		assert_eq!(classify(Path::new("a/Song.cdz")), Some(FileKind::Project));
 		assert_eq!(classify(Path::new("x.JSON")), None);
 		assert_eq!(classify(Path::new("beat.MID")), Some(FileKind::Midi));
 		assert_eq!(classify(Path::new("vox.flac")), Some(FileKind::Audio));
@@ -195,13 +192,7 @@ mod tests {
 	#[test]
 	fn listing_filters_and_sorts() {
 		let dir = tempfile::tempdir().unwrap();
-		for f in [
-			"b.wav",
-			"A.mid",
-			"c.txt",
-			".hidden.wav",
-			"song.cadenza.json",
-		] {
+		for f in ["b.wav", "A.mid", "c.txt", ".hidden.wav", "song.cdz"] {
 			std::fs::write(dir.path().join(f), b"").unwrap();
 		}
 		std::fs::create_dir(dir.path().join("zeta")).unwrap();
@@ -214,7 +205,7 @@ mod tests {
 		};
 		assert_eq!(
 			names(FileFilter::All),
-			["zeta", "A.mid", "b.wav", "song.cadenza.json"]
+			["zeta", "A.mid", "b.wav", "song.cdz"]
 		);
 		assert_eq!(names(FileFilter::Audio), ["zeta", "b.wav"]);
 		assert_eq!(names(FileFilter::Midi), ["zeta", "A.mid"]);

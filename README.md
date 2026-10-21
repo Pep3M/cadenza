@@ -72,7 +72,14 @@ entry. The PKGBUILD lives in `packaging/arch/` (`makepkg -si` there builds it lo
 
 ### Windows
 
-In PowerShell:
+Download `cadenza-<version>-windows-x86_64-setup.exe` from the
+[latest release](https://github.com/Pep3M/cadenza/releases/latest) and run it. The wizard
+installs for you only (no administrator rights) or for every user, adds Start menu (and
+optionally desktop) shortcuts, opens `.cdz` projects and `.cdzpack` archives with Cadenza,
+can put the `cadenza` command on your `PATH`, and registers an uninstaller in
+**Settings → Apps**. Running a newer setup upgrades the install in place.
+
+Or, in PowerShell:
 
 ```powershell
 irm https://github.com/Pep3M/cadenza/releases/latest/download/install.ps1 | iex
@@ -85,7 +92,7 @@ specific release, or `$env:CADENZA_UNINSTALL = "1"` to uninstall.
 ### Manual download
 
 Every [release](https://github.com/Pep3M/cadenza/releases) ships a Linux `tar.gz` and
-`AppImage`, a Windows `zip` and a macOS universal `dmg`, with a `SHA256SUMS` file to verify
+`AppImage`, a Windows `setup.exe` and `zip`, and a macOS universal `dmg`, with a `SHA256SUMS` file to verify
 them. The installers check those checksums for you.
 
 > The binaries are not code-signed yet. On macOS, if you install from the `dmg` by hand,
@@ -96,8 +103,8 @@ them. The installers check those checksums for you.
 
 ```sh
 cadenza-app                       # the desktop app (or: cadenza gui)
-cadenza play song.cadenza.json    # play a project
-cadenza render song.cadenza.json -o song.wav
+cadenza play song.cdz    # play a project
+cadenza render song.cdz -o song.wav
 cadenza --help                    # every command
 ```
 
@@ -109,8 +116,8 @@ in the app's AI settings):
 ```sh
 export OPENROUTER_API_KEY=sk-or-...
 cadenza compose "lo-fi ballad, 3 minutes, piano and strings" --out my-song --slug ballad
-cadenza chat my-song/ballad.cadenza.json "add a bridge after the second chorus"
-cadenza mix my-song/ballad.cadenza.json --target-lufs -14
+cadenza chat my-song/ballad.cdz "add a bridge after the second chorus"
+cadenza mix my-song/ballad.cdz --target-lufs -14
 ```
 
 In the app, press **F10** to open the AI producer; keys entered there are stored in your

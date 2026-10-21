@@ -1,0 +1,47 @@
+CADENZA · DEVICES 14 · Device component kit Extends the Graphite system. Displays sit on #0b0c0e, one step darker than the panel (#15161a). Curves are 1.5–1.75 px polylines; the glow is one extra 5–8 px stroke at 15–20 % alpha. Fills under curves are polygons at 7–20 % alpha.
+Knob · sizes
+S for compact views and secondary parameters. M and L for main parameters. XL for the one control that defines the device (Drive, Input gain). 270° sweep, arc stroke 2.5 / 3 / 4 px.
+Knob · polarity, modulation, automation
+Bipolar arcs start at 12 o'clock. The automation ring is violet (#c884e8): its dot shows the value now playing, the pointer shows the written value, and the readout turns violet.
+Knob · states and floating value
+Drag vertically: 200 px covers the full range, Shift ×0.1. The tooltip sits 2 px above the knob and never under the pointer.
+Value readout 2.80 kHz 2.80 kHz 3.2k 40 kHz Rest Hover Typing Out of range
+Click to type. Units and shorthand are accepted: “3.2k”, “-6”, “1/8”, “C4”. Enter commits, Esc cancels, and an out-of-range value flashes red, then clamps.
+Toggle, segmented selector, A/B, preset bar ⇄ Ping-pong ⇄ Ping-pong Ø Invert R Off 12 24 48
+‹ › Vocal · air and body ●
+▾ A B
+An on toggle gets a tinted fill and a 1 px ring in its function colour: teal for stereo, amber for phase and warnings. Segments are for 5 choices or fewer; above that, use a grid (delay note values) or a dropdown. The amber dot means the preset has unsaved changes. A/B keeps two full states, and A→B copies one onto the other.
+Wave and mode picker cards Sine
+Saw
+Square
+Triangle
+Tape
+Tube
+Hard clip
+The picture is the label. A selected card gets a 1.5 px ring and stroke in the device accent, on a raised fill (#2a2c32).
+ADSR editor D 400 ms · S 62 %
+A moves horizontally. D moves both ways and also sets sustain. S moves vertically, R horizontally. The time axis is cube-root, so 1 ms and 10 s are both easy to grab. The white node is the one being dragged.
+Frequency display · grid, labels, analyzer, nodes, piano strip
+Log scale, 20 Hz–20 kHz. Labelled lines at 50, 100, 200, 500 Hz and so on up to 10k; unlabelled lines in between. The pre analyzer is a solid fill; the post analyzer is a translucent blue fill with a line on top. Nodes are 20 px circles labelled with the band id, and a dormant band is a hollow ring in its colour. On the piano strip, the hovered key lights up in the band colour. The same component draws the Poly Synth and Sampler filters, the Reverb low cut and the Delay feedback filter.
+Meters L / R
+−6.2
+GR
+−6.2
+CLIP
++0.4
+HEADER PAIR (IN / OUT)
+Green up to −9 dBFS, yellow up to −3, red above that. The white tick holds the peak for 1.5 s. Gain reduction is coral (#ff7a5c) and always hangs from the top.
+Level history display now →
+Scrolls right to left, with new data entering at the right edge. The engine sends one min/max pair per column at 30–60 fps, and the display is one polygon plus two polylines. When the transport stops, the trace freezes and dims to 50 %.
+Band / voice palette · 8 colours on #0b0c0e
+Coral #ff7b6e
+Orange #ffa94d
+Yellow #f2d45c
+Green #7ddc7a
+Teal #4fd6c8
+Sky #5aa2f5
+Violet #9d8cff
+Pink #e884d6
+Ordered by hue and assigned left to right (EQ bands HP→LP, drum voices). Equal lightness, so no band looks more important than another. Function colours sit outside the palette: blue for AI and selection, violet for automation, coral for gain reduction, teal and orange for L and R.
+Device header · dock and compact
+Left to right: power, name, track chip, preset ‹ › ▾, Save, A/B, undo hint, sidechain source (only on devices that have one), IN/OUT meters, Mix (only on devices that have mix), Ask AI, pop-out, close. In the compact header, Save, A→B, Mix and the undo hint move into the ⋯ menu. Mix becomes a knob in the body, and the meters shrink to a 34 px pair.

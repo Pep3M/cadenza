@@ -6,7 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::detail::Detail;
-use crate::masking::{MaskInput, MaskingPair, masking};
+use crate::masking::{
+	CUT_Q, Collision, MaskInput, MaskingPair, collisions_for, cut_gain_db, masking,
+};
 use crate::moves::{EqKind, MixMove, hz};
 use crate::roles::Role;
 use crate::targets::{LOUDNESS_TOLERANCE_LU, MixTargets};
@@ -82,19 +84,43 @@ pub struct MasterInput<'a> {
 	pub limiter: Option<LimiterState>,
 }
 
-/// Masking among the non-silent source tracks, indices into `tracks`.
-pub fn track_masking(tracks: &[TrackInput<'_>]) -> Vec<MaskingPair> {
+/// The non-silent source tracks (indices into `tracks`) and their masking inputs.
+fn mask_sources<'a>(tracks: &'a [TrackInput<'a>]) -> (Vec<usize>, Vec<MaskInput<'a>>) {
 	let sources: Vec<usize> = (0..tracks.len())
 		.filter(|&i| !tracks[i].is_bus && !tracks[i].detail.is_silent())
 		.collect();
-	let inputs: Vec<MaskInput<'_>> = sources
+	let inputs = sources
 		.iter()
 		.map(|&i| MaskInput {
 			role: tracks[i].role,
 			frames: &tracks[i].detail.timeline.frames,
 			octave_db: &tracks[i].detail.spectrum.octave_db,
+			third_octave_db: &tracks[i].detail.spectrum.third_octave_db,
 		})
 		.collect();
+	(sources, inputs)
+}
+
+/// Where the other non-silent source tracks collide with `target` (band by band,
+/// strongest first; `Collision::other` indexes `tracks`). Empty when `target` is a bus,
+/// silent or not among the tracks.
+pub fn track_collisions(tracks: &[TrackInput<'_>], target: TrackId) -> Vec<Collision> {
+	let (sources, inputs) = mask_sources(tracks);
+	let Some(t) = sources.iter().position(|&i| tracks[i].id == target) else {
+		return Vec::new();
+	};
+	collisions_for(t, &inputs)
+		.into_iter()
+		.map(|mut c| {
+			c.other = sources[c.other];
+			c
+		})
+		.collect()
+}
+
+/// Masking among the non-silent source tracks, indices into `tracks`.
+pub fn track_masking(tracks: &[TrackInput<'_>]) -> Vec<MaskingPair> {
+	let (sources, inputs) = mask_sources(tracks);
 	masking(&inputs)
 		.into_iter()
 		.map(|mut p| {
@@ -539,7 +565,7 @@ pub fn find_issues(
 	{
 		let (a, b) = (&tracks[p.a], &tracks[p.b]);
 		let (cut, keep) = if p.cut == p.a { (a, b) } else { (b, a) };
-		let gain = if p.score > 0.5 { -4.0 } else { -3.0 };
+		let gain = cut_gain_db(p.score);
 		let low_pair = p.band_hz <= 125.0
 			&& matches!(keep.role, Role::Kick | Role::Drums)
 			&& cut.role == Role::Bass;
@@ -570,7 +596,7 @@ pub fn find_issues(
 				kind: EqKind::Bell,
 				freq_hz: p.band_hz,
 				gain_db: gain,
-				q: Some(1.4),
+				q: Some(CUT_Q),
 			}],
 		);
 	}
@@ -879,5 +905,49 @@ mod tests {
 			"{}",
 			mask.message
 		);
+	}
+
+	#[test]
+	fn collisions_of_one_track_name_the_other_tracks_band_by_band() {
+		let kick_oct = [
+			-144.0, -12.0, -20.0, -40.0, -50.0, -60.0, -40.0, -45.0, -60.0, -80.0,
+		];
+		let bass_oct = [
+			-144.0, -14.0, -12.0, -25.0, -40.0, -60.0, -70.0, -80.0, -90.0, -100.0,
+		];
+		let mut kick = detail(-12.0, -3.0, kick_oct);
+		let mut bass = detail(-13.0, -3.0, bass_oct);
+		// Inside the 63 Hz octave (50 / 63 / 80 Hz thirds) both meet at 80 Hz.
+		kick.spectrum.third_octave_db[4..=6].copy_from_slice(&[-20.0, -14.0, -16.0]);
+		bass.spectrum.third_octave_db[4..=6].copy_from_slice(&[-30.0, -20.0, -15.0]);
+		let hats = detail(-20.0, -8.0, [-144.0; 10]);
+		let mut bus = detail(-12.0, -3.0, kick_oct);
+		bus.timeline.frames = vec![kick_oct; 20];
+		let mut tracks = vec![
+			track("Kick", Role::Kick, &kick),
+			track("Hats", Role::Drums, &hats),
+			track("Bass", Role::Bass, &bass),
+			track("Bus", Role::Other, &bus),
+		];
+		tracks[3].is_bus = true;
+		let c = track_collisions(&tracks, tracks[2].id);
+		assert!(!c.is_empty());
+		assert!(
+			c.iter().all(|c| c.other == 0),
+			"only the kick collides: {c:?}"
+		);
+		let top = &c[0];
+		assert_eq!(top.band_hz, 63.0, "{c:?}");
+		assert_eq!(top.center_hz, 80.0);
+		assert!(top.cut_here, "the bass makes room for the kick at 63 Hz");
+		assert_eq!(top.cut_db, cut_gain_db(top.score));
+		assert!((top.level_db - -14.0).abs() < 1e-4 && (top.other_level_db - -12.0).abs() < 1e-4);
+		assert!(c.windows(2).all(|w| w[0].score >= w[1].score));
+		// The kick sees the bass the other way round; buses and unknown ids see nothing.
+		let k = track_collisions(&tracks, tracks[0].id);
+		assert_eq!(k[0].other, 2);
+		assert!(!k[0].cut_here);
+		assert!(track_collisions(&tracks, tracks[3].id).is_empty());
+		assert!(track_collisions(&tracks, TrackId::new()).is_empty());
 	}
 }

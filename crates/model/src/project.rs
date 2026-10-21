@@ -4,13 +4,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use cadenza_core::{
-	ClipId, DeviceId, Meter, MeterChange, NoteId, ParamAddress, TakeGroupId, TempoMap, Tick,
-	TimeSignature, TrackId,
+	ClipId, DeviceId, LinkId, Meter, MeterChange, NoteId, ParamAddress, TakeGroupId, TempoMap,
+	Tick, TimeSignature, TrackId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::controller::{Controller, ControllerLane};
+use crate::modulation::Modulator;
 use crate::sample::SampleZone;
 
 /// Current on-disk format version written by [`Project::save_json`].
@@ -45,6 +46,9 @@ pub struct Project {
 	/// the live MIDI input). Saved with the song; missing in older files.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub armed: Vec<TrackId>,
+	/// Hardware MIDI controller assignments (MIDI learn); missing in older files.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub midi_map: Vec<crate::midi_map::MidiMapping>,
 }
 
 /// Song-level metadata that has no effect on the sound.
@@ -237,6 +241,10 @@ pub struct Device {
 	/// play. Replaced as a whole by `Command::SetSampleZones`.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub zones: Vec<SampleZone>,
+	/// Built-ins only: LFOs / envelope followers moving params around their values.
+	/// Replaced as a whole by `Command::SetModulators`.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub modulators: Vec<Modulator>,
 }
 
 /// Where a device's sidechain signal comes from.
@@ -282,6 +290,14 @@ pub struct Clip {
 	/// recording, comping); missing = an ordinary clip that always plays.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub take: Option<Take>,
+	/// A muted clip stays on the track but is never heard (FL playlist mute).
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub muted: bool,
+	/// Linked MIDI clips (FL pattern instances): every clip sharing a link holds the same
+	/// notes and controller lanes, and note/controller commands on one edit them all.
+	/// Lengths may differ: a shorter copy simply does not reach the later notes.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub link: Option<LinkId>,
 }
 
 /// A clip's membership in a group of alternative takes. Takes of a group are stacked
@@ -432,6 +448,7 @@ impl Project {
 			markers: Vec::new(),
 			meta: ProjectMeta::default(),
 			armed: Vec::new(),
+			midi_map: Vec::new(),
 		}
 	}
 
@@ -479,6 +496,30 @@ impl Project {
 		self.tracks
 			.iter()
 			.find_map(|t| t.clips.iter().find(|c| c.id == id).map(|c| (t, c)))
+	}
+
+	/// Every clip sharing `link` (linked copies), in track then time order.
+	pub fn linked_clips(&self, link: LinkId) -> impl Iterator<Item = &Clip> {
+		self.tracks
+			.iter()
+			.flat_map(|t| t.clips.iter())
+			.filter(move |c| c.link == Some(link))
+	}
+
+	/// The clips linked to `clip` (itself included); just `clip` when it is not linked.
+	pub fn link_siblings(&self, clip: ClipId) -> Vec<ClipId> {
+		match self.find_clip(clip).and_then(|(_, c)| c.link) {
+			Some(link) => self.linked_clips(link).map(|c| c.id).collect(),
+			None => vec![clip],
+		}
+	}
+
+	/// How far the shared content of `link` may reach: the longest linked clip.
+	pub fn link_span(&self, link: LinkId) -> Tick {
+		self.linked_clips(link)
+			.map(|c| c.length)
+			.max()
+			.unwrap_or(Tick::ZERO)
 	}
 
 	pub(crate) fn find_clip_mut(&mut self, id: ClipId) -> Option<&mut Clip> {
@@ -652,6 +693,7 @@ impl Device {
 			sidechain: None,
 			aux_outputs: Vec::new(),
 			zones: Vec::new(),
+			modulators: Vec::new(),
 		}
 	}
 
@@ -697,6 +739,8 @@ impl Clip {
 				controllers: Vec::new(),
 			},
 			take: None,
+			muted: false,
+			link: None,
 		}
 	}
 
@@ -720,6 +764,8 @@ impl Clip {
 				fade_out: None,
 			},
 			take: None,
+			muted: false,
+			link: None,
 		}
 	}
 
@@ -737,6 +783,12 @@ impl Clip {
 
 	pub fn end(&self) -> Tick {
 		self.start + self.length
+	}
+
+	/// Whether two clips hold the same MIDI content (notes and controller lanes), the
+	/// invariant of linked clips.
+	pub fn same_midi_content(&self, other: &Clip) -> bool {
+		self.is_midi() && other.is_midi() && self.content == other.content
 	}
 
 	/// Notes of a MIDI clip; empty for audio clips.
@@ -799,6 +851,11 @@ impl Clip {
 	/// Whether the clip is heard: ordinary clips always, takes only when active.
 	pub fn plays(&self) -> bool {
 		self.take.is_none_or(|t| t.active)
+	}
+
+	/// Whether the engine renders it: it plays (see [`Clip::plays`]) and is not muted.
+	pub fn sounds(&self) -> bool {
+		self.plays() && !self.muted
 	}
 
 	/// The take group this clip belongs to.

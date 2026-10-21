@@ -361,6 +361,11 @@ impl ToolBridge {
 		}
 	}
 
+	/// A call the harness refuses without running it (an error result with `message`).
+	pub fn refusal(&self, message: String) -> ToolOutcome {
+		self.error(message)
+	}
+
 	fn error(&self, message: String) -> ToolOutcome {
 		ToolOutcome {
 			summary: crate::observer::clip(&message, 140),
@@ -449,6 +454,14 @@ impl ToolBridge {
 					.policy
 					.resolve_read(raw, cadenza_mcp::tools::audio::AUDIO_EXTENSIONS)?;
 				obj.insert("file".into(), path_value(&path));
+			}
+			"match_eq" => {
+				if let Some(raw) = obj.get("reference_file").and_then(Value::as_str) {
+					let path = self
+						.policy
+						.resolve_read(raw, cadenza_mcp::tools::audio::AUDIO_EXTENSIONS)?;
+					obj.insert("reference_file".into(), path_value(&path));
+				}
 			}
 			"relink_files" => {
 				let raw = obj

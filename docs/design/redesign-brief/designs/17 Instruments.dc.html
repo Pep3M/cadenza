@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="./device-viz.js"></script>
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;flex-direction:column;gap:64px;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div style="display:flex;flex-direction:column;gap:8px;max-width:1100px"><span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5;font-size:13px">CADENZA · DEVICES</span><span style="font-size:34px;font-weight:600;letter-spacing:-0.015em">17 · Instruments</span><span style="font-size:15px;color:#a3a6ad;line-height:1.6;text-wrap:pretty">Live: drag the Poly Synth ADSR nodes and the filter node, click drum voices and pads, drag sampler zones. Instruments read left to right as signal flow.</span></div>
+
+<!-- POLY SYNTH -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">17a · Poly Synth · signal flow OSC → FILTER → AMP</div>
+<div data-screen-label="17a Poly Synth" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Poly Synth" track="Pad" tc="#9a82ec" preset="Warm saw pad" dirty="{{ true }}" in-db="{{ -60 }}" out-db="{{ -15.5 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;padding:8px 8px 0;min-height:0">
+<div style="width:430px;flex:none;display:flex;flex-direction:column;gap:8px">
+<span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">OSC 1 + OSC 2 + NOISE</span>
+<sc-for list="{{ ps.oscs }}" as="o" hint-placeholder-count="2">
+<div style="display:flex;align-items:center;gap:6px;height:46px">
+<span style="width:46px;font-weight:600;font-size:12px">{{ o.n }}</span>
+<sc-for list="{{ o.cards }}" as="c" hint-placeholder-count="4"><div onClick="{{ c.pick }}" style="width:52px;height:42px;border-radius:5px;background:{{ c.bg }};box-shadow:{{ c.ring }};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer"><svg width="44" height="22"><path d="{{ c.d }}" stroke="{{ c.c }}" stroke-width="1.6" fill="none" stroke-linejoin="round"></path></svg><span style="font-size:10px;color:{{ c.fg }}">{{ c.t }}</span></div></sc-for>
+<div style="flex:1"></div>
+<sc-for list="{{ o.reads }}" as="r" hint-placeholder-count="0"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="height:24px;min-width:56px;display:flex;align-items:center;justify-content:center;background:#0e0f11;border:1px solid #24262b;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:12px;cursor:ns-resize">{{ r.t }}</span><span style="font-size:10.5px;color:#80848c">{{ r.l }}</span></div></sc-for>
+</div>
+</sc-for>
+<div style="display:flex;align-items:flex-start;justify-content:space-between;padding-top:6px">
+<dc-import name="Knob" v="0.35" size="40" label="Osc mix" value="35 % → 2" hint-size="60px,80px"></dc-import>
+<div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:6px"><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><sc-for list="{{ ps.uni }}" as="u" hint-placeholder-count="4"><span style="width:24px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-family:'IBM Plex Mono',monospace;background:{{ u.bg }};color:{{ u.fg }}">{{ u.t }}</span></sc-for></div><span style="font-size:11px;color:#a3a6ad">Unison voices</span></div>
+<dc-import name="Knob" v="0.18" size="40" label="Detune" value="18 ct" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.08" size="40" label="Noise" value="8 %" hint-size="60px,80px"></dc-import>
+</div>
+</div>
+<div style="width:28px;flex:none;display:flex;align-items:center;justify-content:center;color:#3c3f46;font-size:18px">→</div>
+<div style="width:452px;flex:none;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">FILTER · LOW-PASS</span><div style="flex:1"></div><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><span style="padding:0 8px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">12 dB</span><span style="padding:0 8px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;background:#363940">24 dB</span></div></div>
+<div style="position:relative;width:452px;height:170px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;cursor:crosshair">
+<svg ref="{{ fltRef }}" width="452" height="170" style="position:absolute;inset:0;touch-action:none">
+<path d="{{ ps.flt.grid }}" stroke="#16181b" fill="none"></path>
+<path d="{{ ps.flt.zero }}" stroke="#2a2c32" fill="none"></path>
+<path d="{{ ps.flt.env }}" stroke="#9d8cff" stroke-opacity="0.6" stroke-dasharray="4 4" stroke-width="1.25" fill="none"></path>
+<path d="{{ ps.flt.area }}" fill="#9d8cff" fill-opacity="0.12"></path>
+<path d="{{ ps.flt.line }}" stroke="#9d8cff" stroke-opacity="0.2" stroke-width="6" fill="none"></path>
+<path d="{{ ps.flt.line }}" stroke="#c3b8ff" stroke-width="1.75" fill="none"></path>
+<circle onPointerDown="{{ fltDown }}" cx="{{ ps.flt.nx }}" cy="{{ ps.flt.ny }}" r="9" fill="#9d8cff" stroke="#0b0c0e" stroke-width="1.5" style="cursor:grab"></circle>
+</svg>
+<span style="position:absolute;left:{{ ps.flt.tx }}px;top:{{ ps.flt.ty }}px;padding:2px 6px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;box-shadow:inset 0 0 0 1px #363940;white-space:nowrap;pointer-events:none">{{ ps.flt.tag }}</span>
+<span style="position:absolute;left:8px;bottom:6px;font-size:10.5px;color:#80848c;pointer-events:none">⇔ cutoff · ⇕ resonance · dashed = env peak +24 st</span>
+</div>
+<div style="display:flex;justify-content:space-between">
+<dc-import name="Knob" v="{{ ps.cutV }}" size="40" label="Cutoff" value="{{ ps.cutT }}" color="#c3b8ff" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="{{ ps.resV }}" size="40" label="Resonance" value="{{ ps.resT }}" color="#c3b8ff" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.7" bip="{{ true }}" size="40" label="Env amount" value="+24 st" color="#c3b8ff" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.5" size="40" label="Key track" value="50 %" color="#c3b8ff" hint-size="60px,80px"></dc-import>
+</div>
+</div>
+<div style="width:28px;flex:none;display:flex;align-items:center;justify-content:center;color:#3c3f46;font-size:18px">→</div>
+<div style="width:620px;flex:none;display:flex;gap:16px">
+<sc-for list="{{ ps.envs }}" as="e" hint-placeholder-count="2">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px">
+<span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">{{ e.title }}</span>
+<div style="position:relative;height:170px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg ref="{{ e.ref }}" width="302" height="170" style="position:absolute;inset:0;touch-action:none">
+<path d="{{ e.grid }}" stroke="#16181b" fill="none"></path>
+<path d="{{ e.g.fill }}" fill="{{ e.c }}" fill-opacity="0.13"></path>
+<path d="{{ e.g.line }}" stroke="{{ e.c }}" stroke-opacity="0.2" stroke-width="6" fill="none"></path>
+<path d="{{ e.g.line }}" stroke="{{ e.c }}" stroke-width="1.75" fill="none"></path>
+<path d="{{ e.play }}" stroke="#f4f5f7" stroke-opacity="0.55" stroke-width="1"></path>
+<sc-for list="{{ e.nodes }}" as="n" hint-placeholder-count="4"><circle onPointerDown="{{ n.down }}" cx="{{ n.x }}" cy="{{ n.y }}" r="7" fill="{{ n.fill }}" stroke="{{ n.st }}" stroke-width="1.75" style="cursor:grab"></circle></sc-for>
+</svg>
+<span style="position:absolute;right:8px;top:6px;font-size:10.5px;color:#80848c;pointer-events:none">{{ e.hint }}</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px">
+<sc-for list="{{ e.reads }}" as="r" hint-placeholder-count="4"><div style="display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 0;background:#111215;border-radius:3px"><span style="font-size:10.5px;color:#80848c">{{ r.l }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:{{ r.c }}">{{ r.t }}</span></div></sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+<div style="width:28px;flex:none;display:flex;align-items:center;justify-content:center;color:#3c3f46;font-size:18px">→</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px">
+<span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">OUTPUT</span>
+<div style="position:relative;height:120px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden"><svg width="300" height="120" style="position:absolute;inset:0"><path d="M0 60 H300" stroke="#1f2125"></path><path d="{{ ps.scope }}" stroke="#7ddc7a" stroke-opacity="0.2" stroke-width="5" fill="none"></path><path d="{{ ps.scope }}" stroke="#a6f0a3" stroke-width="1.5" fill="none"></path></svg><span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c">Scope · C3 E3 G3</span></div>
+<div style="display:flex;justify-content:space-around;padding-top:8px">
+<dc-import name="Knob" v="0.6" size="56" label="Velocity" value="60 %" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.04" size="56" label="Glide" value="80 ms" auto="0.3" hint-size="70px,92px"></dc-import>
+<dc-import name="Knob" v="0.75" size="56" label="Gain" value="−6.0 dB" hint-size="70px,92px"></dc-import>
+</div>
+</div>
+</div>
+<div style="height:50px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:6px">
+<div style="display:flex;align-items:center;gap:2px"><span style="width:22px;height:24px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">−</span><span style="height:24px;padding:0 8px;display:flex;align-items:center;background:#0e0f11;font-family:'IBM Plex Mono',monospace;font-size:11.5px">C3</span><span style="width:22px;height:24px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0;color:#a3a6ad">+</span></div>
+<div style="position:relative;width:{{ kb.w }}px;height:40px">
+<sc-for list="{{ kb.white }}" as="k" hint-placeholder-count="21"><div style="position:absolute;left:{{ k.x }}px;top:0;width:21px;height:40px;background:{{ k.bg }};border-radius:0 0 3px 3px;display:flex;align-items:flex-end;justify-content:center;font-size:9.5px;color:#55585f;padding-bottom:2px;box-sizing:border-box">{{ k.l }}</div></sc-for>
+<sc-for list="{{ kb.black }}" as="k" hint-placeholder-count="15"><div style="position:absolute;left:{{ k.x }}px;top:0;width:13px;height:24px;background:{{ k.bg }};border-radius:0 0 2px 2px"></div></sc-for>
+</div>
+<span style="color:#80848c">Click keys or use A–K on the computer keyboard · Z / X octave</span>
+<div style="flex:1"></div>
+<span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 9px;background:#212328;border-radius:4px;color:#a3a6ad"><span style="font-family:'IBM Plex Mono',monospace">▸</span>Expert: filter velocity, osc phase reset, voice steal</span>
+</div>
+</div>
+</div>
+
+<!-- ELECTRIC PIANO -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">17b · Electric Piano · instrument face, three big controls</div>
+<div data-screen-label="17b Electric Piano" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Electric Piano" track="Keys" tc="#e3b24f" preset="Suitcase · mellow" in-db="{{ -60 }}" out-db="{{ -14.6 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="position:relative;width:560px;flex:none;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;display:flex;flex-direction:column;padding:28px 16px 12px;box-sizing:border-box;gap:12px">
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c">Tone · partials of a held C4</span>
+<div style="flex:1;display:flex;align-items:flex-end;gap:5px">
+<sc-for list="{{ ep.bars }}" as="b" hint-placeholder-count="20"><div style="flex:1;height:{{ b.p }}%;background:{{ b.c }};border-radius:2px 2px 0 0;opacity:{{ b.o }}"></div></sc-for>
+</div>
+<div style="display:flex;align-items:center;gap:10px"><span style="color:#a3a6ad;font-size:11px">Mellow</span><div style="flex:1;height:6px;border-radius:3px;background:linear-gradient(90deg,#5a3f17,#e3b24f,#fff1c9);position:relative"><div style="position:absolute;left:38%;top:-4px;width:3px;height:14px;background:#f4f5f7;border-radius:1px;box-shadow:0 0 0 2px #0b0c0e"></div></div><span style="color:#a3a6ad;font-size:11px">Bright</span></div>
+<span style="font-size:11px;color:#80848c">Bell lifts the 7th–9th partials (pale bars): the tine “ping” on hard hits.</span>
+</div>
+<div style="width:640px;flex:none;display:flex;flex-direction:column;background:#1a1b1f;border-radius:6px;box-shadow:inset 0 0 0 1px #2a2c32;overflow:hidden">
+<div style="height:4px;background:#e3b24f"></div>
+<div style="display:flex;align-items:baseline;gap:10px;padding:12px 18px 0"><span style="font-size:20px;font-weight:600;letter-spacing:-0.01em">Electric Piano</span><span style="color:#80848c">tine · 1974 suitcase voicing</span></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:space-around;padding:0 10px">
+<dc-import name="Knob" v="0.38" size="96" label="Brightness" value="38 %" color="#e3b24f" hint-size="110px,140px"></dc-import>
+<dc-import name="Knob" v="0.55" size="96" label="Bell" value="55 %" color="#e3b24f" state="hover" hint-size="110px,140px"></dc-import>
+<dc-import name="Knob" v="0.36" size="96" label="Decay" value="5.6 s" color="#e3b24f" hint-size="110px,140px"></dc-import>
+</div>
+<div style="display:flex;justify-content:center;gap:40px;padding:0 0 12px;border-top:1px solid #24262b;padding-top:10px">
+<dc-import name="Knob" v="0.7" size="40" label="Velocity" value="70 %" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.22" size="40" label="Release" value="420 ms" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.8" size="40" label="Gain" value="−3.0 dB" hint-size="60px,80px"></dc-import>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px">
+<div style="position:relative;flex:1;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="688" height="210" style="position:absolute;inset:0">
+<path d="M0 105 H688" stroke="#1f2125"></path>
+<path d="{{ ep.trem }}" fill="#e3b24f" fill-opacity="0.32"></path>
+<path d="{{ ep.lfo }}" stroke="#fff1c9" stroke-width="1.5" fill="none"></path>
+<path d="{{ ep.lfoB }}" stroke="#fff1c9" stroke-width="1.5" fill="none" stroke-opacity="0.5"></path>
+</svg>
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c">Tremolo · one note over 3 s · line = LFO</span>
+<span style="position:absolute;right:8px;top:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">4.5 Hz · 40 %</span>
+</div>
+<div style="display:flex;justify-content:center;gap:48px;padding-bottom:4px">
+<dc-import name="Knob" v="0.44" size="56" label="Tremolo rate" value="4.5 Hz" color="#fff1c9" hint-size="80px,92px"></dc-import>
+<dc-import name="Knob" v="0.4" size="56" label="Tremolo depth" value="40 %" color="#fff1c9" auto="0.62" hint-size="80px,92px"></dc-import>
+</div>
+</div>
+</div>
+<div style="height:50px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:6px">
+<div style="position:relative;width:{{ kb.w }}px;height:40px">
+<sc-for list="{{ kb.white }}" as="k" hint-placeholder-count="21"><div style="position:absolute;left:{{ k.x }}px;top:0;width:21px;height:40px;background:{{ k.bgE }};border-radius:0 0 3px 3px;display:flex;align-items:flex-end;justify-content:center;font-size:9.5px;color:#55585f;padding-bottom:2px;box-sizing:border-box">{{ k.l }}</div></sc-for>
+<sc-for list="{{ kb.black }}" as="k" hint-placeholder-count="15"><div style="position:absolute;left:{{ k.x }}px;top:0;width:13px;height:24px;background:{{ k.bgE }};border-radius:0 0 2px 2px"></div></sc-for>
+</div>
+<span style="color:#80848c">Tremolo depth is automated: the ring and the LFO line follow playback.</span>
+</div>
+</div>
+</div>
+
+<!-- DRUM MACHINE -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">17c · Drum Machine · one strip per voice, selected voice large</div>
+<div data-screen-label="17c Drum Machine" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Drum Machine" track="Drums" tc="#e8705f" preset="Boom bap kit" in-db="{{ -60 }}" out-db="{{ -9.8 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="display:flex;gap:6px;flex:none">
+<sc-for list="{{ dm.voices }}" as="v" hint-placeholder-count="7">
+<div onClick="{{ v.pick }}" style="width:120px;display:flex;flex-direction:column;gap:6px;padding:6px;box-sizing:border-box;border-radius:6px;background:{{ v.stripBg }};box-shadow:{{ v.ring }};cursor:pointer">
+<div style="height:96px;border-radius:5px;background:{{ v.padBg }};box-shadow:inset 0 0 0 1px {{ v.padBd }};display:flex;flex-direction:column;justify-content:space-between;padding:8px;box-sizing:border-box">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="width:8px;height:8px;border-radius:2px;background:{{ v.c }}"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ v.note }}</span></div>
+<span style="font-weight:600;font-size:14px;color:{{ v.nameC }}">{{ v.n }}</span>
+</div>
+<svg width="108" height="38" style="background:#0b0c0e;border-radius:3px"><path d="{{ v.env }}" fill="{{ v.c }}" fill-opacity="0.55"></path></svg>
+<div style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#a3a6ad;flex:1">
+<sc-for list="{{ v.sum }}" as="s" hint-placeholder-count="2"><span style="display:flex;justify-content:space-between"><span>{{ s.l }}</span><span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">{{ s.t }}</span></span></sc-for>
+</div>
+<div style="height:4px;background:#0e0f11;border-radius:2px;overflow:hidden"><div style="height:4px;width:{{ v.lvl }}%;background:{{ v.c }}"></div></div>
+</div>
+</sc-for>
+</div>
+<div style="flex:1;display:flex;gap:12px;padding:0 4px;min-width:0">
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:10px;height:10px;border-radius:2px;background:{{ dmSel.c }}"></span><span style="font-weight:600;font-size:15px">{{ dmSel.n }}</span><span style="font-family:'IBM Plex Mono',monospace;color:#80848c">{{ dmSel.note }}</span><div style="flex:1"></div><span style="color:#80848c;font-size:11px">Click a pad to audition · ⌘-click to select without playing</span></div>
+<div style="position:relative;width:500px;height:262px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="500" height="262" style="position:absolute;inset:0">
+<path d="{{ dmSel.grid }}" stroke="#16181b" fill="none"></path>
+<path d="M0 131 H500" stroke="#1f2125"></path>
+<path d="{{ dmSel.wave }}" fill="{{ dmSel.waveFill }}" fill-opacity="{{ dmSel.waveFo }}" stroke="{{ dmSel.waveSt }}" stroke-width="1.4"></path>
+<path d="{{ dmSel.envL }}" stroke="#f4f5f7" stroke-opacity="0.7" stroke-width="1.25" stroke-dasharray="4 3" fill="none"></path>
+<path d="{{ dmSel.pitch }}" stroke="#f2d45c" stroke-width="1.25" fill="none" stroke-opacity="0.8"></path>
+</svg>
+<span style="position:absolute;left:8px;top:6px;display:flex;gap:12px;font-size:10.5px;color:#a3a6ad"><span>Output</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:1px;border-top:1px dashed #f4f5f7"></span>Amp envelope</span><span style="display:{{ dmSel.pitchD }};align-items:center;gap:5px"><span style="width:10px;height:2px;background:#f2d45c"></span>Pitch sweep</span></span>
+<span style="position:absolute;right:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">{{ dmSel.len }}</span>
+</div>
+</div>
+<div style="flex:1;display:grid;grid-template-columns:repeat(2,1fr);align-content:center;row-gap:16px">
+<sc-for list="{{ dmSel.knobs }}" as="k" hint-placeholder-count="4"><dc-import name="Knob" v="{{ k.v }}" bip="{{ k.bip }}" size="72" label="{{ k.l }}" value="{{ k.t }}" color="{{ dmSel.c }}" hint-size="100px,110px"></dc-import></sc-for>
+</div>
+<div style="width:120px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;border-left:1px solid #1d1f23">
+<span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">KIT</span>
+<dc-import name="Knob" v="0.55" size="56" label="Tone" value="55 %" hint-size="80px,92px"></dc-import>
+<dc-import name="Knob" v="0.8" size="56" label="Gain" value="−2.0 dB" hint-size="80px,92px"></dc-import>
+</div>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:6px;color:#a3a6ad"><span>Strip shows the voice's own envelope from its current settings. Pads flash in the voice colour when the engine triggers them.</span></div>
+</div>
+</div>
+
+<!-- DRUM SAMPLER -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">17d · Drum Sampler · kit controls | 16 pads | selected pad (replaces today's editor, see 02)</div>
+<div data-screen-label="17d Drum Sampler" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Drum Sampler" track="Drums" tc="#e8705f" preset="Dusty kit 02" in-db="{{ -60 }}" out-db="{{ -10.4 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:8px;padding:8px 8px 0;min-height:0">
+<div style="width:196px;flex:none;display:flex;flex-direction:column;gap:10px;padding:10px;box-sizing:border-box;background:#111215;border-radius:6px;box-shadow:inset 0 0 0 1px #1d1f23">
+<span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">KIT · ALL PADS</span>
+<div style="display:grid;grid-template-columns:1fr 1fr;row-gap:12px">
+<dc-import name="Knob" v="0.8" size="40" label="Gain" value="−2.0 dB" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.7" size="40" label="Velocity" value="70 %" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.25" size="40" label="Polyphony" value="16" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.5" bip="{{ true }}" size="40" label="Kit tune" value="0 st" hint-size="70px,80px"></dc-import>
+</div>
+<div style="flex:1"></div>
+<span style="font-size:11px;color:#80848c;line-height:1.4">Drop a folder here to map a whole kit onto pads by name.</span>
+</div>
+<div style="width:548px;flex:none;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);gap:4px">
+<sc-for list="{{ dsPads }}" as="p" hint-placeholder-count="16">
+<div onClick="{{ p.pick }}" style="position:relative;border-radius:5px;background:{{ p.bg }};box-shadow:{{ p.ring }};display:flex;flex-direction:column;justify-content:space-between;padding:5px 7px;box-sizing:border-box;cursor:pointer;overflow:hidden">
+<div style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:{{ p.c }}"></span><span style="font-weight:600;font-size:12px;color:{{ p.nameC }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.n }}</span><div style="flex:1"></div><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">{{ p.note }}</span></div>
+<svg width="118" height="16" style="display:{{ p.waveD }}"><path d="{{ p.wave }}" fill="{{ p.c }}" fill-opacity="0.6"></path></svg>
+<span style="display:{{ p.dropD }};font-size:11px;color:{{ p.dropC }}">{{ p.drop }}</span>
+<div style="display:flex;gap:3px;min-height:15px"><sc-for list="{{ p.tags }}" as="t" hint-placeholder-count="0"><span style="height:15px;display:flex;align-items:center;padding:0 4px;border-radius:2px;background:{{ t.bg }};color:{{ t.fg }};font-family:'IBM Plex Mono',monospace;font-size:9.5px">{{ t.t }}</span></sc-for></div>
+</div>
+</sc-for>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;min-width:0">
+<div style="display:flex;align-items:center;gap:8px;height:24px">
+<span style="width:10px;height:10px;border-radius:2px;background:{{ dsSel.c }}"></span><span style="font-weight:600;font-size:14px">{{ dsSel.n }}</span><span style="font-family:'IBM Plex Mono',monospace;color:#80848c">{{ dsSel.note }}</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#c4c7cd;box-sizing:border-box">{{ dsSel.file }} ▾</span>
+<div style="flex:1"></div>
+<span style="color:#80848c">Velocity layers</span><div style="display:flex;gap:2px"><span style="width:22px;height:20px;border-radius:3px;background:#2a2c32;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px">1</span><span style="width:22px;height:20px;border-radius:3px;background:#363940;box-shadow:inset 0 0 0 1px #80848c;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px">2</span><span style="width:22px;height:20px;border-radius:3px;background:#2a2c32;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px">3</span><span style="width:22px;height:20px;border-radius:3px;border:1px dashed #363940;box-sizing:border-box;display:flex;align-items:center;justify-content:center;color:#80848c">+</span></div>
+<span style="color:#80848c;padding-left:6px">Round-robin</span><span style="height:20px;display:flex;align-items:center;padding:0 7px;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px">×3</span>
+<span style="height:22px;display:flex;align-items:center;gap:5px;padding:0 8px;background:#212328;border-radius:4px;color:#a3a6ad">⇆ Reverse</span>
+</div>
+<div style="display:flex;gap:10px;flex:1;min-height:0">
+<div style="position:relative;width:700px;flex:none;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="700" height="254" style="position:absolute;inset:0">
+<path d="M0 127 H700" stroke="#1f2125"></path>
+<path d="{{ dsSel.wave }}" fill="{{ dsSel.c }}" fill-opacity="0.55"></path>
+<rect x="0" y="0" width="{{ dsSel.sx }}" height="254" fill="#0b0c0e" fill-opacity="0.72"></rect>
+<rect x="{{ dsSel.ex }}" y="0" width="{{ dsSel.exW }}" height="254" fill="#0b0c0e" fill-opacity="0.72"></rect>
+<path d="{{ dsSel.envL }}" stroke="#f4f5f7" stroke-width="1.5" fill="none"></path>
+<path d="{{ dsSel.envL }}" stroke="#f4f5f7" stroke-opacity="0.12" stroke-width="6" fill="none"></path>
+<circle cx="{{ dsSel.ax }}" cy="18" r="6" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.5"></circle>
+<circle cx="{{ dsSel.dx }}" cy="{{ dsSel.dy }}" r="6" fill="#f4f5f7" stroke="#0b0c0e" stroke-width="1.5"></circle>
+<path d="{{ dsSel.sLine }}" stroke="#4fc38a" stroke-width="1.5"></path>
+<path d="{{ dsSel.eLine }}" stroke="#f0524f" stroke-width="1.5"></path>
+</svg>
+<span style="position:absolute;left:{{ dsSel.sTag }}px;bottom:6px;padding:1px 5px;background:#1d3a2b;color:#4fc38a;border-radius:2px;font-family:'IBM Plex Mono',monospace;font-size:10.5px">Start 4 ms</span>
+<span style="position:absolute;left:{{ dsSel.eTag }}px;bottom:6px;padding:1px 5px;background:#3a1d1f;color:#ff8a87;border-radius:2px;font-family:'IBM Plex Mono',monospace;font-size:10.5px">End 412 ms</span>
+<span style="position:absolute;left:{{ dsSel.aTag }}px;top:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#c4c7cd">A 1 ms</span>
+<span style="position:absolute;left:{{ dsSel.dTag }}px;top:{{ dsSel.dTagY }}px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#c4c7cd">D 260 ms</span>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:10px;min-width:0">
+<div style="display:grid;grid-template-columns:repeat(3,1fr);row-gap:10px">
+<dc-import name="Knob" v="0.54" bip="{{ true }}" size="40" label="Tune" value="+2 st" color="{{ dsSel.c }}" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.75" size="40" label="Gain" value="−1.5 dB" color="{{ dsSel.c }}" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.42" bip="{{ true }}" size="40" label="Pan" value="16 L" color="{{ dsSel.c }}" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.02" size="40" label="Attack" value="1 ms" color="#f4f5f7" hint-size="70px,80px"></dc-import>
+<dc-import name="Knob" v="0.35" size="40" label="Decay" value="260 ms" color="#f4f5f7" hint-size="70px,80px"></dc-import>
+</div>
+<div style="display:flex;gap:6px">
+<div style="flex:1;display:flex;flex-direction:column;gap:3px"><span style="font-size:10.5px;color:#80848c">Choke group</span><span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:11.5px">{{ dsSel.choke }}<div style="flex:1"></div>▾</span></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:3px"><span style="font-size:10.5px;color:#80848c">Output</span><span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:11.5px">{{ dsSel.out }}<div style="flex:1"></div>▾</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:6px;color:#a3a6ad"><span>Pad tags: <span style="font-family:'IBM Plex Mono',monospace;color:#f2a944">C1</span> choke group · <span style="font-family:'IBM Plex Mono',monospace;color:#7fb4ff">→3</span> extra output · <span style="font-family:'IBM Plex Mono',monospace">L3 RR3</span> layers and round-robin. Blue dashed pad = file being dragged over it.</span></div>
+</div>
+</div>
+
+<!-- SAMPLER -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">17e · Sampler · zone map | selected zone | globals (replaces today's editor, see 03)</div>
+<div data-screen-label="17e Sampler" style="width:1920px;height:400px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<dc-import name="Device Header" title="Sampler" track="Keys" tc="#e3b24f" preset="Felt upright · 12 zones" in-db="{{ -60 }}" out-db="{{ -13.2 }}" hint-size="100%,37px"></dc-import>
+<div style="flex:1;display:flex;gap:10px;padding:8px 8px 0;min-height:0">
+<div style="width:900px;flex:none;display:flex;flex-direction:column;gap:4px">
+<div style="display:flex;align-items:center;gap:8px;height:18px"><span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em">ZONE MAP</span><span style="color:#80848c;font-size:11px">x = key · y = velocity · drag to move, edges to resize, drop files to add</span></div>
+<div style="position:relative;width:900px;height:232px;background:#0b0c0e;border-radius:4px 4px 0 0;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="900" height="232" style="position:absolute;inset:0"><path d="{{ sm.grid }}" stroke="#15171a" fill="none"></path><path d="{{ sm.oct }}" stroke="#1f2125" fill="none"></path></svg>
+<sc-for list="{{ zones }}" as="z" hint-placeholder-count="12">
+<div onPointerDown="{{ z.down }}" style="position:absolute;left:{{ z.x }}px;top:{{ z.y }}px;width:{{ z.w }}px;height:{{ z.h }}px;box-sizing:border-box;border-radius:3px;background:{{ z.bg }};box-shadow:{{ z.ring }};padding:4px 6px;display:flex;flex-direction:column;gap:1px;cursor:grab;overflow:hidden">
+<span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ z.fg }};white-space:nowrap">{{ z.range }}</span>
+<span style="font-size:10.5px;color:#a3a6ad;white-space:nowrap">{{ z.vel }}</span>
+<div style="position:absolute;left:{{ z.rootX }}px;bottom:3px;width:7px;height:7px;border-radius:50%;background:{{ z.c }};box-shadow:0 0 0 1.5px #0b0c0e"></div>
+</div>
+</sc-for>
+<sc-for list="{{ sm.vl }}" as="l" hint-placeholder-count="0"><span style="position:absolute;right:6px;top:{{ l.y }}px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#55585f;pointer-events:none">{{ l.t }}</span></sc-for>
+</div>
+<div style="position:relative;width:900px;height:30px;background:#0e0f11;border-radius:0 0 4px 4px;overflow:hidden">
+<sc-for list="{{ sm.keys }}" as="k" hint-placeholder-count="72"><div style="position:absolute;left:{{ k.x }}px;top:0;width:{{ k.w }}px;height:30px;background:{{ k.bg }};border-right:1px solid #0b0c0e;box-sizing:border-box;display:flex;align-items:flex-end;justify-content:center;font-size:9px;color:#55585f;padding-bottom:1px">{{ k.l }}</div></sc-for>
+</div>
+</div>
+<div style="width:560px;flex:none;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:8px;height:22px"><span style="width:10px;height:10px;border-radius:2px;background:{{ zSel.c }}"></span><span style="font-weight:600;font-size:13px">{{ zSel.name }}</span><span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:11px">{{ zSel.range }} · vel {{ zSel.vel }}</span><div style="flex:1"></div><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><span style="padding:0 7px;color:#80848c;font-size:11px">Off</span><span style="padding:0 7px;border-radius:3px;background:#363940;font-size:11px">Forward</span><span style="padding:0 7px;color:#80848c;font-size:11px">Ping-pong</span></div><span style="height:20px;display:flex;align-items:center;padding:0 7px;background:#212328;border-radius:3px;color:#a3a6ad;font-size:11px">⇆ Rev</span></div>
+<div style="position:relative;height:150px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden">
+<svg width="560" height="150" style="position:absolute;inset:0">
+<rect x="{{ sm.ls }}" y="0" width="{{ sm.lw }}" height="150" fill="#4c9cf5" fill-opacity="0.09"></rect>
+<path d="M0 75 H560" stroke="#1f2125"></path>
+<path d="{{ sm.wave }}" fill="{{ zSel.c }}" fill-opacity="0.55"></path>
+<rect x="0" y="0" width="{{ sm.st }}" height="150" fill="#0b0c0e" fill-opacity="0.72"></rect>
+<rect x="{{ sm.en }}" y="0" width="{{ sm.enW }}" height="150" fill="#0b0c0e" fill-opacity="0.72"></rect>
+<path d="{{ sm.xf }}" stroke="#7fb4ff" stroke-width="1.25" fill="#4c9cf5" fill-opacity="0.16"></path>
+<path d="{{ sm.loopL }}" stroke="#4c9cf5" stroke-width="1.5"></path>
+<path d="{{ sm.seL }}" stroke="#4fc38a" stroke-width="1.5"></path>
+<path d="{{ sm.enL }}" stroke="#f0524f" stroke-width="1.5"></path>
+</svg>
+<span style="position:absolute;left:{{ sm.ls }}px;top:4px;padding:1px 5px;background:#1d2a3d;color:#7fb4ff;border-radius:2px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;margin-left:4px">Loop 1.42 – 2.36 s · xfade 120 ms</span>
+</div>
+<div style="display:flex;justify-content:space-between">
+<div style="display:flex;flex-direction:column;align-items:center;gap:3px;padding-top:8px"><span style="height:24px;min-width:52px;display:flex;align-items:center;justify-content:center;background:#0e0f11;border:1px solid #24262b;border-radius:3px;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:12px">{{ zSel.root }}</span><span style="font-size:11px;color:#a3a6ad">Root key</span></div>
+<dc-import name="Knob" v="0.5" bip="{{ true }}" size="40" label="Tune" value="−4 ct" color="{{ zSel.c }}" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.75" size="40" label="Gain" value="0.0 dB" color="{{ zSel.c }}" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.5" bip="{{ true }}" size="40" label="Pan" value="C" color="{{ zSel.c }}" hint-size="60px,80px"></dc-import>
+<dc-import name="Knob" v="0.12" size="40" label="Crossfade" value="120 ms" color="#7fb4ff" hint-size="60px,80px"></dc-import>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;padding-left:10px;border-left:1px solid #1d1f23;min-width:0">
+<span style="font-size:10.5px;font-weight:600;color:#80848c;letter-spacing:.08em;height:22px;display:flex;align-items:center">GLOBAL · ALL ZONES</span>
+<div style="display:flex;gap:8px">
+<div style="flex:1;display:flex;flex-direction:column;gap:3px"><span style="font-size:10.5px;color:#a3a6ad">Amp envelope</span><div style="position:relative;height:96px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden"><svg width="204" height="96" style="position:absolute;inset:0"><path d="{{ sm.amp.fill }}" fill="#4fc38a" fill-opacity="0.13"></path><path d="{{ sm.amp.line }}" stroke="#4fc38a" stroke-width="1.5" fill="none"></path><circle cx="{{ sm.amp.a.0 }}" cy="{{ sm.amp.a.1 }}" r="4.5" fill="#4fc38a"></circle><circle cx="{{ sm.amp.d.0 }}" cy="{{ sm.amp.d.1 }}" r="4.5" fill="#4fc38a"></circle><circle cx="{{ sm.amp.r.0 }}" cy="{{ sm.amp.r.1 }}" r="4.5" fill="#4fc38a"></circle></svg></div><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">A 2 ms · D 1.2 s · S 80 % · R 900 ms</span></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:3px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:10.5px;color:#a3a6ad">Filter</span><div style="flex:1"></div><div style="display:flex;background:#0e0f11;border-radius:3px;padding:1px;box-shadow:inset 0 0 0 1px #24262b"><span style="padding:0 4px;font-size:10px;color:#80848c">Off</span><span style="padding:0 4px;font-size:10px;border-radius:2px;background:#363940">LP</span><span style="padding:0 4px;font-size:10px;color:#80848c">HP</span><span style="padding:0 4px;font-size:10px;color:#80848c">BP</span></div></div><div style="position:relative;height:96px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden"><svg width="204" height="96" style="position:absolute;inset:0"><path d="{{ sm.flt.area }}" fill="#9d8cff" fill-opacity="0.12"></path><path d="{{ sm.flt.line }}" stroke="#c3b8ff" stroke-width="1.5" fill="none"></path><circle cx="{{ sm.flt.nx }}" cy="{{ sm.flt.ny }}" r="5" fill="#9d8cff" stroke="#0b0c0e" stroke-width="1.5"></circle></svg></div><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">4.2 kHz · res 20 % · env +12 st</span></div>
+</div>
+<div style="display:flex;justify-content:space-between;padding-top:4px">
+<dc-import name="Knob" v="0.7" size="40" label="Cutoff" value="4.2 kHz" color="#c3b8ff" hint-size="56px,80px"></dc-import>
+<dc-import name="Knob" v="0.2" size="40" label="Reso" value="20 %" color="#c3b8ff" hint-size="56px,80px"></dc-import>
+<dc-import name="Knob" v="0.56" bip="{{ true }}" size="40" label="Env amt" value="+12 st" color="#c3b8ff" hint-size="56px,80px"></dc-import>
+<dc-import name="Knob" v="0.4" size="40" label="Flt vel" value="40 %" color="#c3b8ff" hint-size="56px,80px"></dc-import>
+</div>
+</div>
+</div>
+<div style="height:33px;flex:none;display:flex;align-items:center;gap:14px;padding:0 10px;border-top:1px solid #1d1f23;margin-top:6px;color:#a3a6ad">
+<span style="display:flex;align-items:center;gap:6px">Trigger<span style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;box-shadow:inset 0 0 0 1px #24262b"><span style="padding:0 8px;border-radius:3px;background:#363940;color:#e8e9ec">Gate</span><span style="padding:0 8px">One-shot</span></span></span>
+<span>Polyphony <span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">24</span></span><span>Transpose <span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">0 st</span></span><span>Glide <span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">0 ms</span></span><span>Legato <span style="color:#e8e9ec">off</span></span><span>Velocity <span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">80 %</span> · curve <span style="color:#e8e9ec">soft ▾</span></span><span>Key track <span style="font-family:'IBM Plex Mono',monospace;color:#e8e9ec">100 %</span></span>
+<div style="flex:1"></div><span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="font-family:'IBM Plex Mono',monospace">▸</span>Filter envelope</span>
+</div>
+</div>
+</div>
+
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    amp: { a: 0.35, d: 1.2, s: 0.7, r: 2.4 }, flt: { a: 0.02, d: 0.8, s: 0.3, r: 1.5 },
+    cut: 1800, res: 0.45, dmSel: 0, dsSel: 14, zSel: 7, zones: null,
+  };
+  componentDidMount() { if (!window.DV) { const t = setInterval(() => { if (window.DV) { clearInterval(t); this.forceUpdate(); } }, 30); } }
+  ft(t) { return t < 1 ? Math.max(1, Math.round(t * 1000)) + ' ms' : t.toFixed(t < 10 ? 2 : 1) + ' s'; }
+  fr(t, max) { return 0.26 * Math.cbrt(Math.max(0, t) / max); }
+  envGeo(e, W, H) { return DV.adsr(this.fr(e.a, 10), this.fr(e.d, 10), e.s, this.fr(e.r, 20), W - 12, H, { pad: 10, hold: 0.16 }); }
+  local(svg, e, W) { const r = svg.getBoundingClientRect(), sc = W / r.width; return [(e.clientX - r.left) * sc, (e.clientY - r.top) * sc]; }
+  envDown(key, node, e) {
+    e.preventDefault(); e.stopPropagation();
+    const svg = this['svg_' + key], W = 302, H = 170, IW = W - 12;
+    const mv = ev => {
+      const [x, y] = this.local(svg, ev, W), cur = this.state[key], g = this.envGeo(cur, W, H), n = { ...cur };
+      const inv = (f, max) => max * Math.pow(Math.max(0, Math.min(0.26, f)) / 0.26, 3);
+      if (node === 'a') n.a = inv((x - 10) / IW, 10);
+      if (node === 'd') { n.d = Math.max(0.001, inv((x - g.a[0]) / IW, 10)); n.s = Math.max(0, Math.min(1, (g.bot - y) / (g.bot - g.top))); }
+      if (node === 's') n.s = Math.max(0, Math.min(1, (g.bot - y) / (g.bot - g.top)));
+      if (node === 'r') n.r = Math.max(0.001, inv((x - g.s[0]) / IW, 20));
+      this.setState({ [key]: n, envDrag: key + node });
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); this.setState({ envDrag: null }); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+    this.setState({ envDrag: key + node });
+  }
+  fltFn(cut, res, W, H) { const R = 30, sh = 12; return f => DV.sumDb([{ type: 'lp', f: cut, slope: 24 }, { type: 'peak', f: cut, g: res * 18, q: 1.5 + res * 5 }], f) + sh; }
+  fltDown(e) {
+    e.preventDefault();
+    const svg = this.fltSvg, W = 452, H = 170, R = 30;
+    const mv = ev => { const [x, y] = this.local(svg, ev, W); const cut = Math.max(20, Math.min(20000, DV.xf(x, W))); const db = (H / 2 - y) / (H / 2) * R - 12; this.setState({ cut, res: Math.max(0, Math.min(1, db / 18)), fDrag: true }); };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); this.setState({ fDrag: false }); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+    this.setState({ fDrag: true });
+  }
+  filterView(cut, res, W, H, tag) {
+    const fn = this.fltFn(cut, res, W, H), R = 30, pts = DV.pts(fn, W, H, R, 160), r1 = n => Math.round(n * 10) / 10;
+    const envFn = this.fltFn(Math.min(20000, cut * Math.pow(2, 2)), res, W, H);
+    let grid = ''; [100, 1000, 10000].forEach(f => { grid += `M${r1(DV.fx(f, W))} 0 V${H} `; }); [-12, -24, -36].forEach(d => { grid += `M0 ${r1(DV.fy(d + 12, H, R))} H${W} `; });
+    const nx = r1(DV.fx(cut, W)), ny = r1(Math.max(10, DV.fy(fn(cut), H, R)));
+    return { grid, zero: `M0 ${r1(DV.fy(12, H, R))} H${W}`, line: DV.line(pts), area: DV.area(pts, H), env: tag ? DV.line(DV.pts(envFn, W, H, R, 120)) : '', nx, ny, tx: nx > W - 170 ? nx - 170 : nx + 14, ty: Math.max(6, ny - 28), tag: tag ? DV.hz(cut) + ' · res ' + Math.round(res * 100) + ' %' : '' };
+  }
+  keyboard() {
+    const white = [], black = [], wn = [0, 2, 4, 5, 7, 9, 11], pressed = [0, 4, 7], epP = [12, 16, 19, 23];
+    for (let i = 0; i < 21; i++) { const n = wn[i % 7] + 12 * Math.floor(i / 7); white.push({ x: i * 22, l: i % 7 === 0 ? 'C' + (3 + i / 7) : '', bg: pressed.includes(n) ? '#4c9cf5' : '#d9dbe0', bgE: epP.includes(n) ? '#e3b24f' : '#d9dbe0' }); }
+    for (let o = 0; o < 3; o++) [[1, 0], [3, 1], [6, 3], [8, 4], [10, 5]].forEach(([s, wi]) => { const n = s + 12 * o; black.push({ x: (wi + o * 7) * 22 + 15, bg: pressed.includes(n) ? '#2c6fc0' : '#1a1b1f', bgE: epP.includes(n) ? '#a87a24' : '#1a1b1f' }); });
+    return { white, black, w: 21 * 22 };
+  }
+  synthStatic() {
+    const r1 = n => Math.round(n * 10) / 10, waves = ['sine', 'saw', 'square', 'tri'];
+    const mk = (n, sel, reads) => ({ n, reads, cards: waves.map(w => ({ t: w === 'tri' ? 'Triangle' : w[0].toUpperCase() + w.slice(1), d: DV.wave(w === 'tri' ? 'triangle' : w, 40, 18, 1.5, { x0: 2, y0: 2, amp: 0.85 }), c: w === sel ? '#c3b8ff' : '#80848c', bg: w === sel ? '#2a2c32' : '#1c1d21', ring: w === sel ? 'inset 0 0 0 1.5px #9d8cff' : 'inset 0 0 0 1px #24262b', fg: w === sel ? '#e8e9ec' : '#80848c' })) });
+    const oscs = [mk('Osc 1', 'saw', []), mk('Osc 2', 'square', [{ l: 'Semi', t: '+7 st' }, { l: 'Cents', t: '−6 ct' }])];
+    const uni = [1, 2, 3, 4].map(u => ({ t: u, bg: u === 3 ? '#363940' : 'transparent', fg: u === 3 ? '#e8e9ec' : '#80848c' }));
+    let sc = ''; const W = 300, H = 120;
+    for (let i = 0; i <= 300; i++) { const t = i / 300 * 2.2; let v = 0; [1, 1.26, 1.5].forEach((m, j) => { for (let k = 1; k <= 14; k++) { const g = Math.pow(10, DV.sumDb([{ type: 'lp', f: 1800, slope: 24 }], 130 * m * k) / 20); v += g * Math.sin(2 * Math.PI * k * m * t + j) / k * (k % 2 ? 1 : 0.8); } }); sc += (i ? 'L' : 'M') + r1(i / 300 * W) + ' ' + r1(H / 2 - v * 13) + ' '; }
+    return { oscs, uni, scope: sc };
+  }
+  ep() {
+    const r1 = n => Math.round(n * 10) / 10, br = 0.38, bell = 0.55;
+    const bars = Array.from({ length: 20 }, (_, i) => { const k = i + 1; let db = -(k - 1) * (6 - br * 4) - (k > 1 ? 4 : 0); const isB = k >= 7 && k <= 9; if (isB) db += bell * 22; return { p: Math.max(3, Math.round((1 + db / 70) * 100)), c: isB ? '#fff1c9' : '#e3b24f', o: isB ? 0.9 : Math.max(0.35, 1 - i * 0.03) }; });
+    const W = 688, H = 210, rate = 4.5, depth = 0.4, dur = 3, rnd = DV.rand(8);
+    const lfoA = t => 1 - depth * (0.5 + 0.5 * Math.sin(2 * Math.PI * rate * t * dur));
+    const env = t => Math.exp(-t * 1.6) * lfoA(t);
+    const trem = DV.waveArea(8, W, H * 0.86, env, { n: 420, y0: H * 0.07 });
+    let lfo = '', lfoB = ''; for (let i = 0; i <= 300; i++) { const t = i / 300, y = H * 0.07 + 2 + (1 - lfoA(t)) * 60; lfo += (i ? 'L' : 'M') + r1(t * W) + ' ' + r1(y) + ' '; lfoB += (i ? 'L' : 'M') + r1(t * W) + ' ' + r1(H - y) + ' '; }
+    return { bars, trem, lfo, lfoB };
+  }
+  drums() {
+    const P = ['#ff7b6e', '#ffa94d', '#f2d45c', '#7ddc7a', '#4fd6c8', '#5aa2f5', '#9d8cff', '#e884d6'];
+    const k = (l, t, v, bip) => ({ l, t, v, bip: !!bip });
+    return [
+      { n: 'Kick', note: 'C1 · 36', c: P[0], e: t => Math.exp(-t * 5), lvl: 90, sum: [['Tune', '−2 st'], ['Punch', '70 %']], knobs: [k('Tune', '−2 st', 0.42, 1), k('Decay', '58 %', 0.58), k('Punch', '70 %', 0.7), k('Level', '−1.0 dB', 0.9)], len: '600 ms', kick: true },
+      { n: 'Snare', note: 'D1 · 38', c: P[1], e: t => Math.exp(-t * 9), lvl: 78, sum: [['Tune', '+1 st'], ['Snappy', '55 %']], knobs: [k('Tune', '+1 st', 0.54, 1), k('Decay', '40 %', 0.4), k('Snappy', '55 %', 0.55), k('Level', '−2.5 dB', 0.8)], len: '400 ms' },
+      { n: 'Clap', note: 'D♯1 · 39', c: P[2], e: t => (t < 0.06 ? 0.7 + 0.3 * Math.sin(t * 160) : 1) * Math.exp(-t * 8), lvl: 60, sum: [['Level', '−6.0 dB']], knobs: [k('Level', '−6.0 dB', 0.6)], len: '400 ms' },
+      { n: 'Hats', note: 'F♯1 · 42/46', c: P[3], e: t => Math.exp(-t * 26) + 0.25 * Math.exp(-t * 4), lvl: 66, sum: [['Closed', '30 %'], ['Open', '65 %']], knobs: [k('Tune', '0 st', 0.5, 1), k('Closed decay', '30 %', 0.3), k('Open decay', '65 %', 0.65), k('Level', '−5.0 dB', 0.66)], len: '400 ms' },
+      { n: 'Toms', note: 'A1 · 41–50', c: P[4], e: t => Math.exp(-t * 4.5), lvl: 70, sum: [['Tune', '+3 st'], ['Decay', '50 %']], knobs: [k('Tune', '+3 st', 0.62, 1), k('Decay', '50 %', 0.5), k('Level', '−4.0 dB', 0.7)], len: '600 ms' },
+      { n: 'Cymbals', note: 'C♯2 · 49–59', c: P[6], e: t => Math.exp(-t * 1.6), lvl: 52, sum: [['Decay', '80 %']], knobs: [k('Decay', '80 %', 0.8), k('Level', '−8.0 dB', 0.52)], len: '2.0 s' },
+      { n: 'Percussion', note: '60–81', c: P[7], e: t => Math.exp(-t * 12), lvl: 58, sum: [['Tune', '0 st'], ['Decay', '120 %']], knobs: [k('Tune', '0 st', 0.5, 1), k('Decay', '120 %', 0.25), k('Level', '−7.0 dB', 0.58)], len: '300 ms' },
+    ].map((v, i) => ({ ...v, env: DV.waveArea(30 + i, 108, 34, v.e, { n: 90, y0: 2 }) }));
+  }
+  drumBig(v) {
+    const W = 500, H = 262, r1 = n => Math.round(n * 10) / 10; let grid = '';
+    for (let x = 50; x < W; x += 50) grid += `M${x} 0 V${H} `;
+    let envL = '';
+    if (v.kick) {
+      let ph = 0, d = '', pitch = ''; const N = 900, dur = 0.6;
+      for (let i = 0; i <= N; i++) { const t = i / N * dur, f = 48 + 150 * Math.exp(-t * 28); ph += 2 * Math.PI * f * dur / N; const a = Math.exp(-t * 6) * (1 + 0.4 * Math.exp(-t * 60)); d += (i ? 'L' : 'M') + r1(i / N * W) + ' ' + r1(H / 2 - Math.min(1.1, a) * Math.sin(ph) * H * 0.4) + ' '; if (i % 6 === 0) pitch += (i ? 'L' : 'M') + r1(i / N * W) + ' ' + r1(H - 16 - (f - 40) / 160 * 80) + ' '; }
+      for (let i = 0; i <= 80; i++) { const t = i / 80; envL += (i ? 'L' : 'M') + r1(t * W) + ' ' + r1(H / 2 - Math.min(1.1, Math.exp(-t * dur * 6) * 1.1) * H * 0.4) + ' '; }
+      return { grid, wave: d, waveFill: 'none', waveFo: 0, waveSt: v.c, envL, pitch, pitchD: 'flex' };
+    }
+    for (let i = 0; i <= 80; i++) { const t = i / 80; envL += (i ? 'L' : 'M') + r1(t * W) + ' ' + r1(H / 2 - v.e(t) * H * 0.42) + ' '; }
+    return { grid, wave: DV.waveArea(50, W, H * 0.84, v.e, { n: 360, y0: H * 0.08 }), waveFill: v.c, waveFo: 0.5, waveSt: 'none', envL, pitch: '', pitchD: 'none' };
+  }
+  dsData() {
+    const N = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'], nn = m => N[m % 12] + (Math.floor(m / 12) - 2);
+    const P = { k: '#ff7b6e', s: '#ffa94d', h: '#7ddc7a', t: '#4fd6c8', c: '#9d8cff', p: '#e884d6' };
+    const def = { 36: ['Kick', 'kick_dusty_01.wav', 'k', '', '→1', 'L2'], 37: ['Side stick', 'rim_02.wav', 's'], 38: ['Snare', 'snare_brush_04.wav', 's', '', '→2', 'L3 RR3'], 39: ['Clap', 'clap_room.wav', 's'], 40: ['Snare 2', 'snare_tight.wav', 's'], 41: ['Low tom', 'tom_lo.wav', 't'], 42: ['Closed hat', 'hat_cl_03.wav', 'h', 'C1', '', 'RR2'], 43: ['Floor tom', 'tom_floor.wav', 't'], 44: ['Pedal hat', 'hat_pedal.wav', 'h', 'C1'], 45: ['Mid tom', 'tom_mid.wav', 't'], 46: ['Open hat', 'hat_open_01.wav', 'h', 'C1'], 47: null, 48: ['Hi tom', 'tom_hi.wav', 't'], 49: ['Crash', 'crash_16.wav', 'c', 'C2'], 50: ['Hi tom 2', 'tom_hi_01.wav', 't'], 51: ['Ride', 'ride_bell.wav', 'c'] };
+    const env = { k: t => Math.exp(-t * 6), s: t => Math.exp(-t * 10), h: t => Math.exp(-t * 18), t: t => Math.exp(-t * 5), c: t => Math.exp(-t * 2), p: t => Math.exp(-t * 9) };
+    const order = [48, 49, 50, 51, 44, 45, 46, 47, 40, 41, 42, 43, 36, 37, 38, 39];
+    return order.map(m => { const d = def[m]; if (!d) return { m, empty: true, note: nn(m) }; return { m, n: d[0], file: d[1], cat: d[2], c: P[d[2]], choke: d[3] || '', out: d[4] || '', lay: d[5] || '', note: nn(m), e: env[d[2]], wave: DV.waveArea(m, 118, 16, env[d[2]], { n: 60 }) }; });
+  }
+  defZones() {
+    const ranges = [[24, 35], [36, 47], [48, 59], [60, 71], [72, 83], [84, 95]], P = ['#ff7b6e', '#ffa94d', '#f2d45c', '#7ddc7a', '#4fd6c8', '#9d8cff'];
+    const out = []; ranges.forEach(([lo, hi], i) => { out.push({ lo, hi, vlo: 0, vhi: 79, root: lo + 6, c: P[i], layer: 'soft' }); out.push({ lo, hi, vlo: 80, vhi: 127, root: lo + 6, c: P[i], layer: 'hard' }); }); return out;
+  }
+  renderVals() {
+    const refs = { fltRef: el => { this.fltSvg = el; }, fltDown: e => this.fltDown(e) };
+    if (!window.DV) return refs;
+    const N = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'], nn = m => N[m % 12] + (Math.floor(m / 12) - 2), r1 = n => Math.round(n * 10) / 10;
+    if (!this._s) {
+      const sm = {}, KW = 900 / 72, H = 232;
+      let grid = '', oct = ''; for (let m = 0; m <= 72; m++) (m % 12 === 0 ? (oct += `M${r1(m * KW)} 0 V${H} `) : (grid += `M${r1(m * KW)} 0 V${H} `));
+      [32, 64, 96].forEach(v => { grid += `M0 ${r1((127 - v) / 127 * H)} H900 `; });
+      sm.grid = grid; sm.oct = oct; sm.vl = [127, 96, 64, 32].map(v => ({ y: r1((127 - v) / 127 * H) + 2, t: v }));
+      sm.keys = Array.from({ length: 72 }, (_, i) => { const m = 24 + i, b = [1, 3, 6, 8, 10].includes(m % 12); return { x: r1(i * KW), w: r1(KW), bg: b ? '#1a1b1f' : '#c4c7cd', l: m % 12 === 0 ? 'C' + (m / 12 - 2) : '' }; });
+      const WW = 560, WH = 150, env = t => 0.15 + 0.85 * Math.exp(-t * 2.2);
+      sm.wave = DV.waveArea(77, WW, WH * 0.9, env, { n: 380, y0: WH * 0.05 });
+      sm.st = r1(WW * 0.015); sm.en = r1(WW * 0.9); sm.enW = r1(WW * 0.1); sm.ls = r1(WW * 0.5); sm.lw = r1(WW * 0.33);
+      const le = WW * 0.83, xf = WW * 0.06;
+      sm.xf = `M${r1(le - xf)} ${WH - 6} L${r1(le)} 20 L${r1(le)} ${WH - 6} Z`;
+      sm.loopL = `M${sm.ls} 0 V${WH} M${r1(le)} 0 V${WH}`; sm.seL = `M${sm.st} 0 V${WH}`; sm.enL = `M${sm.en} 0 V${WH}`;
+      sm.amp = DV.adsr(0.01, 0.3, 0.8, 0.25, 186, 96, { pad: 8, hold: 0.2 });
+      sm.flt = this.filterView(4200, 0.2, 204, 96, false);
+      this._s = { ps: this.synthStatic(), kb: this.keyboard(), ep: this.ep(), dmV: this.drums(), ds: this.dsData(), sm };
+    }
+    const S = this._s, st = this.state;
+    const envs = [['amp', 'AMP ENVELOPE', '#4fc38a', 'drag nodes · double-click resets'], ['flt', 'FILTER ENVELOPE', '#9d8cff', 'drives cutoff by env amount']].map(([key, title, c, hint]) => {
+      const e = st[key], g = this.envGeo(e, 302, 170);
+      const node = (id, p) => ({ x: p[0], y: p[1], fill: st.envDrag === key + id ? '#f4f5f7' : c, st: '#0b0c0e', down: ev => this.envDown(key, id, ev) });
+      let grid = ''; [0.25, 0.5, 0.75].forEach(f => { grid += `M0 ${r1(10 + f * 150)} H302 `; });
+      const play = key === 'amp' ? `M${r1(g.d[0] + (g.s[0] - g.d[0]) * 0.55)} 10 V160` : '';
+      return { key, title, c, hint, g, grid, play, ref: el => { this['svg_' + key] = el; }, nodes: [node('a', g.a), node('d', g.d), node('s', g.s), node('r', g.r)], reads: [{ l: 'Attack', t: this.ft(e.a), c: '#e8e9ec' }, { l: 'Decay', t: this.ft(e.d), c: '#e8e9ec' }, { l: 'Sustain', t: Math.round(e.s * 100) + ' %', c: '#e8e9ec' }, { l: 'Release', t: this.ft(e.r), c: '#e8e9ec' }] };
+    });
+    const ps = { ...S.ps, envs, flt: this.filterView(st.cut, st.res, 452, 170, true), cutV: r1(DV.fx(st.cut, 1) * 100) / 100, cutT: DV.hz(st.cut), resV: st.res, resT: Math.round(st.res * 100) + ' %' };
+    const voices = S.dmV.map((v, i) => { const sel = i === st.dmSel; return { ...v, pick: () => this.setState({ dmSel: i }), stripBg: sel ? '#1f2024' : '#18191d', ring: sel ? `inset 0 0 0 1.5px ${v.c}` : 'inset 0 0 0 1px #1f2125', padBg: sel || i === 0 ? v.c + '33' : v.c + '14', padBd: v.c + (sel ? 'aa' : '44'), nameC: '#f4f5f7', sum: v.sum.map(([l, t]) => ({ l, t })) }; });
+    const sv = S.dmV[st.dmSel];
+    const dmSel = { ...sv, ...this.drumBig(sv) };
+    const dsPads = S.ds.map((p, i) => {
+      const sel = i === st.dsSel, drop = p.m === 50, play = p.m === 36;
+      if (p.empty) return { n: 'Empty', note: p.note, c: '#363940', nameC: '#80848c', bg: '#111215', ring: 'inset 0 0 0 1px #24262b', waveD: 'none', dropD: 'block', drop: 'Drop sample', dropC: '#80848c', tags: [], pick: () => {} };
+      const tags = []; if (p.choke) tags.push({ t: p.choke, bg: '#3a2c17', fg: '#f2a944' }); if (p.out) tags.push({ t: p.out, bg: '#1d2a3d', fg: '#7fb4ff' }); if (p.lay) tags.push({ t: p.lay, bg: '#24262b', fg: '#c4c7cd' });
+      return { n: p.n, note: p.note, c: p.c, nameC: '#f4f5f7', wave: p.wave, waveD: drop ? 'none' : 'block', dropD: drop ? 'block' : 'none', drop: 'Drop to replace', dropC: '#7fb4ff', tags,
+        bg: drop ? '#16243a' : play ? p.c + '44' : sel ? '#26282d' : '#1c1d21',
+        ring: drop ? 'inset 0 0 0 1.5px #4c9cf5' : sel ? `inset 0 0 0 1.5px ${p.c}` : play ? `inset 0 0 0 1px ${p.c}, 0 0 0 3px ${p.c}33` : 'inset 0 0 0 1px #24262b',
+        pick: () => this.setState({ dsSel: i }) };
+    });
+    const sp = S.ds[st.dsSel].empty ? S.ds[14] : S.ds[st.dsSel];
+    const W = 700, H = 254, sx = W * 0.03, ex = W * 0.8, ax = sx + 6, dEnd = ex - 10;
+    let envL = `M${r1(sx)} ${H - 14} L${r1(ax)} 18`; for (let i = 1; i <= 40; i++) { const t = i / 40; envL += ` L${r1(ax + (dEnd - ax) * t)} ${r1(18 + (H - 32) * (1 - Math.exp(-t * 3.2)) / (1 - Math.exp(-3.2)))}`; }
+    const dsSel = { n: sp.n, note: sp.note, file: sp.file, c: sp.c, choke: sp.choke ? 'Group ' + sp.choke.slice(1) : 'None', out: sp.out ? 'Extra out ' + sp.out.slice(1) : 'Main', wave: DV.waveArea(sp.m + 100, W, H * 0.86, t => sp.e(t * 1.25), { n: 400, y0: H * 0.07 }), sx: r1(sx), ex: r1(ex), exW: r1(W - ex), sLine: `M${r1(sx)} 0 V${H}`, eLine: `M${r1(ex)} 0 V${H}`, envL, ax: r1(ax), dx: r1(ax + (dEnd - ax) * 0.3), dy: r1(18 + (H - 32) * (1 - Math.exp(-0.96)) / (1 - Math.exp(-3.2))), sTag: r1(sx + 4), eTag: r1(ex - 92), aTag: r1(ax + 10), dTag: r1(ax + (dEnd - ax) * 0.3 + 10), dTagY: r1(18 + (H - 32) * 0.55) };
+    const zonesD = st.zones || this.defZones(), KW = 900 / 72, ZH = 232;
+    const zones = zonesD.map((z, i) => {
+      const sel = i === st.zSel;
+      return { x: r1((z.lo - 24) * KW) + 1, y: r1((127 - z.vhi) / 127 * ZH) + 1, w: r1((z.hi - z.lo + 1) * KW) - 2, h: r1((z.vhi - z.vlo + 1) / 127 * ZH) - 2, c: z.c, rootX: r1((z.root - z.lo) * KW + KW / 2 - 4), bg: z.c + (sel ? '40' : z.layer === 'hard' ? '24' : '16'), fg: sel ? '#f4f5f7' : '#c4c7cd', ring: sel ? `inset 0 0 0 1.5px ${z.c}, 0 0 0 1px #0b0c0e` : `inset 0 0 0 1px ${z.c}66`, range: nn(z.lo) + '–' + nn(z.hi), vel: z.vlo + '–' + z.vhi,
+        down: e => {
+          e.preventDefault(); this.setState({ zSel: i });
+          const el = e.currentTarget.parentElement, rect = el.getBoundingClientRect(), sc = 900 / rect.width, x0 = e.clientX, y0 = e.clientY, base = (this.state.zones || this.defZones()).map(q => ({ ...q })), z0 = base[i];
+          const mv = ev => { const dk = Math.round((ev.clientX - x0) * sc / KW), dv = Math.round(-(ev.clientY - y0) * sc / ZH * 127); const span = z0.hi - z0.lo, vs = z0.vhi - z0.vlo; const lo = Math.max(24, Math.min(95 - span, z0.lo + dk)), vlo = Math.max(0, Math.min(127 - vs, z0.vlo + dv)); this.setState({ zones: base.map((q, j) => j === i ? { ...q, lo, hi: lo + span, root: q.root + (lo - z0.lo), vlo, vhi: vlo + vs } : q) }); };
+          const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
+          window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+        } };
+    });
+    const zs = zonesD[st.zSel];
+    const zSel = { c: zs.c, name: 'Felt upright ' + nn(zs.root) + ' ' + zs.layer + '.wav', range: nn(zs.lo) + '–' + nn(zs.hi), vel: zs.vlo + '–' + zs.vhi, root: nn(zs.root) };
+    return { ...refs, ps, kb: S.kb, ep: S.ep, dm: { voices }, dmSel, dsPads, dsSel, sm: S.sm, zones, zSel };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><script src="./device-viz.js"></script></helmet>
+<div style="display:flex;flex-direction:column;align-items:center;gap:3px;font-family:'IBM Plex Sans',sans-serif;position:relative;min-width:{{ minW }}px;opacity:{{ op }}">
+<div style="position:absolute;bottom:100%;left:50%;transform:translate(-50%,-2px);padding:3px 7px;background:#2a2c32;border:1px solid #363940;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#e8e9ec;white-space:nowrap;box-shadow:0 6px 16px rgba(0,0,0,.55);display:{{ tipDisplay }};z-index:2">{{ tip }}</div>
+<svg width="{{ k.s }}" height="{{ k.s }}" style="display:block;overflow:visible">
+<circle cx="{{ k.c }}" cy="{{ k.c }}" r="{{ autoR }}" fill="none" stroke="#c884e8" stroke-width="1.25" stroke-opacity="{{ autoOp }}"></circle>
+<circle cx="{{ k.c }}" cy="{{ k.c }}" r="{{ focusR }}" fill="none" stroke="#4c9cf5" stroke-width="2" stroke-opacity="{{ focusOp }}"></circle>
+<path d="{{ k.track }}" stroke="#26282d" stroke-width="{{ k.sw }}" fill="none" stroke-linecap="round"></path>
+<path d="{{ k.val }}" stroke="{{ col }}" stroke-width="{{ k.sw }}" fill="none" stroke-linecap="round"></path>
+<path d="{{ k.mod }}" stroke="{{ col }}" stroke-opacity="0.45" stroke-width="1.5" fill="none" stroke-linecap="round"></path>
+<circle cx="{{ k.c }}" cy="{{ k.c }}" r="{{ k.br }}" fill="{{ body }}" stroke="{{ rim }}" stroke-width="1"></circle>
+<line x1="{{ k.x1 }}" y1="{{ k.y1 }}" x2="{{ k.x2 }}" y2="{{ k.y2 }}" stroke="#eef0f3" stroke-width="{{ pw }}" stroke-linecap="round"></line>
+<circle cx="{{ k.ax }}" cy="{{ k.ay }}" r="3.2" fill="#c884e8" stroke="#0b0c0e" stroke-width="1.5" fill-opacity="{{ autoOp }}" stroke-opacity="{{ autoOp }}"></circle>
+</svg>
+<span style="font-size:{{ lfs }}px;color:#a3a6ad;line-height:1.2;white-space:nowrap;padding-top:2px">{{ label }}</span>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:{{ vfs }}px;color:{{ vcol }};line-height:1.2;white-space:nowrap;padding:1px 4px;border-radius:3px;background:{{ vbg }}">{{ value }}</span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:120,&quot;height&quot;:120},&quot;v&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:0.6,&quot;min&quot;:0,&quot;max&quot;:1,&quot;step&quot;:0.01,&quot;tsType&quot;:&quot;number&quot;},&quot;label&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Attack&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;value&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;12 ms&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;size&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[28,40,56,72,96],&quot;default&quot;:56,&quot;tsType&quot;:&quot;number&quot;},&quot;color&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#e8e9ec&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;bip&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;auto&quot;:{&quot;editor&quot;:null,&quot;default&quot;:null,&quot;tsType&quot;:&quot;number | null&quot;},&quot;mod&quot;:{&quot;editor&quot;:null,&quot;default&quot;:null,&quot;tsType&quot;:&quot;number | null&quot;},&quot;state&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;&quot;,&quot;hover&quot;,&quot;drag&quot;,&quot;focus&quot;],&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;tip&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dim&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;disabled&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;minW&quot;:{&quot;editor&quot;:null,&quot;default&quot;:52,&quot;tsType&quot;:&quot;number&quot;}}">
+class Component extends DCLogic {
+  componentDidMount() { if (!window.DV) { const t = setInterval(() => { if (window.DV) { clearInterval(t); this.forceUpdate(); } }, 30); } }
+  renderVals() {
+    const p = this.props, size = Number(p.size ?? 40);
+    if (!window.DV) return { k: { s: size }, label: p.label, value: p.value, minW: size, op: 1, tipDisplay: 'none' };
+    const v = Math.max(0, Math.min(1, Number(p.v ?? 0.5)));
+    const auto = p.auto != null && p.auto !== '' ? Number(p.auto) : null;
+    const k = DV.knob(v, { size, bip: !!p.bip, auto: auto ?? 0, mod: p.mod != null ? Number(p.mod) : null });
+    const st = p.state || '';
+    const big = size >= 56;
+    return {
+      k, label: p.label, value: p.value, tip: p.tip || '', tipDisplay: p.tip ? 'block' : 'none',
+      col: p.dim ? '#4a4d55' : (p.color || '#e8e9ec'),
+      body: st === 'drag' ? '#2a2c32' : st === 'hover' ? '#24262b' : '#1c1d21',
+      rim: st ? '#3c3f46' : '#2a2c32',
+      pw: big ? 2.5 : 2,
+      autoR: k.rr + k.sw / 2 + 3.5, autoOp: auto != null ? 1 : 0,
+      focusR: k.rr + k.sw / 2 + 3.5, focusOp: st === 'focus' ? 1 : 0,
+      minW: Math.max(size, Number(p.minW ?? 52)), op: p.disabled ? 0.4 : 1,
+      lfs: big ? 12 : 11, vfs: big ? 12.5 : 11.5,
+      vcol: st === 'drag' ? '#7fb4ff' : auto != null ? '#d9a8f0' : '#e8e9ec',
+      vbg: st === 'drag' ? '#1d2a3d' : 'transparent',
+    };
+  }
+}
+</script>
+</body>
+</html>

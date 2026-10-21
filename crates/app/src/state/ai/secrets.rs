@@ -7,6 +7,7 @@
 //! Every function here may block (D-Bus): call them from the AI worker thread, never
 //! from the UI thread.
 
+use crate::i18n::{tr, trf};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -30,10 +31,10 @@ pub enum KeySource {
 impl KeySource {
 	pub fn describe(&self) -> String {
 		match self {
-			KeySource::Env(name) => format!("from the environment ({name})"),
-			KeySource::DotEnv(path) => format!("from {}", path.display()),
-			KeySource::Stored(store) => format!("stored in {store}"),
-			KeySource::Missing => "not set".into(),
+			KeySource::Env(name) => trf("from the environment ({name})", &[("name", &name)]),
+			KeySource::DotEnv(path) => trf("from {path}", &[("path", &path.display())]),
+			KeySource::Stored(store) => trf("stored in {store}", &[("store", &store)]),
+			KeySource::Missing => tr("not set").into(),
 		}
 	}
 }
@@ -131,9 +132,9 @@ impl SecretStore for SystemSecretStore {
 
 	fn name(&self) -> String {
 		if keyring::Entry::store_status().is_ok() {
-			"the system keyring".into()
+			tr("the system keyring").into()
 		} else {
-			format!("{} (mode 0600)", self.file.path.display())
+			trf("{path} (mode 0600)", &[("path", &self.file.path.display())])
 		}
 	}
 }
@@ -216,7 +217,7 @@ impl SecretStore for FileSecretStore {
 	}
 
 	fn name(&self) -> String {
-		format!("{} (mode 0600)", self.path.display())
+		trf("{path} (mode 0600)", &[("path", &self.path.display())])
 	}
 }
 

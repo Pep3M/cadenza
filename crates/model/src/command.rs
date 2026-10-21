@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use cadenza_core::{ClipId, DeviceId, NoteId, ParamAddress, Tick, TimeSignature, TrackId};
+use cadenza_core::{ClipId, DeviceId, LinkId, NoteId, ParamAddress, Tick, TimeSignature, TrackId};
 
 use crate::controller::{Controller, ControllerPoint};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::modulation::Modulator;
 use crate::project::{
 	AutomationPoint, Clip, ClipFade, Device, Marker, Note, Output, OutputRoute, ProjectMeta, Send,
 	SidechainSource, Take, Track, TrackInput,
@@ -99,6 +100,14 @@ pub enum Command {
 		track: Option<TrackId>,
 		device: DeviceId,
 		zones: Vec<SampleZone>,
+	},
+	/// Replaces the modulators (LFOs, envelope followers) of a built-in device; an empty
+	/// list removes them.
+	SetModulators {
+		#[serde(default)]
+		track: Option<TrackId>,
+		device: DeviceId,
+		modulators: Vec<Modulator>,
 	},
 	/// Feeds a device's sidechain input from another track (`source: null` disconnects it).
 	SetSidechain {
@@ -233,6 +242,11 @@ pub enum Command {
 	SetProjectMeta {
 		meta: ProjectMeta,
 	},
+	/// Replaces the hardware MIDI controller assignments (MIDI learn) as a whole; an empty
+	/// list forgets them all.
+	SetMidiMap {
+		map: Vec<crate::midi_map::MidiMapping>,
+	},
 	/// Replaces the tracks armed for recording (audio and instrument tracks, arming order).
 	SetArmedTracks {
 		armed: Vec<TrackId>,
@@ -305,6 +319,17 @@ pub struct ClipPatch {
 		skip_serializing_if = "Option::is_none"
 	)]
 	pub take: Option<Option<Take>>,
+	/// Mutes or unmutes the clip.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub muted: Option<bool>,
+	/// Link group of a MIDI clip (`null` = make it unique); joining a group requires the
+	/// same notes and controller lanes as its clips. Absent leaves it unchanged.
+	#[serde(
+		default,
+		deserialize_with = "double_option",
+		skip_serializing_if = "Option::is_none"
+	)]
+	pub link: Option<Option<LinkId>>,
 }
 
 /// Fields left out (or `None`) are unchanged.
@@ -356,6 +381,7 @@ impl Command {
 			Self::SetDeviceBypass { .. } => "set_device_bypass",
 			Self::SetDeviceState { .. } => "set_device_state",
 			Self::SetSampleZones { .. } => "set_sample_zones",
+			Self::SetModulators { .. } => "set_modulators",
 			Self::SetSidechain { .. } => "set_sidechain",
 			Self::SetOutputRoutes { .. } => "set_output_routes",
 			Self::SetParam { .. } => "set_param",
@@ -383,6 +409,7 @@ impl Command {
 			Self::RemoveMarker { .. } => "remove_marker",
 			Self::SetProjectMeta { .. } => "set_project_meta",
 			Self::SetArmedTracks { .. } => "set_armed_tracks",
+			Self::SetMidiMap { .. } => "set_midi_map",
 			Self::Batch { .. } => "batch",
 		}
 	}
@@ -437,6 +464,10 @@ impl Command {
 			Self::SetDeviceState { .. } => "Store plugin state".into(),
 			Self::SetSampleZones { zones, .. } if zones.is_empty() => "Unload samples".into(),
 			Self::SetSampleZones { .. } => "Edit sample zones".into(),
+			Self::SetModulators { modulators, .. } if modulators.is_empty() => {
+				"Remove modulation".into()
+			}
+			Self::SetModulators { .. } => "Edit modulation".into(),
 			Self::SetSidechain {
 				source: Some(_), ..
 			} => "Set sidechain".into(),
@@ -463,6 +494,25 @@ impl Command {
 			Self::AddClip { clip, .. } => format!("Add clip '{}'", clip.name),
 			Self::RemoveClip { .. } => "Remove clip".into(),
 			Self::UpdateClip { patch, .. } if patch.take.is_some() => "Edit take".into(),
+			Self::UpdateClip {
+				patch: ClipPatch {
+					link: Some(None), ..
+				},
+				..
+			} => "Make clip unique".into(),
+			Self::UpdateClip {
+				patch: ClipPatch {
+					link: Some(Some(_)),
+					..
+				},
+				..
+			} => "Link clip".into(),
+			Self::UpdateClip {
+				patch: ClipPatch {
+					muted: Some(muted), ..
+				},
+				..
+			} => if *muted { "Mute clip" } else { "Unmute clip" }.into(),
 			Self::UpdateClip { patch, .. } => {
 				match (&patch.name, patch.start, patch.length, patch.track) {
 					(Some(name), None, None, None) => format!("Rename clip to '{name}'"),
@@ -528,6 +578,7 @@ impl Command {
 			},
 			Self::SetArmedTracks { armed } if armed.is_empty() => "Disarm all tracks".into(),
 			Self::SetArmedTracks { .. } => "Arm tracks".into(),
+			Self::SetMidiMap { .. } => "Edit MIDI assignments".into(),
 			Self::Batch { label, .. } => label.clone(),
 		}
 	}

@@ -304,6 +304,8 @@ pub fn move_clip(session: &mut Session, args: MoveClipArgs) -> Result<(), McpErr
 		length: None,
 		track: args.track_id,
 		take: None,
+		muted: None,
+		link: None,
 	};
 	session.document_mut().execute(Command::UpdateClip {
 		clip: args.clip_id,
@@ -325,6 +327,8 @@ pub fn resize_clip(session: &mut Session, args: ResizeClipArgs) -> Result<(), Mc
 		length: Some(beats_to_tick(args.length_beats)),
 		track: None,
 		take: None,
+		muted: None,
+		link: None,
 	};
 	session.document_mut().execute(Command::UpdateClip {
 		clip: args.clip_id,
@@ -352,6 +356,11 @@ pub struct DuplicateClipArgs {
 	/// Defaults to the source clip's track.
 	#[serde(default)]
 	pub track_id: Option<TrackId>,
+	/// MIDI only: make a linked copy (like an FL pattern instance) that shares its notes
+	/// and controller lanes with the source, so editing either edits both. Default false:
+	/// an independent copy. Use linked copies for repeated sections that must stay equal.
+	#[serde(default)]
+	pub linked: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -368,6 +377,30 @@ pub fn duplicate_clip(
 		.find_clip(args.clip_id)
 		.ok_or(ModelError::ClipNotFound(args.clip_id))?;
 	let target_track = args.track_id.unwrap_or(source_track.id);
+	if args.linked {
+		if !source_clip.is_midi() {
+			return Err(McpError::Invalid(
+				"linked: true works only for MIDI clips; duplicate audio clips with linked: false"
+					.into(),
+			));
+		}
+		let clip_id = ClipId::new();
+		let commands = cadenza_model::links::copy_clip(
+			project,
+			args.clip_id,
+			clip_id,
+			Some(target_track),
+			beats_to_tick(args.to_beat),
+			true,
+			cadenza_core::LinkId::new(),
+		)
+		.ok_or(ModelError::ClipNotFound(args.clip_id))?;
+		session.document_mut().execute(Command::Batch {
+			label: "Duplicate linked clip".into(),
+			commands,
+		})?;
+		return Ok(DuplicateClipOutput { clip_id });
+	}
 	let mut clip = Clip::midi(
 		source_clip.name.clone(),
 		beats_to_tick(args.to_beat),
@@ -440,6 +473,7 @@ mod tests {
 				clip_id,
 				to_beat: 8.0,
 				track_id: None,
+				linked: false,
 			},
 		)
 		.unwrap()
@@ -453,6 +487,50 @@ mod tests {
 			assert_ne!(o.id, d.id, "duplicated notes must have fresh ids");
 			assert_eq!(o.pitch, d.pitch);
 		}
+	}
+
+	#[test]
+	fn linked_duplicate_shares_note_edits() {
+		let mut session = Session::new();
+		let track_id = instrument_track(&mut session);
+		let clip_id = add_midi_clip(
+			&mut session,
+			AddMidiClipArgs {
+				track_id,
+				start_beat: 0.0,
+				length_beats: 4.0,
+				name: None,
+				notes: vec![note_input("C4", 0.0, 1.0)],
+			},
+		)
+		.unwrap()
+		.clip_id;
+		let dup = duplicate_clip(
+			&mut session,
+			DuplicateClipArgs {
+				clip_id,
+				to_beat: 4.0,
+				track_id: None,
+				linked: true,
+			},
+		)
+		.unwrap()
+		.clip_id;
+		session
+			.document_mut()
+			.execute(Command::AddNotes {
+				clip: dup,
+				notes: vec![Note::new(
+					64,
+					cadenza_core::Tick(960),
+					cadenza_core::Tick(960),
+					0.7,
+				)],
+			})
+			.unwrap();
+		assert_eq!(get_notes(&session, clip_id), get_notes(&session, dup));
+		let summary = session.document().project().summary();
+		assert_eq!(summary.tracks[0].clips[0].link, Some(vec![dup]));
 	}
 
 	fn get_notes(session: &Session, clip_id: ClipId) -> Vec<Note> {

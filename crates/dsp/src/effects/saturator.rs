@@ -74,13 +74,30 @@ pub static INFO: DeviceInfo = DeviceInfo {
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
+pub enum Mode {
 	Tape,
 	Tube,
 	Hard,
 }
 
 const TUBE_BIAS: f64 = 0.35;
+
+/// Partial level compensation: loudness grows with drive, but less than the
+/// raw gain (used both by [`saturator_shape`] and the processor).
+#[inline]
+fn drive_compensation(drive_gain: f64) -> f64 {
+	drive_gain.powf(-0.7)
+}
+
+/// The static waveshaping curve the processor applies (drive scaling, the
+/// mode's shape and level compensation), before the DC blocker, tone filter,
+/// dry/wet mix and output gain. For a slowly changing `x` this matches
+/// [`Adaa::process`]'s output exactly; at audio rate `Adaa` additionally
+/// anti-aliases fast transitions.
+pub fn saturator_shape(mode: Mode, drive_db: f32, x: f32) -> f32 {
+	let drive = db_to_gain(drive_db) as f64;
+	(mode.shape(x as f64 * drive) * drive_compensation(drive)) as f32
+}
 
 #[inline]
 fn ln_cosh(x: f64) -> f64 {
@@ -240,8 +257,7 @@ impl Processor for Saturator {
 				self.tone_coeffs_db = tone_db;
 			}
 			let drive = self.drive.tick();
-			// Partial level compensation: loudness grows with drive, but less than the gain.
-			let comp = drive.powf(-0.7);
+			let comp = drive_compensation(drive as f64) as f32;
 			let out = self.output.tick();
 			let mix = self.mix.tick();
 			for (ch, x) in [l, r].into_iter().enumerate() {
@@ -283,6 +299,69 @@ mod tests {
 				let h = 1e-5;
 				let d = (mode.integral(x + h) - mode.integral(x - h)) / (2.0 * h);
 				assert!((d - mode.shape(x)).abs() < 1e-4, "{mode:?} at {x}");
+			}
+		}
+	}
+
+	/// A slow triangle ramp (well above the DC blocker's ~8 Hz cutoff so it
+	/// passes through essentially unattenuated, but slow enough that ADAA's
+	/// anti-aliasing correction converges to the plain shape) processed at
+	/// mix 100%, neutral tone, 0 dB output should match `saturator_shape`.
+	#[test]
+	fn processed_ramp_matches_shape() {
+		for mode in [Mode::Tape, Mode::Tube, Mode::Hard] {
+			let mut s = Saturator::new();
+			s.prepare(48_000.0, 512);
+			s.set_param(P_MODE, mode as usize as f32);
+			s.set_param(P_DRIVE, 12.0);
+			s.set_param(P_TONE, 0.0);
+			s.set_param(P_OUTPUT, 0.0);
+			s.set_param(P_MIX, 100.0);
+			s.reset();
+			let sr = 48_000.0;
+			let freq = 200.0; // well above the ~8 Hz DC-blocker cutoff
+			// The DC blocker's time constant is ~955 samples (~20 ms); give
+			// it ~10 time constants to settle before measuring.
+			let settle = 9_600;
+			let n = settle + 9_600;
+			let x: Vec<f32> = (0..n)
+				.map(|i| {
+					let t = (i as f32 * freq / sr).fract();
+					// Triangle wave in -1..1.
+					if t < 0.5 {
+						4.0 * t - 1.0
+					} else {
+						3.0 - 4.0 * t
+					}
+				})
+				.collect();
+			let mut l = x.clone();
+			let mut r = x.clone();
+			for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+				s.process(cl, cr, &[], &Transport::default());
+			}
+			// Skip the first few cycles so the tone filter settles.
+			let want: Vec<f32> = x
+				.iter()
+				.map(|&xi| saturator_shape(mode, 12.0, xi))
+				.collect();
+			// Tube mode is asymmetric, so its shaped output carries a DC
+			// offset; the real processor's DC blocker removes it (an
+			// explicit, separate stage after shaping), but the static curve
+			// in `saturator_shape` does not. Compare with any constant
+			// offset removed so this still checks the curve's *shape*.
+			let got_mean: f32 = l[settle..].iter().sum::<f32>() / (n - settle) as f32;
+			let want_mean: f32 = want[settle..].iter().sum::<f32>() / (n - settle) as f32;
+			for i in settle..n {
+				let got = l[i] - got_mean;
+				let w = want[i] - want_mean;
+				assert!(
+					(got - w).abs() < 0.02,
+					"{mode:?} at sample {i} (x={}): got {got} (raw {}), want {w} (raw {})",
+					x[i],
+					l[i],
+					want[i]
+				);
 			}
 		}
 	}

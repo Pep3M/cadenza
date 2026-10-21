@@ -8,7 +8,7 @@ pub mod tempo;
 pub mod time;
 pub mod units;
 
-pub use id::{ClipId, DeviceId, NoteId, TakeGroupId, TrackId};
+pub use id::{ClipId, DeviceId, LinkId, ModulatorId, NoteId, TakeGroupId, TrackId};
 pub use meter::{BarInfo, Meter, MeterChange, MeterMap, beat_ticks};
 pub use param::{ParamAddress, ParamAddressError, ParamTarget};
 pub use tempo::{TempoMap, TempoPoint, TimeSignature};

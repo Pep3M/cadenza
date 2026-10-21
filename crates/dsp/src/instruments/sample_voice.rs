@@ -133,6 +133,16 @@ impl Playhead {
 		}
 	}
 
+	/// Current position in source frames of the zone's sample.
+	pub fn position(&self) -> f64 {
+		self.pos
+	}
+
+	/// The position in seconds of the sample's file.
+	pub fn seconds(&self, rt: &ZoneRt) -> f32 {
+		(self.pos / f64::from(rt.sample_rate)) as f32
+	}
+
 	/// The next stereo frame at playback `ratio` (source frames per output sample), or
 	/// `None` once the region is over.
 	#[inline]
@@ -232,6 +242,10 @@ impl ZoneEnv {
 				.map(|d| decay_coeff(d.max(1.0), sample_rate)),
 			attacking: attack >= 1.0,
 		}
+	}
+
+	pub fn level(&self) -> f32 {
+		self.level
 	}
 
 	/// Next gain; `None` once a decay has run out.

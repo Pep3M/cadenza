@@ -27,6 +27,7 @@ use crate::graph::{
 	AuxEdge, Device, Edge, Fader, Graph, Master, Node, Sidechain, Source, StereoBuf, StereoDelay,
 };
 use crate::hosting::{PluginEditorSlot, PluginHosting, PluginWatch, sandbox_unavailable};
+use crate::modulation::Modulation;
 use crate::pdc::{PdcEdge, PdcNode, PdcStage, Tap, plan};
 use crate::schedule::MidiSchedule;
 use crate::{MAX_TAIL_SECONDS, QUANTUM};
@@ -392,16 +393,44 @@ impl<'a> Compiler<'a> {
 		});
 	}
 
+	/// The graph device for `model`'s instantiated `processor`, with its modulators.
+	fn device(
+		&mut self,
+		model: &cadenza_model::Device,
+		processor: Box<dyn Processor>,
+		instrument: bool,
+		owner: &str,
+	) -> Device {
+		let info = processor.info();
+		let warnings = &mut self.warnings;
+		let modulation = Modulation::new(
+			&model.modulators,
+			info,
+			&model.params,
+			self.sample_rate as f64,
+			instrument,
+			|param| {
+				warnings.push(format!(
+					"{owner}: device '{}' has no parameter '{param}' to modulate; that target is ignored",
+					model.name
+				))
+			},
+		)
+		.map(Box::new);
+		Device {
+			id: model.id,
+			processor,
+			sidechain: None,
+			modulation,
+		}
+	}
+
 	fn inserts(&mut self, devices: &[cadenza_model::Device], owner: &str) -> Vec<Device> {
 		devices
 			.iter()
 			.filter_map(|d| {
 				self.instantiate(d, DeviceRole::Effect, owner)
-					.map(|processor| Device {
-						id: d.id,
-						processor,
-						sidechain: None,
-					})
+					.map(|processor| self.device(d, processor, false, owner))
 			})
 			.collect()
 	}
@@ -490,11 +519,7 @@ impl<'a> Compiler<'a> {
 			TrackKind::Instrument => {
 				let device = track.instrument.as_ref().and_then(|d| {
 					self.instantiate(d, DeviceRole::Instrument, owner)
-						.map(|processor| Device {
-							id: d.id,
-							processor,
-							sidechain: None,
-						})
+						.map(|processor| self.device(d, processor, true, owner))
 				});
 				if track.instrument.is_none() && track.clips.iter().any(|c| !c.notes().is_empty()) {
 					self.warnings.push(format!(
@@ -521,7 +546,7 @@ impl<'a> Compiler<'a> {
 			}
 			TrackKind::Audio => {
 				let mut clips = Vec::new();
-				for clip in track.clips.iter().filter(|c| c.plays()) {
+				for clip in track.clips.iter().filter(|c| c.sounds()) {
 					let ClipContent::Audio {
 						file,
 						offset_seconds,
@@ -934,6 +959,9 @@ impl<'a> Compiler<'a> {
 			count_in: crate::graph::CountIn::default(),
 			segments: [crate::graph::Segment::default(); crate::graph::MAX_SEGMENTS],
 			segment_count: 0,
+			probe: crate::graph::ProbeTap::new(),
+			listen: None,
+			master_tap: None,
 		})
 	}
 
@@ -1031,7 +1059,9 @@ impl<'a> Compiler<'a> {
 			));
 			return;
 		}
-		if !device.processor.has_sidechain() {
+		let feeds = device.processor.has_sidechain();
+		let follows = device.modulation.as_ref().is_some_and(|m| m.needs_key());
+		if !feeds && !follows {
 			self.warnings.push(format!(
 				"{owner}: device '{name}' has no sidechain input; the sidechain from track {source_name} is ignored (use a compressor or a plugin with a sidechain input)"
 			));
@@ -1043,6 +1073,7 @@ impl<'a> Compiler<'a> {
 		device.sidechain = Some(Box::new(Sidechain {
 			source: src,
 			pre_fader: source.pre_fader,
+			feeds,
 			key: StereoBuf::new(),
 			key_delay: StereoDelay::new(0),
 			main_delay: StereoDelay::new(0),

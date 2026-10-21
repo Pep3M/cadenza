@@ -1,6 +1,7 @@
 //! The Files section of the browser: bookmarked folders, a filtered listing of the
 //! current folder, and how a file (from there or from the OS file manager) is used.
 
+use crate::i18n::tr;
 use std::path::{Path, PathBuf};
 
 use super::AUDIO_EXTENSIONS;
@@ -55,9 +56,9 @@ pub enum FileFilter {
 impl FileFilter {
 	pub fn name(self) -> &'static str {
 		match self {
-			FileFilter::All => "All",
-			FileFilter::Audio => "Audio",
-			FileFilter::Midi => "MIDI",
+			FileFilter::All => tr("All"),
+			FileFilter::Audio => tr("Audio"),
+			FileFilter::Midi => tr("MIDI"),
 		}
 	}
 

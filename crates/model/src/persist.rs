@@ -120,6 +120,17 @@ impl Project {
 			.collect();
 		self.armed
 			.retain(|t| armable.contains(t) && seen.insert(*t));
+		// So are MIDI assignments whose target is gone (hand-edited files).
+		let stale: Vec<bool> = self
+			.midi_map
+			.iter()
+			.map(|m| crate::validate::address(self, &m.target).is_err())
+			.collect();
+		let mut i = 0;
+		self.midi_map.retain(|_| {
+			i += 1;
+			!stale[i - 1]
+		});
 	}
 }
 

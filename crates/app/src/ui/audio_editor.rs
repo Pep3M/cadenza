@@ -5,6 +5,7 @@
 //! trim / delete (clip edits) and processed copies (normalize, reverse, gain,
 //! stretch/pitch). Every gesture is one command through `AppState`.
 
+use crate::i18n::{tr, trf};
 use cadenza_model::{ClipFade, FadeCurve};
 use egui::{
 	Align2, Color32, CornerRadius, CursorIcon, Id, PointerButton, Pos2, Rect, RichText, Sense,
@@ -71,7 +72,7 @@ impl AudioEditorUi {
 			ui.painter().text(
 				wave.center(),
 				Align2::CENTER_CENTER,
-				"Double-click an audio clip to edit it here",
+				tr("Double-click an audio clip to edit it here"),
 				theme::small(),
 				theme::TEXT_FAINT,
 			);
@@ -131,11 +132,7 @@ impl AudioEditorUi {
 		);
 		let ui = &mut bar;
 		ui.spacing_mut().item_spacing.x = 5.0;
-		ui.label(
-			RichText::new("AUDIO EDITOR")
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
-		);
+		super::widgets::panel_title(ui, tr("Audio editor"), Some("F7"));
 		let Some(r) = r else {
 			return;
 		};
@@ -163,8 +160,8 @@ impl AudioEditorUi {
 		let has_sel = sel.is_some_and(|(a, b)| b - a > 1e-6);
 		let cursor = sel.map(|s| s.0);
 		if ui
-			.add_enabled(cursor.is_some(), egui::Button::new("Split"))
-			.on_hover_text("Split the clip at the selection start (S)")
+			.add_enabled(cursor.is_some(), egui::Button::new(tr("Split")))
+			.on_hover_text(tr("Split the clip at the selection start (S)"))
 			.clicked()
 			&& let Some(at) = cursor
 			&& let Some((cmd, _)) = ae::split_at(state.project(), clip, at)
@@ -172,8 +169,8 @@ impl AudioEditorUi {
 			state.apply(cmd);
 		}
 		if ui
-			.add_enabled(has_sel, egui::Button::new("Trim"))
-			.on_hover_text("Keep only the selection (non-destructive)")
+			.add_enabled(has_sel, egui::Button::new(tr("Trim")))
+			.on_hover_text(tr("Keep only the selection (non-destructive)"))
 			.clicked()
 			&& let Some(s) = sel
 		{
@@ -183,38 +180,51 @@ impl AudioEditorUi {
 			}
 		}
 		if ui
-			.add_enabled(has_sel, egui::Button::new("Delete"))
-			.on_hover_text("Delete the selected range, leaving a gap (Del)")
+			.add_enabled(has_sel, egui::Button::new(tr("Delete")))
+			.on_hover_text(tr("Delete the selected range, leaving a gap (Del)"))
 			.clicked()
 			&& let Some(s) = sel
 		{
 			delete_range(state, clip, s);
 		}
 		ui.separator();
-		let scope = if has_sel { "selection" } else { "whole clip" };
+		let scope = if has_sel {
+			"selection"
+		} else {
+			tr("whole clip")
+		};
 		let busy = state.jobs.process.is_some();
 		ui.add_enabled_ui(!busy, |ui| {
 			if ui
-				.button("Normalize")
-				.on_hover_text(format!(
-					"Peak to {} dBFS ({scope}); renders a new file, undoable",
-					ae::NORMALIZE_DBFS
+				.button(tr("Normalize"))
+				.on_hover_text(trf(
+					"Peak to {normalize_dbfs} dBFS ({scope}); renders a new file, undoable",
+					&[("normalize_dbfs", &ae::NORMALIZE_DBFS), ("scope", &scope)],
 				))
 				.clicked()
 			{
 				state.process_audio(Process::Normalize);
 			}
 			if ui
-				.button("Reverse")
-				.on_hover_text(format!("Reverse the {scope}; renders a new file, undoable"))
+				.button(tr("Reverse"))
+				.on_hover_text(trf(
+					"Reverse the {scope}; renders a new file, undoable",
+					&[("scope", &scope)],
+				))
 				.clicked()
 			{
 				state.process_audio(Process::Reverse);
 			}
 			let db = state.view.audio.gain_db;
 			if ui
-				.button(format!("Gain {db:+.1} dB"))
-				.on_hover_text(format!("Apply the gain to the {scope}; renders a new file"))
+				.button(trf(
+					"Gain {db} dB",
+					&[("db", &crate::i18n::decimal(format!("{:+.1}", db)))],
+				))
+				.on_hover_text(trf(
+					"Apply the gain to the {scope}; renders a new file",
+					&[("scope", &scope)],
+				))
 				.clicked()
 			{
 				state.process_audio(Process::Gain(db));
@@ -226,11 +236,11 @@ impl AudioEditorUi {
 					.suffix(" dB")
 					.max_decimals(1),
 			);
-			ui.menu_button("Stretch / Pitch", |ui| {
+			ui.menu_button(tr("Stretch / Pitch"), |ui| {
 				let enabled = cfg!(feature = "stretch");
 				if !enabled {
 					ui.label(
-						RichText::new(ae::STRETCH_HINT)
+						RichText::new(crate::i18n::tr_str(ae::STRETCH_HINT))
 							.font(theme::small())
 							.color(theme::WARNING),
 					);
@@ -244,7 +254,7 @@ impl AudioEditorUi {
 								.speed(0.01)
 								.prefix("×"),
 						);
-						if ui.button("Time-stretch").clicked() {
+						if ui.button(tr("Time-stretch")).clicked() {
 							state.process_audio(Process::Stretch(state.view.audio.stretch_ratio));
 							ui.close();
 						}
@@ -256,7 +266,7 @@ impl AudioEditorUi {
 								.speed(0.1)
 								.suffix(" st"),
 						);
-						if ui.button("Pitch-shift").clicked() {
+						if ui.button(tr("Pitch-shift")).clicked() {
 							state.process_audio(Process::Pitch(state.view.audio.pitch_semitones));
 							ui.close();
 						}
@@ -276,28 +286,41 @@ impl AudioEditorUi {
 					egui::Button::new(RichText::new("×").size(15.0).color(theme::TEXT_DIM))
 						.frame(false),
 				)
-				.on_hover_text("Close the audio editor (F7)")
+				.on_hover_text(tr("Close the audio editor (F7)"))
 				.clicked()
 			{
 				state.close_piano_roll();
 			}
 			if ui
-				.small_button("Fit")
-				.on_hover_text("Show the whole clip")
+				.small_button(tr("Fit"))
+				.on_hover_text(tr("Show the whole clip"))
 				.clicked()
 			{
 				state.view.audio.framed = None;
 			}
 			ui.label(
-				RichText::new(format!("gain {:+.1} dB", r.gain_db))
-					.font(theme::small())
-					.color(theme::TEXT_DIM),
+				RichText::new(trf(
+					"gain {gain_db} dB",
+					&[(
+						"gain_db",
+						&crate::i18n::decimal(format!("{:+.1}", r.gain_db)),
+					)],
+				))
+				.font(theme::small())
+				.color(theme::TEXT_DIM),
 			);
 			if let Some((a, b)) = sel {
 				ui.label(
-					RichText::new(format!("sel {:.3}–{:.3} s ({:.3} s)", a, b, b - a))
-						.font(theme::mono(10.5))
-						.color(theme::ACCENT),
+					RichText::new(trf(
+						"sel {from}–{to} s ({length} s)",
+						&[
+							("from", &crate::i18n::decimal(format!("{:.3}", a))),
+							("to", &crate::i18n::decimal(format!("{:.3}", b))),
+							("length", &crate::i18n::decimal(format!("{:.3}", b - a))),
+						],
+					))
+					.font(theme::mono(10.5))
+					.color(theme::ACCENT),
 				);
 			}
 		});
@@ -330,7 +353,7 @@ impl AudioEditorUi {
 				p.text(
 					wave.center(),
 					Align2::CENTER_CENTER,
-					"loading waveform…",
+					tr("loading waveform…"),
 					theme::small(),
 					theme::TEXT_FAINT,
 				);
@@ -698,21 +721,25 @@ fn fade_picker(
 		FADE_CURVES
 			.iter()
 			.find(|(k, _)| *k == c)
-			.map_or("?", |(_, n)| n)
+			.map_or("?", |(_, n)| crate::i18n::tr_str(n))
 	};
 	let label = format!(
 		"{} {}",
-		if fade_in { "Fade in:" } else { "Fade out:" },
-		current.map_or("none".to_owned(), |f| format!(
-			"{:.2} s {}",
-			f.seconds,
+		if fade_in {
+			tr("Fade in:")
+		} else {
+			tr("Fade out:")
+		},
+		current.map_or(tr("none").to_owned(), |f| format!(
+			"{} s {}",
+			crate::i18n::num(f.seconds, 2),
 			name(f.curve)
 		))
 	);
 	ui.menu_button(RichText::new(label).font(theme::small()), |ui| {
 		for (curve, n) in FADE_CURVES {
 			let on = current.is_some_and(|f| f.curve == curve);
-			if ui.selectable_label(on, n).clicked() {
+			if ui.selectable_label(on, crate::i18n::tr_str(n)).clicked() {
 				let f = Some(ClipFade::new(
 					current.map_or((r.duration * 0.1).min(0.5), |f| f.seconds),
 					curve,
@@ -729,7 +756,7 @@ fn fade_picker(
 		}
 		ui.separator();
 		if ui
-			.add_enabled(current.is_some(), egui::Button::new("No fade"))
+			.add_enabled(current.is_some(), egui::Button::new(tr("No fade")))
 			.clicked()
 		{
 			let (fi, fo) = if fade_in {
@@ -743,7 +770,9 @@ fn fade_picker(
 		}
 	})
 	.response
-	.on_hover_text("Drag the white squares on the waveform to change the fade lengths");
+	.on_hover_text(tr(
+		"Drag the white squares on the waveform to change the fade lengths",
+	));
 }
 
 /// Gain of the clip fades at file second `s` (for drawing).

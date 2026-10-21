@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+
+<div style="display:flex;flex-direction:column;gap:14px;flex:none">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">06a · analysis report</div>
+<div data-screen-label="06a Mix report" style="width:560px;height:1080px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-left:1px solid #24262b">
+<div style="height:38px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid #24262b"><span style="padding:4px 10px;color:#a3a6ad;font-size:13px">Producer</span><span style="padding:4px 10px;background:#212328;border-radius:4px;font-weight:600;font-size:13px">Mix</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">session $0.042</span></div>
+<div style="height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1d1f23"><span style="color:#a3a6ad">Bars 1–16 · analyzed 12 s ago</span><span style="flex:1"></span><span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="color:#80848c">Target</span>Streaming −14 ▾</span><span style="height:22px;display:flex;align-items:center;padding:0 9px;background:#212328;border-radius:4px;font-weight:500">↻ Analyze</span></div>
+<div style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+<!-- master -->
+<div style="padding:12px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid #1d1f23">
+<div style="display:flex;align-items:baseline;gap:10px"><span style="font-weight:600;font-size:13px">Master</span><span style="flex:1"></span><span style="font-size:11px;color:#f2a944">⚠ 2.2 LU over target</span></div>
+<div style="display:flex;gap:18px;align-items:flex-end">
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:500;line-height:1">−11.8</span><span style="font-size:11px;color:#a3a6ad">LUFS integrated</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#f2a944">−0.4</span><span style="font-size:11px;color:#a3a6ad">dBTP peak</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'IBM Plex Mono',monospace;font-size:15px">6.2</span><span style="font-size:11px;color:#a3a6ad">LU range</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'IBM Plex Mono',monospace;font-size:15px">8.9</span><span style="font-size:11px;color:#a3a6ad">dB crest</span></div>
+</div>
+<div style="position:relative;height:24px">
+<div style="position:absolute;left:0;right:0;top:6px;height:8px;background:#0e0f11;border-radius:2px"></div>
+<div style="position:absolute;left:0;width:72%;top:6px;height:8px;background:linear-gradient(90deg,#2f7a56,#4fc38a 70%,#f2a944);border-radius:2px"></div>
+<div style="position:absolute;left:62%;top:2px;width:2px;height:16px;background:#e8e9ec"></div>
+<div style="position:absolute;left:62%;top:17px;transform:translateX(-50%);font-family:'IBM Plex Mono',monospace;font-size:10px;color:#a3a6ad">−14</div>
+<div style="position:absolute;left:0;top:17px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">−30</div><div style="position:absolute;right:0;top:17px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c">−6</div>
+</div>
+</div>
+<!-- issues -->
+<div style="padding:12px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid #1d1f23">
+<div style="display:flex;align-items:center"><span style="font-weight:600;font-size:13px">Issues</span><span style="margin-left:8px;color:#80848c">3</span><span style="flex:1"></span><span style="height:22px;display:flex;align-items:center;padding:0 10px;background:#4c9cf5;color:#0b1220;border-radius:4px;font-weight:600">Fix all · 3</span></div>
+<sc-for list="{{ issues }}" as="is" hint-placeholder-count="3"><div style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;background:#1c1d21;border-radius:4px"><span style="width:16px;flex:none;color:{{ is.c }};font-weight:600">{{ is.i }}</span><div style="flex:1;display:flex;flex-direction:column;gap:2px"><span style="font-weight:500">{{ is.t }}</span><span style="color:#a3a6ad;font-size:11.5px;line-height:1.4">{{ is.d }}</span></div><span style="height:22px;flex:none;display:flex;align-items:center;padding:0 9px;background:#2a2c32;border-radius:4px;font-weight:500">Fix</span></div></sc-for>
+</div>
+<!-- tone -->
+<div style="padding:12px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid #1d1f23">
+<div style="display:flex;align-items:center;gap:12px"><span style="font-weight:600;font-size:13px">Tone</span><span style="flex:1"></span><span style="display:flex;align-items:center;gap:5px;color:#a3a6ad;font-size:11px"><span style="width:12px;height:8px;background:rgba(90,200,216,.35);border-top:1.5px solid #5ac8d8"></span>Mix</span><span style="display:flex;align-items:center;gap:5px;color:#a3a6ad;font-size:11px"><span style="width:12px;border-top:1.5px dashed #e8e9ec"></span>Target “Pop · warm”</span></div>
+<div style="position:relative;height:100px;background:#111215;border-radius:4px">
+<svg viewBox="0 0 536 120" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+<path d="{{ specArea }}" fill="#5ac8d8" fill-opacity="0.18"></path><path d="{{ specLine }}" fill="none" stroke="#5ac8d8" stroke-width="1.5"></path>
+<path d="{{ tgtLine }}" fill="none" stroke="#e8e9ec" stroke-width="1.2" stroke-dasharray="4 3"></path>
+<rect x="{{ hot.x }}" y="0" width="{{ hot.w }}" height="120" fill="#f2a944" fill-opacity="0.08"></rect>
+</svg>
+<div style="position:absolute;left:{{ hot.x }}px;top:6px;margin-left:4px;font-size:10.5px;color:#f2a944">+3.1 dB</div>
+<sc-for list="{{ fgrid }}" as="g" hint-placeholder-count="6"><div style="position:absolute;left:{{ g.x }}px;top:0;bottom:0;width:1px;background:#1d1f23"></div><div style="position:absolute;left:{{ g.x }}px;bottom:3px;margin-left:3px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#80848c">{{ g.l }}</div></sc-for>
+</div>
+</div>
+<!-- channels -->
+<div style="padding:12px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid #1d1f23">
+<div style="display:flex;align-items:center;padding-bottom:4px"><span style="font-weight:600;font-size:13px">Channels</span><span style="flex:1"></span><span style="font-size:11px;color:#80848c">short-term LUFS · band = suggested</span></div>
+<sc-for list="{{ chans }}" as="ch" hint-placeholder-count="6"><div style="display:grid;grid-template-columns:8px 64px minmax(0,1fr) 46px 40px;gap:8px;align-items:center;height:20px"><span style="width:8px;height:8px;border-radius:2px;background:{{ ch.c }}"></span><span>{{ ch.n }}</span><span style="height:8px;background:#0e0f11;border-radius:2px;position:relative"><span style="position:absolute;left:{{ ch.bl }}%;width:{{ ch.bw }}%;top:-3px;bottom:-3px;background:rgba(232,233,236,.08);border-left:1px solid #363940;border-right:1px solid #363940"></span><span style="position:absolute;left:0;top:0;bottom:0;width:{{ ch.p }}%;background:{{ ch.bar }};border-radius:2px"></span></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-align:right">{{ ch.v }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-align:right;color:{{ ch.dc }}">{{ ch.d }}</span></div></sc-for>
+</div>
+<!-- masking -->
+<div style="padding:12px;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center"><span style="font-weight:600;font-size:13px">Masking</span></div>
+<sc-for list="{{ masks }}" as="m" hint-placeholder-count="3"><div style="display:grid;grid-template-columns:minmax(0,1fr) 80px 64px;gap:10px;align-items:center;height:22px"><span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:{{ m.c1 }}"></span>{{ m.a }}<span style="color:#80848c">×</span><span style="width:8px;height:8px;border-radius:2px;background:{{ m.c2 }}"></span>{{ m.b }}<span style="color:#80848c;font-family:'IBM Plex Mono',monospace;font-size:10.5px;margin-left:4px">{{ m.f }}</span></span><span style="display:flex;gap:2px"><sc-for list="{{ m.sev }}" as="sv" hint-placeholder-count="5"><span style="flex:1;height:6px;border-radius:1px;background:{{ sv }}"></span></sc-for></span><span style="color:{{ m.lc }};font-size:11px;text-align:right">{{ m.l }}</span></div></sc-for>
+</div>
+</div>
+<!-- AI pass -->
+<div style="padding:12px;border-top:1px solid #24262b;display:flex;flex-direction:column;gap:8px;background:#131c28">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">AI mix pass</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">~$0.02 · 1 undo step</span></div>
+<div style="display:flex;gap:6px"><span style="flex:1;height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:4px"><span style="color:#80848c">Reference</span>night_drive_ref.wav <span style="flex:1"></span><span style="color:#80848c">✕</span></span></div>
+<div style="height:40px;background:#0e0f11;border:1px solid #24262b;border-radius:4px;padding:6px 8px;color:#c4c7cd">Warm, vocal upfront, keep the drums punchy</div>
+<div style="display:flex;justify-content:flex-end"><span style="height:26px;display:flex;align-items:center;padding:0 14px;background:#4c9cf5;color:#0b1220;border-radius:4px;font-weight:600">Run mix pass</span></div>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px;flex:none">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">06b · after an AI mix pass</div>
+<div data-screen-label="06b Mix before after" style="width:560px;height:1080px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-left:1px solid #24262b">
+<div style="height:38px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid #24262b"><span style="padding:4px 10px;color:#a3a6ad;font-size:13px">Producer</span><span style="padding:4px 10px;background:#212328;border-radius:4px;font-weight:600;font-size:13px">Mix</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">session $0.061</span></div>
+<div style="flex:1;padding:12px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="border:1px solid #2c4a73;background:#131c28;border-radius:6px;padding:12px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;align-items:baseline;gap:8px"><span style="font-weight:600;font-size:14px">Mix pass applied</span><span style="color:#a3a6ad">14 changes on 7 channels</span><span style="flex:1"></span><span style="font-size:11px;color:#a3a6ad">1 undo step</span></div>
+<div style="font-size:12.5px;line-height:1.55;color:#c4c7cd">Brought the master to −14 LUFS, cleared the low end between Bass and Kick, and lifted the vocal 1.5 dB to match your reference.</div>
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:#a3a6ad">Listen</span><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 10px;color:#a3a6ad">Before</span><span style="padding:2px 10px;background:#2a2c32;border-radius:3px;font-weight:500">After</span><span style="padding:2px 10px;color:#a3a6ad">Reference</span></div><span style="font-size:11px;color:#80848c">level-matched</span></div>
+<div style="display:flex;gap:6px"><span style="flex:1;text-align:center;padding:6px 0;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px">Keep</span><span style="flex:1;text-align:center;padding:6px 0;background:#212328;border-radius:4px;font-weight:500">↶ Revert</span></div>
+</div>
+<div style="display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 20px 64px 56px;gap:8px;padding:0 4px 6px;font-size:11px;color:#80848c;border-bottom:1px solid #24262b"><span>Measure</span><span style="text-align:right">Before</span><span></span><span style="text-align:right">After</span><span style="text-align:right">Target</span></div>
+<sc-for list="{{ ba }}" as="r" hint-placeholder-count="6"><div style="display:grid;grid-template-columns:minmax(0,1fr) 64px 20px 64px 56px;gap:8px;padding:0 4px;height:28px;align-items:center;border-bottom:1px solid #1d1f23"><span>{{ r.n }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:{{ r.bc }}">{{ r.b }}</span><span style="color:#80848c;text-align:center">→</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:{{ r.ac }}">{{ r.a }}</span><span style="font-family:'IBM Plex Mono',monospace;text-align:right;color:#80848c">{{ r.t }}</span></div></sc-for>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<div style="display:flex;align-items:center;padding-bottom:6px"><span style="font-weight:600;font-size:13px">Changes</span><span style="flex:1"></span><span style="font-size:11px;color:#80848c">uncheck to drop one</span></div>
+<sc-for list="{{ changes }}" as="c" hint-placeholder-count="8"><div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 4px;border-radius:3px;background:{{ c.bg }}"><span style="width:14px;height:14px;border-radius:3px;background:{{ c.cb }};box-shadow:{{ c.cbd }};display:flex;align-items:center;justify-content:center;color:#0b1220;font-size:10px;font-weight:700">{{ c.ck }}</span><span style="width:8px;height:8px;border-radius:2px;background:{{ c.col }}"></span><span style="width:64px">{{ c.ch }}</span><span style="flex:1;color:{{ c.fg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.t }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a3a6ad">{{ c.v }}</span></div></sc-for>
+</div>
+<div style="flex:1"></div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c;display:flex;gap:10px"><span style="color:#4fc38a">done</span><span>18.4 s</span><span>6,210 tok</span><span style="color:#a3a6ad">$0.019</span><span>session $0.061 of $5.00</span></div>
+</div>
+</div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd;padding-top:36px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 06</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Mix assistant</span><span style="color:#a3a6ad">The Mix tab of the AI panel (F10). The panel widens to 560 px on this tab and remembers the width.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    const W = 536, H = 120, fx = f => (Math.log10(f) - Math.log10(20)) / (Math.log10(20000) - Math.log10(20)) * W;
+    const tgt = f => 60 + 8 * Math.log10(f / 1000) * 1.0 + (f < 100 ? -6 : 0) * 0;
+    const ty = db => H - 14 - (db + 30) * 2.2;
+    const target = f => -6 - 4.2 * Math.log2(f / 100) * .55;
+    const mix = f => target(f) + (f > 50 && f < 140 ? 3.1 * Math.sin((Math.log(f) - Math.log(50)) / (Math.log(140) - Math.log(50)) * Math.PI) : 0) - (f > 2500 && f < 7000 ? 2 * Math.sin((Math.log(f) - Math.log(2500)) / (Math.log(7000) - Math.log(2500)) * Math.PI) : 0) + Math.sin(f * .013) * .4 - (f < 35 ? (35 - f) * .6 : 0) - (f > 14000 ? (f - 14000) / 900 : 0);
+    const fs = []; for (let i = 0; i <= 120; i++) fs.push(20 * Math.pow(1000, i / 120));
+    const specLine = 'M' + fs.map(f => `${fx(f).toFixed(1)} ${ty(mix(f)).toFixed(1)}`).join(' L');
+    const tgtLine = 'M' + fs.map(f => `${fx(f).toFixed(1)} ${ty(target(f)).toFixed(1)}`).join(' L');
+    const fgrid = [[30, '30'], [100, '100'], [300, '300'], [1000, '1k'], [3000, '3k'], [10000, '10k']].map(([f, l]) => ({ x: fx(f), l }));
+    const hot = { x: fx(55), w: fx(135) - fx(55) };
+    const issues = [
+      ['⚠', '#f2a944', 'Master is 2.2 LU louder than the target', 'Limiter is working hard; true peak −0.4 dBTP will clip after encoding.'],
+      ['⚠', '#f2a944', 'Bass and Drums mask each other at 60–90 Hz', 'Kick and bass fundamentals overlap. Suggested: −3 dB at 80 Hz on Bass, sidechain duck.'],
+      ['i', '#7fb4ff', 'Keys sits 4 dB above its suggested level', 'It competes with the vocal in the Verse.'],
+    ].map(([i, c, t, d]) => ({ i, c, t, d }));
+    const C = [['Drums', '#e8705f', -14.1, [-16, -12]], ['Bass', '#5aa2f5', -13.0, [-17, -14]], ['Keys', '#e3b24f', -15.2, [-21, -18]], ['Pad', '#9a82ec', -22.4, [-25, -20]], ['Lead', '#4fc3a1', -19.0, [-21, -17]], ['Vocal', '#e07fb0', -16.8, [-16, -13]]];
+    const pct = v => (v + 30) / 24 * 100;
+    const chans = C.map(([n, c, v, [lo, hi]]) => { const out = v > hi ? v - hi : v < lo ? v - lo : 0; return { n, c, p: pct(v), bl: pct(lo), bw: pct(hi) - pct(lo), v: v.toFixed(1), d: out ? (out > 0 ? '+' : '−') + Math.abs(out).toFixed(1) : 'ok', dc: out ? '#f2a944' : '#4fc38a', bar: out ? '#f2a944' : '#4fc38a' }; });
+    const sevBar = (n, col) => Array.from({ length: 5 }, (_, i) => i < n ? col : '#212328');
+    const masks = [['Bass', '#5aa2f5', 'Drums', '#e8705f', '60–90 Hz', 5, 'High', '#f2a944'], ['Keys', '#e3b24f', 'Vocal', '#e07fb0', '1–2 kHz', 3, 'Medium', '#e8c94a'], ['Pad', '#9a82ec', 'Keys', '#e3b24f', '300–500 Hz', 1, 'Low', '#a3a6ad']].map(([a, c1, b, c2, f, s, l, lc]) => ({ a, c1, b, c2, f, sev: sevBar(s, lc), l, lc }));
+    const ba = [['Integrated loudness', '−11.8', '−14.1', '−14 LUFS', 1, 1], ['True peak', '−0.4', '−1.2', '≤ −1.0', 1, 1], ['Low-end masking', 'High', 'Low', 'Low', 1, 1], ['Tone deviation', '3.1 dB', '1.2 dB', '< 1.5', 1, 1], ['Vocal vs mix', '−2.6', '−1.1', '−1 LU', 1, 1], ['Dynamic range', '6.2 LU', '6.8 LU', '6–9', 0, 1]].map(([n, b, a, t, bad, good]) => ({ n, b, a, t, bc: bad ? '#f2a944' : '#a3a6ad', ac: good ? '#4fc38a' : '#e8e9ec' }));
+    const ch = [['Master', '#4c9cf5', 'Limiter ceiling', '−1.0 dB'], ['Master', '#4c9cf5', 'Output gain', '−2.3 dB'], ['Bass', '#5aa2f5', 'EQ bell 80 Hz', '−3.0 dB'], ['Bass', '#5aa2f5', 'Gain / Utility duck from Drums', '−4 dB', 0], ['Drums', '#e8705f', 'Compressor attack', '12 → 25 ms'], ['Keys', '#e3b24f', 'Volume', '−7.0 → −11.0'], ['Keys', '#e3b24f', 'EQ dip 1.6 kHz', '−2.0 dB'], ['Vocal', '#e07fb0', 'Volume', '−3.0 → −1.5'], ['Pad', '#9a82ec', 'EQ low cut', '180 Hz'], ['Lead', '#4fc3a1', 'Delay send', '−10 → −14']];
+    const changes = ch.map(([chn, col, t, v, on]) => { const off = on === 0; return { ch: chn, col, t, v, ck: off ? '' : '✓', cb: off ? 'transparent' : '#4c9cf5', cbd: off ? 'inset 0 0 0 1.5px #363940' : 'none', fg: off ? '#80848c' : '#e8e9ec', bg: off ? 'transparent' : 'transparent' }; });
+    const ux = [
+      { h: 'What changed and why', items: [
+        'The report reads top to bottom as a story: how loud is the master, what is wrong, then the evidence (tone, channels, masking). The old MASTER / ISSUES / TONE / CHANNELS / MASKING caps headers become normal 13 px section titles.',
+        'Loudness is a bar with the target tick, not just a number, so "2.2 LU over" is visible before you read it. Warnings use amber + ⚠, notes use blue + ⓘ.',
+        'Tone overlays the mix spectrum (filled cyan) on the target tone curve (dashed), with the worst deviation band shaded and labelled.',
+        'Channels show short-term loudness against a suggested band; out-of-band values turn amber and show by how much. Masking pairs show both track colors, the frequency range and a 5-step severity meter with a word.',
+        'Every issue has its own Fix, and "Fix all" is the primary action. A Fix is a normal AI request: it shows up in History as one step and in the Producer tab as a result card.',
+        'The AI mix pass sits in a pinned footer with an optional reference file, a free-text brief and the estimated cost before you run it.',
+        'After a pass, the before → after table shows each measure against its target, and the change list lets you uncheck single changes before you Keep. Audition switches Before / After / Reference, level-matched so louder doesn\u2019t sound better.',
+      ]},
+      { h: 'Interaction', items: [
+        'Hover a channel or masking pair to highlight those strips in the mixer and tracks in the arrange. Click to select.',
+        'Analyze runs over the loop range if loop is on, otherwise the whole song. The header always says which range was measured.',
+        'Drag an audio file from the browser onto Reference. The reference is analyzed locally; only numbers go to the model.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'Never analyzed: a short explanation, the target dropdown and one large Analyze button. No empty report sections.',
+        'Analyzing: the button turns into a progress bar with "Rendering bar 9 of 16 offline", and Cancel. Previous results stay visible but dimmed.',
+        'Silent project: "Nothing to analyze yet; add some clips or press Play once."',
+        'Stale report: after edits, a "Mix changed since analysis · Re-analyze" bar appears above Issues.',
+      ]},
+    ];
+    this._v = { specLine, specArea: specLine + ` L${W} ${H} L0 ${H} Z`, tgtLine, fgrid, hot, issues, chans, masks, ba, changes, ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

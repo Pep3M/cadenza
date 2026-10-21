@@ -6,6 +6,7 @@
 //! auditioning only that track (the project's mute/solo is not touched). [`config`]
 //! turns the view state into what the player needs; `AppState` sends it.
 
+use crate::i18n::tr;
 use cadenza_core::{ClipId, Meter, Tick, TrackId};
 use cadenza_model::{Clip, Project};
 
@@ -19,8 +20,8 @@ pub enum PlayMode {
 impl PlayMode {
 	pub fn name(self) -> &'static str {
 		match self {
-			PlayMode::Song => "Song",
-			PlayMode::Pattern => "Pattern",
+			PlayMode::Song => tr("Song"),
+			PlayMode::Pattern => tr("Pattern"),
 		}
 	}
 

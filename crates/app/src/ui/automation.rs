@@ -5,6 +5,7 @@
 //! (linear -> hold -> smooth). Ctrl+drag draws a ramp. Every gesture is previewed
 //! locally (and heard live) and committed as one command on release.
 
+use crate::i18n::{tr, trf};
 use cadenza_core::{ParamAddress, Tick};
 use cadenza_model::{AutomationPoint, Command, PointShape};
 use egui::{
@@ -152,7 +153,7 @@ impl AutoUi {
 			},
 		);
 		if close_r
-			.on_hover_text("Hide this lane (its points are kept)")
+			.on_hover_text(tr("Hide this lane (its points are kept)"))
 			.clicked()
 		{
 			state.view.automation.hide(address);
@@ -193,7 +194,7 @@ impl AutoUi {
 				}
 			})
 			.response
-			.on_hover_text("Parameter of this lane (● = automated)");
+			.on_hover_text(tr("Parameter of this lane (● = automated)"));
 		// Row 2: value at the playhead.
 		let value = state
 			.automated(address)
@@ -216,7 +217,7 @@ impl AutoUi {
 				p.text(
 					pos2(rect.right() - 10.0, rect.top() + 36.0),
 					Align2::RIGHT_CENTER,
-					"click the lane to add points",
+					tr("click the lane to add points"),
 					theme::small(),
 					theme::TEXT_FAINT,
 				);
@@ -247,7 +248,7 @@ impl AutoUi {
 		p.text(
 			pos2(rect.left() + 12.0, rect.center().y),
 			Align2::LEFT_CENTER,
-			"Master",
+			tr("Master"),
 			egui::FontId::proportional(12.0),
 			theme::TEXT,
 		);
@@ -258,7 +259,7 @@ impl AutoUi {
 		let open = state.view.automation.is_open(None);
 		let r = ui.interact(toggle, Id::new("master-auto"), Sense::click());
 		super::widgets::paint_toggle(&p, toggle, open, "A", theme::AUTOMATION, r.hovered());
-		if r.on_hover_text("Show / hide master automation (A)")
+		if r.on_hover_text(tr("Show / hide master automation (A)"))
 			.clicked()
 		{
 			let project = state.project().clone();
@@ -614,7 +615,7 @@ impl AutoUi {
 		hp.text(
 			pos2(header.left() + 12.0, header.top() + 14.0),
 			Align2::LEFT_CENTER,
-			"Tempo",
+			tr("Tempo"),
 			egui::FontId::proportional(12.0),
 			theme::TEXT,
 		);
@@ -628,7 +629,7 @@ impl AutoUi {
 		hp.text(
 			pos2(header.right() - 10.0, header.top() + 34.0),
 			Align2::RIGHT_CENTER,
-			"click: add change",
+			tr("click: add change"),
 			theme::small(),
 			theme::TEXT_FAINT,
 		);
@@ -746,10 +747,12 @@ impl AutoUi {
 				value_tag(
 					ui,
 					pos2(x_of(d.to), y_of(d.bpm)),
-					&format!(
-						"{:.1} BPM @ {}",
-						d.bpm,
-						format_bbt(d.to, state.project().meter())
+					&trf(
+						"{bpm} BPM @ {bbt}",
+						&[
+							("bpm", &crate::i18n::decimal(format!("{:.1}", d.bpm))),
+							("bbt", &format_bbt(d.to, state.project().meter())),
+						],
 					),
 				);
 			}
@@ -803,7 +806,13 @@ impl AutoUi {
 		hp.text(
 			pos2(header.left() + 12.0, header.center().y),
 			Align2::LEFT_CENTER,
-			format!("Signature  {}/{}", now.numerator, now.denominator),
+			trf(
+				"Signature  {numerator}/{denominator}",
+				&[
+					("numerator", &now.numerator),
+					("denominator", &now.denominator),
+				],
+			),
 			egui::FontId::proportional(12.0),
 			theme::TEXT,
 		);
@@ -909,7 +918,7 @@ impl AutoUi {
 			let current = project.meter().signature_at_bar(i64::from(bar));
 			let is_change = project.time_signature_changes.iter().any(|c| c.bar == bar);
 			ui.label(
-				egui::RichText::new(format!("Bar {}", bar + 1))
+				egui::RichText::new(trf("Bar {bar}", &[("bar", &(bar + 1))]))
 					.font(theme::small())
 					.color(theme::TEXT_FAINT),
 			);
@@ -947,7 +956,7 @@ impl AutoUi {
 				}
 			});
 			let remove = ui
-				.add_enabled(is_change, egui::Button::new("Remove change"))
+				.add_enabled(is_change, egui::Button::new(tr("Remove change")))
 				.clicked();
 			let cmd = if remove {
 				crate::state::meter::remove_change(project, bar)
@@ -992,11 +1001,14 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 	let selected = state.view.automation.selected_in(address);
 	ui.add_enabled_ui(!selected.is_empty(), |ui| {
 		for (label, shape) in [
-			("Linear", PointShape::Linear),
-			("Hold (step)", PointShape::Hold),
-			("Smooth", PointShape::Smooth),
+			(tr("Linear"), PointShape::Linear),
+			(tr("Hold (step)"), PointShape::Hold),
+			(tr("Smooth"), PointShape::Smooth),
 		] {
-			if ui.button(format!("Shape: {label}")).clicked() {
+			if ui
+				.button(trf("Shape: {label}", &[("label", &label)]))
+				.clicked()
+			{
 				if let Some(cmd) = auto::set_shape(state.project(), address, &selected, shape) {
 					state.apply(cmd);
 				}
@@ -1004,7 +1016,7 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 			}
 		}
 		if ui
-			.add(egui::Button::new("Delete selected points").shortcut_text("Del"))
+			.add(egui::Button::new(tr("Delete selected points")).shortcut_text("Del"))
 			.clicked()
 		{
 			if let Some(cmd) = auto::delete_points(state.project(), address, &selected) {
@@ -1015,7 +1027,10 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 	});
 	ui.separator();
 	if ui
-		.add_enabled(state.is_automated(address), egui::Button::new("Clear lane"))
+		.add_enabled(
+			state.is_automated(address),
+			egui::Button::new(tr("Clear lane")),
+		)
 		.clicked()
 	{
 		state.apply(Command::SetAutomation {
@@ -1024,7 +1039,7 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 		});
 		ui.close();
 	}
-	if ui.button("Hide lane").clicked() {
+	if ui.button(tr("Hide lane")).clicked() {
 		state.view.automation.hide(address);
 		ui.close();
 	}
@@ -1034,11 +1049,17 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 /// arrange view (creating it at the control's current value).
 pub fn automate_item(ui: &mut Ui, state: &mut AppState, address: ParamAddress) {
 	let has = state.is_automated(&address);
-	let label = if has { "Show automation" } else { "Automate" };
+	let label = if has {
+		tr("Show automation")
+	} else {
+		tr("Automate")
+	};
 	if ui.button(label).clicked() {
-		state.automate(address);
+		state.automate(address.clone());
 		ui.close();
 	}
+	// Every automatable control can also be MIDI-learned.
+	crate::ui::midi_learn::menu_items(ui, state, &address);
 }
 
 /// Paints a small "A" badge on a control that follows automation.

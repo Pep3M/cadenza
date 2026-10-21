@@ -329,6 +329,23 @@ pub struct DeviceInfoOutput {
 	/// track); plugin presets are listed by list_presets.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub presets: Vec<String>,
+	/// Built-in wavetables of the poly_synth (`oscN_table` index: name, what
+	/// `oscN_position` 0 -> 1 morphs through; used when `oscN_wave` is 4).
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub wavetables: Vec<String>,
+}
+
+fn wavetable_lines(id: &str) -> Vec<String> {
+	if id != "poly_synth" {
+		return Vec::new();
+	}
+	use cadenza_dsp::response::{WAVETABLE_DESCRIPTIONS, WAVETABLE_NAMES};
+	WAVETABLE_NAMES
+		.iter()
+		.zip(WAVETABLE_DESCRIPTIONS)
+		.enumerate()
+		.map(|(i, (name, what))| format!("{i} {name}: {what}"))
+		.collect()
 }
 
 /// Full description of one device with a filtered, paginated parameter list.
@@ -415,6 +432,7 @@ pub fn get_device_info(
 				.iter()
 				.map(|p| format!("{}: {}", p.name, p.description))
 				.collect(),
+			wavetables: wavetable_lines(info.id),
 		},
 		DeviceRef::Plugin(desc) => DeviceInfoOutput {
 			id: plugin_device_id(desc),
@@ -451,6 +469,7 @@ pub fn get_device_info(
 				})
 				.collect(),
 			presets: Vec::new(),
+			wavetables: Vec::new(),
 		},
 	})
 }
@@ -639,5 +658,26 @@ mod tests {
 		)
 		.unwrap_err();
 		assert!(err.to_string().contains("scan_plugins"), "{err}");
+	}
+
+	#[test]
+	fn poly_synth_info_describes_the_wavetables() {
+		let info = get_device_info(
+			None,
+			GetDeviceInfoArgs {
+				device: "poly_synth".into(),
+				param_query: Some("position".into()),
+				limit: None,
+				offset: None,
+				include_non_automatable: false,
+			},
+		)
+		.unwrap();
+		assert_eq!(info.wavetables.len(), 5);
+		assert!(info.wavetables[2].starts_with("2 Formant"));
+		let ids: Vec<&str> = info.params.iter().map(|p| p.id.as_str()).collect();
+		assert_eq!(ids, ["osc1_position", "osc2_position"]);
+		assert!(info.presets.iter().any(|p| p.starts_with("Vowel Pad")));
+		assert!(info.description.contains("wavetable"));
 	}
 }

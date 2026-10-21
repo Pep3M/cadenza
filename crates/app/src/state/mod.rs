@@ -11,35 +11,65 @@
 //! player follows live or through a debounced reload.
 
 pub mod ai;
+pub mod ai_changes;
+pub mod arrange_tool;
 pub mod audio_edit;
 pub mod automation;
 pub mod autowrite;
 pub mod bounce;
 pub mod browser;
+pub mod chorus_editor;
+pub mod collisions;
+pub mod compressor_editor;
+pub mod delay_editor;
+pub mod device;
+pub mod device_ab;
+pub mod device_display;
 pub mod dnd;
+pub mod drum_machine_editor;
+pub mod drum_sampler_editor;
 pub mod editors;
 pub mod edits;
+pub mod electric_piano_editor;
+pub mod eq_editor;
 pub mod export;
 pub mod files;
 pub mod folders;
+pub mod gain_editor;
+pub mod inspector;
 pub mod layout;
 pub mod library;
+pub mod limiter_editor;
 pub mod live;
+pub mod live_voices;
+pub mod loudness_meter;
+pub mod match_eq;
 pub mod meter;
 pub mod meters;
+pub mod midi_learn;
 pub mod mix;
+pub mod mixer;
+pub mod modulation;
 pub mod notices;
 pub mod piano;
+pub mod playlist;
+pub mod poly_synth_editor;
 pub mod project_io;
 pub mod record;
+pub mod reverb_editor;
 pub mod rows;
 pub mod safety;
+pub mod sampler_editor;
 pub mod samples;
+pub mod saturator_editor;
 pub mod selection;
+pub mod start;
 pub mod timeline;
 pub mod transport;
+pub mod windows;
 pub mod xruns;
 
+use crate::i18n::{tr, trf, trn_with};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,7 +77,7 @@ use std::time::{Duration, Instant};
 
 use cadenza_core::{ClipId, DeviceId, ParamAddress, ParamTarget, Tick, TrackId};
 use cadenza_dsp::DeviceRole;
-use cadenza_engine::{MeterBank, PlayerClock};
+use cadenza_engine::{DeviceProbe, MeterBank, PlayerClock};
 use cadenza_mcp::{ChangeKey, McpError, Session, SharedSession};
 use cadenza_model::{ChannelPatch, Command, Document, Project, TrackKind};
 use cadenza_plugin_host::{PluginCatalog, ScanReport};
@@ -85,7 +115,7 @@ pub fn pan_address(track: Option<TrackId>) -> ParamAddress {
 /// Edits within this window are compiled into the player once.
 pub const RELOAD_DEBOUNCE: Duration = Duration::from_millis(120);
 
-pub const DEFAULT_TRACK_HEIGHT: f32 = 64.0;
+pub const DEFAULT_TRACK_HEIGHT: f32 = 66.0;
 pub const MIN_TRACK_HEIGHT: f32 = 36.0;
 pub const MAX_TRACK_HEIGHT: f32 = 220.0;
 
@@ -111,10 +141,13 @@ pub struct ViewState {
 	pub audio: audio_edit::AudioEditorView,
 	/// The editor dock shows the audio editor instead of the piano roll.
 	pub audio_editor: bool,
-	/// The sampler / drum sampler editor (shares the bottom editor dock).
+	/// The device editor's device and the sampler / drum sampler selection (shares the
+	/// bottom editor dock).
 	pub instrument: samples::InstrumentView,
-	/// The editor dock shows the instrument editor (over the piano roll / audio editor).
-	pub instrument_editor: bool,
+	/// The editor dock shows the device editor (over the piano roll / audio editor).
+	pub device_editor: bool,
+	/// Floating windows (device editors, track / clip properties) over the workspace.
+	pub windows: windows::Windows,
 	/// Pattern / Song mode and the arrange loop region.
 	pub transport: transport::TransportView,
 	/// The start screen (recent projects, new, open, demo) is shown.
@@ -123,6 +156,51 @@ pub struct ViewState {
 	pub takes: Vec<TrackId>,
 	/// Collapsed folder tracks (their contents hidden in the arrange and the mixer).
 	pub collapsed: std::collections::HashSet<TrackId>,
+	/// Mixer strip width and visible sections.
+	pub mixer: mixer::MixerView,
+	/// The inspector's active tab (Track | Clip | Device).
+	pub inspector: inspector::InspectorView,
+	/// The arrange pointer tool (Select / Draw / Paint / Split / Mute).
+	pub arrange_tool: arrange_tool::ArrangeTool,
+	/// Track heights set by dragging a header's bottom edge (others use `track_height`).
+	pub track_heights: HashMap<TrackId, f32>,
+	/// Clips copied with Ctrl+C / Ctrl+X in the arrange.
+	pub clip_board: playlist::ClipClipboard,
+	/// The clip the Paint tool repeats when none is pressed or selected on the lane.
+	pub paint_source: Option<ClipId>,
+	/// The shell for the current window size (docked / overlay panels, transport and
+	/// status bar folding), set by the view every frame.
+	pub responsive: layout::Responsive,
+}
+
+impl ViewState {
+	/// Height of `track`'s clip row.
+	pub fn height_of(&self, track: TrackId) -> f32 {
+		self.track_heights
+			.get(&track)
+			.copied()
+			.unwrap_or(self.track_height)
+	}
+
+	/// Sets one track's height (clamped); the default height clears the override.
+	pub fn set_track_height(&mut self, track: TrackId, height: f32) {
+		let h = height.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+		if (h - self.track_height).abs() < 0.5 {
+			self.track_heights.remove(&track);
+		} else {
+			self.track_heights.insert(track, h);
+		}
+	}
+
+	/// Alt+wheel: every track grows or shrinks together (resized ones keep their ratio).
+	pub fn scale_track_heights(&mut self, height: f32) {
+		let new = height.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+		let ratio = new / self.track_height.max(1.0);
+		self.track_height = new;
+		for h in self.track_heights.values_mut() {
+			*h = (*h * ratio).clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+		}
+	}
 }
 
 impl Default for ViewState {
@@ -141,11 +219,19 @@ impl Default for ViewState {
 			audio: audio_edit::AudioEditorView::default(),
 			audio_editor: false,
 			instrument: samples::InstrumentView::default(),
-			instrument_editor: false,
+			device_editor: false,
+			windows: windows::Windows::default(),
 			transport: transport::TransportView::default(),
 			start_screen: false,
 			takes: Vec::new(),
 			collapsed: std::collections::HashSet::new(),
+			mixer: mixer::MixerView::default(),
+			inspector: inspector::InspectorView::default(),
+			arrange_tool: arrange_tool::ArrangeTool::default(),
+			track_heights: HashMap::new(),
+			clip_board: playlist::ClipClipboard::default(),
+			paint_source: None,
+			responsive: layout::Responsive::default(),
 		}
 	}
 }
@@ -298,6 +384,14 @@ pub struct AppState {
 	pub meters: Meters,
 	/// Audio device and plugin dropouts (transport indicator).
 	pub xruns: xruns::Xruns,
+	/// Live loudness of the master strip (from the player's master tap).
+	pub master_loudness: mixer::MasterLoudness,
+	/// Mono / dim on the output: monitoring only, not in the project (see
+	/// [`AppState::set_monitor_fx`]).
+	monitor_fx: cadenza_engine::MonitorFx,
+	/// The open editor's device playing a listen mode (compressor key, EQ band solo):
+	/// monitoring only, cleared when the editor closes (see [`AppState::set_listen`]).
+	listen: Option<(DeviceId, cadenza_engine::Listen)>,
 	pub previews: Previews,
 	pub audio_status: AudioStatus,
 	/// Warnings of the last player load (missing files, unknown devices...).
@@ -320,6 +414,13 @@ pub struct AppState {
 	pub ai: ai::AiChat,
 	/// The mix assistant (the AI panel's Mix tab).
 	pub mix: mix::MixAssistant,
+	/// Match EQ of the EQ editors.
+	match_eq: match_eq::MatchEqState,
+	collisions: collisions::CollisionState,
+	/// MIDI learn and the mapped controllers' values (T36).
+	pub midi: midi_learn::MidiLearnState,
+	/// Recent project summaries and the start screen's inputs.
+	pub start: start::StartScreen,
 	/// Plugin editor values and finished background edits that arrived while the AI was
 	/// editing: applied once it is done.
 	ai_queue: Vec<Command>,
@@ -343,6 +444,29 @@ pub struct AppState {
 	audio: Option<AudioEngine>,
 	clock: Option<PlayerClock>,
 	bank: Option<Arc<MeterBank>>,
+	/// The device whose live signal the engine probes, and the probe once the engine
+	/// answered (see [`AppState::set_probe`]).
+	probe_target: Option<DeviceId>,
+	probe: Option<Arc<DeviceProbe>>,
+	/// The device the open device editor pointed the probe at (see
+	/// [`AppState::sync_editor_probe`]).
+	editor_probe: Option<DeviceId>,
+	/// Presets of the device editor's device (factory + user), listed when it opens.
+	device_presets: Option<(DeviceRef, Vec<device::PresetEntry>)>,
+	/// The preset last loaded into (or saved from) each device, for the dirty dot.
+	loaded_presets: HashMap<DeviceId, device::LoadedPreset>,
+	/// A/B compare states of the devices opened in the editor (view state).
+	compares: HashMap<DeviceId, device_ab::Compare>,
+	/// The devices each undo / redo step changed (the editor's undo hint).
+	touches: device_ab::StepTouches,
+	/// An A/B switch is being applied (its own step is not an undo / redo to follow).
+	switching: bool,
+	/// Built-in params when the running AI request started, and the request.
+	ai_snapshot: Option<(ai_changes::Snapshot, String)>,
+	/// What the last AI request changed on built-in devices (rings, the editor's card).
+	pub ai_changes: Option<ai_changes::AiChanges>,
+	/// The device whose AI changes are heard reverted ("Hold to hear before").
+	hearing_before: Option<DeviceId>,
 	/// Playhead when there is no audio engine, or while stopped before it is ready.
 	position: Tick,
 	reload_since: Option<Instant>,
@@ -369,6 +493,11 @@ pub struct AppState {
 	pub library_view: library::LibraryView,
 	/// A library pattern sounding through the preview path.
 	library_preview: Option<library::PatternPreview>,
+	/// The UI language preference (View > Language).
+	pub language: crate::i18n::LanguageChoice,
+	/// The app sets the process-wide language; headless states (tests) only this
+	/// thread's, so parallel tests keep their own.
+	language_global: bool,
 }
 
 impl AppState {
@@ -376,6 +505,8 @@ impl AppState {
 	pub fn new(waker: Option<Waker>) -> Self {
 		let mut s = Self::headless_with(waker.clone());
 		s.ai = ai::AiChat::new(waker.clone());
+		s.language_global = true;
+		s.set_language(crate::i18n::LanguageChoice::System);
 		s.audio = Some(AudioEngine::start(waker));
 		s.audio_status = AudioStatus::Starting;
 		s.report_library();
@@ -407,6 +538,9 @@ impl AppState {
 			notices: Notices::default(),
 			meters: Meters::default(),
 			xruns: xruns::Xruns::default(),
+			master_loudness: mixer::MasterLoudness::default(),
+			monitor_fx: cadenza_engine::MonitorFx::default(),
+			listen: None,
 			previews: Previews::default(),
 			audio_status: AudioStatus::Off,
 			load_warnings: Vec::new(),
@@ -427,6 +561,10 @@ impl AppState {
 				waker.clone(),
 			),
 			mix: mix::MixAssistant::default(),
+			match_eq: match_eq::MatchEqState::default(),
+			collisions: collisions::CollisionState::default(),
+			midi: midi_learn::MidiLearnState::default(),
+			start: start::StartScreen::default(),
 			ai_queue: Vec::new(),
 			after_save: None,
 			export: export::ExportDialog::default(),
@@ -441,6 +579,17 @@ impl AppState {
 			audio: None,
 			clock: None,
 			bank: None,
+			probe_target: None,
+			probe: None,
+			editor_probe: None,
+			device_presets: None,
+			loaded_presets: HashMap::new(),
+			compares: HashMap::new(),
+			touches: device_ab::StepTouches::default(),
+			ai_snapshot: None,
+			ai_changes: None,
+			hearing_before: None,
+			switching: false,
 			position: Tick::ZERO,
 			reload_since: Some(Instant::now()),
 			generation: 0,
@@ -456,6 +605,8 @@ impl AppState {
 			library: None,
 			library_view: library::LibraryView::default(),
 			library_preview: None,
+			language: crate::i18n::LanguageChoice::System,
+			language_global: false,
 		}
 	}
 
@@ -519,6 +670,7 @@ impl AppState {
 		let before = std::mem::replace(&mut self.doc, view);
 		self.session_key = key;
 		self.path = path;
+		self.follow_history(&before, epoch_changed);
 		// A different document (new/open) has nothing to diff against: reload.
 		self.after_edit((!epoch_changed).then_some(&before.project));
 		if clean {
@@ -539,7 +691,7 @@ impl AppState {
 			.path()
 			.and_then(|p| p.file_name())
 			.map(|f| f.to_string_lossy().into_owned())
-			.unwrap_or_else(|| "not saved".into());
+			.unwrap_or_else(|| tr("not saved").into());
 		format!(
 			"{}{} ({file}) — Cadenza",
 			if self.dirty { "• " } else { "" },
@@ -571,9 +723,9 @@ impl AppState {
 	/// Whether the AI is editing (user edits refused, with a notice saying so).
 	fn ai_locked(&mut self) -> bool {
 		if self.ai.busy() {
-			self.notices.info(
+			self.notices.info(tr(
 				"The AI is editing the project — wait for it or press Stop in the chat (F10)",
-			);
+			));
 			return true;
 		}
 		false
@@ -619,7 +771,7 @@ impl AppState {
 			.chain(
 				self.selection
 					.master
-					.then(|| "the master channel".to_owned()),
+					.then(|| tr("the master channel").to_owned()),
 			)
 			.collect();
 		let files_root = self
@@ -647,14 +799,206 @@ impl AppState {
 			transport_mode: Some(self.view.transport.mode.name().to_lowercase()),
 			recording: self.recording_context(),
 			reference_file: None,
+			open_device: self
+				.device_editor_target()
+				.and_then(|r| self.describe_device(r)),
+			reply_language: self
+				.ai
+				.settings
+				.reply_language
+				.resolve_name(self.language.resolve()),
 		}
 	}
 
 	/// Sends `request` to the AI producer (with the app context).
 	pub fn send_ai(&mut self, request: &str) -> bool {
+		self.send_ai_as(request, request.trim())
+	}
+
+	/// [`AppState::send_ai`] remembering `shown` as the request on the AI change card.
+	fn send_ai_as(&mut self, request: &str, shown: &str) -> bool {
 		let context = self.ai_context();
 		let session = self.session.clone();
-		self.ai.send(request, context, &session)
+		if self.ai.busy() {
+			return false;
+		}
+		self.begin_ai_changes(shown);
+		let sent = self.ai.send(request, context, &session);
+		if !sent {
+			self.ai_snapshot = None;
+		}
+		sent
+	}
+
+	/// The device editor's "Ask AI": `text` about the device `r`, named in the request
+	/// (the context carries its id as the open device). Opens the chat so the reply shows.
+	pub fn ask_ai_about_device(&mut self, r: DeviceRef, text: &str) -> bool {
+		let text = text.trim();
+		let Some(d) = self.device(r) else {
+			return false;
+		};
+		if text.is_empty() {
+			return false;
+		}
+		let on = match r.track.and_then(|t| self.project().track(t)) {
+			Some(t) => format!("'{}'", t.name),
+			None => tr("the master").to_owned(),
+		};
+		let request = format!("{text} ({} on {on})", d.name);
+		let sent = self.send_ai_as(&request, text);
+		if sent {
+			self.view.panels.set(PanelKind::Chat, true);
+			self.mix.open = false;
+		}
+		sent
+	}
+
+	/// A device as the AI reads it: "\"EQ\" (device 4c1d..., Parametric EQ, eq) on track
+	/// \"Vox\" (track 9a0b...)".
+	fn describe_device(&self, r: DeviceRef) -> Option<String> {
+		let p = self.project();
+		let d = self.device(r)?;
+		let kind = d
+			.builtin_id()
+			.and_then(cadenza_dsp::device_info)
+			.map_or_else(|| "plugin".to_owned(), |i| format!("{}, {}", i.name, i.id));
+		let on = match r.track.and_then(|t| p.track(t)) {
+			Some(t) => format!("track \"{}\" (track {})", t.name, t.id),
+			None => tr("the master channel").to_owned(),
+		};
+		Some(format!("\"{}\" (device {}, {kind}) on {on}", d.name, d.id))
+	}
+
+	/// "Explain this device": a read-only request about the device `r` (its current
+	/// settings in plain language); opens the chat so the answer streams in.
+	pub fn explain_device(&mut self, r: DeviceRef) -> bool {
+		let Some(d) = self.device(r) else {
+			return false;
+		};
+		if self.ai.busy() {
+			return false;
+		}
+		let name = d.name.clone();
+		let mut context = self.ai_context();
+		let described = self.describe_device(r).unwrap_or_else(|| name.clone());
+		context.open_device = Some(described.clone());
+		let text = cadenza_agent::prompt::explain_request(&described);
+		let label = trf("Explain {device}", &[("device", &name)]);
+		let session = self.session.clone();
+		let sent = self.ai.send_explain(&label, text, context, &session);
+		if sent {
+			self.view.panels.set(PanelKind::Chat, true);
+			self.mix.open = false;
+		}
+		sent
+	}
+
+	// --- AI changes on devices (design 15e) -------------------------------------------
+
+	/// A request starts: the built-ins' params are remembered and the last changes go.
+	fn begin_ai_changes(&mut self, request: &str) {
+		self.hear_before(None);
+		self.ai_changes = None;
+		self.ai_snapshot = Some((ai_changes::snapshot(self.project()), request.to_owned()));
+	}
+
+	fn finish_ai_changes(&mut self, finished: &ai::worker::Finished) {
+		let Some((before, request)) = self.ai_snapshot.take() else {
+			return;
+		};
+		if !finished.edited {
+			return;
+		}
+		let undo = &self.doc.undo;
+		if undo.last() != Some(&finished.undo_label) {
+			return;
+		}
+		self.ai_changes = ai_changes::AiChanges::new(
+			&finished.undo_label,
+			&request,
+			undo.len(),
+			&before,
+			&self.doc.project,
+		);
+	}
+
+	/// The AI change of `param` on `device`, if the last request moved it.
+	pub fn ai_change(&self, device: DeviceId, param: &str) -> Option<&ai_changes::Change> {
+		self.ai_changes.as_ref()?.change(device, param)
+	}
+
+	/// Every AI change on `device`.
+	pub fn ai_changes_of(&self, device: DeviceId) -> &[ai_changes::Change] {
+		self.ai_changes.as_ref().map_or(&[], |c| c.of(device))
+	}
+
+	/// Whether Undo would take back the AI step (it is still the last step).
+	pub fn ai_step_is_last(&self) -> bool {
+		self.ai_changes
+			.as_ref()
+			.is_some_and(|c| c.is_last_step(&self.doc.undo))
+	}
+
+	/// "Keep": the changes stay, their rings go.
+	pub fn keep_ai_changes(&mut self) {
+		self.hear_before(None);
+		self.ai_changes = None;
+	}
+
+	/// "Undo" on the card: undoes the AI step while it is the last one.
+	pub fn undo_ai_changes(&mut self) -> bool {
+		if !self.ai_step_is_last() {
+			return false;
+		}
+		self.hear_before(None);
+		self.undo();
+		self.ai_changes.is_none()
+	}
+
+	/// The user touched `param`: that AI change is kept and loses its ring.
+	fn touch_ai_change(&mut self, device: DeviceId, param: &str) {
+		if let Some(c) = &mut self.ai_changes {
+			c.touch(device, param);
+			if c.is_empty() {
+				self.ai_changes = None;
+			}
+		}
+	}
+
+	/// "Hold to hear before": `Some(device)` plays that device's params from before the AI
+	/// request through the live param path (no command), `None` puts the current values
+	/// back. The document never changes.
+	pub fn hear_before(&mut self, device: Option<DeviceId>) {
+		if self.hearing_before == device {
+			return;
+		}
+		if let Some(old) = self.hearing_before.take() {
+			self.send_ai_values(old, false);
+		}
+		if let Some(new) = device
+			&& !self.ai_changes_of(new).is_empty()
+		{
+			self.send_ai_values(new, true);
+			self.hearing_before = Some(new);
+		}
+	}
+
+	/// The device being heard as it was before the AI request.
+	pub fn hearing_before(&self) -> Option<DeviceId> {
+		self.hearing_before
+	}
+
+	fn send_ai_values(&self, device: DeviceId, before: bool) {
+		let Some(a) = &self.audio else { return };
+		let track = self.device_track(device).flatten();
+		for c in self.ai_changes_of(device) {
+			let value = if before {
+				c.before
+			} else {
+				self.param_value(track, device, &c.param).unwrap_or(c.after)
+			};
+			a.live_param(device, &c.param, value);
+		}
 	}
 
 	/// Quick requests for the chat, from the selection.
@@ -671,12 +1015,15 @@ impl AppState {
 	fn poll_ai(&mut self) {
 		for finished in self.ai.poll() {
 			self.sync_session(true);
+			self.finish_ai_changes(&finished);
 			if finished.undo_label == cadenza_agent::ENGINEER_UNDO_LABEL {
 				self.mix_pass_finished(&finished);
 			}
 			if finished.edited {
-				self.notices
-					.info(format!("{} — one undo step (Ctrl+Z)", finished.undo_label));
+				self.notices.info(trf(
+					"{undo_label} — one undo step (Ctrl+Z)",
+					&[("undo_label", &finished.undo_label)],
+				));
 			}
 		}
 		if !self.ai.busy() && !self.ai_queue.is_empty() {
@@ -732,8 +1079,12 @@ impl AppState {
 		self.view.instrument.prune(&self.doc.project);
 		self.prune_record();
 		if self.view.instrument.device.is_none() {
-			self.view.instrument_editor = false;
+			self.view.device_editor = false;
 		}
+		self.view.windows.prune(&self.doc.project);
+		let devices = device_ab::devices(&self.doc.project);
+		self.compares.retain(|id, _| devices.contains_key(id));
+		self.sync_editor_probe();
 		let project = &self.doc.project;
 		self.meters
 			.retain(|id| project.tracks.iter().any(|t| t.id == id));
@@ -771,6 +1122,9 @@ impl AppState {
 		if changes.automation {
 			let p = self.project();
 			a.automation(p.automation.clone(), p.tempo.clone());
+		}
+		if changes.midi_map {
+			a.midi_map(self.project().clone());
 		}
 		for &track in &changes.clips {
 			let p = self.project();
@@ -872,7 +1226,7 @@ impl AppState {
 			Some(t)
 		} else {
 			self.notices
-				.info("Select a track to show its automation lanes");
+				.info(tr("Select a track to show its automation lanes"));
 			return;
 		};
 		let project = self.project().clone();
@@ -936,7 +1290,8 @@ impl AppState {
 		let result = self.session().document_mut().undo();
 		match result {
 			Ok(label) => {
-				self.notices.info(format!("Undo: {label}"));
+				self.notices
+					.info(trf("Undo: {label}", &[("label", &label)]));
 				self.sync_session(true);
 			}
 			Err(e) => self.notices.info(e.to_string()),
@@ -950,7 +1305,8 @@ impl AppState {
 		let result = self.session().document_mut().redo();
 		match result {
 			Ok(label) => {
-				self.notices.info(format!("Redo: {label}"));
+				self.notices
+					.info(trf("Redo: {label}", &[("label", &label)]));
 				self.sync_session(true);
 			}
 			Err(e) => self.notices.info(e.to_string()),
@@ -1021,7 +1377,7 @@ impl AppState {
 		start: Tick,
 	) {
 		if self.jobs.bounce.is_some() {
-			self.notices.warn("A track render is already running");
+			self.notices.warn(tr("A track render is already running"));
 			return;
 		}
 		let Some(t) = self.project().track(track) else {
@@ -1069,9 +1425,9 @@ impl AppState {
 			_ => cadenza_engine::BounceScope::Track,
 		};
 		self.notices.info(match kind {
-			bounce::BounceKind::Freeze => "Freezing…",
-			bounce::BounceKind::InPlace => "Bouncing…",
-			bounce::BounceKind::Consolidate => "Consolidating…",
+			bounce::BounceKind::Freeze => tr("Freezing…"),
+			bounce::BounceKind::InPlace => tr("Bouncing…"),
+			bounce::BounceKind::Consolidate => tr("Consolidating…"),
 		});
 		let work = Job::spawn("bounce", self.waker.clone(), move || {
 			cadenza_engine::render_track(&project, &opts, track, &scope, start, &file)
@@ -1113,7 +1469,7 @@ impl AppState {
 		}
 		let first = t.clips.iter().filter(|c| c.plays()).map(|c| c.start).min();
 		let Some(first) = first else {
-			self.notices.info("The track has no clips to bounce");
+			self.notices.info(tr("The track has no clips to bounce"));
 			return;
 		};
 		let start = self.project().meter().bar_floor(first);
@@ -1159,21 +1515,25 @@ impl AppState {
 					if self.apply_or_queue(cmd) {
 						self.notices.info(match job.kind {
 							bounce::BounceKind::Freeze => {
-								"Frozen: the track plays its render (Unfreeze to edit)".to_owned()
+								tr("Frozen: the track plays its render (Unfreeze to edit)")
+									.to_owned()
 							}
-							bounce::BounceKind::InPlace => {
-								format!("Bounced to a new track: {}", job.file.display())
-							}
-							bounce::BounceKind::Consolidate => "Clips consolidated".to_owned(),
+							bounce::BounceKind::InPlace => trf(
+								"Bounced to a new track: {job}",
+								&[("job", &job.file.display())],
+							),
+							bounce::BounceKind::Consolidate => tr("Clips consolidated").to_owned(),
 						});
 					}
 				}
 				Err(e) => self.notices.warn(e),
 			},
-			Some(Err(e)) => self.notices.error(format!("Track render failed: {e}")),
+			Some(Err(e)) => self
+				.notices
+				.error(trf("Track render failed: {e}", &[("e", &e)])),
 			None => self
 				.notices
-				.error("Track render failed: the worker thread stopped"),
+				.error(tr("Track render failed: the worker thread stopped")),
 		}
 	}
 
@@ -1451,6 +1811,43 @@ impl AppState {
 		}
 	}
 
+	/// Shows a value a mapped MIDI controller set (the player already plays it): like a
+	/// gesture's preview, so automation Touch/Latch writes it.
+	pub(crate) fn mirror_value(&mut self, address: &ParamAddress, value: f32) {
+		match &address.target {
+			ParamTarget::Volume => {
+				self.previews.volume.insert(address.track, value);
+			}
+			ParamTarget::Pan => {
+				self.previews.pan.insert(address.track, value);
+			}
+			ParamTarget::Send { send } => {
+				self.previews.sends.insert(*send, value);
+			}
+			ParamTarget::Device { device, param } => {
+				self.previews.params.insert((*device, param.clone()), value);
+			}
+		}
+		self.write_value(address.clone(), value);
+	}
+
+	/// Ends a gesture on any address with one command (see the `commit_*` methods).
+	pub(crate) fn commit_address(&mut self, address: &ParamAddress, value: f32) {
+		match &address.target {
+			ParamTarget::Volume => self.commit_volume(address.track, value),
+			ParamTarget::Pan => self.commit_pan(address.track, value),
+			ParamTarget::Send { send } => match address.track {
+				Some(track) => self.commit_send(track, *send, value),
+				None => {
+					self.previews.sends.remove(send);
+				}
+			},
+			ParamTarget::Device { device, param } => {
+				self.commit_param(address.track, *device, param, value);
+			}
+		}
+	}
+
 	/// The channel holding `device` (`Some(None)` = the master).
 	fn device_track(&self, device: DeviceId) -> Option<Option<TrackId>> {
 		let p = self.project();
@@ -1472,11 +1869,52 @@ impl AppState {
 		value: f32,
 	) {
 		self.previews.params.remove(&(device, param.to_owned()));
+		self.touch_ai_change(device, param);
 		let address = ParamAddress::device(track, device, param);
 		if self.release_write(&address) {
 			return;
 		}
 		self.set_param(address, value);
+	}
+
+	/// Forgets a parameter preview without committing it (a gesture that ended where it
+	/// started).
+	pub fn drop_param_preview(&mut self, device: DeviceId, param: &str) {
+		self.previews.params.remove(&(device, param.to_owned()));
+	}
+
+	/// Several device parameters let go together (a node dragged in freq and gain): ONE
+	/// undo step named `label` holding the values that changed. Returns whether it applied.
+	pub fn commit_params(
+		&mut self,
+		track: Option<TrackId>,
+		device: DeviceId,
+		values: &[(&str, f32)],
+		label: &str,
+	) -> bool {
+		let mut commands = Vec::new();
+		for &(param, value) in values {
+			self.previews.params.remove(&(device, param.to_owned()));
+			self.touch_ai_change(device, param);
+			let address = ParamAddress::device(track, device, param);
+			if self.release_write(&address) {
+				continue;
+			}
+			let current = self
+				.project()
+				.device(track, device)
+				.and_then(|d| d.params.get(param).copied());
+			if current != Some(value) {
+				commands.push(Command::SetParam { address, value });
+			}
+		}
+		if commands.is_empty() {
+			return false;
+		}
+		self.apply(Command::Batch {
+			label: label.to_owned(),
+			commands,
+		})
 	}
 
 	/// One `SetParam` unless the value is already set.
@@ -1572,8 +2010,9 @@ impl AppState {
 
 	/// After an instrument lands on a track (which is now selected): how to write notes.
 	fn instrument_hint(&mut self, name: &str) {
-		self.notices.info(format!(
-			"{name} added — press F7 or double-click the track to open the piano roll"
+		self.notices.info(trf(
+			"{name} added — press F7 or double-click the track to open the piano roll",
+			&[("name", &name)],
 		));
 	}
 
@@ -1658,23 +2097,23 @@ impl AppState {
 			return;
 		};
 		if matches!(d.kind, cadenza_model::DeviceKind::Builtin { .. }) {
-			self.notices.info(format!(
-				"{} is a built-in device: edit it in the inspector (F8)",
-				d.name
+			self.notices.info(trf(
+				"{name} is a built-in device: edit it in the inspector (F8)",
+				&[("name", &d.name)],
 			));
 			return;
 		}
 		if d.bypass {
-			self.notices.warn(format!(
-				"{} is bypassed: enable it to open its editor",
-				d.name
+			self.notices.warn(trf(
+				"{name} is bypassed: enable it to open its editor",
+				&[("name", &d.name)],
 			));
 			return;
 		}
 		if !cadenza_engine::EDITORS_SUPPORTED {
-			self.notices.warn(
+			self.notices.warn(tr(
 				"Plugin editor windows are not supported on this platform yet; use the inspector",
-			);
+			));
 			return;
 		}
 		let Some(title) = editors::title(project, device) else {
@@ -1682,14 +2121,15 @@ impl AppState {
 		};
 		match &self.audio_status {
 			AudioStatus::Unavailable(e) => {
-				self.notices.error(format!(
-					"Plugin editors need the audio engine, which is unavailable: {e}"
+				self.notices.error(trf(
+					"Plugin editors need the audio engine, which is unavailable: {e}",
+					&[("e", &e)],
 				));
 				return;
 			}
 			AudioStatus::Off => {
 				self.notices
-					.error("Plugin editors need the audio engine (not running)");
+					.error(tr("Plugin editors need the audio engine (not running)"));
 				return;
 			}
 			_ => {}
@@ -1818,10 +2258,10 @@ impl AppState {
 		self.play_intent = true;
 		let (config, fell_back) = self.transport_config();
 		if fell_back {
-			self.notices.info(
+			self.notices.info(tr(
 				"Pattern mode plays the clip open in the piano roll — open one with F7. \
 				 Playing the song instead.",
-			);
+			));
 		}
 		// Start inside the loop: pattern mode at the pattern start (FL Studio) unless the
 		// playhead was placed inside it, song mode when past the loop end.
@@ -1841,7 +2281,7 @@ impl AppState {
 			Some(a) if self.clock.is_some() => a.play(),
 			_ => self
 				.notices
-				.warn("No audio output: playback is unavailable"),
+				.warn(tr("No audio output: playback is unavailable")),
 		}
 	}
 
@@ -2099,7 +2539,8 @@ impl AppState {
 				for w in out.warnings {
 					self.notices.warn(w);
 				}
-				self.notices.info(format!("Saved {}", out.path));
+				self.notices
+					.info(trf("Saved {path}", &[("path", &out.path)]));
 				true
 			}
 			None => false,
@@ -2151,10 +2592,15 @@ impl AppState {
 		};
 		if let Some(out) = self.edit_session(|s| cadenza_mcp::tools::audio::import_audio(s, args)) {
 			self.selection.click_clip(out.track_id, out.clip_id, false);
-			self.notices.info(format!(
-				"Imported {} ({:.1} s)",
-				path.display(),
-				out.file.duration_seconds
+			self.notices.info(trf(
+				"Imported {path} ({seconds} s)",
+				&[
+					("path", &path.display()),
+					(
+						"seconds",
+						&crate::i18n::decimal(format!("{:.1}", out.file.duration_seconds)),
+					),
+				],
 			));
 		}
 	}
@@ -2183,10 +2629,11 @@ impl AppState {
 				if let Some(c) = out.clip {
 					self.selection.click_clip(c.track_id, c.clip_id, false);
 				}
-				self.notices.info(format!(
-					"Imported {} ({} tracks)",
-					path.display(),
-					out.created_tracks.len().max(1)
+				self.notices.info(trn_with(
+					"Imported {path} ({n} track)",
+					"Imported {path} ({n} tracks)",
+					out.created_tracks.len().max(1),
+					&[("path", &path.display())],
 				));
 			}
 			return;
@@ -2208,8 +2655,10 @@ impl AppState {
 		let mut result = match result {
 			Ok(r) => r,
 			Err(e) => {
-				self.notices
-					.error(format!("Cannot import {}: {e}", path.display()));
+				self.notices.error(trf(
+					"Cannot import {path}: {e}",
+					&[("path", &path.display()), ("e", &e)],
+				));
 				return;
 			}
 		};
@@ -2228,8 +2677,12 @@ impl AppState {
 			for w in result.warnings {
 				self.notices.warn(w);
 			}
-			self.notices
-				.info(format!("Imported {} ({tracks} tracks)", path.display()));
+			self.notices.info(trn_with(
+				"Imported {path} ({n} track)",
+				"Imported {path} ({n} tracks)",
+				tracks,
+				&[("path", &path.display())],
+			));
 		}
 	}
 
@@ -2281,6 +2734,7 @@ impl AppState {
 				true
 			}
 			DropAction::LoadSample { device, path, slot } => self.load_sample(device, &path, slot),
+			DropAction::MapKit { device, folder } => self.map_kit_folder(device, &folder),
 			DropAction::NewSampler { path } => self.new_sampler_track(&path),
 			DropAction::AddPattern {
 				pattern, track, at, ..
@@ -2435,7 +2889,7 @@ impl AppState {
 		self.view.piano.clip = Some(clip);
 		self.view.piano.recent.insert(track, clip);
 		self.view.audio_editor = false;
-		self.view.instrument_editor = false;
+		self.view.device_editor = false;
 		self.selection.click_clip(track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
@@ -2449,9 +2903,9 @@ impl AppState {
 			return false;
 		};
 		if t.kind != TrackKind::Instrument {
-			let msg = format!(
-				"'{}' is not an instrument track: the piano roll edits MIDI clips",
-				t.name
+			let msg = trf(
+				"'{name}' is not an instrument track: the piano roll edits MIDI clips",
+				&[("name", &t.name)],
 			);
 			self.notices.info(msg);
 			return false;
@@ -2489,7 +2943,7 @@ impl AppState {
 			.filter(|t| self.project().track(*t).map(|t| t.kind) == Some(TrackKind::Instrument));
 		if self.view.panels.visible(PanelKind::PianoRoll) {
 			// Another instrument track was selected since: show its clip instead of closing.
-			let editing = (!self.view.audio_editor && !self.view.instrument_editor)
+			let editing = (!self.view.audio_editor && !self.view.device_editor)
 				.then_some(self.view.piano.clip)
 				.flatten()
 				.and_then(|c| self.project().find_clip(c).map(|(t, _)| t.id));
@@ -2535,7 +2989,7 @@ impl AppState {
 		}
 		self.view.audio.clip = Some(clip);
 		self.view.audio_editor = true;
-		self.view.instrument_editor = false;
+		self.view.device_editor = false;
 		self.selection.click_clip(r.track, clip, false);
 		self.view.panels.open_piano_roll();
 		true
@@ -2553,11 +3007,13 @@ impl AppState {
 	/// file next to the project, then swaps it into the clip (one undo step).
 	pub fn process_audio(&mut self, op: audio_edit::Process) {
 		if !op.available() {
-			self.notices.warn(audio_edit::STRETCH_HINT);
+			self.notices
+				.warn(crate::i18n::tr_str(audio_edit::STRETCH_HINT));
 			return;
 		}
 		if self.jobs.process.is_some() {
-			self.notices.warn("An audio operation is already running");
+			self.notices
+				.warn(tr("An audio operation is already running"));
 			return;
 		}
 		let Some(clip) = self.view.audio.clip else {
@@ -2568,7 +3024,7 @@ impl AppState {
 		};
 		let range = r.clamp(self.view.audio.selection.unwrap_or((r.offset, r.end())));
 		if range.1 - range.0 <= 1e-6 {
-			self.notices.info("Select a range of the clip first");
+			self.notices.info(tr("Select a range of the clip first"));
 			return;
 		}
 		let out = audio_edit::processed_path(self.path(), &r.file, op);
@@ -2585,50 +3041,499 @@ impl AppState {
 		}));
 	}
 
-	// --- Sampler / drum sampler editor ---------------------------------------------
+	// --- Device editors ---------------------------------------------------------------
 
-	/// Whether `device` is a built-in sampler or drum sampler (it has the instrument editor).
+	/// Whether `device` is a built-in sampler or drum sampler (pads / zones body).
 	pub fn is_sample_device(&self, r: DeviceRef) -> bool {
 		self.device(r).and_then(samples::kind).is_some()
 	}
 
-	/// Shows `r`'s sampler editor in the bottom editor dock.
-	pub fn open_instrument_editor(&mut self, r: DeviceRef) -> bool {
-		if !self.is_sample_device(r) {
+	/// Whether `r` is a built-in device (it opens in the device editor; plugins have
+	/// their own windows).
+	pub fn has_device_editor(&self, r: DeviceRef) -> bool {
+		self.device(r)
+			.and_then(|d| d.builtin_id())
+			.is_some_and(|id| cadenza_dsp::device_info(id).is_some())
+	}
+
+	/// Shows built-in device `r` in its floating window (opened, or brought to the front
+	/// when it is already open); a device shown in the bottom dock stays there.
+	pub fn open_device_editor(&mut self, r: DeviceRef) -> bool {
+		if !self.has_device_editor(r) {
+			return false;
+		}
+		if !self.docked_device_shown(r) {
+			self.open_window(windows::WindowItem::Device(r));
+		}
+		self.selection.select_device(r);
+		self.sync_editor_probe();
+		true
+	}
+
+	/// Shows built-in device `r` in the bottom editor dock (one device at a time; its
+	/// floating window closes).
+	pub fn open_device_in_dock(&mut self, r: DeviceRef) -> bool {
+		if !self.has_device_editor(r) {
 			return false;
 		}
 		self.release_previews();
 		if self.view.instrument.device != Some(r) {
 			self.view.instrument.zone = 0;
 		}
+		self.view.windows.close(windows::WindowItem::Device(r));
 		self.view.instrument.device = Some(r);
-		self.view.instrument_editor = true;
-		self.selection.select_device(r);
+		self.view.device_editor = true;
 		self.view.panels.open_piano_roll();
+		self.selection.select_device(r);
+		self.sync_editor_probe();
 		true
 	}
 
-	/// Toggles the sampler editor of `r` (inspector button, double-clicks).
-	pub fn toggle_instrument_editor(&mut self, r: DeviceRef) {
-		let shown = self.view.instrument_editor
-			&& self.view.instrument.device == Some(r)
-			&& self.view.panels.visible(PanelKind::PianoRoll);
-		if shown {
+	/// Whether `r` is the device of the visible editor dock.
+	fn docked_device_shown(&self, r: DeviceRef) -> bool {
+		self.view.instrument.device == Some(r)
+			&& self.view.device_editor
+			&& self.view.panels.visible(PanelKind::PianoRoll)
+	}
+
+	/// Toggles the editor of `r` (double-clicks, the inspector's Edit): a focused
+	/// window closes, an unfocused one comes to the front, the dock showing it closes.
+	pub fn toggle_device_editor(&mut self, r: DeviceRef) {
+		let item = windows::WindowItem::Device(r);
+		if self.view.windows.is_open(item) {
+			if self.view.windows.focus == Some(item) {
+				self.close_window(item);
+			} else {
+				self.view.windows.focus(item);
+				self.sync_editor_probe();
+			}
+		} else if self.docked_device_shown(r) {
 			self.close_piano_roll();
 		} else {
-			self.open_instrument_editor(r);
+			self.open_device_editor(r);
 		}
 	}
 
-	/// Leaves the instrument editor for the piano roll / audio editor in the dock.
-	pub fn close_instrument_editor(&mut self) {
+	/// Leaves the device editor of the dock (it goes back to the piano roll / audio
+	/// editor) and closes the focused device window.
+	pub fn close_device_editor(&mut self) {
 		self.release_previews();
-		self.view.instrument_editor = false;
+		self.view.device_editor = false;
+		if let Some(r) = self.view.windows.focused_device() {
+			self.view.windows.close(windows::WindowItem::Device(r));
+		}
+		self.sync_editor_probe();
+	}
+
+	/// Pops the dock's device out into its floating window; the dock shows the piano
+	/// roll / audio editor again.
+	pub fn pop_out_device_editor(&mut self) {
+		let Some(r) = self.view.instrument.device else {
+			return;
+		};
+		self.view.device_editor = false;
+		self.open_window(windows::WindowItem::Device(r));
+		self.sync_editor_probe();
+	}
+
+	/// Puts device window `r` into the bottom dock.
+	pub fn dock_device_window(&mut self, r: DeviceRef) {
+		self.open_device_in_dock(r);
+	}
+
+	/// Opens (or brings to the front) the floating window of `item`.
+	pub fn open_window(&mut self, item: windows::WindowItem) -> bool {
+		if !item.alive(self.project()) {
+			return false;
+		}
+		let kind = item.kind_key(self.project());
+		let size = match item {
+			windows::WindowItem::Device(_) => windows::DEVICE_SIZE,
+			windows::WindowItem::Track(_) => windows::TRACK_SIZE,
+			windows::WindowItem::Clip(_) => windows::CLIP_SIZE,
+		};
+		self.view.windows.open(item, &kind, size);
+		self.sync_editor_probe();
+		true
+	}
+
+	/// Closes the floating window of `item`.
+	pub fn close_window(&mut self, item: windows::WindowItem) {
+		if item.device().is_some() {
+			self.release_previews();
+		}
+		self.view.windows.close(item);
+		self.sync_editor_probe();
+	}
+
+	/// The floating properties window of a track (`None` = the master channel).
+	pub fn open_track_window(&mut self, track: Option<TrackId>) -> bool {
+		match track {
+			Some(t) => self.selection.select_track(t),
+			None => self.selection.select_master(),
+		}
+		self.open_window(windows::WindowItem::Track(track))
+	}
+
+	/// The floating properties window of a clip.
+	pub fn open_clip_window(&mut self, clip: ClipId) -> bool {
+		if let Some((t, _)) = self.project().find_clip(clip) {
+			let t = t.id;
+			self.selection.click_clip(t, clip, false);
+		}
+		self.open_window(windows::WindowItem::Clip(clip))
+	}
+
+	/// Whether `r` is shown in a device editor (a window or the visible dock).
+	pub fn device_editor_shown(&self, r: DeviceRef) -> bool {
+		self.view.windows.is_open(windows::WindowItem::Device(r)) || self.docked_device_shown(r)
+	}
+
+	/// The device editor in front: the focused device window, else the visible dock's
+	/// device, else the topmost device window (device alive).
+	pub fn device_editor_target(&self) -> Option<DeviceRef> {
+		let dock = self
+			.view
+			.instrument
+			.device
+			.filter(|r| self.docked_device_shown(*r));
+		let r = self
+			.view
+			.windows
+			.focused_device()
+			.or(dock)
+			.or_else(|| self.view.windows.top_device())?;
+		self.device(r).is_some().then_some(r)
+	}
+
+	// --- A/B compare and the undo hint --------------------------------------------
+
+	fn device_params(&self, r: DeviceRef) -> device_ab::Params {
+		self.device(r).map(|d| d.params.clone()).unwrap_or_default()
+	}
+
+	/// The A/B state of `r`, both slots set to its current params the first time.
+	pub fn compare(&mut self, r: DeviceRef) -> &device_ab::Compare {
+		let current = self.device_params(r);
+		self.compares
+			.entry(r.device)
+			.or_insert_with(|| device_ab::Compare::new(&current))
+	}
+
+	/// The slot `r` is on (A until the editor switched it).
+	pub fn compare_slot(&self, r: DeviceRef) -> device_ab::Slot {
+		self.compares
+			.get(&r.device)
+			.map_or(device_ab::Slot::A, |c| c.active())
+	}
+
+	/// Switches `r` to `slot`: its params become that slot's in ONE undo step
+	/// ("Compare B"); nothing to undo when both slots are equal.
+	pub fn switch_compare(&mut self, r: DeviceRef, slot: device_ab::Slot) -> bool {
+		let current = self.device_params(r);
+		let Some(state) = self.device(r).map(|d| d.state.clone()) else {
+			return false;
+		};
+		let Some(apply) = self.compare(r).switch_to(slot, &current) else {
+			return false;
+		};
+		if let Some(params) = apply {
+			self.switching = true;
+			let ok = self.apply(Command::Batch {
+				label: slot.label(),
+				commands: vec![Command::SetDeviceState {
+					track: r.track,
+					device: r.device,
+					state,
+					params: Some(params),
+				}],
+			});
+			self.switching = false;
+			if !ok {
+				return false;
+			}
+		}
+		if let Some(c) = self.compares.get_mut(&r.device) {
+			c.flip(&current);
+		}
+		true
+	}
+
+	/// The other slot of `r` (the A/B key).
+	pub fn toggle_compare(&mut self, r: DeviceRef) -> bool {
+		let slot = self.compare_slot(r).other();
+		self.switch_compare(r, slot)
+	}
+
+	/// "A→B": the slot `r` is on is copied onto the other one (view state, no undo step).
+	pub fn copy_compare(&mut self, r: DeviceRef) {
+		let current = self.device_params(r);
+		self.compare(r);
+		if let Some(c) = self.compares.get_mut(&r.device) {
+			c.copy(&current);
+		}
+		let label = self.compares.get(&r.device).map(|c| c.copy_label());
+		if let Some(label) = label {
+			self.notices
+				.info(trf("Copied {label}", &[("label", &label)]));
+		}
+	}
+
+	/// The label of the step undo would revert, when that step touched `r`.
+	pub fn device_undo_label(&self, r: DeviceRef) -> Option<&str> {
+		self.touches
+			.last_touches(r.device)
+			.then(|| self.undo_label())
+			.flatten()
+	}
+
+	/// Follows a document change from `before`: which devices the new / undone step
+	/// touched, and A/B switches undone or redone (the slot flips back with them).
+	fn follow_history(&mut self, before: &DocView, epoch_changed: bool) {
+		if epoch_changed {
+			self.touches.clear();
+			self.compares.clear();
+			self.ai_changes = None;
+			self.hearing_before = None;
+			return;
+		}
+		let sizes = |d: &DocView| (d.undo.len(), d.redo.len());
+		let (b, a) = (sizes(before), sizes(&self.doc));
+		let touched = device_ab::touched_devices(&before.project, &self.doc.project);
+		let step = device_ab::step(b, a);
+		self.follow_ai_changes(before, step);
+		let label = match step {
+			device_ab::Step::Undo => before.undo.last(),
+			device_ab::Step::Redo => self.doc.undo.last(),
+			_ => None,
+		};
+		if !self.switching && label.is_some_and(|l| device_ab::is_compare_label(l)) {
+			let old = device_ab::devices(&before.project);
+			for id in &touched {
+				if let (Some(c), Some(d)) = (self.compares.get_mut(id), old.get(id)) {
+					c.flip(&d.params);
+				}
+			}
+		}
+		self.touches.update(b, a, touched);
+	}
+
+	/// AI changes after a document change: undoing the AI step clears them, a later user
+	/// step drops the params it moved.
+	fn follow_ai_changes(&mut self, before: &DocView, step: device_ab::Step) {
+		let Some(c) = &mut self.ai_changes else {
+			return;
+		};
+		if c.undone(&self.doc.undo) {
+			self.ai_changes = None;
+			self.hearing_before = None;
+			return;
+		}
+		if step == device_ab::Step::New && !self.ai.busy() {
+			c.touch_changed(&before.project, &self.doc.project);
+			if c.is_empty() {
+				self.ai_changes = None;
+				self.hearing_before = None;
+			}
+		}
+	}
+
+	/// Points the probe at the device editor's device (dock or popped-out window), and
+	/// away from it once the editor closes, switches or the dock hides. With no editor
+	/// open, falls back to the built-in device the inspector is showing (its compact
+	/// forms draw from the same probe), so their analyzers and meters stay live instead of
+	/// idle; only one consumer may drain the probe's frames a given frame, which is why the
+	/// editor always wins the device when both show one. A probe set by someone else is
+	/// left alone while neither needs it.
+	/// The inspector's active tab, after following a selection change.
+	pub fn inspector_tab(&mut self) -> inspector::InspectorTab {
+		self.view.inspector.follow(self.selection.focus())
+	}
+
+	/// What the inspector's tabs edit for the current selection.
+	pub fn inspector_targets(&self) -> inspector::Targets {
+		inspector::Targets::of(&self.selection, self.project())
+	}
+
+	/// The device the inspector's Device tab shows (when that tab is active).
+	pub fn inspector_device(&mut self) -> Option<DeviceRef> {
+		if self.inspector_tab() != inspector::InspectorTab::Device {
+			return None;
+		}
+		self.inspector_targets().device
+	}
+
+	/// Points the one probe at the device editor in front ([`Self::device_editor_target`]:
+	/// the focused window first), else the inspector's Device tab.
+	pub fn sync_editor_probe(&mut self) {
+		let want = self
+			.device_editor_target()
+			.or_else(|| {
+				if !self.view.panels.visible(PanelKind::Inspector) {
+					return None;
+				}
+				self.inspector_device()
+					.filter(|r| self.has_device_editor(*r))
+			})
+			.map(|r| r.device);
+		if want != self.editor_probe {
+			self.editor_probe = want;
+			self.set_probe(want);
+		}
+		if self.listen.is_some_and(|(d, _)| Some(d) != want) {
+			self.set_listen_target(None);
+		}
+	}
+
+	/// Makes `device` (the device of the open editor) play a listen mode instead of its
+	/// output, or back to normal with `Listen::Off`; one device at a time. Monitoring
+	/// only: never in the document or renders, kept across reloads, cleared when the
+	/// editor closes or shows another device.
+	pub fn set_listen(&mut self, device: DeviceId, mode: cadenza_engine::Listen) {
+		if mode == cadenza_engine::Listen::Off {
+			if self.listen.is_some_and(|(d, _)| d == device) {
+				self.set_listen_target(None);
+			}
+		} else {
+			self.set_listen_target(Some((device, mode)));
+		}
+	}
+
+	fn set_listen_target(&mut self, target: Option<(DeviceId, cadenza_engine::Listen)>) {
+		if self.listen == target {
+			return;
+		}
+		self.listen = target;
+		if let Some(a) = &self.audio {
+			a.listen(target);
+		}
+	}
+
+	/// The listen mode `device` plays (`Listen::Off` when it does not listen).
+	pub fn listen_mode(&self, device: DeviceId) -> cadenza_engine::Listen {
+		match self.listen {
+			Some((d, mode)) if d == device => mode,
+			_ => cadenza_engine::Listen::Off,
+		}
+	}
+
+	/// Factory and user presets of `r` (listed once per device through the MCP
+	/// `list_presets` tool; refreshed after a save).
+	pub fn device_presets(&mut self, r: DeviceRef) -> &[device::PresetEntry] {
+		if self.device_presets.as_ref().map(|(d, _)| *d) != Some(r) {
+			let list = self.list_device_presets(r);
+			self.device_presets = Some((r, list));
+		}
+		self.device_presets
+			.as_ref()
+			.map_or(&[], |(_, list)| list.as_slice())
+	}
+
+	fn list_device_presets(&mut self, r: DeviceRef) -> Vec<device::PresetEntry> {
+		let args = cadenza_mcp::tools::presets::ListPresetsArgs {
+			track_id: r.track,
+			device_id: r.device,
+		};
+		let listed = cadenza_mcp::tools::presets::list_presets(&mut self.session(), args);
+		match listed {
+			Ok(out) => out
+				.presets
+				.into_iter()
+				.map(|p| device::PresetEntry {
+					name: p.name,
+					user: p.source == cadenza_mcp::tools::presets::PresetSource::User,
+					description: p.description,
+				})
+				.collect(),
+			Err(e) => {
+				self.notices.error(e.to_string());
+				Vec::new()
+			}
+		}
+	}
+
+	/// Loads preset `entry` into `r` through the MCP `load_preset` tool (one undo step).
+	pub fn load_device_preset(&mut self, r: DeviceRef, entry: &device::PresetEntry) -> bool {
+		use cadenza_mcp::tools::presets::{LoadPresetArgs, PresetSource, load_preset};
+		let args = LoadPresetArgs {
+			track_id: r.track,
+			device_id: r.device,
+			name: entry.name.clone(),
+			source: Some(if entry.user {
+				PresetSource::User
+			} else {
+				PresetSource::Factory
+			}),
+		};
+		let Some(out) = self.edit_session(|s| load_preset(s, args)) else {
+			return false;
+		};
+		self.loaded_presets.insert(
+			r.device,
+			device::LoadedPreset {
+				name: out.name,
+				user: entry.user,
+				params: out.params,
+			},
+		);
+		true
+	}
+
+	/// Saves `r`'s current settings as user preset `name` through the MCP `save_preset`
+	/// tool (`overwrite` replaces one with that name).
+	pub fn save_device_preset(&mut self, r: DeviceRef, name: &str, overwrite: bool) -> bool {
+		use cadenza_mcp::tools::presets::{SavePresetArgs, save_preset};
+		let args = SavePresetArgs {
+			track_id: r.track,
+			device_id: r.device,
+			name: name.trim().to_owned(),
+			overwrite,
+		};
+		if self.edit_session(|s| save_preset(s, args)).is_none() {
+			return false;
+		}
+		let params = self.device(r).map(|d| d.params.clone()).unwrap_or_default();
+		self.loaded_presets.insert(
+			r.device,
+			device::LoadedPreset {
+				name: name.trim().to_owned(),
+				user: true,
+				params,
+			},
+		);
+		self.device_presets = None;
+		self.notices
+			.info(trf("Saved preset '{name}'", &[("name", &name.trim())]));
+		true
+	}
+
+	/// The preset `r` is on and whether its params moved away from it: the one loaded
+	/// or saved here, else a factory preset with exactly these params.
+	pub fn preset_status(&self, r: DeviceRef) -> device::PresetStatus {
+		let Some(d) = self.device(r) else {
+			return device::PresetStatus::default();
+		};
+		let Some(info) = d.builtin_id().and_then(cadenza_dsp::device_info) else {
+			return device::PresetStatus::default();
+		};
+		device::preset_status(
+			info,
+			&d.params,
+			self.loaded_presets.get(&r.device),
+			cadenza_dsp::factory_presets(info.id),
+		)
 	}
 
 	/// Loads `path` into a pad, zone or the whole keyboard of a sample device (the shared
 	/// `load_sample` tool: root from the name or pitch, pad settings kept; one undo step).
 	pub fn load_sample(&mut self, r: DeviceRef, path: &Path, slot: samples::SampleSlot) -> bool {
+		if let samples::SampleSlot::Area { key, vel } = slot {
+			let ok = self.add_zone_at(r, path, key, vel);
+			if ok {
+				self.open_device_editor(r);
+			}
+			return ok;
+		}
 		let Some(track) = r.track else {
 			return false;
 		};
@@ -2640,9 +3545,14 @@ impl AppState {
 			match slot {
 				samples::SampleSlot::Pad(n) => self.view.instrument.pad = n,
 				samples::SampleSlot::Zone(i) => self.view.instrument.zone = i,
-				samples::SampleSlot::Keyboard => self.view.instrument.zone = 0,
+				samples::SampleSlot::Keyboard | samples::SampleSlot::Area { .. } => {
+					self.view.instrument.zone = 0
+				}
 			}
-			self.open_instrument_editor(r);
+			if self.device(r).and_then(samples::kind) == Some(samples::SampleKind::Sampler) {
+				self.view.instrument.last_sample = Some(path.to_path_buf());
+			}
+			self.open_device_editor(r);
 		}
 		ok
 	}
@@ -2666,7 +3576,8 @@ impl AppState {
 			return false;
 		}
 		self.selection.select_track(track_id);
-		self.open_instrument_editor(DeviceRef {
+		self.view.instrument.last_sample = Some(path.to_path_buf());
+		self.open_device_editor(DeviceRef {
 			track: Some(track_id),
 			device: r_device,
 		})
@@ -2686,6 +3597,115 @@ impl AppState {
 	pub fn piano_track(&self) -> Option<TrackId> {
 		let clip = self.view.piano.clip?;
 		self.project().find_clip(clip).map(|(t, _)| t.id)
+	}
+
+	/// Follows `device` (any built-in in the project: instrument, insert, master insert)
+	/// with the engine's probe, or stops (`None`). Device editors drain
+	/// [`AppState::probe`] once per frame for analyzers, meters and scopes.
+	pub fn set_probe(&mut self, device: Option<DeviceId>) {
+		if self.probe_target == device {
+			return;
+		}
+		self.probe_target = device;
+		if device.is_none() {
+			self.probe = None;
+		}
+		if let Some(a) = &self.audio {
+			a.probe(device);
+		}
+	}
+
+	pub fn probe_target(&self) -> Option<DeviceId> {
+		self.probe_target
+	}
+
+	/// Mono / dim on what the output device plays (after the meters, never in renders
+	/// or the project). Kept across loads and device reopens.
+	pub fn set_monitor_fx(&mut self, fx: cadenza_engine::MonitorFx) {
+		self.monitor_fx = fx;
+		if let Some(a) = &self.audio {
+			a.monitor_fx(fx);
+		}
+	}
+
+	pub fn monitor_fx(&self) -> cadenza_engine::MonitorFx {
+		self.monitor_fx
+	}
+
+	/// Meters (and the master tap) of a player the app does not own, such as a test's
+	/// virtual device; the app's own engine replaces them on its next load.
+	pub fn attach_meters(
+		&mut self,
+		bank: Option<Arc<MeterBank>>,
+		master: Option<Arc<DeviceProbe>>,
+	) {
+		self.bank = bank;
+		match master {
+			Some(tap) => self.master_loudness.attach(tap),
+			None => self.master_loudness.detach(),
+		}
+	}
+
+	/// Sidechain targets of `source`'s output menu (devices on other strips that take a
+	/// key; see [`mixer::sidechain_targets`]).
+	pub fn sidechain_targets(&mut self, source: TrackId) -> Vec<mixer::SidechainTarget> {
+		let catalog = self.catalog();
+		mixer::sidechain_targets(self.project(), source, |d| mixer::accepts_key(d, &catalog))
+	}
+
+	/// The probe ring of the running player while a device is probed (`None` without an
+	/// audio engine or device, or until the engine answered).
+	pub fn probe(&self) -> Option<&Arc<DeviceProbe>> {
+		self.probe_target.and(self.probe.as_ref())
+	}
+
+	/// Attaches a player's probe ring directly (headless tests driving a virtual device;
+	/// the app gets it from the audio thread).
+	pub fn attach_probe(&mut self, probe: Option<Arc<DeviceProbe>>) {
+		self.probe = probe;
+	}
+
+	/// The current output of `device`'s modulators (engine order), while it is the probed
+	/// device and the player runs it.
+	pub fn modulation_values(&self, device: DeviceId) -> Option<Vec<f32>> {
+		match self.probe() {
+			Some(p) if self.probe_target == Some(device) && p.is_active() => {
+				let (values, n) = p.modulation();
+				Some(values[..n].to_vec())
+			}
+			_ => None,
+		}
+	}
+
+	/// What `device` plays now (held keys, voices), from its readings: empty unless it is
+	/// the probed device and the player runs it.
+	pub fn live_voices(&self, device: DeviceId) -> live_voices::LiveVoices {
+		match self.probe() {
+			Some(p) if self.probe_target == Some(device) && p.is_active() => {
+				let (values, n) = p.readings();
+				live_voices::LiveVoices::decode(&values[..n])
+			}
+			_ => live_voices::LiveVoices::default(),
+		}
+	}
+
+	/// Keys to light on `r`'s editors: previews on its track (at once) plus the keys its
+	/// processor holds (playback, live MIDI input). Lowest first, no repeats.
+	pub fn lit_keys(&self, r: DeviceRef, live: &live_voices::LiveVoices) -> Vec<u8> {
+		let mut keys: Vec<u8> = r
+			.track
+			.map(|t| {
+				self.previewing
+					.iter()
+					.filter(|(tr, _)| *tr == t)
+					.map(|(_, n)| *n)
+					.collect()
+			})
+			.unwrap_or_default();
+		keys.extend(live.held_keys());
+		keys.sort_unstable();
+		keys.dedup();
+		keys
 	}
 
 	/// Starts sounding `pitch` on `track`'s instrument (also while stopped). Notes held
@@ -2748,15 +3768,24 @@ impl AppState {
 			}
 			let what = r.pack.as_deref().unwrap_or(&r.location);
 			let text = if r.loaded {
-				format!(
-					"Library pack '{what}': {} item(s) skipped or broken. See Browser > Library > Credits.",
-					r.issues.len()
+				trn_with(
+					"Library pack '{pack}': {n} item skipped or broken. See Browser > Library > \
+					 Credits.",
+					"Library pack '{pack}': {n} items skipped or broken. See Browser > Library > \
+					 Credits.",
+					r.issues.len(),
+					&[("pack", &what)],
 				)
 			} else {
-				format!(
-					"Library pack at {} was not loaded: {}",
-					r.location,
-					r.issues.first().map_or("", |i| i.message.as_str())
+				trf(
+					"Library pack at {location} was not loaded: {first}",
+					&[
+						("location", &r.location),
+						(
+							"first",
+							&r.issues.first().map_or("", |i| i.message.as_str()),
+						),
+					],
 				)
 			};
 			self.notices.warn(text);
@@ -2777,7 +3806,7 @@ impl AppState {
 		self.stop_pattern_preview();
 		if self.is_playing() {
 			self.notices
-				.info("Stop playback to preview library patterns");
+				.info(tr("Stop playback to preview library patterns"));
 			return false;
 		}
 		let library = self.library();
@@ -2786,8 +3815,9 @@ impl AppState {
 		};
 		let Some(track) = library::preview_track(self.project(), self.selection.track, pattern)
 		else {
-			self.notices
-				.info("Add an instrument track to preview patterns (or drag one below the tracks)");
+			self.notices.info(tr(
+				"Add an instrument track to preview patterns (or drag one below the tracks)",
+			));
 			return false;
 		};
 		let at = self.position();
@@ -2807,6 +3837,13 @@ impl AppState {
 	/// The pattern being previewed.
 	pub fn pattern_preview(&self) -> Option<&str> {
 		self.library_preview.as_ref().map(|p| p.pattern.as_str())
+	}
+
+	/// How far the previewed pattern has played, 0..=1.
+	pub fn pattern_preview_progress(&self) -> Option<f32> {
+		self.library_preview
+			.as_ref()
+			.map(|p| p.progress(Instant::now()))
 	}
 
 	pub fn stop_pattern_preview(&mut self) {
@@ -2907,6 +3944,11 @@ impl AppState {
 			export: self.export.settings.clone(),
 			audio: self.record.audio.clone(),
 			record: self.record.settings,
+			mixer: v.mixer,
+			arrange_tool: v.arrange_tool,
+			track_heights: v.track_heights.clone(),
+			windows: v.windows.saved.clone(),
+			language: self.language,
 		}
 	}
 
@@ -2938,6 +3980,14 @@ impl AppState {
 		v.piano.snap = p.piano_snap;
 		v.piano.scale = cadenza_theory::Scale::parse(&p.piano_scale).ok();
 		v.bookmarks = p.bookmarks;
+		v.mixer = p.mixer;
+		v.arrange_tool = p.arrange_tool;
+		v.track_heights = p
+			.track_heights
+			.into_iter()
+			.map(|(t, h)| (t, h.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT)))
+			.collect();
+		v.windows.saved = p.windows;
 		self.ai.settings = p.ai.sanitized();
 		self.recent = p.recent;
 		self.recent.truncate(safety::RECENT_MAX);
@@ -2951,6 +4001,23 @@ impl AppState {
 		}
 		self.record.settings = p.record.migrated();
 		self.apply_audio_settings(p.audio);
+		self.set_language(p.language);
+	}
+
+	/// Switches the UI language; every label follows from the next frame on. Headless
+	/// states keep the system choice out of tests: "System default" leaves this thread
+	/// on the process language (English unless the app set it).
+	pub fn set_language(&mut self, choice: crate::i18n::LanguageChoice) {
+		use crate::i18n::{self, LanguageChoice};
+		self.language = choice;
+		if self.language_global {
+			i18n::set_global(choice.resolve());
+		} else {
+			i18n::set_thread(match choice {
+				LanguageChoice::System => None,
+				LanguageChoice::Fixed(l) => Some(l),
+			});
+		}
 	}
 
 	/// Rescans plugins in the background (the scanner loads each new plugin in a helper
@@ -2960,7 +4027,7 @@ impl AppState {
 			return;
 		}
 		let cache = self.session().plugin_cache_path().to_path_buf();
-		self.notices.info("Scanning plugins…");
+		self.notices.info(tr("Scanning plugins…"));
 		self.jobs.scan = Some(Job::spawn("scan", self.waker.clone(), move || {
 			let scanner = cadenza_plugin_host::scanner_path().map_err(|e| e.to_string())?;
 			let mut catalog = PluginCatalog::load_or_default(cache);
@@ -3017,7 +4084,11 @@ impl AppState {
 			}
 			FileAction::ImportAudio => self.import_audio(&path),
 			FileAction::MixReference => self.mix.reference = Some(path),
+			FileAction::MatchReference => self.finish_match_file(path),
 			FileAction::ImportMidi => self.import_midi(&path),
+			FileAction::PadSample | FileAction::PadLayer | FileAction::KitFolder => {
+				self.finish_sample_dialog(action, &path);
+			}
 			FileAction::ExportFolder
 			| FileAction::UnpackFolder
 			| FileAction::RelinkFolder
@@ -3074,6 +4145,7 @@ impl AppState {
 		self.sync_session(false);
 		self.poll_ai();
 		self.poll_audio();
+		self.sync_editor_probe();
 		if let Some(since) = self.reload_since
 			&& now.saturating_duration_since(since) >= RELOAD_DEBOUNCE
 		{
@@ -3083,9 +4155,12 @@ impl AppState {
 		self.editor_actions(actions);
 		self.poll_jobs();
 		self.poll_mix();
+		self.poll_match_eq();
+		self.poll_collisions();
 		self.poll_file_jobs();
 		self.tick_autosave(now);
 		self.sync_transport();
+		self.tick_midi_learn(now);
 		let (playing, position) = (self.is_playing(), self.position());
 		self.tick_autowrite(playing, position);
 		self.tick_record(dt);
@@ -3093,6 +4168,8 @@ impl AppState {
 		self.peaks.poll();
 		let ids: Vec<TrackId> = self.project().tracks.iter().map(|t| t.id).collect();
 		self.meters.update(self.bank.as_deref(), ids, dt);
+		let playing = self.is_playing();
+		self.master_loudness.update(playing, dt);
 		self.is_playing()
 			|| previewing
 			|| self.meters.any_active()
@@ -3106,6 +4183,7 @@ impl AppState {
 			|| self.ai.busy()
 			|| self.mix.busy()
 			|| self.record_animating()
+			|| self.midi.learning.is_some()
 	}
 
 	fn poll_audio(&mut self) {
@@ -3119,8 +4197,12 @@ impl AppState {
 				AudioEvent::Ready {
 					clock,
 					input,
+					master,
+					midi_map,
 					status,
 				} => {
+					self.master_loudness.attach(master);
+					self.attach_midi_map(Some(midi_map));
 					self.record.input_stats = Some(input);
 					self.record.status = Some(status);
 					self.resend_record_state();
@@ -3134,7 +4216,9 @@ impl AppState {
 					self.schedule_reload();
 				}
 				AudioEvent::Unavailable(e) => {
-					self.notices.warn(format!("No audio output: {e}"));
+					self.probe = None;
+					self.master_loudness.detach();
+					self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
 					self.audio_status = AudioStatus::Unavailable(e);
 				}
 				AudioEvent::Loaded {
@@ -3160,13 +4244,17 @@ impl AppState {
 				}
 				AudioEvent::LoadFailed { generation, error } => {
 					self.loaded_generation = self.loaded_generation.max(generation);
-					self.notices.error(format!("Playback engine: {error}"));
+					self.notices
+						.error(trf("Playback engine: {error}", &[("error", &error)]));
 				}
 				AudioEvent::ReloadNeeded => self.schedule_reload(),
 				AudioEvent::AudioThread(scheduling) => {
 					if let Some(status) = &mut self.record.status {
 						status.audio_thread = Some(scheduling);
 					}
+				}
+				AudioEvent::Probe(probe) => {
+					self.probe = probe.filter(|_| self.probe_target.is_some());
 				}
 				AudioEvent::Xruns { device, plugins } => {
 					self.xruns.update(device, plugins, Instant::now());
@@ -3188,7 +4276,7 @@ impl AppState {
 				}
 				AudioEvent::Recorded(rec) => self.record_event(record::RecordEvent::Done(rec)),
 				AudioEvent::RecordFailed(e) => self.record_event(record::RecordEvent::Failed(e)),
-				AudioEvent::Error(e) => self.notices.error(format!("Audio: {e}")),
+				AudioEvent::Error(e) => self.notices.error(trf("Audio: {e}", &[("e", &e)])),
 			}
 		}
 	}
@@ -3205,21 +4293,22 @@ impl AppState {
 				Some(Ok(done)) => match audio_edit::swap_in(self.project(), &done) {
 					Some(cmd) => {
 						if self.apply_or_queue(cmd) {
-							self.notices.info(format!(
-								"{}: wrote {}",
-								done.op.label(),
-								done.file.display()
+							self.notices.info(trf(
+								"{label}: wrote {done}",
+								&[("label", &done.op.label()), ("done", &done.file.display())],
 							));
 						}
 					}
 					None => self
 						.notices
-						.warn("The clip was removed before the operation finished"),
+						.warn(tr("The clip was removed before the operation finished")),
 				},
-				Some(Err(e)) => self.notices.error(format!("Audio operation failed: {e}")),
+				Some(Err(e)) => self
+					.notices
+					.error(trf("Audio operation failed: {e}", &[("e", &e)])),
 				None => self
 					.notices
-					.error("Audio operation failed: the worker thread stopped"),
+					.error(tr("Audio operation failed: the worker thread stopped")),
 			}
 		}
 		if let Some(r) = self.jobs.scan.as_ref().and_then(Job::poll) {
@@ -3228,19 +4317,24 @@ impl AppState {
 				Some(Ok((catalog, report))) => {
 					self.session().set_plugins(Arc::new(catalog));
 					self.browser_items = None;
-					self.notices.info(format!(
-						"Plugin scan: {} files, {} added, {} updated, {} removed, {} blocked",
-						report.files_found,
-						report.added.len(),
-						report.updated.len(),
-						report.removed.len(),
-						report.blocked.len()
+					self.notices.info(trf(
+						"Plugin scan: {files} files, {added} added, {updated} updated, {removed} \
+						 removed, {blocked} blocked",
+						&[
+							("files", &report.files_found),
+							("added", &report.added.len()),
+							("updated", &report.updated.len()),
+							("removed", &report.removed.len()),
+							("blocked", &report.blocked.len()),
+						],
 					));
 				}
-				Some(Err(e)) => self.notices.error(format!("Plugin scan failed: {e}")),
+				Some(Err(e)) => self
+					.notices
+					.error(trf("Plugin scan failed: {e}", &[("e", &e)])),
 				None => self
 					.notices
-					.error("Plugin scan failed: the scan thread stopped"),
+					.error(tr("Plugin scan failed: the scan thread stopped")),
 			}
 		}
 	}

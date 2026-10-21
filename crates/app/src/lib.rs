@@ -8,6 +8,7 @@
 //!   `cadenza_model::Command` through `AppState::apply`.
 
 pub mod audio;
+pub mod i18n;
 pub mod jobs;
 pub mod state;
 pub mod theme;

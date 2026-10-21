@@ -7,6 +7,7 @@
 //! The editor's time axis is the clip's **source file** in seconds; the clip region is
 //! `offset_seconds .. offset_seconds + duration`.
 
+use crate::i18n::{mark, tr, trf};
 use std::path::{Path, PathBuf};
 
 use cadenza_audio_io::AudioBuffer;
@@ -343,10 +344,10 @@ pub fn fade_curve(c: FadeCurve) -> cadenza_audio_io::FadeCurve {
 }
 
 pub const FADE_CURVES: [(FadeCurve, &str); 4] = [
-	(FadeCurve::Linear, "Linear"),
-	(FadeCurve::EqualPower, "Equal power"),
-	(FadeCurve::Exponential, "Exponential"),
-	(FadeCurve::SCurve, "S-curve"),
+	(FadeCurve::Linear, mark("Linear")),
+	(FadeCurve::EqualPower, mark("Equal power")),
+	(FadeCurve::Exponential, mark("Exponential")),
+	(FadeCurve::SCurve, mark("S-curve")),
 ];
 
 // --- Processed copies ------------------------------------------------------------
@@ -376,11 +377,20 @@ impl Process {
 
 	pub fn label(self) -> String {
 		match self {
-			Process::Normalize => "Normalize".into(),
-			Process::Reverse => "Reverse".into(),
-			Process::Gain(db) => format!("Gain {db:+.1} dB"),
-			Process::Stretch(r) => format!("Time-stretch ×{r:.2}"),
-			Process::Pitch(s) => format!("Pitch {s:+.1} st"),
+			Process::Normalize => tr("Normalize").into(),
+			Process::Reverse => tr("Reverse").into(),
+			Process::Gain(db) => trf(
+				"Gain {db} dB",
+				&[("db", &crate::i18n::decimal(format!("{:+.1}", db)))],
+			),
+			Process::Stretch(r) => trf(
+				"Time-stretch ×{r}",
+				&[("r", &crate::i18n::decimal(format!("{:.2}", r)))],
+			),
+			Process::Pitch(s) => trf(
+				"Pitch {s} st",
+				&[("s", &crate::i18n::decimal(format!("{:+.1}", s)))],
+			),
 		}
 	}
 
@@ -391,9 +401,11 @@ impl Process {
 }
 
 /// Explains how to get time-stretch/pitch in a build without the `stretch` feature.
-pub const STRETCH_HINT: &str = "Time-stretch and pitch-shift need the optional `stretch` \
+pub const STRETCH_HINT: &str = mark(
+	"Time-stretch and pitch-shift need the optional `stretch` \
 	feature (Signalsmith Stretch; needs a C++ compiler and libclang): build with \
-	`cargo build --release -p cadenza-app --features stretch`.";
+	`cargo build --release -p cadenza-app --features stretch`.",
+);
 
 /// What a processing job produced.
 #[derive(Debug, Clone, PartialEq)]
@@ -437,7 +449,7 @@ pub fn process(
 	let frames = buffer.frames();
 	let (a, b) = (a.min(frames), b.min(frames));
 	if b <= a {
-		return Err("the selection is empty".into());
+		return Err(tr("the selection is empty").into());
 	}
 	let sr = buffer.sample_rate();
 	let ramp = ((EDGE_RAMP_SECONDS * f64::from(sr)) as usize).max(1);
@@ -452,7 +464,7 @@ pub fn process(
 						.flat_map(|c| c[a..b].iter())
 						.fold(0.0f32, |m, x| m.max(x.abs()));
 					if peak <= 0.0 {
-						return Err("the selection is silent: nothing to normalize".into());
+						return Err(tr("the selection is silent: nothing to normalize").into());
 					}
 					cadenza_core::db_to_gain(NORMALIZE_DBFS) / peak
 				}
@@ -520,7 +532,7 @@ fn stretch(
 
 #[cfg(not(feature = "stretch"))]
 fn stretch(_: &AudioBuffer, _: (usize, usize), _: Process) -> Result<(AudioBuffer, i64), String> {
-	Err(STRETCH_HINT.into())
+	Err(crate::i18n::tr_str(STRETCH_HINT).into())
 }
 
 /// Decodes `source`, processes `range` (file seconds) and writes a 32-bit float WAV to
@@ -537,8 +549,12 @@ pub fn render_processed(
 	let b = (range.1.max(0.0) * sr).round() as usize;
 	let (processed, grown) = process(&buffer, (a, b), op)?;
 	if let Some(dir) = out.parent() {
-		std::fs::create_dir_all(dir)
-			.map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+		std::fs::create_dir_all(dir).map_err(|e| {
+			trf(
+				"cannot create {dir}: {e}",
+				&[("dir", &dir.display()), ("e", &e)],
+			)
+		})?;
 	}
 	cadenza_audio_io::export(
 		&processed,

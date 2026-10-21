@@ -94,7 +94,7 @@ impl Rows {
 			}
 			push(
 				RowKind::Track { id: t.id, index },
-				view.track_height,
+				view.height_of(t.id),
 				&mut rows,
 			);
 			if view.takes.contains(&t.id) {

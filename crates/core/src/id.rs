@@ -56,3 +56,5 @@ typed_id!(ClipId);
 typed_id!(NoteId);
 typed_id!(DeviceId);
 typed_id!(TakeGroupId);
+typed_id!(LinkId);
+typed_id!(ModulatorId);

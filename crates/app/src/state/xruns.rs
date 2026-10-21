@@ -2,6 +2,7 @@
 //! device reported and late or busy blocks of sandboxed plugins (`Player::device_xruns`,
 //! `Player::plugin_xruns`, polled by the player thread). Counted from the last reset.
 
+use crate::i18n::{trn, trn_with};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
@@ -88,21 +89,24 @@ impl Xruns {
 		let mut out = Vec::new();
 		let device = self.device_count();
 		if device > 0 {
-			out.push(format!(
-				"Audio device: {device} buffer under/overrun{} (try a larger buffer in Audio \
-				 settings)",
-				if device == 1 { "" } else { "s" }
+			out.push(trn(
+				"Audio device: {n} buffer under/overrun (try a larger buffer in Audio settings)",
+				"Audio device: {n} buffer under/overruns (try a larger buffer in Audio settings)",
+				device,
 			));
 		}
 		for p in &self.plugins {
 			let n = self.plugin_count(p);
 			if n > 0 {
-				out.push(format!(
-					"{} on {}: {n} late block{} (longest stall {} ms)",
-					p.device_name,
-					p.location,
-					if n == 1 { "" } else { "s" },
-					p.stats.longest_stall_ms
+				out.push(trn_with(
+					"{device} on {track}: {n} late block (longest stall {ms} ms)",
+					"{device} on {track}: {n} late blocks (longest stall {ms} ms)",
+					n,
+					&[
+						("device", &p.device_name),
+						("track", &p.location),
+						("ms", &p.stats.longest_stall_ms),
+					],
 				));
 			}
 		}

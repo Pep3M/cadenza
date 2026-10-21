@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cadenza_core::{DeviceId, PPQ, TempoMap, Tick, TrackId};
-use cadenza_dsp::{MidiEvent, Processor, Transport};
+use cadenza_dsp::{Listen, MidiEvent, Processor, Transport};
 use cadenza_model::{AutomationLane, MonitorMode};
 
 use crate::QUANTUM;
@@ -19,7 +19,10 @@ use crate::metronome::{
 	Click, MAX_CLICKS, MeterSegment, Metronome, MetronomeSettings, clicks_between, meter_at,
 	meter_clicks,
 };
+use crate::modulation::Modulation;
+use crate::probe::DeviceProbe;
 use crate::schedule::MidiSchedule;
+use cadenza_model::modulation::MAX_MODULATORS;
 
 /// Which tracks are heard while auditioning (see [`Graph::set_audition`]): written by the
 /// control side, read by the audio thread once per quantum. Wait-free and allocation
@@ -263,6 +266,8 @@ pub(crate) struct Sidechain {
 	/// Node (index in processing order) whose signal keys the device.
 	pub source: usize,
 	pub pre_fader: bool,
+	/// The processor has a key input (false: only an envelope follower listens).
+	pub feeds: bool,
 	/// Scratch copy of the key for the current quantum.
 	pub key: StereoBuf,
 	pub key_delay: StereoDelay,
@@ -371,11 +376,63 @@ pub(crate) struct Device {
 	pub id: DeviceId,
 	pub processor: Box<dyn Processor>,
 	pub sidechain: Option<Box<Sidechain>>,
+	pub modulation: Option<Box<Modulation>>,
+}
+
+/// The audio side of the device probe (see [`crate::probe`]): the shared ring the player
+/// attached and the device it follows. Allocation free after [`ProbeTap::new`].
+pub(crate) struct ProbeTap {
+	probe: Option<Arc<DeviceProbe>>,
+	target: Option<DeviceId>,
+	input: StereoBuf,
+	readings: [f32; cadenza_dsp::readings::MAX],
+	/// The target ran in the quantum being rendered.
+	hit: bool,
+}
+
+impl ProbeTap {
+	pub fn new() -> Self {
+		Self {
+			probe: None,
+			target: None,
+			input: StereoBuf::new(),
+			readings: [0.0; cadenza_dsp::readings::MAX],
+			hit: false,
+		}
+	}
+
+	fn wants(&self, device: DeviceId) -> bool {
+		self.probe.is_some() && self.target == Some(device)
+	}
+
+	fn capture(&mut self, device: &Device, buf: &StereoBuf) {
+		let Some(p) = &self.probe else {
+			return;
+		};
+		p.push(&self.input.l, &self.input.r, &buf.l, &buf.r);
+		self.readings.fill(0.0);
+		let n = device.processor.readings(&mut self.readings);
+		p.publish_readings(&self.readings[..n.min(self.readings.len())]);
+		let mut mods = [0.0; MAX_MODULATORS];
+		let n = device
+			.modulation
+			.as_ref()
+			.map_or(0, |m| m.values(&mut mods));
+		p.publish_modulation(&mods[..n]);
+		self.hit = true;
+	}
 }
 
 impl Device {
 	/// Runs one quantum: aligns and hands over the key (if any), then processes `buf`.
-	fn run(&mut self, buf: &mut StereoBuf, events: &[MidiEvent], t: &Transport, done: &[Node]) {
+	fn run(
+		&mut self,
+		buf: &mut StereoBuf,
+		events: &[MidiEvent],
+		t: &Transport,
+		done: &[Node],
+		probe: &mut ProbeTap,
+	) {
 		if let Some(sc) = &mut self.sidechain
 			&& let Some(src) = done.get(sc.source)
 		{
@@ -384,12 +441,52 @@ impl Device {
 			sc.key.r.copy_from_slice(&tap.r);
 			sc.key_delay.process(&mut sc.key);
 			sc.main_delay.process(buf);
-			self.processor.set_sidechain(&sc.key.l, &sc.key.r);
+			if sc.feeds {
+				self.processor.set_sidechain(&sc.key.l, &sc.key.r);
+			}
+		}
+		if let Some(m) = &mut self.modulation {
+			if m.needs_key()
+				&& let Some(sc) = &self.sidechain
+			{
+				m.follow(&sc.key.l, &sc.key.r, true);
+			}
+			if !m.follows_output() {
+				m.follow(&buf.l, &buf.r, false);
+			}
+			m.apply(&mut *self.processor, events, t);
+		}
+		let probed = probe.wants(self.id);
+		if probed {
+			probe.input.l.copy_from_slice(&buf.l);
+			probe.input.r.copy_from_slice(&buf.r);
 		}
 		self.processor.process(&mut buf.l, &mut buf.r, events, t);
+		if let Some(m) = &mut self.modulation
+			&& m.follows_output()
+		{
+			m.follow(&buf.l, &buf.r, false);
+		}
+		if probed {
+			probe.capture(self, buf);
+		}
+	}
+
+	/// A parameter write from the graph (initial value, live edit, automation): moves
+	/// the modulation base of a modulated parameter, else sets it. Realtime safe.
+	pub(crate) fn set_param(&mut self, index: usize, value: f32) {
+		if let Some(m) = &mut self.modulation
+			&& m.set_base(index, value)
+		{
+			return;
+		}
+		self.processor.set_param(index, value);
 	}
 
 	fn reset(&mut self) {
+		if let Some(m) = &mut self.modulation {
+			m.reset();
+		}
 		self.processor.reset();
 		if let Some(sc) = &mut self.sidechain {
 			sc.key_delay.clear();
@@ -583,11 +680,47 @@ pub struct Graph {
 	/// What the last `process` call played (see [`Graph::segments`]).
 	pub(crate) segments: [Segment; MAX_SEGMENTS],
 	pub(crate) segment_count: usize,
+	pub(crate) probe: ProbeTap,
+	/// Device playing a listen mode (monitoring only, see [`Graph::set_listen`]).
+	pub(crate) listen: Option<(DeviceId, Listen)>,
+	/// Ring the master's post-fader output goes to every quantum (live loudness).
+	pub(crate) master_tap: Option<Arc<DeviceProbe>>,
 }
 
 impl Graph {
 	pub fn sample_rate(&self) -> u32 {
 		self.sample_rate
+	}
+
+	/// Attaches the probe ring the graph writes the probed device into (control side,
+	/// before the graph goes to the audio thread).
+	pub fn attach_probe(&mut self, probe: Option<Arc<DeviceProbe>>) {
+		self.probe.probe = probe;
+	}
+
+	/// Attaches the ring that receives the master's post-fader output (before the
+	/// metronome and the player's monitor switches) every rendered quantum, as both the
+	/// input and the output of each [`crate::ProbeFrame`]. Control side.
+	pub fn attach_master_tap(&mut self, tap: Option<Arc<DeviceProbe>>) {
+		self.master_tap = tap;
+	}
+
+	/// The device whose input/output and readings go to the attached probe (`None` =
+	/// idle). A different target restarts the probe. Realtime safe.
+	pub fn set_probe_target(&mut self, device: Option<DeviceId>) {
+		if self.probe.target == device {
+			return;
+		}
+		self.probe.target = device;
+		if let Some(p) = &self.probe.probe {
+			p.restart();
+		}
+	}
+
+	/// Like [`Graph::set_probe_target`] for a graph replacing one that already followed
+	/// `device`: frames not read yet are kept.
+	pub(crate) fn continue_probe(&mut self, device: Option<DeviceId>) {
+		self.probe.target = device;
 	}
 
 	/// Total plugin latency at the master output, in samples (compensated internally).
@@ -730,8 +863,18 @@ impl Graph {
 	/// the master) without recompiling; plain value, the device smooths and clamps it.
 	/// Realtime safe. Returns false when the graph has no such device (e.g. bypassed).
 	pub fn set_device_param(&mut self, device: DeviceId, index: usize, value: f32) -> bool {
-		let found = self
-			.nodes
+		match self.device_mut(device) {
+			Some(d) => {
+				d.set_param(index, value);
+				true
+			}
+			None => false,
+		}
+	}
+
+	/// The graph's device `id` (instrument, insert or master insert). Realtime safe.
+	fn device_mut(&mut self, id: DeviceId) -> Option<&mut Device> {
+		self.nodes
 			.iter_mut()
 			.flat_map(|n| {
 				let instrument = match &mut n.source {
@@ -741,14 +884,28 @@ impl Graph {
 				instrument.into_iter().chain(n.inserts.iter_mut())
 			})
 			.chain(self.master.inserts.iter_mut())
-			.find(|d| d.id == device);
-		match found {
-			Some(d) => {
-				d.processor.set_param(index, value);
-				true
-			}
-			None => false,
+			.find(|d| d.id == id)
+	}
+
+	/// Monitoring-only listen mode of one device (see [`cadenza_dsp::Listen`]); the
+	/// previous target goes back to normal. `None` or [`Listen::Off`] = nobody listens.
+	/// Live graphs only (the player); offline renders never call it. Realtime safe.
+	pub fn set_listen(&mut self, target: Option<(DeviceId, Listen)>) {
+		let target = target.filter(|(_, mode)| *mode != Listen::Off);
+		if self.listen == target {
+			return;
 		}
+		if let Some((old, _)) = self.listen.take()
+			&& let Some(d) = self.device_mut(old)
+		{
+			d.processor.set_listen(Listen::Off);
+		}
+		if let Some((id, mode)) = target
+			&& let Some(d) = self.device_mut(id)
+		{
+			d.processor.set_listen(mode);
+		}
+		self.listen = target;
 	}
 
 	/// Sets a send's level (dB) without recompiling; ramped over one quantum. Realtime
@@ -1083,6 +1240,10 @@ impl Graph {
 			right.fill(0.0);
 			self.meters.silence();
 			self.meters.publish();
+			// Nothing ran: readers must not take the last readings as live.
+			if let Some(p) = &self.probe.probe {
+				p.set_active(false);
+			}
 			return;
 		}
 		let mut start = 0;
@@ -1365,7 +1526,7 @@ impl Graph {
 						(None, DeviceSlot::Instrument) => None,
 					};
 					if let Some(d) = device {
-						d.processor.set_param(index, v);
+						d.set_param(index, v);
 					}
 				}
 			}
@@ -1452,8 +1613,11 @@ impl Graph {
 			audition,
 			input_block,
 			metronome,
+			probe,
+			master_tap,
 			..
 		} = self;
+		probe.hit = false;
 		for i in 0..nodes.len() {
 			let (done, rest) = nodes.split_at_mut(i);
 			let node = &mut rest[0];
@@ -1523,7 +1687,7 @@ impl Graph {
 						}
 					}
 					if let Some(d) = device {
-						d.run(buf, events, &transport, done);
+						d.run(buf, events, &transport, done, probe);
 						for e in &mut node.aux_edges {
 							let Some((l, r)) = d.processor.aux_output(e.port) else {
 								continue;
@@ -1573,7 +1737,7 @@ impl Graph {
 				}
 			}
 			for d in &mut node.inserts {
-				d.run(buf, &[], &transport, done);
+				d.run(buf, &[], &transport, done, probe);
 			}
 			if node.tap_pre {
 				node.pre.l.copy_from_slice(&buf.l);
@@ -1612,10 +1776,17 @@ impl Graph {
 		master.buf.l.copy_from_slice(&master_in.l);
 		master.buf.r.copy_from_slice(&master_in.r);
 		for d in &mut master.inserts {
-			d.run(&mut master.buf, &[], &transport, nodes);
+			d.run(&mut master.buf, &[], &transport, nodes, probe);
+		}
+		if let Some(p) = &probe.probe {
+			p.set_active(probe.hit);
 		}
 		master.fader.apply(&mut master.buf);
 		meters.measure(None, &master.buf.l, &master.buf.r);
+		if let Some(tap) = master_tap {
+			tap.push(&master.buf.l, &master.buf.r, &master.buf.l, &master.buf.r);
+			tap.set_active(true);
+		}
 		if preview {
 			return;
 		}

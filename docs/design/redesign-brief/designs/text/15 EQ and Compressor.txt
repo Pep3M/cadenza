@@ -1,0 +1,61 @@
+CADENZA · DEVICES 15 · Parametric EQ and Compressor 15a and 15b are live: drag nodes (Shift = fine), wheel over a node for Q or slope, double-click a node to reset, double-click empty space to wake the nearest dormant band. Both views share one state.
+15a · Parametric EQ · dock 1920 × 400 · Peak 2 being dragged
+OUTPUT
+HP LS 1 2 3 HS LP Peak 2 Freq 2.8 kHz F7 +4c Gain +2.5 dB Q Q 0.80 Listen
+Range ± 12 dB ▸ Analyzer and display
+15b · EQ · compact 360
+HP LS 1 2 3 HS LP
+Peak 2 F7 +4c
+Listen
+▸ Analyzer and display
+± 12 dB
+15c · Compressor · dock 1920 × 400 · ducking Bass from the Kick sidechain
+−6 −12 −18 −24 −36 −48 −6 −12 −18 Input Output Gain reduction Key · Kick
+⇕ Threshold −24.0 dB
+4 s · now →
+Transfer −24 dB · 4.0:1 in → ratio ⇕
+GR −6.2
+0 3 6 9 12 18 24
+Auto suggests +4.5 · Apply
+Key from Kick · post-fader send Listen to key Release is automated (Read) · ring shows the playing value
+▸ Display: history 4 s · range 60 dB · key trace on
+15d · Compressor · compact 360
+GAIN REDUCTION −6.2 dB
+0 6 12 24
+Key Kick
+▾
+▸ Display
+Auto makeup +4.5
+15e · AI changed the EQ · “make the vocal brighter”
+OUTPUT
+AI changed 3 bands “make the vocal brighter”
+High shelf +3.0 → +6.0 dB, 10 → 8 kHz for air Peak 1 −3.5 → −5.0 dB at 320 Hz to clear boxiness Peak 3 6.5 → 5.2 kHz, −2.5 → −3.5 dB so the extra top doesn't add sibilance
+Keep Undo ⌘Z Hold to hear before B
+Dashed = before
+HP LS 1 2 3 HS LP Bands with a blue ring were moved by the AI. The ring clears when you touch the band or press Keep.
+15f · EQ popped out into a floating window over the arrange · 1920 × 1000 crop
+CADENZA 5.3.120 92.00 BPM
+Drums Drum Machine
+Bass Poly Synth
+Keys Electric Piano
+Vocals Audio · EQ, Comp
+Pad Poly Synth
+Reverb Bus
+Drums
+Drums
+Drums
+Bass
+Bass
+Bass
+Keys
+Keys
+Keys
+Lead vox take 3
+Lead vox take 3
+Pad
+Pad
+Pad
+Parametric EQ · Vocals
+Dock Keep on top ✓ ×
+Peak 2 2.8 kHz +2.5 dB Q 0.80
+Window remembers size per device · resize from any edge

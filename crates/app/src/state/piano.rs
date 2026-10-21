@@ -10,13 +10,14 @@
 //! the arrange view follows. Notes cannot go before the clip start (they are clamped):
 //! growing the clip to the left would move its start and shift every other note.
 
+use crate::i18n::tr;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{ClipId, Meter, NoteId, PPQ, Tick, TimeSignature, TrackId};
 use cadenza_model::controller::splice;
 use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project, TrackKind};
 use cadenza_model::{Controller, ControllerPoint};
-use cadenza_theory::Scale;
+use cadenza_theory::{Scale, ScaleKind};
 use serde::{Deserialize, Serialize};
 
 use super::timeline::{Timeline, snap_to};
@@ -44,12 +45,22 @@ pub enum Tool {
 impl Tool {
 	pub const ALL: [Tool; 4] = [Tool::Draw, Tool::Paint, Tool::Select, Tool::Slice];
 
-	pub fn label(self) -> &'static str {
+	pub fn name(self) -> &'static str {
 		match self {
-			Tool::Draw => "✏ Draw",
-			Tool::Paint => "🎨 Paint",
-			Tool::Select => "⛶ Select",
-			Tool::Slice => "✂ Slice",
+			Tool::Draw => tr("Draw"),
+			Tool::Paint => tr("Paint"),
+			Tool::Select => tr("Select"),
+			Tool::Slice => tr("Slice"),
+		}
+	}
+
+	/// The toolbar glyph (the same pictures as the arrange tools).
+	pub fn glyph(self) -> &'static str {
+		match self {
+			Tool::Draw => "✏",
+			Tool::Paint => "▦",
+			Tool::Select => "↖",
+			Tool::Slice => "✂",
 		}
 	}
 
@@ -64,13 +75,13 @@ impl Tool {
 
 	pub fn tip(self) -> &'static str {
 		match self {
-			Tool::Draw => {
+			Tool::Draw => tr(
 				"Click adds a note (drag to place it), drag notes to move, edges to resize, \
-				 right-drag deletes, Ctrl+drag selects, Shift+drag duplicates"
-			}
-			Tool::Paint => "Drag to paint notes at every snap step",
-			Tool::Select => "Click selects, drag a rubber band (Shift/Ctrl adds)",
-			Tool::Slice => "Click or drag vertically across notes to split them",
+				 right-drag deletes, Ctrl+drag selects, Shift+drag duplicates",
+			),
+			Tool::Paint => tr("Drag to paint notes at every snap step"),
+			Tool::Select => tr("Click selects, drag a rubber band (Shift/Ctrl adds)"),
+			Tool::Slice => tr("Click or drag vertically across notes to split them"),
 		}
 	}
 }
@@ -109,12 +120,12 @@ impl PianoSnap {
 
 	pub fn name(self) -> &'static str {
 		match self {
-			PianoSnap::Main => "Main snap",
-			PianoSnap::Off => "No snap",
-			PianoSnap::Bar => "Bar",
-			PianoSnap::Beat => "Beat",
+			PianoSnap::Main => tr("Main snap"),
+			PianoSnap::Off => tr("No snap"),
+			PianoSnap::Bar => tr("Bar"),
+			PianoSnap::Beat => tr("Beat"),
 			PianoSnap::HalfBeat => "1/2 beat",
-			PianoSnap::Step => "Step (1/16)",
+			PianoSnap::Step => tr("Step (1/16)"),
 			PianoSnap::HalfStep => "1/2 step",
 			PianoSnap::ThirdBeat => "1/3 beat",
 			PianoSnap::ThirdStep => "1/6 beat",
@@ -174,9 +185,9 @@ pub enum Ghosts {
 impl Ghosts {
 	pub fn name(self) -> &'static str {
 		match self {
-			Ghosts::Off => "No ghost notes",
-			Ghosts::SameTrack => "Ghosts: this track",
-			Ghosts::AllTracks => "Ghosts: all tracks",
+			Ghosts::Off => tr("No ghost notes"),
+			Ghosts::SameTrack => tr("Ghosts: this track"),
+			Ghosts::AllTracks => tr("Ghosts: all tracks"),
 		}
 	}
 }
@@ -198,6 +209,10 @@ pub struct PianoView {
 	pub last_velocity: f32,
 	/// Rows outside the scale are dimmed.
 	pub scale: Option<Scale>,
+	/// With a scale: rows outside it are shaded and in-scale rows one step lighter
+	/// (toolbar "Scale rows"); off, the rows follow the keys and only the keyboard marks
+	/// the scale.
+	pub scale_rows: bool,
 	pub ghosts: Ghosts,
 	pub velocity_lane: bool,
 	/// What the event lane under the notes edits (velocity or a controller).
@@ -225,6 +240,7 @@ impl Default for PianoView {
 			last_length: Tick(PPQ / 4),
 			last_velocity: 0.8,
 			scale: None,
+			scale_rows: true,
 			ghosts: Ghosts::SameTrack,
 			velocity_lane: true,
 			event_lane: EventLane::Velocity,
@@ -711,10 +727,82 @@ impl EventLane {
 
 	pub fn label(self) -> String {
 		match self {
-			EventLane::Velocity => "Velocity".into(),
-			EventLane::Controller(Controller::Cc(74)) => "Brightness (CC 74)".into(),
+			EventLane::Velocity => tr("Velocity").into(),
+			EventLane::Controller(Controller::Cc(74)) => tr("Brightness (CC 74)").into(),
 			EventLane::Controller(c) => c.label(),
 		}
+	}
+}
+
+impl EventLane {
+	/// The lane tabs under the notes (design 04): velocity and the common performance
+	/// controllers, then every other lane the clip has data in, then `current` when it is
+	/// none of those (a CC picked from the "+ CC" menu).
+	pub fn tabs(clip: &Clip, current: EventLane) -> Vec<EventLane> {
+		let mut tabs = vec![
+			EventLane::Velocity,
+			EventLane::Controller(Controller::Cc(1)),
+			EventLane::Controller(Controller::PitchBend),
+			EventLane::Controller(Controller::Cc(64)),
+			EventLane::Controller(Controller::Cc(11)),
+		];
+		for lane in clip.controllers() {
+			let l = EventLane::Controller(lane.controller);
+			if !tabs.contains(&l) {
+				tabs.push(l);
+			}
+		}
+		if !tabs.contains(&current) {
+			tabs.push(current);
+		}
+		tabs
+	}
+
+	/// The short name in the lane's left column ("Mod CC1", "Bend").
+	pub fn short(self) -> String {
+		match self {
+			EventLane::Velocity => tr("Velocity").into(),
+			EventLane::Controller(Controller::Cc(1)) => tr("Mod CC1").into(),
+			EventLane::Controller(Controller::Cc(11)) => tr("Expr CC11").into(),
+			EventLane::Controller(Controller::Cc(64)) => tr("Sustain").into(),
+			EventLane::Controller(Controller::PitchBend) => tr("Bend").into(),
+			EventLane::Controller(Controller::ChannelPressure) => tr("Pressure").into(),
+			EventLane::Controller(Controller::Cc(n)) => format!("CC {n}"),
+		}
+	}
+}
+
+/// Whether note names in `scale` read better with flats (C minor: E♭, not D♯): the
+/// scale's relative major has a flat key signature. Sharps without a scale.
+pub fn prefers_flats(scale: Option<Scale>) -> bool {
+	let Some(s) = scale else {
+		return false;
+	};
+	// Semitones from the scale root up to its relative major's root.
+	let to_major = match s.kind {
+		ScaleKind::Major | ScaleKind::MajorPentatonic => 0,
+		ScaleKind::Dorian => 10,
+		ScaleKind::Mixolydian => 5,
+		ScaleKind::Phrygian => 8,
+		ScaleKind::Lydian => 7,
+		ScaleKind::Locrian => 1,
+		ScaleKind::NaturalMinor
+		| ScaleKind::HarmonicMinor
+		| ScaleKind::MelodicMinor
+		| ScaleKind::MinorPentatonic
+		| ScaleKind::Blues => 3,
+		ScaleKind::WholeTone | ScaleKind::Chromatic => 0,
+	};
+	matches!((s.root.0 + to_major) % 12, 1 | 3 | 5 | 6 | 8 | 10)
+}
+
+/// A controller value as the lane shows it: MIDI 0..127, pitch bend -8191..+8191,
+/// switches On/Off.
+pub fn controller_text(controller: Controller, v: f32) -> String {
+	match controller {
+		Controller::PitchBend => format!("{:+.0}", v * 8191.0),
+		c if c.is_switch() => if v >= 0.5 { tr("On") } else { tr("Off") }.to_owned(),
+		_ => format!("{}", (v * 127.0).round()),
 	}
 }
 
@@ -803,7 +891,7 @@ pub fn targets(clip: &Clip, selected: &BTreeSet<NoteId>) -> BTreeSet<NoteId> {
 	}
 }
 
-fn ceil_to(tick: Tick, step: Tick) -> Tick {
+pub(crate) fn ceil_to(tick: Tick, step: Tick) -> Tick {
 	let s = step.0.max(1);
 	Tick((tick.0 + s - 1).div_euclid(s) * s)
 }
@@ -1162,6 +1250,48 @@ pub fn is_black(pitch: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn controller_values_read_in_midi_units() {
+		assert_eq!(controller_text(Controller::Cc(1), 0.5), "64");
+		assert_eq!(controller_text(Controller::Cc(64), 0.7), "On");
+		assert_eq!(controller_text(Controller::PitchBend, -1.0), "-8191");
+		assert_eq!(controller_text(Controller::PitchBend, 0.0), "+0");
+	}
+
+	#[test]
+	fn flat_keys_spell_with_flats() {
+		let flats = |s: &str| prefers_flats(Scale::parse(s).ok());
+		assert!(flats("C minor"));
+		assert!(flats("F major"));
+		assert!(flats("G dorian"));
+		assert!(!flats("A minor"));
+		assert!(!flats("E minor"));
+		assert!(!flats("D major"));
+		assert!(!prefers_flats(None));
+	}
+
+	#[test]
+	fn lane_tabs_add_lanes_with_data_and_the_current_one() {
+		let mut clip = Clip::midi("C", Tick::ZERO, Tick(PPQ * 4));
+		let base = EventLane::tabs(&clip, EventLane::Velocity);
+		assert_eq!(base.len(), 5);
+		assert_eq!(base[1], EventLane::Controller(Controller::Cc(1)));
+		if let cadenza_model::ClipContent::Midi { controllers, .. } = &mut clip.content {
+			controllers.push(cadenza_model::ControllerLane {
+				controller: Controller::Cc(74),
+				points: vec![ControllerPoint::new(Tick::ZERO, 0.5)],
+			});
+		}
+		let cc7 = EventLane::Controller(Controller::Cc(7));
+		let tabs = EventLane::tabs(&clip, cc7);
+		assert_eq!(
+			&tabs[5..],
+			&[EventLane::Controller(Controller::Cc(74)), cc7]
+		);
+		assert_eq!(EventLane::tabs(&clip, base[3]).len(), 6, "no repeats");
+		assert_eq!(base[1].short(), "Mod CC1");
+	}
+
 	use super::*;
 	use cadenza_model::{Document, Track, TrackKind};
 

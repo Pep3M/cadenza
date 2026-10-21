@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div style="display:flex;flex-direction:column;gap:56px;flex:none">
+
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">09a · Start screen</div>
+<div data-screen-label="09a Start screen" style="width:1920px;height:1080px;background:#111215;display:flex;flex-direction:column;overflow:hidden;font-size:13px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="height:28px;flex:none;display:flex;align-items:center;gap:18px;padding:0 12px;background:#0e0f11;border-bottom:1px solid #1d1f23;font-size:12px">
+<span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5">CADENZA</span>
+<div style="display:flex;gap:14px;color:#a3a6ad;font-size:12.5px"><span>File</span><span>Edit</span><span>View</span><span>Help</span></div>
+<div style="flex:1"></div>
+<span style="color:#4fc38a">● USB Audio · 48 kHz · 256 · ready</span><span style="color:#a3a6ad">Audio settings</span>
+</div>
+<div style="flex:1;display:flex;justify-content:center;padding:56px 64px 32px;min-height:0">
+<div style="width:100%;max-width:1240px;display:flex;flex-direction:column;gap:32px">
+<div style="display:flex;align-items:center;gap:14px;padding:12px 16px;background:#3a2c17;border-radius:6px;box-shadow:inset 0 0 0 1px #5a4422">
+<span style="color:#f2a944;font-size:15px">⚠</span><span style="flex:1"><b style="font-weight:600">night_drive</b> wasn’t closed cleanly. An autosave from today 14:32 is newer than the saved file.</span><span style="padding:4px 12px;background:#f2a944;color:#1a1208;border-radius:4px;font-weight:600;font-size:12px">Recover autosave</span><span style="padding:4px 12px;background:#2a2c32;border-radius:4px;font-size:12px">Open saved version</span><span style="color:#a3a6ad;font-size:12px">Discard</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:28px;font-weight:600;letter-spacing:-0.01em">Start a song</span><span style="color:#a3a6ad">Pick a starting point. Everything can be changed later.</span></div>
+<div style="display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:12px">
+<div style="background:#131c28;border-radius:8px;box-shadow:inset 0 0 0 1px #2c4a73;padding:18px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;align-items:center;gap:10px"><span style="width:28px;height:28px;border-radius:50%;background:#4c9cf5;color:#0b1220;display:flex;align-items:center;justify-content:center;font-weight:700">C</span><span style="font-size:15px;font-weight:600">Describe it to the producer</span></div>
+<div style="min-height:72px;background:#0e0f11;border:1px solid #2c4a73;border-radius:6px;padding:10px 12px;color:#c4c7cd;line-height:1.5">A chill lo-fi beat at 80 bpm with Rhodes, upright bass and vinyl crackle<span style="display:inline-block;width:1px;height:15px;background:#e8e9ec;vertical-align:-2px;margin-left:1px"></span></div>
+<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#80848c"><span>claude-haiku-4.5</span><span>·</span><span>~$0.01</span><span style="flex:1"></span><span style="padding:5px 14px;background:#4c9cf5;color:#0b1220;border-radius:4px;font-weight:600;font-size:12.5px">Create ↵</span></div>
+</div>
+<div style="background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b;padding:18px;display:flex;flex-direction:column;gap:10px">
+<span style="font-size:15px;font-weight:600">From a style</span>
+<span style="color:#a3a6ad;font-size:12.5px;line-height:1.5">Tracks, tempo, key and a song form from the library.</span>
+<div style="display:flex;flex-direction:column;gap:4px;margin-top:auto">
+<sc-for list="{{ styles }}" as="s" hint-placeholder-count="3"><div style="height:30px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#1c1d21;border-radius:4px"><span style="width:8px;height:8px;border-radius:2px;background:{{ s.c }}"></span><span>{{ s.n }}</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">{{ s.t }}</span></div></sc-for>
+<span style="color:#7fb4ff;font-size:12px;padding-top:4px">All 8 styles →</span>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="flex:1;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b;padding:18px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between"><span style="font-size:15px;font-weight:600">Empty project</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">Ctrl N</span></div><span style="color:#a3a6ad;font-size:12.5px">120 bpm · 4/4 · 48 kHz</span></div>
+<div style="flex:1;background:#15161a;border-radius:8px;box-shadow:inset 0 0 0 1px #24262b;padding:18px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between"><span style="font-size:15px;font-weight:600">Demo song</span><span style="font-size:11px;color:#80848c">read-only copy</span></div><span style="color:#a3a6ad;font-size:12.5px">First Light · 7 tracks · 1:12</span></div>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;min-height:0">
+<div style="display:flex;align-items:baseline;gap:12px"><span style="font-size:17px;font-weight:600">Recent</span><span style="flex:1"></span><span style="height:26px;display:flex;align-items:center;padding:0 12px;background:#212328;border-radius:4px;font-weight:500;font-size:12.5px">Open… <span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:11px;margin-left:8px">Ctrl O</span></span></div>
+<div style="display:flex;flex-direction:column;border-radius:6px;overflow:hidden;box-shadow:inset 0 0 0 1px #24262b">
+<sc-for list="{{ recent }}" as="r" hint-placeholder-count="6">
+<div style="height:52px;display:grid;grid-template-columns:200px minmax(0,1fr) 140px 130px 120px;gap:16px;align-items:center;padding:0 16px;background:{{ r.bg }};border-bottom:1px solid #1d1f23;box-shadow:{{ r.edge }}">
+<div style="height:28px;background:#0e0f11;border-radius:3px;position:relative;overflow:hidden"><sc-for list="{{ r.ov }}" as="o" hint-placeholder-count="0"><div style="position:absolute;left:{{ o.l }}%;width:{{ o.w }}%;top:{{ o.t }}px;height:3px;border-radius:1px;background:{{ o.c }}"></div></sc-for></div>
+<div style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font-weight:600;display:flex;gap:8px;align-items:center">{{ r.n }}<sc-if value="{{ r.warn }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:600;color:#f2a944;background:#3a2c17;padding:0 5px;border-radius:2px">autosave</span></sc-if></span><span style="font-size:11.5px;color:#80848c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.p }}</span></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#a3a6ad">{{ r.meta }}</span>
+<span style="font-size:12px;color:#a3a6ad">{{ r.tr }}</span>
+<span style="font-size:12px;color:#80848c;text-align:right">{{ r.when }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="display:flex;gap:20px;font-size:12px;color:#80848c;margin-top:auto"><span>F1 keyboard shortcuts</span><span>Getting started</span><span>Plugins: 14 CLAP / VST3 found · Rescan</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace">v0.9.0</span></div>
+</div>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">09b · Empty project</div>
+<div data-screen-label="09b Empty project" style="width:1920px;height:1080px;background:#0e0f11;display:grid;grid-template-rows:28px 56px minmax(0,1fr) 24px;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:18px;padding:0 12px;border-bottom:1px solid #1d1f23"><span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5">CADENZA</span><div style="display:flex;gap:14px;color:#a3a6ad;font-size:12.5px"><span>File</span><span>Edit</span><span>Track</span><span>View</span><span>AI</span><span>Help</span></div><div style="flex:1;text-align:center;color:#a3a6ad">untitled</div><span style="color:#80848c;font-family:'IBM Plex Mono',monospace;font-size:11.5px">F1 shortcuts</span></div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;background:#15161a;border-bottom:1px solid #24262b">
+<div style="display:flex;gap:2px"><div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">⏮</div><div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328"><span style="width:10px;height:10px;background:#a3a6ad;border-radius:1px"></span></div><div style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;color:#a3a6ad;font-size:14px">▶</div><div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:11px;height:11px;border-radius:50%;background:#f0524f"></span></div></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 8px;color:#a3a6ad">Pattern</span><span style="padding:2px 8px;background:#2a2c32;border-radius:3px;font-weight:500">Song</span></div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;background:#0e0f11;border:1px solid #24262b;border-radius:6px;height:44px"><div style="padding:0 18px"><span style="font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:500;line-height:1">1.1.000</span></div><div style="width:1px;height:28px;background:#24262b"></div><div style="padding:0 14px;display:flex;flex-direction:column;gap:1px"><span style="font-size:10.5px;color:#80848c">Tempo</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:500">120.00</span></div><div style="padding:0 14px 0 4px;display:flex;flex-direction:column;gap:1px"><span style="font-size:10.5px;color:#80848c">Sig</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px">4/4</span></div></div>
+<div style="flex:1"></div>
+<div style="display:flex;flex-direction:column;gap:4px;width:180px"><span style="font-size:11px;color:#4fc38a">● 48 kHz · 256 · 5.3 ms</span><div style="height:4px;background:#0e0f11;border-radius:2px"></div><div style="height:4px;background:#0e0f11;border-radius:2px"></div></div>
+</div>
+<div style="display:grid;grid-template-columns:248px minmax(0,1fr) 300px;min-height:0">
+<div style="background:#15161a;border-right:1px solid #24262b;display:flex;flex-direction:column">
+<div style="height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-bottom:1px solid #1d1f23"><span style="font-weight:600;font-size:13px">Browser</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">F6</span></div>
+<div style="display:flex;padding:8px"><div style="flex:1;display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="flex:1;text-align:center;padding:4px 0;background:#2a2c32;border-radius:3px;font-weight:500">Devices</span><span style="flex:1;text-align:center;padding:4px 0;color:#a3a6ad">Files</span><span style="flex:1;text-align:center;padding:4px 0;color:#a3a6ad">Library</span></div></div>
+<div style="padding:6px 12px 2px;font-size:11px;font-weight:600;color:#a3a6ad">▾ Instruments</div>
+<sc-for list="{{ insts }}" as="d" hint-placeholder-count="5"><div style="height:24px;padding:0 12px;display:flex;align-items:center;gap:8px"><span style="width:16px;height:16px;border-radius:3px;background:#1d2a3d;display:flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:600;color:#7fb4ff">{{ d.g }}</span><span>{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 12px 2px;font-size:11px;font-weight:600;color:#a3a6ad">▸ Effects <span style="color:#80848c;font-weight:400">8</span></div>
+<div style="padding:10px 12px 2px;font-size:11px;font-weight:600;color:#a3a6ad">▸ Plugins <span style="color:#80848c;font-weight:400">14</span></div>
+</div>
+<div style="background:#111215;display:flex;flex-direction:column;min-width:0">
+<div style="height:28px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#15161a;border-bottom:1px solid #24262b"><span style="font-weight:600;font-size:13px">Arrange</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">F5</span></div>
+<div style="height:24px;display:flex;border-bottom:1px solid #24262b;background:#15161a"><div style="width:212px;flex:none;border-right:1px solid #24262b"></div><div style="flex:1;position:relative"><sc-for list="{{ bars }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.l }}%;top:6px;bottom:0;border-left:1px solid #2a2c32;padding-left:4px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">{{ b.n }}</div></sc-for></div></div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;background-image:linear-gradient(to right,#17181c 1px,transparent 1px);background-size:6.25% 100%;background-position:212px 0">
+<div style="width:640px;display:flex;flex-direction:column;gap:20px;align-items:stretch">
+<div style="border:1.5px dashed #363940;border-radius:8px;padding:28px;display:flex;flex-direction:column;align-items:center;gap:14px;background:rgba(21,22,26,.8)">
+<span style="font-size:17px;font-weight:600">Add your first track</span>
+<span style="color:#a3a6ad;text-align:center;line-height:1.5">Drop a device, audio or MIDI file, or a library pattern here, or start with one of these.</span>
+<div style="display:flex;gap:8px">
+<sc-for list="{{ addBtns }}" as="a" hint-placeholder-count="4"><span style="height:32px;display:flex;align-items:center;gap:8px;padding:0 14px;background:{{ a.bg }};color:{{ a.fg }};border-radius:4px;font-weight:500;font-size:12.5px">{{ a.n }}<span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ a.kc }}">{{ a.k }}</span></span></sc-for>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px;padding:16px;background:#131c28;border-radius:8px;box-shadow:inset 0 0 0 1px #2c4a73">
+<div style="display:flex;align-items:center;gap:10px"><span style="width:22px;height:22px;border-radius:50%;background:#4c9cf5;color:#0b1220;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px">C</span><span style="font-weight:600;font-size:13px">Or ask the producer</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">F10</span></div>
+<div style="height:36px;display:flex;align-items:center;padding:0 12px;background:#0e0f11;border:1px solid #2c4a73;border-radius:6px;color:#80848c;font-size:13px">Make a 16-bar house groove with a bassline and chords</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap"><span style="padding:3px 10px;border:1px solid #363940;border-radius:12px;color:#c4c7cd">Add drums at 120 bpm</span><span style="padding:3px 10px;border:1px solid #363940;border-radius:12px;color:#c4c7cd">Start from Latin pop</span><span style="padding:3px 10px;border:1px solid #363940;border-radius:12px;color:#c4c7cd">Write chords in A minor</span></div>
+</div>
+</div>
+</div>
+</div>
+<div style="background:#15161a;border-left:1px solid #24262b;display:flex;flex-direction:column">
+<div style="height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-bottom:1px solid #1d1f23"><span style="font-weight:600;font-size:13px">Inspector</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">F8</span></div>
+<div style="padding:12px;display:flex;flex-direction:column;gap:3px"><span style="font-size:15px;font-weight:600">Project</span><span style="color:#a3a6ad;font-size:11.5px">Nothing selected</span></div>
+<div style="display:flex;flex-direction:column;padding:0 12px;gap:2px">
+<sc-for list="{{ proj }}" as="p" hint-placeholder-count="5"><div style="display:grid;grid-template-columns:96px minmax(0,1fr);align-items:center;height:24px"><span style="color:#a3a6ad">{{ p.k }}</span><span style="height:20px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">{{ p.v }}</span></div></sc-for>
+</div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid #1d1f23;font-size:11px;color:#a3a6ad"><span>New project · not saved yet</span><span style="flex:1"></span><span style="color:#80848c">0 tracks</span></div>
+</div>
+</div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd;padding-top:36px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 09</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Start screen and empty project</span><span style="color:#a3a6ad">First run and every launch without a project.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    let seed = 4; const r = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const TC = ['#e8705f', '#5aa2f5', '#e3b24f', '#9a82ec', '#4fc3a1', '#e07fb0', '#ec8d4f'];
+    const ov = n => { const o = []; for (let i = 0; i < n; i++) { let x = Math.floor(r() * 4) * 12.5; while (x < 100) { const w = (1 + Math.floor(r() * 3)) * 12.5; o.push({ l: x, w: Math.min(w, 100 - x) - 1, t: 3 + i * 4, c: TC[i % 7] }); x += w + (r() > .6 ? 12.5 : 0); } } return o; };
+    const R = [['night_drive', '~/Music/Cadenza/night_drive', '94 · A minor', '9 tracks', 'Today 14:32', 1, 6], ['first_light', '~/Music/Cadenza/first_light', '92 · C minor', '7 tracks', 'Yesterday', 0, 5], ['lofi_sketch_03', '~/Music/Cadenza/sketches', '80 · F major', '5 tracks', '3 days ago', 0, 4], ['vocal_demo_v2', '~/Music/Clients/ana', '104 · E♭ major', '12 tracks', 'Oct 9', 0, 6], ['house_idea', '~/Music/Cadenza/sketches', '124 · G minor', '6 tracks', 'Oct 2', 0, 5]];
+    const recent = R.map(([n, p, meta, tr, when, warn, k], i) => ({ n, p, meta, tr, when, warn: !!warn, ov: ov(k), bg: i === 1 ? '#1c1d21' : '#15161a', edge: i === 1 ? 'inset 2px 0 0 #4c9cf5' : 'none' }));
+    const styles = [['Latin pop', '#e8705f', '88–102'], ['Lo-fi hip hop', '#9a82ec', '70–90'], ['Deep house', '#4fc3a1', '118–125']].map(([n, c, t]) => ({ n, c, t }));
+    const insts = [['DM', 'Drum Machine'], ['DS', 'Drum Sampler'], ['EP', 'Electric Piano'], ['PS', 'Poly Synth'], ['SA', 'Sampler']].map(([g, n]) => ({ g, n }));
+    const addBtns = [['+ Instrument', 'I', 1], ['+ Audio', 'A'], ['+ Bus', ''], ['+ Folder', '']].map(([n, k, p]) => ({ n, k, bg: p ? '#4c9cf5' : '#212328', fg: p ? '#0b1220' : '#e8e9ec', kc: p ? '#1d3a63' : '#80848c' }));
+    const proj = [['Tempo', '120.00 bpm'], ['Signature', '4/4'], ['Key', 'C major'], ['Sample rate', '48 kHz'], ['Autosave', 'every 2 min']].map(([k, v]) => ({ k, v }));
+    const ux = [
+      { h: 'What changed and why', items: [
+        'The start screen is a full window, not a small modal over a disabled app. It shows the audio device status right away, so a broken device is found before you start a song.',
+        'Three equal ways in, with the AI first: describe a song (with an estimated cost), start from a style, or an empty project or demo. The demo opens as a copy so it can’t be overwritten.',
+        'Recent projects show a mini arrangement overview, tempo and key, track count and relative date. The full path is a dim second line instead of the main label.',
+        'Autosave recovery is a banner at the top with three clear choices instead of a separate prompt.',
+        'The empty project keeps the normal layout (so you learn where things are) and fills the arrange with one drop target, the four add buttons with their keys, and a producer prompt with starter suggestions. The inspector shows project settings rather than "select something".',
+      ]},
+      { h: 'Interaction', items: [
+        'Enter in the producer field creates the project and sends the prompt; the AI panel opens with the request running.',
+        'Arrow keys move through recent projects, Enter opens, Delete removes from the list (the files stay). Dragging a project file onto the window opens it.',
+        'In the empty project, I adds an instrument (opens a small device picker at the mouse) and A adds an audio track with the default input.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'First run: no Recent list, but a one-line "Set up audio" check (device, sample rate, test tone) and "Scan for plugins".',
+        'Missing recent project: the row is dimmed with "Not found · Locate… · Remove".',
+        'Audio device unavailable: the status turns amber, "Audio off · Choose device", and the project can still be opened and edited.',
+      ]},
+    ];
+    this._v = { recent, styles, insts, addBtns, proj, bars: Array.from({ length: 16 }, (_, i) => ({ n: i + 1, l: i / 16 * 100 })), ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

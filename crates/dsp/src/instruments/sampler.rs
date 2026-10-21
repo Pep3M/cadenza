@@ -3,6 +3,7 @@
 use super::sample_voice::{
 	KillFade, Playhead, SlotInfo, ZoneEnv, ZoneRt, pick_slot, select_zones, velocity_gain,
 };
+use super::voice_readings::{self, HeldNotes, NewestVoices, VoiceReading};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::sample::Zone;
 use crate::util::envelope::Adsr;
@@ -256,6 +257,27 @@ pub static INFO: DeviceInfo = DeviceInfo {
 	params: &PARAMS,
 };
 
+/// Static magnitude response of the filter stage alone (no envelope, velocity
+/// or key tracking, which modulate `cutoff_hz` live), in dB. `filter_type`:
+/// 0 off (returns 0 dB), 1 low-pass, 2 high-pass, 3 band-pass. Uses the same
+/// [`SvfCoeffs::new`] the voice applies so the picture matches the sound.
+pub fn sampler_filter_response_db(
+	filter_type: usize,
+	cutoff_hz: f32,
+	resonance: f32,
+	sample_rate: f32,
+	freq_hz: f32,
+) -> f32 {
+	let output = match filter_type {
+		0 => return 0.0,
+		1 => crate::util::svf::SvfOutput::Low,
+		2 => crate::util::svf::SvfOutput::High,
+		_ => crate::util::svf::SvfOutput::Band,
+	};
+	let coeffs = SvfCoeffs::new(cutoff_hz, (resonance * 0.01).clamp(0.0, 1.0), sample_rate);
+	crate::util::svf::svf_magnitude_db(&coeffs, output, freq_hz, sample_rate)
+}
+
 /// Voice slots: the polyphony maximum plus room for voices fading out after a steal.
 const SLOTS: usize = MAX_POLYPHONY + 16;
 /// Samples between pitch/filter coefficient updates.
@@ -285,6 +307,17 @@ struct Voice {
 	coeffs: SvfCoeffs,
 	/// Key up while the sustain pedal is down.
 	pedal: bool,
+	/// Samples since the note-on, or since the release once released (readings).
+	elapsed: u32,
+}
+
+impl Voice {
+	fn release(&mut self) {
+		if !self.slot.released {
+			self.slot.released = true;
+			self.elapsed = 0;
+		}
+	}
 }
 
 /// Multi-zone sampler.
@@ -303,6 +336,7 @@ pub struct Sampler {
 	expr: Expression,
 	/// Bend + vibrato of the span being rendered (semitones).
 	pitch_offset: f32,
+	held: HeldNotes,
 }
 
 impl Default for Sampler {
@@ -328,6 +362,7 @@ impl Sampler {
 			longest: 0.0,
 			expr: Expression::default(),
 			pitch_offset: 0.0,
+			held: HeldNotes::default(),
 		}
 	}
 
@@ -474,6 +509,7 @@ impl Sampler {
 			svf: [Svf::default(); 2],
 			coeffs: SvfCoeffs::default(),
 			pedal: false,
+			elapsed: 0,
 		};
 		self.set_envelopes(&mut v);
 		v.amp.gate_on();
@@ -492,7 +528,7 @@ impl Sampler {
 					v.pedal = true;
 					continue;
 				}
-				v.slot.released = true;
+				v.release();
 				v.amp.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -502,7 +538,7 @@ impl Sampler {
 	fn pedal_up(&mut self) {
 		for v in self.voices.iter_mut() {
 			if v.slot.active && !v.slot.released && v.pedal {
-				v.slot.released = true;
+				v.release();
 				v.amp.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -515,7 +551,7 @@ impl Sampler {
 		for v in self.voices.iter_mut().filter(|v| v.slot.active) {
 			v.kill.start(ALL_OFF_MS, sr);
 			v.slot.fading = true;
-			v.slot.released = true;
+			v.release();
 		}
 	}
 
@@ -591,6 +627,7 @@ impl Sampler {
 				*l += a * rt.gain_l * g;
 				*r += b * rt.gain_r * g;
 			}
+			v.elapsed = v.elapsed.saturating_add(left.len() as u32);
 			self.voices[i] = v;
 		}
 		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
@@ -643,6 +680,9 @@ impl Processor for Sampler {
 		right[..len].fill(0.0);
 		for (start, end, ev) in event_spans(len, events) {
 			self.render(&mut left[start..end], &mut right[start..end]);
+			if let Some(ev) = ev {
+				self.held.apply(ev);
+			}
 			match ev {
 				Some(&MidiEvent::NoteOn {
 					pitch, velocity, ..
@@ -670,6 +710,7 @@ impl Processor for Sampler {
 		self.gain.snap();
 		self.last_pitch = None;
 		self.rr = [0; 17];
+		self.held.clear();
 		self.expr.reset_controllers();
 	}
 
@@ -677,6 +718,31 @@ impl Processor for Sampler {
 		let release = self.params.get(P_AMP_RELEASE) * 0.0014 + 0.05;
 		let one_shot = if self.one_shot() { self.longest } else { 0.0 };
 		(release + one_shot).min(30.0)
+	}
+
+	fn readings(&self, out: &mut [f32]) -> usize {
+		let mut voices = NewestVoices::default();
+		for v in self
+			.voices
+			.iter()
+			.filter(|v| v.slot.active && !v.slot.fading)
+		{
+			let Some(rt) = self.rt.get(v.zone) else {
+				continue;
+			};
+			voices.offer(
+				v.slot.started,
+				VoiceReading {
+					note: v.note,
+					zone: Some(v.zone),
+					position: Some(v.head.seconds(rt)),
+					released: v.slot.released,
+					elapsed_ms: voice_readings::samples_to_ms(v.elapsed, self.sample_rate),
+					level: v.amp.level(),
+				},
+			);
+		}
+		voice_readings::write(out, &self.held, &voices)
 	}
 
 	fn set_zones(&mut self, zones: Vec<Zone>) -> bool {
@@ -920,5 +986,36 @@ mod tests {
 		assert!(bright(0.0) > 0.45);
 		assert!(bright(1.0) < 0.05);
 		assert!(bright(2.0) > 0.4);
+	}
+
+	#[test]
+	fn filter_response_matches_voice_output() {
+		let pitch = 69u8;
+		let freq = 440.0;
+		for &(filter_type, cutoff, resonance) in
+			&[(1.0, 1_000.0, 20.0), (2.0, 300.0, 50.0), (3.0, 800.0, 70.0)]
+		{
+			let mut s = sampler(vec![Zone::new(sine(freq, SR, 2.0), 0, 127, pitch)]);
+			s.set_param(P_FILTER_TYPE, filter_type);
+			s.set_param(P_FILTER_CUTOFF, cutoff);
+			s.set_param(P_FILTER_RESONANCE, resonance);
+			s.set_param(P_AMP_ATTACK, 0.0);
+			s.set_param(P_AMP_SUSTAIN, 100.0);
+			let out = run(&mut s, &[(0, on(pitch, 0))], 96_000);
+			let settled = &out[48_000..];
+			let sum_sq: f64 = settled.iter().map(|&x| (x as f64) * (x as f64)).sum();
+			let rms = (sum_sq / settled.len() as f64).sqrt() as f32;
+			// The source sine has amplitude 0.5 (RMS 0.5/sqrt(2)); with
+			// velocity sensitivity and zone gain/pan all neutral the voice
+			// otherwise passes it through unchanged.
+			let input_rms = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+			let measured = crate::util::gain_to_db(rms / input_rms);
+			let formula =
+				sampler_filter_response_db(filter_type as usize, cutoff, resonance, SR, freq);
+			assert!(
+				(formula - measured).abs() < 0.5,
+				"filter {filter_type} cutoff {cutoff} res {resonance}: formula {formula}, measured {measured}"
+			);
+		}
 	}
 }

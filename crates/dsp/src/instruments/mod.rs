@@ -7,6 +7,7 @@ mod percussion;
 pub mod poly_synth;
 pub mod sample_voice;
 pub mod sampler;
+pub mod voice_readings;
 
 /// Bookkeeping every polyphonic voice carries for allocation/stealing.
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,9 +21,36 @@ pub struct VoiceSlot {
 	/// Key released while the sustain pedal is down: keeps sounding until the pedal
 	/// goes up.
 	pub pedal: bool,
+	/// Samples since the note-on, or since the release once released (readings).
+	pub elapsed: u32,
 }
 
 impl VoiceSlot {
+	/// The key is released now: the release tail starts.
+	pub fn release(&mut self) {
+		if !self.released {
+			self.released = true;
+			self.elapsed = 0;
+		}
+	}
+
+	/// Counts `samples` rendered.
+	pub fn advance(&mut self, samples: usize) {
+		self.elapsed = self.elapsed.saturating_add(samples as u32);
+	}
+
+	/// This voice as a reading (`level` = its amp envelope).
+	pub fn reading(&self, level: f32, sample_rate: f32) -> voice_readings::VoiceReading {
+		voice_readings::VoiceReading {
+			note: self.note,
+			zone: None,
+			position: None,
+			released: self.released,
+			elapsed_ms: voice_readings::samples_to_ms(self.elapsed, sample_rate),
+			level,
+		}
+	}
+
 	/// A key went up: `true` when the voice should release now, `false` when the
 	/// sustain pedal holds it (marked for [`VoiceSlot::pedal_up`]).
 	pub fn key_up(&mut self, sustain: bool) -> bool {
@@ -82,6 +110,7 @@ mod tests {
 			released,
 			started,
 			pedal: false,
+			elapsed: 0,
 		}
 	}
 

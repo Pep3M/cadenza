@@ -287,6 +287,107 @@ pub trait Processor: Send {
 	fn load_preset(&mut self, _key: &str) -> bool {
 		false
 	}
+	/// Live readings of the last `process` call (e.g. gain reduction) written into
+	/// `out` (at most [`readings::MAX`] values; index meanings in [`readings`]).
+	/// Returns how many were written. Realtime-safe: called on the audio thread.
+	fn readings(&self, _out: &mut [f32]) -> usize {
+		0
+	}
+	/// Switches a monitoring-only listen mode (hear the sidechain key, solo an EQ band).
+	/// Hosts use it for live playback only, never in offline renders, and it is not part
+	/// of the device's state. Returns `false` when the device has no such mode (it then
+	/// stays as it was). Realtime-safe: called on the audio thread.
+	fn set_listen(&mut self, _mode: Listen) -> bool {
+		false
+	}
+}
+
+/// What a device plays instead of its normal output while an editor listens to a part
+/// of it (see [`Processor::set_listen`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Listen {
+	/// Normal output.
+	#[default]
+	Off,
+	/// Dynamics: the detector's key signal (the sidechain, else the device's input).
+	Key,
+	/// `eq`: the input isolated to one band (index as in `effects::eq::N_BANDS`).
+	Band(u8),
+}
+
+/// Index meanings of [`Processor::readings`].
+pub mod readings {
+	/// Most readings a device publishes.
+	pub const MAX: usize = 64;
+	/// `compressor`, `limiter`: largest gain reduction of the last block, positive dB;
+	/// `reverb`: how far ducking turned the wet signal down in the last block.
+	pub const GAIN_REDUCTION_DB: usize = 0;
+	/// `compressor`: level of the detector's key signal (the sidechain when keyed, else
+	/// the input), dBFS (-144 = silence): instant peak with a 20 dB / 300 ms fall, so a
+	/// reader sampling once per UI frame still sees every hit.
+	pub const KEY_LEVEL_DB: usize = 1;
+	/// `eq`: first of [`EQ_BANDS`] values, the gain (dB) each band plays now in the
+	/// response band order (HP, LS, Peak 1-3, HS, LP; HP / LP read 0): the static gain,
+	/// or a dynamic band's live gain (between 0 dB and its static gain).
+	pub const EQ_BAND_GAIN_DB_START: usize = 0;
+	/// Number of `eq` band gain readings.
+	pub const EQ_BANDS: usize = 7;
+	/// `drum_machine`: first of [`DRUM_VOICES`] trigger counters, one per voice in
+	/// [`DRUM_VOICE_NAMES`] order (kick, snare, clap, hats, toms, cymbals, perc). Each
+	/// grows by one per note-on of that voice; readers compare against the last value.
+	pub const DRUM_VOICE_TRIGGERS_START: usize = 0;
+	/// Number of `drum_machine` trigger counters.
+	pub const DRUM_VOICES: usize = 7;
+	/// `drum_machine` voice order of the trigger counters.
+	pub const DRUM_VOICE_NAMES: [&str; DRUM_VOICES] =
+		["kick", "snare", "clap", "hats", "toms", "cymbals", "perc"];
+	pub const DRUM_KICK: usize = 0;
+	pub const DRUM_SNARE: usize = 1;
+	pub const DRUM_CLAP: usize = 2;
+	pub const DRUM_HATS: usize = 3;
+	pub const DRUM_TOMS: usize = 4;
+	pub const DRUM_CYMBALS: usize = 5;
+	pub const DRUM_PERC: usize = 6;
+	/// `drum_sampler`: first of [`DRUM_PADS`] trigger counters, one per pad of
+	/// `instruments::drum_sampler::PADS` (in that order). Each grows by one per note-on of
+	/// the pad's note that starts a sample.
+	pub const DRUM_PAD_TRIGGERS_START: usize = 0;
+	/// Number of `drum_sampler` pad trigger counters.
+	pub const DRUM_PADS: usize = 16;
+
+	// Live voice state of the built-in instruments (`poly_synth`, `electric_piano`,
+	// `sampler`, `drum_sampler`); encoded and decoded by `instruments::voice_readings`.
+	/// First of [`HELD_NOTE_WORDS`] words of the held-key mask: word `w` holds keys
+	/// `16 w .. 16 w + 15` as an integer-valued float (bit `k` = key `16 w + k`), so the
+	/// value survives any float path exactly. A key is held from its note-on to its
+	/// note-off (or all-notes-off), whatever the processor plays from it.
+	pub const HELD_NOTES_START: usize = 16;
+	/// Words of the held-key mask (128 keys, 16 per word).
+	pub const HELD_NOTE_WORDS: usize = 8;
+	/// How many voice records follow (0..=[`MAX_VOICES`]).
+	pub const VOICE_COUNT: usize = 24;
+	/// First voice record: the newest sounding voices, newest first, [`VOICE_FIELDS`]
+	/// values each (offsets `VOICE_*`).
+	pub const VOICES_START: usize = 25;
+	/// Most voice records published.
+	pub const MAX_VOICES: usize = 4;
+	/// Values per voice record.
+	pub const VOICE_FIELDS: usize = 6;
+	/// Voice field: the MIDI key that started it.
+	pub const VOICE_NOTE: usize = 0;
+	/// Voice field: zone index of the sample built-ins (-1 = none).
+	pub const VOICE_ZONE: usize = 1;
+	/// Voice field: playhead in seconds of the zone's file (-1 = not a sample voice).
+	pub const VOICE_POSITION: usize = 2;
+	/// Voice field: 1 once the key is released (release tail), else 0.
+	pub const VOICE_RELEASED: usize = 3;
+	/// Voice field: milliseconds since the note-on (held) or since the release.
+	pub const VOICE_ELAPSED_MS: usize = 4;
+	/// Voice field: current amp envelope level, 0..1.
+	pub const VOICE_LEVEL: usize = 5;
+	/// One past the last voice reading.
+	pub const VOICES_END: usize = VOICES_START + MAX_VOICES * VOICE_FIELDS;
+	const _: () = assert!(VOICES_END <= MAX);
 }
 
 /// A factory preset exposed by a device (see [`Processor::presets`]).

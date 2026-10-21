@@ -27,8 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, controllers, devices, library, midi, mix, playback, portable,
-	presets, project, render, samples, tracks,
+	arrange, audio, clips, compose, controllers, devices, library, midi, mix, modulation, playback,
+	portable, presets, project, render, samples, tracks,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -69,7 +69,7 @@ their own buses with `set_output_routes`.\n\
 `set_track_folder`: the folder's volume offsets them all); `freeze_track` heavy plugin \
 tracks to save CPU. Odd meters: `set_time_signature` with `at_bar` adds changes. Mixing: `analyze_mix` measures the mix against the style's targets and lists issues \
 with ready-made `moves`; apply them (or your own) with `apply_mix_moves` as one undo step, \
-then analyze again; `analyze_track`, `compare_to_reference` and `mix_targets` go deeper. `play`/`stop` audition on the default \
+then analyze again; `analyze_track`, `compare_to_reference` and `mix_targets` go deeper; `match_eq` fits an EQ to a reference. `play`/`stop` audition on the default \
 output device; edits made while playing are pushed to the player automatically.\n\n\
 Third-party plugins run in crash-isolated sandbox processes: a plugin that crashes or \
 hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in \
@@ -539,6 +539,28 @@ impl CadenzaServer {
 	}
 
 	#[tool(
+		description = "Adds movement to a built-in device: LFOs and envelope followers that \
+			move parameters around their set (or automated) value, e.g. a slow sine on a pad's \
+			filter_cutoff, a 1/8 tremolo (sync_beats 0.5) on gain, a kick-keyed envelope \
+			ducking an EQ band (envelope source sidechain + sidechain_track_id). Each target \
+			is {param, depth}: depth -1..1 of the param's range (LFO swings +/- depth; an \
+			envelope moves toward +depth as the signal gets louder over -60..0 dBFS). LFO: \
+			shape sine|triangle|saw|square|random, rate_hz 0.01..40 or sync_beats in quarter \
+			notes (0.125 = 1/32, 0.25 = 1/16, 0.5 = 1/8, 1 = 1/4, 4 = one 4/4 bar), phase \
+			0..1, retrigger free|note (instruments: every note-on)|transport (locked to the \
+			song position). Envelope: source own_input|sidechain, attack_ms, release_ms, \
+			gain_db. At most 8 modulators per device, 16 targets each; replaces the device's \
+			modulators ([] removes them) in one undo step. Prefer set_automation for \
+			song-level changes (builds, sections) and modulation for cyclic or level-driven motion."
+	)]
+	fn set_modulators(
+		&self,
+		Parameters(args): Parameters<modulation::SetModulatorsArgs>,
+	) -> Result<Json<modulation::SetModulatorsOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| modulation::set_modulators(s, args))?))
+	}
+
+	#[tool(
 		description = "Chooses which extra outputs of a multi-output instrument plugin (e.g. a \
 			drum sampler with separate kick/snare/hat outputs; see get_device_info aux_outputs) \
 			are heard and where: each route sends output `port` (1-based) to a Bus track \
@@ -632,7 +654,7 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Writes MIDI controller events into a MIDI clip: mod wheel (cc1), sustain pedal (cc64: 1 = down, 0 = up), expression (cc11), any cc0..cc127, pitch_bend (-1..1, ±2 semitones) or channel_pressure. Beats are clip-relative; each value holds until the next event. replace (default true) replaces the lane, false merges."
+		description = "Writes MIDI controller events into a MIDI clip: mod wheel (cc1), sustain pedal (cc64: 1 = down, 0 = up), expression (cc11), any cc0..cc127, pitch_bend (-1..1, ±2 semitones) or channel_pressure. Beats are clip-relative; each value holds until the next event. replace (default true) replaces the lane, false merges. On a linked clip (get_project `link`) every note/controller edit applies to all its linked copies."
 	)]
 	fn set_controller_events(
 		&self,
@@ -666,7 +688,9 @@ impl CadenzaServer {
 		)?))
 	}
 
-	#[tool(description = "Adds notes to an existing MIDI clip.")]
+	#[tool(
+		description = "Adds notes to an existing MIDI clip. On a linked clip (get_project `link`) every note/controller edit applies to all its linked copies."
+	)]
 	fn add_notes(
 		&self,
 		Parameters(args): Parameters<clips::AddNotesArgs>,
@@ -674,7 +698,9 @@ impl CadenzaServer {
 		Ok(Json(self.run_mut(|s| clips::add_notes(s, args))?))
 	}
 
-	#[tool(description = "Removes notes from a clip by id, or every note with all: true.")]
+	#[tool(
+		description = "Removes notes from a clip by id, or every note with all: true. On a linked clip (get_project `link`) every note/controller edit applies to all its linked copies."
+	)]
 	fn remove_notes(
 		&self,
 		Parameters(args): Parameters<clips::RemoveNotesArgs>,
@@ -740,7 +766,7 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Duplicates a clip (with fresh ids for the clip and its notes) to a new position."
+		description = "Duplicates a clip (with fresh ids for the clip and its notes) to a new position. `linked: true` (MIDI only) makes a linked copy instead: it shares notes and controller lanes with the source (get_project shows `link` = the other copies), so a later note/controller edit on any copy changes all of them (to change one copy alone, replace it with a linked: false duplicate)."
 	)]
 	fn duplicate_clip(
 		&self,
@@ -1211,6 +1237,37 @@ impl CadenzaServer {
 		})?;
 		let input = mix::AnalysisInput::from_session(&mut self.session());
 		Ok(Json(mix::compare_to_reference(input, args, file).await?))
+	}
+
+	#[tool(
+		description = "Match EQ: fits the bands of a built-in Parametric EQ insert (low \
+			shelf, peaks 1-3, high shelf; stereo, static) so what that EQ receives takes the \
+			tonal shape of a reference: reference_file (audio) or reference_track_id (another \
+			track). Renders the song once with the EQ and the inserts after it bypassed, \
+			compares smoothed third-octave spectra after level matching. amount 0..100 % \
+			(default 100; 50 = half way), max_gain_db per band (default 6), max_bands 1..5. \
+			ONE undo step \"Match EQ to <reference>\"; dry_run only reports. Returns the bands \
+			and the tonal difference before -> after (dB)."
+	)]
+	async fn match_eq(
+		&self,
+		Parameters(args): Parameters<crate::tools::match_eq::MatchEqArgs>,
+	) -> Result<Json<crate::tools::match_eq::MatchEqOutput>, ErrorData> {
+		let file = match args.reference_file.as_deref().map(str::trim) {
+			Some(raw) if !raw.is_empty() => {
+				let raw = std::path::PathBuf::from(raw);
+				Some(cadenza_core::paths::real_path(&raw).map_err(|e| {
+					crate::McpError::Invalid(format!(
+						"cannot access reference file '{}': {e}; pass an existing audio file",
+						raw.display()
+					))
+				})?)
+			}
+			_ => None,
+		};
+		let out = crate::tools::match_eq::match_eq(self.shared_session(), args, file).await?;
+		self.sync_player_if_playing();
+		Ok(Json(out))
 	}
 
 	#[tool(

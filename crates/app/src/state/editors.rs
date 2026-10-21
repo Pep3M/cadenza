@@ -14,6 +14,7 @@
 //!   what the running instance already holds, so storing them needs no reload
 //!   ([`PluginEditors::live_state`], consulted by `live::diff`).
 
+use crate::i18n::tr;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -94,7 +95,7 @@ pub fn title(project: &Project, device: DeviceId) -> Option<String> {
 	let (track, d) = find_device(project, device)?;
 	let place = match track {
 		Some(t) => project.track(t)?.name.clone(),
-		None => "Master".to_owned(),
+		None => tr("Master").to_owned(),
 	};
 	Some(format!("{} — {place}", d.name))
 }

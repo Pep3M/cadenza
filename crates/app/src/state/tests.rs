@@ -391,7 +391,7 @@ fn prefs_restore_layout_and_zoom() {
 	);
 	let mut t = AppState::headless();
 	t.apply_prefs(prefs);
-	assert!(!t.view.panels.inspector);
+	assert!(t.view.panels.inspector, "shown again (hidden by default)");
 	assert!(!t.view.panels.piano_roll, "no clip to show yet");
 	assert_eq!(t.view.timeline.px_per_beat, 40.0);
 	assert_eq!(t.view.follow, FollowMode::Continuous);
@@ -403,6 +403,32 @@ fn prefs_restore_layout_and_zoom() {
 	t.apply_prefs(bad);
 	assert_eq!(t.view.timeline.px_per_beat, timeline::MAX_PX_PER_BEAT);
 	assert_eq!(t.view.track_height, MIN_TRACK_HEIGHT);
+}
+
+#[test]
+fn track_heights_are_per_track_scale_together_and_persist() {
+	let mut v = ViewState::default();
+	let (a, b) = (TrackId::new(), TrackId::new());
+	v.set_track_height(a, 132.0);
+	v.set_track_height(b, 1e6);
+	assert_eq!(v.height_of(a), 132.0);
+	assert_eq!(v.height_of(b), MAX_TRACK_HEIGHT, "clamped");
+	v.set_track_height(b, v.track_height);
+	assert!(!v.track_heights.contains_key(&b), "the default clears it");
+	assert_eq!(v.height_of(b), DEFAULT_TRACK_HEIGHT);
+	// Alt+wheel: all tracks together, resized ones keep their ratio.
+	v.scale_track_heights(DEFAULT_TRACK_HEIGHT / 2.0 + 1.0);
+	assert_eq!(
+		v.track_height,
+		MIN_TRACK_HEIGHT.max(DEFAULT_TRACK_HEIGHT / 2.0 + 1.0)
+	);
+	assert!((v.height_of(a) - 132.0 * v.track_height / DEFAULT_TRACK_HEIGHT).abs() < 0.01);
+	let mut s = AppState::headless();
+	s.view.set_track_height(a, 90.0);
+	let prefs = s.prefs();
+	let mut t = AppState::headless();
+	t.apply_prefs(prefs);
+	assert_eq!(t.view.height_of(a), 90.0);
 }
 
 #[test]
@@ -832,6 +858,44 @@ pub(crate) mod ai_chat {
 	}
 
 	#[test]
+	fn explain_this_device_is_read_only_and_streams_the_answer() {
+		let mut c = chat_state(
+			vec![
+				ScriptedTurn::tools(
+					None,
+					&[
+						("get_project", "{}"),
+						("create_track", r#"{"name":"Nope","kind":"audio"}"#),
+					],
+				),
+				ScriptedTurn::text("The **Poly Synth** plays the keys; cutoff is fairly open."),
+			],
+			0,
+			true,
+		);
+		let s = &mut c.state;
+		let keys = s.project().tracks[0].id;
+		let synth = s.project().tracks[0].instrument.as_ref().unwrap().id;
+		let before = s.project().clone();
+		let steps = s.document().history_labels().len();
+		let r = DeviceRef {
+			track: Some(keys),
+			device: synth,
+		};
+		assert!(s.explain_device(r));
+		assert!(s.view.panels.visible(PanelKind::Chat));
+		wait(s);
+		assert_eq!(s.project(), &before, "nothing changed");
+		assert_eq!(s.document().history_labels().len(), steps, "no undo step");
+		let items = &s.ai.items;
+		assert!(matches!(&items[0], ChatItem::User(t) if t.starts_with("Explain ")));
+		assert!(items.iter().any(|i| matches!(i,
+			ChatItem::Assistant { text, .. } if text.contains("cutoff is fairly open"))));
+		assert!(items.iter().any(|i| matches!(i,
+			ChatItem::Tool { name, ok: Some(false), .. } if name == "create_track")));
+	}
+
+	#[test]
 	fn a_request_streams_into_the_chat_and_is_one_undo_step() {
 		let mut c = chat_state(
 			vec![
@@ -898,6 +962,108 @@ pub(crate) mod ai_chat {
 		assert_eq!(s.project().tracks.len(), 1);
 		assert!(s.project().markers.is_empty());
 		assert!(s.ai.transcript_path().is_file());
+	}
+
+	/// A master EQ the scripted AI raises the high shelf of (+ peak 1), as one request.
+	fn ai_eq_state() -> (Chat, DeviceRef) {
+		let eq = cadenza_model::Device::builtin("eq", "EQ");
+		let r = DeviceRef {
+			track: None,
+			device: eq.id,
+		};
+		let args = format!(
+			r#"{{"device_id":"{}","params":{{"high_shelf_gain":6.0,"peak1_gain":-5.0}}}}"#,
+			eq.id
+		);
+		let mut c = chat_state(
+			vec![
+				ScriptedTurn::tools(Some("Brighter."), &[("set_device_params", args.as_str())]),
+				ScriptedTurn::text("Raised the air shelf."),
+			],
+			0,
+			true,
+		);
+		assert!(c.state.apply(Command::InsertDevice {
+			track: None,
+			device: eq,
+			index: None,
+		}));
+		assert!(c.state.open_device_editor(r));
+		(c, r)
+	}
+
+	#[test]
+	fn an_ai_request_on_a_device_records_its_changes_and_keep_clears_them() {
+		let (mut c, r) = ai_eq_state();
+		let s = &mut c.state;
+		assert!(s.ai_context().open_device.unwrap().contains("(device "));
+		assert!(s.ask_ai_about_device(r, "make it brighter"));
+		assert!(s.view.panels.visible(PanelKind::Chat), "the chat opens");
+		assert_eq!(
+			s.ai.items[0],
+			ChatItem::User("make it brighter (EQ on the master)".into())
+		);
+		wait(s);
+		let change = s.ai_change(r.device, "high_shelf_gain").cloned().unwrap();
+		assert_eq!((change.before, change.after), (0.0, 6.0));
+		assert_eq!(s.ai_changes_of(r.device).len(), 2);
+		assert_eq!(s.ai_changes.as_ref().unwrap().request, "make it brighter");
+		assert!(s.ai_step_is_last());
+
+		// Touching a changed param keeps it and drops its ring.
+		s.commit_param(None, r.device, "peak1_gain", -4.0);
+		assert!(s.ai_change(r.device, "peak1_gain").is_none());
+		assert!(s.ai_change(r.device, "high_shelf_gain").is_some());
+		assert!(!s.ai_step_is_last(), "a step came after the AI's");
+		assert!(!s.undo_ai_changes(), "Undo only while it is the last step");
+		s.undo();
+		assert!(s.ai_step_is_last());
+		s.keep_ai_changes();
+		assert!(s.ai_changes.is_none());
+		assert_eq!(
+			s.project().master.inserts[0].params.get("high_shelf_gain"),
+			Some(&6.0),
+			"Keep keeps the values"
+		);
+	}
+
+	#[test]
+	fn undoing_the_ai_step_clears_its_changes_and_a_new_request_resets_them() {
+		let (mut c, r) = ai_eq_state();
+		let s = &mut c.state;
+		assert!(s.send_ai("brighter"));
+		wait(s);
+		assert!(s.ai_changes.is_some());
+		let steps = s.document().history_labels().len();
+		assert!(s.undo_ai_changes());
+		assert!(s.ai_changes.is_none());
+		assert_eq!(s.document().history_labels().len(), steps - 1, "one step");
+		assert_eq!(
+			s.project().master.inserts[0].params.get("high_shelf_gain"),
+			None
+		);
+		s.redo();
+		assert!(s.ai_changes.is_none(), "redo does not bring the rings back");
+
+		assert!(s.ai_change(r.device, "high_shelf_gain").is_none());
+	}
+
+	#[test]
+	fn holding_to_hear_before_never_changes_the_document() {
+		let (mut c, r) = ai_eq_state();
+		let s = &mut c.state;
+		assert!(s.send_ai("brighter"));
+		wait(s);
+		let project = s.project().clone();
+		let history = s.document().history_labels().len();
+		s.hear_before(Some(r.device));
+		assert_eq!(s.hearing_before(), Some(r.device));
+		s.tick(Instant::now());
+		s.hear_before(None);
+		assert_eq!(s.hearing_before(), None);
+		assert_eq!(s.project(), &project);
+		assert_eq!(s.document().history_labels().len(), history);
+		assert!(s.ai_changes.is_some(), "the changes stay");
 	}
 
 	#[test]
@@ -1020,8 +1186,12 @@ fn drum_pad_gestures_and_drops_are_single_undo_steps() {
 		kit.len() >= 12,
 		"a new drum sampler starts with the Synth Kit"
 	);
-	assert!(s.open_instrument_editor(r));
-	assert!(s.view.instrument_editor && s.view.panels.visible(PanelKind::PianoRoll));
+	assert!(s.open_device_editor(r));
+	let window = windows::WindowItem::Device(r);
+	assert!(
+		s.view.windows.is_open(window),
+		"devices open in floating windows"
+	);
 
 	// A knob gesture on the snare pad: one undoable command.
 	let cmd = samples::edit_pad(s.project(), r, 38, |z| z.tune = -3.0);
@@ -1066,9 +1236,9 @@ fn drum_pad_gestures_and_drops_are_single_undo_steps() {
 		!s.drop_action(&dnd::Payload::File("/x/beat.mid".into()), target, false)
 			.accepted()
 	);
-	// Removing the device closes the editor.
+	// Removing the device closes its window.
 	s.remove_device(r.track, r.device);
-	assert!(!s.view.instrument_editor && s.view.instrument.device.is_none());
+	assert!(!s.view.windows.is_open(window));
 }
 
 #[test]
@@ -1095,8 +1265,7 @@ fn audio_dropped_with_alt_below_the_tracks_becomes_a_sampler() {
 		track: Some(t.id),
 		device: d.id,
 	};
-	assert_eq!(s.view.instrument.device, Some(r));
-	assert!(s.view.instrument_editor);
+	assert!(s.view.windows.is_open(windows::WindowItem::Device(r)));
 
 	// Zone gestures: markers, then replacing the zone's sample by a drop.
 	let cmd = samples::edit_zone(s.project(), r, 0, |z| {
@@ -1121,9 +1290,9 @@ fn audio_dropped_with_alt_below_the_tracks_becomes_a_sampler() {
 		cadenza_model::LoopMode::Forward,
 		"mapping kept"
 	);
-	// Opening a clip in the piano roll takes the dock back.
-	s.close_instrument_editor();
-	assert!(!s.view.instrument_editor);
+	// Closing the focused device window.
+	s.close_device_editor();
+	assert!(!s.view.windows.is_open(windows::WindowItem::Device(r)));
 	// Plain drops below the tracks still import audio.
 	assert!(matches!(
 		s.drop_action(&payload, DropTarget::Below { at: Tick::ZERO }, false),
@@ -1560,4 +1729,318 @@ fn a_count_in_at_the_song_start_is_shown_before_bar_one() {
 	player.request_stop_recording().unwrap();
 	dev.process(&mut out, &[]);
 	player.finish_recording(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn probe_follows_the_chosen_device_and_works_headless() {
+	let (mut s, _) = state_with_song();
+	assert!(s.probe().is_none());
+	let device = s.project().tracks[0].instrument.as_ref().unwrap().id;
+	s.set_probe(Some(device));
+	assert_eq!(s.probe_target(), Some(device));
+	// Headless: no engine, so no ring.
+	assert!(s.probe().is_none());
+	// What the engine would answer.
+	s.probe = Some(Arc::new(DeviceProbe::new(48_000)));
+	assert!(s.probe().is_some());
+	s.set_probe(None);
+	assert_eq!(s.probe_target(), None);
+	assert!(s.probe().is_none());
+}
+
+#[test]
+fn device_editor_points_the_probe_at_its_device() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+	let device = cadenza_model::Device::builtin("reverb", "Reverb");
+	let reverb = DeviceRef {
+		track: Some(keys),
+		device: device.id,
+	};
+	assert!(s.apply(Command::InsertDevice {
+		track: Some(keys),
+		device,
+		index: None,
+	}));
+	assert!(s.has_device_editor(synth) && s.has_device_editor(reverb));
+
+	assert!(s.open_device_editor(synth));
+	assert!(s.view.windows.is_open(windows::WindowItem::Device(synth)));
+	assert_eq!(s.device_editor_target(), Some(synth));
+	assert_eq!(s.probe_target(), Some(synth.device));
+	// A second window takes the focus and the probe; both stay open.
+	assert!(s.open_device_editor(reverb));
+	assert_eq!(s.view.windows.open.len(), 2);
+	assert_eq!(s.probe_target(), Some(reverb.device));
+	// Focusing the first one (a click, or opening it again) re-points it.
+	assert!(s.open_device_editor(synth));
+	assert_eq!(s.view.windows.open.len(), 2);
+	assert_eq!(s.probe_target(), Some(synth.device));
+	// A click outside every window keeps the topmost device window probed.
+	s.view.windows.blur();
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), Some(synth.device));
+	// Toggling an unfocused window brings it to the front, a focused one closes.
+	s.toggle_device_editor(reverb);
+	assert_eq!(s.view.windows.focused_device(), Some(reverb));
+	assert_eq!(s.probe_target(), Some(reverb.device));
+	s.toggle_device_editor(reverb);
+	assert!(!s.view.windows.is_open(windows::WindowItem::Device(reverb)));
+	assert_eq!(s.probe_target(), Some(synth.device));
+	// With every window closed and the inspector hidden, nothing needs the probe.
+	s.view.panels.set(PanelKind::Inspector, false);
+	s.close_window(windows::WindowItem::Device(synth));
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), None);
+	// The dock is still an option: docking a device shows it there.
+	assert!(s.open_device_in_dock(reverb));
+	assert!(s.view.device_editor && s.view.panels.visible(PanelKind::PianoRoll));
+	assert_eq!(s.probe_target(), Some(reverb.device));
+	s.toggle_device_editor(reverb);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), None);
+	// Removing the open device closes its window and the probe.
+	assert!(s.open_device_editor(reverb));
+	s.remove_device(reverb.track, reverb.device);
+	assert!(s.view.windows.open.is_empty());
+	assert_eq!(s.probe_target(), None);
+	// A probe chosen by someone else is left alone while no editor needs it.
+	s.set_probe(Some(synth.device));
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), Some(synth.device));
+}
+
+#[test]
+fn probe_follows_the_inspector_device_with_no_editor_open_and_back_when_one_opens() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+	let device = cadenza_model::Device::builtin("reverb", "Reverb");
+	let reverb = DeviceRef {
+		track: Some(keys),
+		device: device.id,
+	};
+	assert!(s.apply(Command::InsertDevice {
+		track: Some(keys),
+		device,
+		index: None,
+	}));
+
+	// No editor open: selecting a built-in device (as the inspector's own track picker
+	// would) points the probe at it through the (optional) inspector.
+	s.view.panels.set(PanelKind::Inspector, true);
+	assert_eq!(s.probe_target(), None);
+	s.selection.select_device(synth);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), Some(synth.device));
+
+	// Selecting another device re-points it, still with no editor open.
+	s.selection.select_device(reverb);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), Some(reverb.device));
+
+	// Hiding the inspector stops it: nothing shows the device's analyzers any more.
+	s.view.panels.set(PanelKind::Inspector, false);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), None);
+	s.view.panels.set(PanelKind::Inspector, true);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), Some(reverb.device));
+
+	// Opening the dock editor on a different device takes the probe back: the editor
+	// always wins over the inspector (only one consumer may drain a given frame).
+	assert!(s.open_device_editor(synth));
+	assert_eq!(s.probe_target(), Some(synth.device));
+
+	// Closing the editor falls back to the inspector again, now showing `synth` (opening
+	// the editor selects its device too).
+	s.close_device_editor();
+	s.tick(Instant::now());
+	assert_eq!(s.probe_target(), Some(synth.device));
+}
+
+#[test]
+fn device_undo_hint_follows_the_step_and_a_b_flips_with_undo() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+	assert!(s.open_device_editor(synth));
+	s.compare(synth);
+	assert_eq!(s.device_undo_label(synth), None, "loading is no step");
+	s.commit_param(synth.track, synth.device, "cutoff", 900.0);
+	let label = s.undo_label().unwrap().to_owned();
+	assert_eq!(s.device_undo_label(synth), Some(label.as_str()));
+	s.apply(Command::SetChannel {
+		track: Some(keys),
+		patch: ChannelPatch {
+			volume_db: Some(-3.0),
+			..Default::default()
+		},
+	});
+	assert_eq!(
+		s.device_undo_label(synth),
+		None,
+		"the last step is the fader"
+	);
+	s.undo();
+	assert_eq!(
+		s.device_undo_label(synth),
+		Some(label.as_str()),
+		"undo uncovers it"
+	);
+
+	// A/B: B is the state from before the cutoff edit.
+	assert!(s.switch_compare(synth, device_ab::Slot::B));
+	assert!(!s.device(synth).unwrap().params.contains_key("cutoff"));
+	assert_eq!(s.device_undo_label(synth), Some("Compare B"));
+	s.undo();
+	assert_eq!(s.compare_slot(synth), device_ab::Slot::A);
+	assert_eq!(s.device(synth).unwrap().params["cutoff"], 900.0);
+	s.redo();
+	assert_eq!(s.compare_slot(synth), device_ab::Slot::B);
+	assert!(!s.device(synth).unwrap().params.contains_key("cutoff"));
+	// Docking the window and popping it out again keep the probe on the device.
+	s.dock_device_window(synth);
+	assert!(s.view.device_editor && s.view.windows.open.is_empty());
+	assert_eq!(s.probe_target(), Some(synth.device));
+	s.pop_out_device_editor();
+	assert!(!s.view.device_editor && s.view.windows.is_open(windows::WindowItem::Device(synth)));
+	assert_eq!(s.probe_target(), Some(synth.device));
+	s.close_piano_roll();
+	assert_eq!(s.device_editor_target(), Some(synth), "the dock can hide");
+}
+
+#[test]
+fn device_editor_presets_load_in_one_step_and_track_edits() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+	assert!(s.open_device_editor(synth));
+	let presets = s.device_presets(synth).to_vec();
+	let factory = cadenza_dsp::factory_presets("poly_synth");
+	assert!(presets.len() >= factory.len());
+	assert!(presets.iter().take(factory.len()).all(|p| !p.user));
+	let history = s.document().history_labels().len();
+	assert!(s.load_device_preset(synth, &presets[1]));
+	assert_eq!(s.document().history_labels().len(), history + 1);
+	let status = s.preset_status(synth);
+	assert_eq!(status.name.as_deref(), Some(presets[1].name.as_str()));
+	assert!(!status.dirty);
+	// The next preset from there, wrapping around.
+	assert_eq!(
+		crate::state::device::step_preset(&presets, &status, 1),
+		Some(2 % presets.len())
+	);
+	s.commit_param(synth.track, synth.device, "filter_cutoff", 321.0);
+	assert!(s.preset_status(synth).dirty);
+	s.undo();
+	assert!(!s.preset_status(synth).dirty);
+}
+
+#[test]
+fn listen_follows_the_open_editor_and_never_reaches_the_document() {
+	use cadenza_engine::Listen;
+	let (mut s, keys) = state_with_song();
+	let mut refs = Vec::new();
+	for id in ["eq", "compressor"] {
+		let device = cadenza_model::Device::builtin(id, id);
+		refs.push(DeviceRef {
+			track: Some(keys),
+			device: device.id,
+		});
+		assert!(s.apply(Command::InsertDevice {
+			track: Some(keys),
+			device,
+			index: None,
+		}));
+	}
+	let (eq, comp) = (refs[0], refs[1]);
+	let before = s.project().clone();
+	assert!(s.open_device_editor(eq));
+	s.set_listen(eq.device, Listen::Band(2));
+	assert_eq!(s.listen_mode(eq.device), Listen::Band(2));
+	assert_eq!(s.listen_mode(comp.device), Listen::Off);
+	assert_eq!(s.project(), &before, "not in the document");
+	// Another device's editor takes the probe: the EQ stops listening.
+	assert!(s.open_device_editor(comp));
+	assert_eq!(s.listen_mode(eq.device), Listen::Off);
+	s.set_listen(comp.device, Listen::Key);
+	// Off for another device leaves it alone.
+	s.set_listen(eq.device, Listen::Off);
+	assert_eq!(s.listen_mode(comp.device), Listen::Key);
+	// Closing every editor clears it.
+	s.view.panels.set(PanelKind::Inspector, false);
+	s.close_window(windows::WindowItem::Device(eq));
+	s.close_window(windows::WindowItem::Device(comp));
+	s.tick(Instant::now());
+	assert_eq!(s.listen_mode(comp.device), Listen::Off);
+}
+
+#[test]
+fn midi_learn_takes_the_next_controller_and_mirrors_it_as_one_step() {
+	use std::time::{Duration, Instant};
+	let (mut s, keys) = state_with_song();
+	let synth = s
+		.project()
+		.track(keys)
+		.unwrap()
+		.instrument
+		.clone()
+		.unwrap()
+		.id;
+	let (mut player, mut dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	player.load(s.project()).unwrap();
+	let (mut tx, rx) = cadenza_midi_io::new_queue(64);
+	player.set_midi_queue(rx).unwrap();
+	s.attach_midi_map(Some(player.midi_map_monitor()));
+	let mut out = vec![0.0f32; 512];
+	macro_rules! cc {
+		($n:expr, $v:expr) => {
+			tx.push(cadenza_midi_io::TimedMessage {
+				host_micros: 0,
+				message: cadenza_midi_io::RawMessage::from_bytes(&[0xB0, $n, $v]).unwrap(),
+			})
+			.unwrap();
+			dev.process(&mut out, &[]);
+		};
+	}
+	// A controller moved before the learn does not count.
+	cc!(20, 10);
+	let cutoff = ParamAddress::device(Some(keys), synth, "filter_cutoff");
+	s.start_midi_learn(cutoff.clone());
+	assert!(s.is_learning(&cutoff));
+	let t0 = Instant::now();
+	s.tick_midi_learn(t0);
+	assert!(s.is_learning(&cutoff), "still waiting");
+	cc!(74, 64);
+	s.tick_midi_learn(t0);
+	assert!(!s.is_learning(&cutoff));
+	assert_eq!(s.undo_label(), Some("MIDI learn CC 74"));
+	assert_eq!(s.project().midi_map[0].target, cutoff);
+	let depth = s.document().history_labels().len();
+
+	// The player takes the map (the app's audio thread does it from `live::diff`).
+	player.set_midi_map(s.project()).unwrap();
+	cc!(74, 127);
+	s.tick_midi_learn(t0);
+	let max = s.project().midi_map[0].max;
+	assert_eq!(s.param_value(Some(keys), synth, "filter_cutoff"), Some(max));
+	assert_eq!(s.document().history_labels().len(), depth, "not yet");
+	s.tick_midi_learn(t0 + Duration::from_millis(500));
+	assert_eq!(s.document().history_labels().len(), depth + 1, "one step");
+	assert_eq!(
+		s.project().device(Some(keys), synth).unwrap().params["filter_cutoff"],
+		max
+	);
+	assert!(s.forget_midi(&cutoff));
+	assert!(s.project().midi_map.is_empty());
 }

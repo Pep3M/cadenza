@@ -59,6 +59,27 @@ fn graph_process_does_not_allocate() {
 		.channel
 		.inserts
 		.push(cadenza_model::Device::builtin("compressor", "Duck").with_sidechain(source, true));
+	// Reverb ducking (by its input on one track, keyed on another), a 4-tap ping-pong
+	// delay and the 2x / 4x oversampled limiter (before the duck, which the
+	// modulators below expect last).
+	p.tracks[last].channel.inserts.splice(
+		0..0,
+		[
+			cadenza_model::Device::builtin("reverb", "Ducked verb")
+				.with_param("duck", 9.0)
+				.with_sidechain(source, false),
+			cadenza_model::Device::builtin("delay", "Taps")
+				.with_param("taps", 4.0)
+				.with_param("ping_pong", 1.0),
+			cadenza_model::Device::builtin("limiter", "Limiter 2x").with_param("oversample", 1.0),
+		],
+	);
+	p.tracks[1].channel.inserts.push(
+		cadenza_model::Device::builtin("reverb", "Self-ducked verb").with_param("duck", 12.0),
+	);
+	p.master.inserts.push(
+		cadenza_model::Device::builtin("limiter", "Limiter 4x").with_param("oversample", 2.0),
+	);
 	// Automate a send level and a device parameter too.
 	let chords = &p.tracks[2];
 	let send = chords.channel.sends[0].id;
@@ -137,14 +158,98 @@ fn graph_process_does_not_allocate() {
 		port: 3,
 		bus: Some(pad_bus.id),
 	}];
+	// Modulators: an envelope on the duck's key + a note-retriggered LFO, an LFO and an
+	// output follower on the keys (whose first param is also moved live), a synced
+	// transport-locked random LFO on the master insert.
+	{
+		use cadenza_model::{
+			EnvelopeSource, LfoShape, ModTarget, Modulator, ModulatorKind, Retrigger,
+		};
+		let target = |param: &str, depth| ModTarget {
+			param: param.into(),
+			depth,
+		};
+		let mut key_env = Modulator::envelope(cadenza_core::ModulatorId::new());
+		if let ModulatorKind::Envelope { source, .. } = &mut key_env.kind {
+			*source = EnvelopeSource::Sidechain;
+		}
+		key_env.targets = vec![target("threshold", -0.2)];
+		let mut retrig = Modulator::lfo(cadenza_core::ModulatorId::new());
+		if let ModulatorKind::Lfo { retrigger, .. } = &mut retrig.kind {
+			*retrigger = Retrigger::Note;
+		}
+		retrig.targets = vec![target("ratio", 0.1), target("threshold", 0.05)];
+		p.tracks[last]
+			.channel
+			.inserts
+			.last_mut()
+			.unwrap()
+			.modulators = vec![key_env, retrig];
+		let first = cadenza_dsp::device_info("electric_piano").unwrap().params[0].id;
+		let mut lfo = Modulator::lfo(cadenza_core::ModulatorId::new());
+		lfo.targets = vec![target(first, 0.2)];
+		let mut out_env = Modulator::envelope(cadenza_core::ModulatorId::new());
+		out_env.targets = vec![target(first, -0.1)];
+		p.tracks[2].instrument.as_mut().unwrap().modulators = vec![lfo, out_env];
+		let mut random = Modulator::lfo(cadenza_core::ModulatorId::new());
+		if let ModulatorKind::Lfo {
+			shape,
+			sync_beats,
+			retrigger,
+			..
+		} = &mut random.kind
+		{
+			*shape = LfoShape::Random;
+			*sync_beats = Some(0.5);
+			*retrigger = Retrigger::Transport;
+		}
+		let master = &mut p.master.inserts[0];
+		let param = cadenza_dsp::device_info(master.builtin_id().unwrap())
+			.unwrap()
+			.params[0]
+			.id;
+		random.targets = vec![target(param, 0.05)];
+		master.modulators = vec![random];
+	}
+	let pads_instrument = drums.instrument.as_ref().unwrap().id;
+	let sampler_instrument = p.tracks.last().unwrap().instrument.as_ref().unwrap().id;
 	p.tracks.push(drums);
 	p.tracks.push(pad_bus);
+	// A wavetable poly synth (both oscillators, unison) with an LFO on the morph position.
+	{
+		use cadenza_model::Modulator;
+		let mut morph = Modulator::lfo(cadenza_core::ModulatorId::new());
+		morph.targets = vec![cadenza_model::ModTarget {
+			param: "osc1_position".into(),
+			depth: 0.4,
+		}];
+		let mut wavetable = cadenza_model::Device::builtin("poly_synth", "Wavetable")
+			.with_param("osc1_wave", 4.0)
+			.with_param("osc1_table", 2.0)
+			.with_param("osc1_position", 0.3)
+			.with_param("osc2_wave", 4.0)
+			.with_param("osc2_table", 4.0)
+			.with_param("unison", 3.0);
+		wavetable.modulators = vec![morph];
+		let notes: Vec<(u8, f64, f64)> = (0..16)
+			.map(|i| (48 + (i * 5 % 40) as u8, i as f64 * 0.5, 1.0))
+			.collect();
+		p.tracks
+			.push(instrument_track("Wavetable", wavetable, &notes, 8.0));
+	}
 	let mut graph = compile(&p, 48_000, 1024).unwrap();
 	assert!(graph.warnings().is_empty(), "{:?}", graph.warnings());
 	let mut left = vec![0.0f32; 1024];
 	let mut right = vec![0.0f32; 1024];
 	graph.play();
 	assert!(graph.set_monitor_track(Some(source)));
+	// The probe follows an insert, then an instrument, then a master insert.
+	let probe = std::sync::Arc::new(cadenza_engine::DeviceProbe::new(48_000));
+	graph.attach_probe(Some(probe.clone()));
+	let duck = p.tracks[last].channel.inserts.last().unwrap().id;
+	let master_insert = p.master.inserts[0].id;
+	graph.set_probe_target(Some(duck));
+	let mut probed = Vec::with_capacity(probe.capacity());
 	// Live parameter changes and automation edits, prepared off the audio thread.
 	let info = cadenza_dsp::device_info("electric_piano").unwrap();
 	let param = info.params[0].id;
@@ -180,7 +285,19 @@ fn graph_process_does_not_allocate() {
 		if i % 100 == 0 {
 			graph.swap_automation(&mut edited);
 		}
+		match i {
+			100 => graph.set_probe_target(Some(keys)),
+			// Voice readings of both samplers (playheads, held keys).
+			150 => graph.set_probe_target(Some(sampler_instrument)),
+			220 => graph.set_probe_target(Some(pads_instrument)),
+			300 => graph.set_probe_target(Some(master_insert)),
+			_ => {}
+		}
 		graph.process(&mut left[..block], &mut right[..block]);
+		probed.clear();
+		probe.drain(&mut probed);
+		let _ = probe.readings();
+		let _ = probe.modulation();
 	}
 	graph.seek(beats(3.0));
 	graph.process(&mut left, &mut right);
@@ -191,6 +308,12 @@ fn graph_process_does_not_allocate() {
 	TRACKING.with(|t| t.set(false));
 
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(probe.is_active());
+	assert!(
+		probe
+			.reading(cadenza_dsp::readings::GAIN_REDUCTION_DB)
+			.is_some()
+	);
 }
 
 #[test]
@@ -355,6 +478,7 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 
 	let mut p = mini_song();
 	let keys = p.tracks[2].id;
+	let keys_instrument = p.tracks[2].instrument.as_ref().unwrap().id;
 	let drums = p.tracks[0].id;
 	let mut vox = Track::new("Vox", TrackKind::Audio);
 	vox.input = Some(TrackInput {
@@ -364,9 +488,59 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 	});
 	vox.channel
 		.inserts
-		.push(cadenza_model::Device::builtin("compressor", "Comp"));
+		.push(cadenza_model::Device::builtin("compressor", "Comp").with_param("key_hp", 150.0));
+	// A dynamic band: detector, envelope and per-quantum coefficients on the audio thread;
+	// it works on the side only, and a mid high-pass makes the EQ run in M/S.
+	vox.channel.inserts.push(
+		cadenza_model::Device::builtin("eq", "EQ")
+			.with_param("peak3_gain", -6.0)
+			.with_param("peak3_dyn", 1.0)
+			.with_param("peak3_threshold", -40.0)
+			.with_param("peak3_ms", 2.0)
+			.with_param("hp_slope", 1.0)
+			.with_param("hp_ms", 1.0),
+	);
 	let vox_id = vox.id;
+	let vox_comp = vox.channel.inserts[0].id;
 	p.tracks.push(vox);
+	// MIDI learn: an absolute knob on the comp threshold, a relative encoder on the keys
+	// fader, a pickup fader on the master pan (applied on the audio thread).
+	let knob = |controller, target, min, max| cadenza_model::MidiMapping {
+		controller,
+		channel: None,
+		target,
+		min,
+		max,
+		mode: cadenza_model::MapMode::Absolute,
+		takeover: cadenza_model::Takeover::Jump,
+	};
+	let mut encoder = knob(
+		cadenza_model::Controller::Cc(16),
+		cadenza_core::ParamAddress::track_volume(keys),
+		-60.0,
+		6.0,
+	);
+	encoder.mode = cadenza_model::MapMode::Relative;
+	let mut fader = knob(
+		cadenza_model::Controller::Cc(10),
+		cadenza_core::ParamAddress {
+			track: None,
+			target: cadenza_core::ParamTarget::Pan,
+		},
+		-1.0,
+		1.0,
+	);
+	fader.takeover = cadenza_model::Takeover::Pickup;
+	p.midi_map = vec![
+		knob(
+			cadenza_model::Controller::Cc(74),
+			cadenza_core::ParamAddress::device(Some(vox_id), vox_comp, "threshold"),
+			-40.0,
+			0.0,
+		),
+		encoder,
+		fader,
+	];
 	let dir = std::env::temp_dir().join(format!("cadenza-noalloc-rec-{}", std::process::id()));
 	let (mut player, mut dev) = Player::virtual_device(48_000, 2);
 	player.load(&p).unwrap();
@@ -401,6 +575,13 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 	);
 	setup.count_in_bars = 1;
 	player.start_recording(&setup).unwrap();
+	let comp = p.tracks.last().unwrap().channel.inserts[0].id;
+	let eq = p.tracks.last().unwrap().channel.inserts[1].id;
+	player.set_probe(Some(comp)).unwrap();
+	let probe = player.probe().unwrap();
+	let mut probed = Vec::with_capacity(probe.capacity());
+	let master_tap = player.master_tap();
+	let mut tapped = Vec::with_capacity(master_tap.capacity());
 	let mut out = vec![0.0f32; 2 * 1024];
 	let input: Vec<f32> = (0..2 * 1024)
 		.map(|i| ((i as f32) * 0.01).sin() * 0.3)
@@ -424,6 +605,23 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 		if i % 40 == 20 {
 			let _ = midi_tx.push(note(&[0x80, 60 + (i % 12) as u8, 0]));
 		}
+		if i % 7 == 3 {
+			let _ = midi_tx.push(note(&[0xB0, 74, (i % 128) as u8]));
+			let _ = midi_tx.push(note(&[0xB0, 16, if i % 2 == 0 { 2 } else { 126 }]));
+			let _ = midi_tx.push(note(&[0xB0, 10, (i * 3 % 128) as u8]));
+		}
+		// A new map (built off the audio thread) swaps in; a fader set by hand.
+		if i == 500 {
+			TRACKING.with(|t| t.set(false));
+			player.set_midi_map(&p).unwrap();
+			TRACKING.with(|t| t.set(true));
+		}
+		// The control side drops the returned table here (not the audio thread).
+		if i == 501 {
+			TRACKING.with(|t| t.set(false));
+			player.set_live_volume(Some(keys), -12.0).unwrap();
+			TRACKING.with(|t| t.set(true));
+		}
 		// A piano-roll preview on another track takes the live input and gives it back.
 		if i % 60 == 30 {
 			player.preview_note_on(drums, 38, 0.9).unwrap();
@@ -431,10 +629,50 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 		if i % 60 == 35 {
 			player.preview_note_off(drums, 38).unwrap();
 		}
+		if i == 450 {
+			player.set_probe(Some(keys_instrument)).unwrap();
+		}
+		// Listen modes: the compressor's key, then an EQ band solo (replacing it), off.
+		if i == 100 {
+			player
+				.set_listen(comp, cadenza_engine::Listen::Key)
+				.unwrap();
+		}
+		if i == 300 {
+			player
+				.set_listen(eq, cadenza_engine::Listen::Band(3))
+				.unwrap();
+		}
+		if i == 700 {
+			player.set_listen(eq, cadenza_engine::Listen::Off).unwrap();
+		}
+		// Monitoring switches on the device output (mono + dim, then dim only).
+		if i == 200 {
+			player
+				.set_monitor(cadenza_engine::MonitorFx {
+					mono: true,
+					dim: true,
+				})
+				.unwrap();
+		}
+		if i == 600 {
+			player
+				.set_monitor(cadenza_engine::MonitorFx {
+					mono: false,
+					dim: true,
+				})
+				.unwrap();
+		}
 		dev.process(&mut out[..2 * block], &input[..2 * block]);
+		probed.clear();
+		probe.drain(&mut probed);
+		tapped.clear();
+		master_tap.drain(&mut tapped);
 	}
 	TRACKING.with(|t| t.set(false));
 	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert!(probe.is_active());
+	assert!(master_tap.is_active());
 
 	player.request_stop_recording().unwrap();
 	dev.process(&mut out, &input);

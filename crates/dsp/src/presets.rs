@@ -229,7 +229,7 @@ static SAMPLER: [FactoryPreset; 2] = [
 	),
 ];
 
-static POLY_SYNTH: [FactoryPreset; 3] = [
+static POLY_SYNTH: [FactoryPreset; 5] = [
 	preset(
 		"Warm Pad",
 		"Slow, detuned saw pad with a soft filter; sustained chords and beds.",
@@ -275,6 +275,51 @@ static POLY_SYNTH: [FactoryPreset; 3] = [
 			("amp_sustain", 90.0),
 			("amp_release", 80.0),
 			("glide", 30.0),
+		],
+	),
+	preset(
+		"Vowel Pad",
+		"Wavetable pad on the Formant table, a fifth above in Basic; automate or modulate the position to make it talk.",
+		&[
+			("osc1_wave", 4.0),
+			("osc1_table", 2.0),
+			("osc1_position", 0.35),
+			("osc2_wave", 4.0),
+			("osc2_table", 0.0),
+			("osc2_position", 0.5),
+			("osc2_semitones", 7.0),
+			("osc_mix", 35.0),
+			("unison", 2.0),
+			("unison_detune", 14.0),
+			("filter_cutoff", 3_500.0),
+			("filter_env_amount", 6.0),
+			("amp_attack", 450.0),
+			("amp_sustain", 85.0),
+			("amp_release", 1_600.0),
+			("gain", -6.0),
+		],
+	),
+	preset(
+		"Digital Pluck",
+		"Glassy wavetable pluck: Digital and Harmonics tables, short filter envelope; arps and hooks.",
+		&[
+			("osc1_wave", 4.0),
+			("osc1_table", 4.0),
+			("osc1_position", 0.4),
+			("osc2_wave", 4.0),
+			("osc2_table", 3.0),
+			("osc2_position", 0.6),
+			("osc2_semitones", 12.0),
+			("osc_mix", 40.0),
+			("filter_cutoff", 1_200.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 36.0),
+			("filter_decay", 220.0),
+			("filter_sustain", 0.0),
+			("amp_decay", 420.0),
+			("amp_sustain", 0.0),
+			("amp_release", 260.0),
+			("gain", -3.0),
 		],
 	),
 ];

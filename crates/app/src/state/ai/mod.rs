@@ -16,6 +16,7 @@ pub mod secrets;
 pub mod settings;
 pub mod worker;
 
+use crate::i18n::{tr, trf};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -181,7 +182,19 @@ impl AiChat {
 
 	/// Sends a request (ignored while one runs or when empty). Returns whether it was sent.
 	pub fn send(&mut self, request: &str, context: AppContext, session: &SharedSession) -> bool {
-		self.send_with(request, None, context, session)
+		self.send_with(request, None, None, context, session)
+	}
+
+	/// Sends a read-only explain request (`text`, see `prompt::explain_request`), shown
+	/// in the chat as `label`: the agent may only read, so it leaves no undo step.
+	pub fn send_explain(
+		&mut self,
+		label: &str,
+		text: String,
+		context: AppContext,
+		session: &SharedSession,
+	) -> bool {
+		self.send_with(label, None, Some(text), context, session)
 	}
 
 	/// Runs a sound-engineer mix pass (one undo step "AI mix pass"); shown in the chat as
@@ -193,13 +206,14 @@ impl AiChat {
 		context: AppContext,
 		session: &SharedSession,
 	) -> bool {
-		self.send_with(label, Some(brief), context, session)
+		self.send_with(label, Some(brief), None, context, session)
 	}
 
 	fn send_with(
 		&mut self,
 		request: &str,
 		engineer: Option<EngineerBrief>,
+		explain: Option<String>,
 		context: AppContext,
 		session: &SharedSession,
 	) -> bool {
@@ -220,13 +234,14 @@ impl AiChat {
 		let sent = self.worker(session).send(worker::Command::Run {
 			request,
 			engineer,
+			explain,
 			context: Box::new(context),
 			settings,
 		});
 		if !sent {
 			self.running = None;
 			self.items.push(ChatItem::Error {
-				text: "The AI thread stopped; restart the app to use the chat.".into(),
+				text: tr("The AI thread stopped; restart the app to use the chat.").into(),
 				settings: false,
 			});
 		}
@@ -366,8 +381,10 @@ impl AiChat {
 				) {
 					self.items.pop();
 				}
-				self.items
-					.push(ChatItem::Notice(format!("retrying: {reason}")));
+				self.items.push(ChatItem::Notice(trf(
+					"retrying: {reason}",
+					&[("reason", &reason)],
+				)));
 			}
 			Event::Notice(text) => self.items.push(ChatItem::Notice(text)),
 			Event::KeyStatus(source) => self.key_source = Some(source),
@@ -388,8 +405,8 @@ impl AiChat {
 				let status = match &f.status {
 					RequestStatus::Completed => "done",
 					RequestStatus::Cancelled => "stopped",
-					RequestStatus::BudgetExhausted => "budget reached",
-					RequestStatus::MaxTurns => "turn limit reached",
+					RequestStatus::BudgetExhausted => tr("budget reached"),
+					RequestStatus::MaxTurns => tr("turn limit reached"),
 					RequestStatus::Refused => "declined",
 					RequestStatus::Failed(_) => "failed",
 				};
@@ -460,29 +477,35 @@ pub fn quick_actions(
 		match track.kind {
 			cadenza_model::TrackKind::Instrument => {
 				out.push((
-					format!("Bassline for {}", track.name),
-					format!(
-						"Write a bassline for the selected track \"{}\" that fits the song",
-						track.name
+					trf("Bassline for {name}", &[("name", &track.name)]),
+					trf(
+						"Write a bassline for the selected track \"{name}\" that fits the song",
+						&[("name", &track.name)],
 					),
 				));
 			}
 			_ => out.push((
-				format!("Mix {}", track.name),
-				format!("Improve the mix of the selected track \"{}\"", track.name),
+				trf("Mix {name}", &[("name", &track.name)]),
+				trf(
+					"Improve the mix of the selected track \"{name}\"",
+					&[("name", &track.name)],
+				),
 			)),
 		}
 	}
 	if let Some((_, clip)) = selected_clip.and_then(|c| project.find_clip(c)) {
 		out.push((
-			format!("Vary {}", clip.name),
-			format!("Write a variation of the selected clip \"{}\"", clip.name),
+			trf("Vary {name}", &[("name", &clip.name)]),
+			trf(
+				"Write a variation of the selected clip \"{name}\"",
+				&[("name", &clip.name)],
+			),
 		));
 	}
-	out.push(("Mix the project".into(), "Mix the project".into()));
+	out.push((tr("Mix the project").into(), tr("Mix the project").into()));
 	out.push((
-		"Continue the arrangement".into(),
-		"Continue the arrangement: add the next section after the last one".into(),
+		tr("Continue the arrangement").into(),
+		tr("Continue the arrangement: add the next section after the last one").into(),
 	));
 	out
 }

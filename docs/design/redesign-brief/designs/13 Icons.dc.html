@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+<style>body{margin:0;background:#0e0f11;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<div style="font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec;font-size:13px;padding:48px 40px 96px;display:flex;flex-direction:column;gap:36px;max-width:1440px;margin:0 auto">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#80848c">Screen 13 · icon list</span>
+<span style="font-size:40px;font-weight:600;letter-spacing:-0.015em">Icons</span>
+<div style="font-size:15px;line-height:1.6;color:#a3a6ad;max-width:860px;text-wrap:pretty">Lucide (ISC) is the primary set: one stroke style, 24 px grid, drawn at 1.5 px stroke at 16 px and 1.25 px at 14 px. Phosphor (MIT, Regular weight) is listed as the alternative and covers the one icon Lucide lacks (metronome). Icons are always paired with a label or tooltip; state uses the icon plus color, never color alone.</div>
+<div style="display:flex;gap:10px;flex-wrap:wrap;padding-top:6px">
+<sc-for list="{{ sizes }}" as="s" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#15161a;border:1px solid #24262b;border-radius:4px"><span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#7fb4ff">{{ s.px }} px</span><span style="color:#a3a6ad">{{ s.use }}</span></div></sc-for>
+</div>
+</div>
+<sc-for list="{{ groups }}" as="g" hint-placeholder-count="7">
+<div style="display:flex;flex-direction:column;gap:8px">
+<span style="font-size:18px;font-weight:600">{{ g.n }}</span>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:4px">
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="8">
+<div style="display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 10px;background:#15161a;border:1px solid #1d1f23;border-radius:4px">
+<span style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#1c1d21;border-radius:4px;color:{{ it.col }}"><span ref="{{ it.ref }}" style="display:flex;width:{{ it.px }}px;height:{{ it.px }}px;align-items:center;justify-content:center;font-size:10px;color:#80848c"></span></span>
+<div style="display:flex;flex-direction:column;gap:1px;min-width:0"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ it.use }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a3a6ad">{{ it.lu }} <span style="color:#80848c">· Ph {{ it.ph }}</span></span></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">{{ it.px }}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-for>
+<div style="font-size:13px;color:#80848c;line-height:1.6;max-width:860px">Implementation: ship the SVGs in the repo (not a font), rasterize to egui textures at size × pixels_per_point, tint with the text or state color at draw time. Filled variants (record, play while playing, star when favorited) use the same path with fill = currentColor.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { ready: false };
+  componentDidMount() {
+    const t = setInterval(() => { if (window.lucide && window.lucide.icons) { clearInterval(t); this.setState({ ready: true }); } }, 150);
+    this._t = t;
+  }
+  componentWillUnmount() { clearInterval(this._t); }
+  renderVals() {
+    if (!this._data) {
+      const G = [
+        ['Transport', 20, [['Go to start', 'skip-back', 'SkipBack'], ['Stop', 'square', 'Stop'], ['Play', 'play', 'Play', '#4fc38a'], ['Pause', 'pause', 'Pause'], ['Record', 'circle', 'Record', '#f0524f'], ['Loop', 'repeat', 'Repeat', '#5ac8d8'], ['Metronome', '—', 'Metronome'], ['Count-in', 'timer', 'Timer'], ['Punch in/out', 'crosshair', 'Crosshair'], ['Pattern mode', 'grid-3x3', 'GridNine', '#8f8cf5'], ['Song mode', 'list-music', 'Playlist'], ['Follow playhead', 'arrow-right-to-line', 'ArrowLineRight'], ['Audio device', 'speaker', 'SpeakerHifi'], ['Dropout warning', 'alert-triangle', 'Warning', '#f2a944']]],
+        ['Tracks', 14, [['Instrument track', 'keyboard-music', 'PianoKeys'], ['Audio track', 'audio-waveform', 'Waveform'], ['Bus', 'git-merge', 'GitMerge'], ['Folder', 'folder', 'Folder'], ['Folder open', 'folder-open', 'FolderOpen'], ['Record arm', 'circle-dot', 'RecordFill', '#f0524f'], ['Mute', 'volume-x', 'SpeakerSimpleX', '#f08a4b'], ['Solo', 'headphones', 'Headphones', '#ecd04f'], ['Input monitor', 'ear', 'Ear'], ['Input', 'mic', 'Microphone'], ['Freeze', 'snowflake', 'Snowflake', '#8cc8f0'], ['Take lanes', 'layers', 'Stack'], ['Automation', 'spline', 'WaveSine', '#c884e8'], ['Track color', 'palette', 'Palette']]],
+        ['Arrange and editors', 16, [['Select', 'mouse-pointer-2', 'Cursor'], ['Draw', 'pencil', 'Pencil'], ['Paint', 'paintbrush', 'PaintBrush'], ['Slice / split', 'scissors', 'Scissors'], ['Erase', 'eraser', 'Eraser'], ['Snap', 'magnet', 'Magnet'], ['Zoom in', 'zoom-in', 'MagnifyingGlassPlus'], ['Zoom out', 'zoom-out', 'MagnifyingGlassMinus'], ['Zoom to fit', 'scan', 'ArrowsOut'], ['Marker', 'flag', 'Flag', '#e8b84a'], ['Tempo lane', 'gauge', 'Gauge', '#ee86b4'], ['Time signature', 'hash', 'Hash'], ['Quantize', 'align-horizontal-distribute-center', 'AlignCenterVertical'], ['Ghost notes', 'eye', 'Eye']]],
+        ['Mixer and devices', 14, [['Add insert / send', 'plus', 'Plus'], ['Bypass', 'power', 'Power'], ['Remove', 'x', 'X'], ['Plugin editor', 'sliders-horizontal', 'Sliders'], ['Send', 'send', 'PaperPlaneRight'], ['Routing', 'route', 'Path'], ['Meter', 'activity', 'Pulse'], ['Drag handle', 'grip-vertical', 'DotsSixVertical'], ['Plugin', 'plug', 'Plug'], ['Preset', 'bookmark', 'BookmarkSimple']]],
+        ['Browser and library', 16, [['Search', 'search', 'MagnifyingGlass'], ['Favorite', 'star', 'Star', '#e8b84a'], ['Devices', 'box', 'Cube'], ['Files', 'file-audio', 'FileAudio'], ['Library', 'library', 'Books'], ['Audition', 'volume-2', 'SpeakerHigh'], ['Filter', 'filter', 'Funnel'], ['Rescan', 'refresh-cw', 'ArrowsClockwise'], ['Apply form', 'layout-template', 'Layout']]],
+        ['AI producer and mix assistant', 16, [['Producer', 'sparkles', 'Sparkle', '#4c9cf5'], ['Send prompt', 'arrow-up', 'ArrowUp'], ['Thinking', 'brain', 'Brain'], ['Step done', 'check', 'Check', '#4fc38a'], ['Step failed', 'x', 'X', '#f0524f'], ['Step running', 'loader-2', 'CircleNotch', '#4c9cf5'], ['Undo', 'undo-2', 'ArrowUUpLeft'], ['Redo', 'redo-2', 'ArrowUUpRight'], ['Cost', 'coins', 'Coins'], ['Settings', 'settings', 'Gear'], ['Mix assistant', 'audio-lines', 'Equalizer'], ['Fix issue', 'wand-2', 'MagicWand'], ['Before / after', 'git-compare', 'ArrowsLeftRight'], ['Reference track', 'disc-3', 'VinylRecord']]],
+        ['Project, dialogs and window', 16, [['New project', 'file-plus', 'FilePlus'], ['Open', 'folder-open', 'FolderOpen'], ['Save', 'save', 'FloppyDisk'], ['Recover autosave', 'history', 'ClockCounterClockwise'], ['Export', 'share', 'Export'], ['Info', 'info', 'Info', '#7fb4ff'], ['Warning', 'alert-triangle', 'Warning', '#f2a944'], ['Error', 'x-circle', 'XCircle', '#f0524f'], ['Close', 'x', 'X'], ['Maximize panel', 'maximize-2', 'ArrowsOutSimple'], ['Close panel', 'panel-right-close', 'SidebarSimple'], ['Shortcuts', 'keyboard', 'Keyboard'], ['Help', 'help-circle', 'Question']]],
+      ];
+      this._data = G.map(([n, px, items]) => ({ n, items: items.map(([use, lu, ph, col]) => ({ use, lu, ph, col: col || '#e8e9ec', px })) }));
+    }
+    const ready = this.state.ready;
+    const pascal = s => s.split('-').map(p => p[0].toUpperCase() + p.slice(1)).join('');
+    const groups = this._data.map(g => ({ ...g, items: g.items.map(it => ({ ...it, ref: el => {
+      if (!el || !ready || el.dataset.done) return;
+      el.dataset.done = '1';
+      const node = it.lu !== '—' && window.lucide.icons[pascal(it.lu)];
+      if (!node) { el.textContent = 'Ph'; return; }
+      const svg = window.lucide.createElement(node);
+      svg.setAttribute('width', it.px); svg.setAttribute('height', it.px); svg.setAttribute('stroke-width', it.px <= 14 ? 1.25 : 1.5);
+      el.appendChild(svg);
+    } })) }));
+    const sizes = [{ px: 14, use: 'Track headers, mixer strips, dense rows' }, { px: 16, use: 'Toolbars, lists, panels (default)' }, { px: 20, use: 'Transport and empty states' }];
+    return { groups, sizes };
+  }
+}
+</script>
+</body>
+</html>

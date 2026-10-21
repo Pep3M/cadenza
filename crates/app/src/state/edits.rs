@@ -2,26 +2,24 @@
 //! project: the result goes through [`super::AppState::apply`] like every other edit (and
 //! like the AI's edits), so it is validated, undoable and reloaded into the player.
 
+use crate::i18n::tr;
 use cadenza_core::{ClipId, DeviceId, NoteId, PPQ, Tick, TrackId};
 use cadenza_model::{
 	Clip, ClipContent, ClipPatch, Command, Device, NotePatch, Project, Track, TrackKind,
 };
 
 /// Default colors for new tracks (cycled).
-pub const TRACK_PALETTE: [&str; 10] = [
-	"#E0603A", "#E8A33A", "#D8CF4A", "#7CC655", "#3FB98E", "#3BB3D0", "#4F86E8", "#8A6CE0",
-	"#C65CC9", "#E05C8C",
-];
+pub const TRACK_PALETTE: [&str; 16] = crate::theme::TRACK_COLORS;
 
 /// Shortest clip a resize can produce.
 pub const MIN_CLIP_LENGTH: Tick = Tick(PPQ / 16);
 
 pub fn kind_name(kind: TrackKind) -> &'static str {
 	match kind {
-		TrackKind::Instrument => "Instrument",
-		TrackKind::Audio => "Audio",
-		TrackKind::Bus => "Bus",
-		TrackKind::Folder => "Folder",
+		TrackKind::Instrument => tr("Instrument"),
+		TrackKind::Audio => tr("Audio"),
+		TrackKind::Bus => tr("Bus"),
+		TrackKind::Folder => tr("Folder"),
 	}
 }
 
@@ -104,23 +102,18 @@ pub fn copy_clips(
 	clips: &[ClipId],
 	delta: Tick,
 	to_track: Option<TrackId>,
+	linked: bool,
 ) -> Option<(Command, Vec<ClipId>)> {
 	let found: Vec<(&Track, &Clip)> = clips.iter().filter_map(|c| project.find_clip(*c)).collect();
 	let earliest = found.iter().map(|(_, c)| c.start).min()?;
 	let delta = Tick(delta.0.max(-earliest.0));
 	let target = to_track.and_then(|t| project.track(t));
 	let mut ids = Vec::new();
+	let mut copier = super::playlist::Copier::new(project, linked);
 	let commands = found
 		.iter()
 		.map(|(track, clip)| {
-			let mut copy = (*clip).clone();
-			copy.id = ClipId::new();
-			copy.start = clip.start + delta;
-			if let ClipContent::Midi { notes, .. } = &mut copy.content {
-				for n in notes {
-					n.id = NoteId::new();
-				}
-			}
+			let copy = copier.copy(clip, clip.start + delta);
 			ids.push(copy.id);
 			let track = target
 				.filter(|t| compatible(track.kind, t.kind))
@@ -128,6 +121,7 @@ pub fn copy_clips(
 			Command::AddClip { track, clip: copy }
 		})
 		.collect();
+	let commands = copier.finish(commands);
 	Some((
 		batch(
 			if ids.len() == 1 {
@@ -193,8 +187,23 @@ pub fn drop_insert(
 /// Sets the end of `clip`: at least [`MIN_CLIP_LENGTH`] long and past its last note start.
 pub fn resize_clip(project: &Project, clip: ClipId, end: Tick) -> Option<Command> {
 	let (_, c) = project.find_clip(clip)?;
-	// The model keeps every note start inside its clip.
-	let last_note = c.notes().iter().map(|n| n.start.0).max().unwrap_or(0);
+	// The model keeps every note start inside its clip (for linked clips: inside the
+	// longest copy, so a copy may be shorter than the shared content).
+	let others = c.link.map_or(Tick::ZERO, |l| {
+		project
+			.linked_clips(l)
+			.filter(|o| o.id != clip)
+			.map(|o| o.length)
+			.max()
+			.unwrap_or(Tick::ZERO)
+	});
+	let last_note = c
+		.notes()
+		.iter()
+		.filter(|n| n.start >= others)
+		.map(|n| n.start.0)
+		.max()
+		.unwrap_or(0);
 	let min = MIN_CLIP_LENGTH.0 + last_note;
 	let length = Tick((end - c.start).0.max(min));
 	(length != c.length).then_some(Command::UpdateClip {
@@ -222,23 +231,21 @@ pub fn delete_clips(clips: &[ClipId]) -> Option<Command> {
 
 /// Copies `clips` (fresh clip and note ids) right after the end of the selection, on
 /// their own tracks. Returns the command and the new clip ids (to select them).
-pub fn duplicate_clips(project: &Project, clips: &[ClipId]) -> Option<(Command, Vec<ClipId>)> {
+pub fn duplicate_clips(
+	project: &Project,
+	clips: &[ClipId],
+	linked: bool,
+) -> Option<(Command, Vec<ClipId>)> {
 	let found: Vec<(&Track, &Clip)> = clips.iter().filter_map(|c| project.find_clip(*c)).collect();
 	let start = found.iter().map(|(_, c)| c.start).min()?;
 	let end = found.iter().map(|(_, c)| c.end()).max()?;
 	let offset = end - start;
 	let mut ids = Vec::new();
+	let mut copier = super::playlist::Copier::new(project, linked);
 	let commands = found
 		.iter()
 		.map(|(track, clip)| {
-			let mut copy = (*clip).clone();
-			copy.id = ClipId::new();
-			copy.start = clip.start + offset;
-			if let ClipContent::Midi { notes, .. } = &mut copy.content {
-				for n in notes {
-					n.id = NoteId::new();
-				}
-			}
+			let copy = copier.copy(clip, clip.start + offset);
 			ids.push(copy.id);
 			Command::AddClip {
 				track: track.id,
@@ -246,7 +253,7 @@ pub fn duplicate_clips(project: &Project, clips: &[ClipId]) -> Option<(Command, 
 			}
 		})
 		.collect();
-	Some((batch("Duplicate", commands)?, ids))
+	Some((batch("Duplicate", copier.finish(commands))?, ids))
 }
 
 /// Splits `clip` at `at` (strictly inside it) into two clips. MIDI notes starting after
@@ -285,9 +292,13 @@ pub fn trim_start(project: &Project, clip: ClipId, start: Tick) -> Option<Comman
 	let (_, c) = project.find_clip(clip)?;
 	let end = c.end();
 	let mut start = Tick(start.0.clamp(0, end.0 - MIN_CLIP_LENGTH.0));
-	let mut commands = Vec::new();
+	// A linked copy leaves its group (it keeps only its own notes): trimming one copy
+	// must not shift the others' notes.
+	let mut commands = cadenza_model::links::unique_commands(project, clip);
 	match &c.content {
 		ClipContent::Midi { notes, .. } => {
+			let notes: Vec<&cadenza_model::Note> =
+				notes.iter().filter(|n| n.start < c.length).collect();
 			let delta = start - c.start;
 			if delta.0 == 0 {
 				return None;
@@ -407,7 +418,7 @@ pub fn overlaps(track: &Track) -> Vec<(Tick, Tick)> {
 	let audio: Vec<&Clip> = track
 		.clips
 		.iter()
-		.filter(|c| !c.is_midi() && c.plays())
+		.filter(|c| !c.is_midi() && c.sounds())
 		.collect();
 	let mut out = Vec::new();
 	for (i, a) in audio.iter().enumerate() {
@@ -442,7 +453,7 @@ pub fn crossfades(project: &Project, track: &Track) -> Vec<Crossfade> {
 	let mut audio: Vec<&Clip> = track
 		.clips
 		.iter()
-		.filter(|c| !c.is_midi() && c.plays())
+		.filter(|c| !c.is_midi() && c.sounds())
 		.collect();
 	audio.sort_by_key(|c| c.start);
 	let tempo = &project.tempo;
@@ -690,7 +701,7 @@ mod tests {
 	#[test]
 	fn delete_and_duplicate() {
 		let mut fx = fixture();
-		let (cmd, ids) = duplicate_clips(fx.doc.project(), &[fx.riff]).unwrap();
+		let (cmd, ids) = duplicate_clips(fx.doc.project(), &[fx.riff], false).unwrap();
 		fx.doc.execute(cmd).unwrap();
 		let (track, copy) = clip(&fx.doc, ids[0]);
 		let orig = clip(&fx.doc, fx.riff).1;
@@ -713,15 +724,27 @@ mod tests {
 	#[test]
 	fn ctrl_drag_copies_clips() {
 		let mut fx = fixture();
-		let (cmd, ids) =
-			copy_clips(fx.doc.project(), &[fx.riff], beats(4.0), Some(fx.keys2)).unwrap();
+		let (cmd, ids) = copy_clips(
+			fx.doc.project(),
+			&[fx.riff],
+			beats(4.0),
+			Some(fx.keys2),
+			false,
+		)
+		.unwrap();
 		fx.doc.execute(cmd).unwrap();
 		let (track, copy) = clip(&fx.doc, ids[0]);
 		assert_eq!((track, copy.start), (fx.keys2, beats(8.0)));
 		assert_eq!(clip(&fx.doc, fx.riff).0, fx.keys, "original stays");
 		// Incompatible target: copied on its own track.
-		let (cmd, ids) =
-			copy_clips(fx.doc.project(), &[fx.riff], beats(-40.0), Some(fx.audio)).unwrap();
+		let (cmd, ids) = copy_clips(
+			fx.doc.project(),
+			&[fx.riff],
+			beats(-40.0),
+			Some(fx.audio),
+			false,
+		)
+		.unwrap();
 		fx.doc.execute(cmd).unwrap();
 		assert_eq!(clip(&fx.doc, ids[0]), (fx.keys, clip(&fx.doc, ids[0]).1));
 		assert_eq!(clip(&fx.doc, ids[0]).1.start, Tick::ZERO);

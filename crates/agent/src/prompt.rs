@@ -170,7 +170,8 @@ pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, 
 # How Cadenza works
 - Positions and lengths are in beats (quarter notes); pitches are note names ("C4") or MIDI numbers (60 = C4); velocity is 0..1; volume is in dB; pan is -1..1.
 - Every edit is an undoable command. Everything you change for one request becomes a single undo step named after the request, so the user can take the whole request back with one Ctrl+Z. Inside a request you can use undo for your own steps only.
-- Ids for tracks, clips, devices and sends are in get_project and in tool results; keep track of them. Each request message carries the app context: the selection, the playhead, the loop range and the clip open in the piano roll, plus the project summary whenever the project changed since you last saw it (the user edits too). Call get_project when you need fresh details.
+- Ids for tracks, clips, devices and sends are in get_project and in tool results; keep track of them. Each request message carries the app context: the selection, the playhead, the loop range, the clip open in the piano roll and the device open in the device editor ("it", "this EQ" and requests asked from the editor mean that device: change its params with set_device_params), plus the project summary whenever the project changed since you last saw it (the user edits too). Call get_project when you need fresh details.
+- Reply to the user in the language named in the app context's "Reply in" line (default: the app's own UI language); when that line is absent, reply in English. Tool names, parameters, ids, file paths and code/identifiers inside your reply always stay as given, in English.
 - Calls that don't depend on each other can go in the same response; a call that needs an id from another result must wait for that result.
 - Tool errors are written for you: read them and fix the call.
 
@@ -186,8 +187,11 @@ pub const SESSION_SYSTEM_PROMPT: &str = r#"You are Cadenza's resident producer, 
 # Sound engineer
 - Start with analyze_mix: it measures against the song's targets (style guide mix section; mix_targets explains them) and lists issues most severe first, each with `moves` you can pass to apply_mix_moves as they are or adjusted.
 - Work in this order: gain staging (no channel peaking above -6 dBFS, levels by role), masking (EQ cuts of 2-4 dB on the part that owns the band less, high-pass parts that don't need lows), dynamics (compressor for control and punch), space (reverb/delay buses via sends, lows kept out of the returns), pan layout (kick, bass, lead and vocal centered; supporting parts spread), then master loudness to the target with the limiter, true peak at or below the ceiling.
-- One apply_mix_moves call per step (one undo step each, a few dB per move at most). analyze_track looks at one channel; compare_to_reference compares with a reference track when there is one.
+- One apply_mix_moves call per step (one undo step each, a few dB per move at most). analyze_track looks at one channel; compare_to_reference compares with a reference track when there is one. match_eq fits a track's Parametric EQ to a reference (file or another track) in one step; EQ bands can also work on mid or side only (<band>_ms 1/2: e.g. high-pass the side for a mono low end).
 - Always analyze_mix again after a pass and report what changed in numbers: LUFS, true peak, issues and masking pairs before -> after.
+
+# Explain
+- A request starting "Explain this device" is read only: never change the project (only reading tools work). Read the device with get_project / get_device_info, then explain in plain language, briefly: what the device does to this track, what each important control is set to and why it matters here, and one suggestion described in words (not applied).
 
 # Musical craft
 - Voice-lead chords; give each part its own register; leave space. Melodies need a motif, repetition with variation and phrases that breathe; bass lines lock with the kick and outline the harmony.
@@ -229,6 +233,12 @@ pub struct AppContext {
 	/// A reference track the user chose (readable by compare_to_reference even outside the
 	/// project folder).
 	pub reference_file: Option<String>,
+	/// The device open in the device editor: "Parametric EQ \"EQ\" (device 4c1d..., eq) on
+	/// track \"Vox\" (track 9a0b...)".
+	pub open_device: Option<String>,
+	/// The language to reply in ("Français"), when not plain English. `None`: reply in
+	/// English (the setting is "English", or the UI language resolves to it).
+	pub reply_language: Option<String>,
 }
 
 impl AppContext {
@@ -273,10 +283,16 @@ impl AppContext {
 		if let Some(recording) = &self.recording {
 			out.push_str(&format!("- Recording setup: {recording}\n"));
 		}
+		if let Some(device) = &self.open_device {
+			out.push_str(&format!("- Open in the device editor: {device}\n"));
+		}
 		if let Some(reference) = &self.reference_file {
 			out.push_str(&format!(
 				"- Reference track: {reference} (compare_to_reference file)\n"
 			));
+		}
+		if let Some(language) = &self.reply_language {
+			out.push_str(&format!("- Reply in: {language}\n"));
 		}
 		out
 	}
@@ -338,6 +354,17 @@ pub struct EngineerBrief {
 	pub notes: Option<String>,
 }
 
+/// The read-only request of "Explain this device": `device` names it like
+/// [`AppContext::open_device`] ("Compressor \"Comp\" (device 4c1d..., compressor) on track
+/// \"Vox\" (track 9a0b...)").
+pub fn explain_request(device: &str) -> String {
+	format!(
+		"Explain this device: {device}. Read only: do not change anything. In plain language, \
+		 say what it does to this track, what each important setting is now and why it \
+		 matters, and end with one suggestion (described, not applied)."
+	)
+}
+
 /// The request of a mix pass: the sound-engineer workflow on the open project.
 pub fn engineer_request(brief: &EngineerBrief) -> String {
 	let mut out = String::from(
@@ -388,6 +415,8 @@ mod tests {
 			loop_beats: Some((16.0, 32.0)),
 			transport_mode: Some("song".into()),
 			recording: Some("Vox (audio, In 1, monitor auto) armed".into()),
+			open_device: Some("Parametric EQ \"EQ\" (device d1, eq) on track \"Vox\"".into()),
+			reply_language: Some("Français".into()),
 			..AppContext::default()
 		};
 		let with =
@@ -397,6 +426,8 @@ mod tests {
 		assert!(with.contains("Selected clips: none"));
 		assert!(with.contains("Loop: beats 16.00 to 32.00"));
 		assert!(with.contains("Recording setup: Vox (audio, In 1, monitor auto) armed"));
+		assert!(with.contains("Open in the device editor: Parametric EQ \"EQ\" (device d1"));
+		assert!(with.contains("Reply in: Français"));
 		assert!(with.contains("$0.25"));
 		assert!(with.contains("{\"name\":\"x\"}"));
 		let without = session_request_message("again", &context, 0.25, None);
@@ -419,6 +450,8 @@ mod tests {
 		assert!(plain.contains("the style's"));
 		assert!(!plain.contains("Reference"));
 		assert!(SESSION_SYSTEM_PROMPT.contains("# Sound engineer"));
+		assert!(SESSION_SYSTEM_PROMPT.contains("# Explain"));
+		assert!(explain_request("Comp").contains("Read only"));
 		let context = AppContext {
 			reference_file: Some("/refs/hit.wav".into()),
 			..AppContext::default()

@@ -3,6 +3,7 @@
 //! The decisions live in [`super::safety`], [`super::export`] and the shared MCP
 //! `portable` tools; this file runs them off the UI thread and turns results into edits.
 
+use crate::i18n::{tr, trf, trn, trn_with};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -53,18 +54,42 @@ impl FileJobs {
 	pub fn labels(&self) -> Vec<String> {
 		let secs = |started: Instant| started.elapsed().as_secs_f32();
 		[
-			self.collect
-				.as_ref()
-				.map(|j| format!("Collecting files… {:.0} s", secs(j.started))),
-			self.relink
-				.as_ref()
-				.map(|j| format!("Searching for missing files… {:.0} s", secs(j.started))),
-			self.pack
-				.as_ref()
-				.map(|j| format!("Packing the project… {:.0} s", secs(j.started))),
-			self.unpack
-				.as_ref()
-				.map(|j| format!("Extracting the archive… {:.0} s", secs(j.started))),
+			self.collect.as_ref().map(|j| {
+				trf(
+					"Collecting files… {secs} s",
+					&[(
+						"secs",
+						&crate::i18n::decimal(format!("{:.0}", secs(j.started))),
+					)],
+				)
+			}),
+			self.relink.as_ref().map(|j| {
+				trf(
+					"Searching for missing files… {secs} s",
+					&[(
+						"secs",
+						&crate::i18n::decimal(format!("{:.0}", secs(j.started))),
+					)],
+				)
+			}),
+			self.pack.as_ref().map(|j| {
+				trf(
+					"Packing the project… {secs} s",
+					&[(
+						"secs",
+						&crate::i18n::decimal(format!("{:.0}", secs(j.started))),
+					)],
+				)
+			}),
+			self.unpack.as_ref().map(|j| {
+				trf(
+					"Extracting the archive… {secs} s",
+					&[(
+						"secs",
+						&crate::i18n::decimal(format!("{:.0}", secs(j.started))),
+					)],
+				)
+			}),
 		]
 		.into_iter()
 		.flatten()
@@ -149,7 +174,7 @@ impl AppState {
 				Some(Ok(_)) => {}
 				Some(Err(e)) if !self.safety.warned => {
 					self.safety.warned = true;
-					self.notices.warn(format!("Autosave failed: {e}"));
+					self.notices.warn(trf("Autosave failed: {e}", &[("e", &e)]));
 				}
 				_ => {}
 			}
@@ -221,14 +246,15 @@ impl AppState {
 				if let Some(dir) = &r.cleanup {
 					let _ = std::fs::remove_dir_all(dir);
 				}
-				self.notices
-					.info("Recovered the autosaved work — save to keep it (Ctrl+S)");
+				self.notices.info(tr(
+					"Recovered the autosaved work — save to keep it (Ctrl+S)",
+				));
 				true
 			}
 			Err(e) => {
-				self.notices.error(format!(
-					"Cannot read the autosave {}: {e}",
-					r.autosave.display()
+				self.notices.error(trf(
+					"Cannot read the autosave {r}: {e}",
+					&[("r", &r.autosave.display()), ("e", &e)],
 				));
 				false
 			}
@@ -268,7 +294,8 @@ impl AppState {
 				self.close_files();
 				self.load_document(document, Some(path.to_path_buf()));
 				self.reset_view();
-				self.notices.info(format!("Opened {}", path.display()));
+				self.notices
+					.info(trf("Opened {path}", &[("path", &path.display())]));
 				safety::push_recent(&mut self.recent, path);
 				self.take_lock();
 				self.view.start_screen = false;
@@ -280,8 +307,10 @@ impl AppState {
 				true
 			}
 			Err(e) => {
-				self.notices
-					.error(format!("Cannot open {}: {e}", path.display()));
+				self.notices.error(trf(
+					"Cannot open {path}: {e}",
+					&[("path", &path.display()), ("e", &e)],
+				));
 				self.recent.retain(|p| p != path);
 				false
 			}
@@ -294,7 +323,7 @@ impl AppState {
 		self.load_document(Document::new(Project::new("Untitled")), None);
 		self.reset_view();
 		self.view.start_screen = false;
-		self.notices.info("New project");
+		self.notices.info(tr("New project"));
 	}
 
 	/// Opens the bundled demo song (written to the user's state folder first).
@@ -312,7 +341,7 @@ impl AppState {
 			Ok(()) => self.open(&file),
 			Err(e) => {
 				self.notices
-					.error(format!("Cannot write the demo project: {e}"));
+					.error(trf("Cannot write the demo project: {e}", &[("e", &e)]));
 				false
 			}
 		}
@@ -324,6 +353,7 @@ impl AppState {
 			return;
 		};
 		safety::push_recent(&mut self.recent, &path);
+		self.start.invalidate(&path);
 		self.safety.autosaver.written(self.session_key);
 		if self.safety.enabled {
 			safety::clear_autosaves(&self.autosave_dir());
@@ -355,8 +385,9 @@ impl AppState {
 	pub fn collect_files(&mut self) {
 		self.collect_prompt = false;
 		let Some(path) = self.path().map(Path::to_path_buf) else {
-			self.notices
-				.warn("Save the project first: collecting copies files into its folder");
+			self.notices.warn(tr(
+				"Save the project first: collecting copies files into its folder",
+			));
 			self.after_save = Some(Pending::Collect);
 			self.file_dialog(FileAction::SaveAs);
 			return;
@@ -398,7 +429,7 @@ impl AppState {
 	pub fn pack_to(&mut self, out: PathBuf) {
 		let Some(path) = self.path().map(Path::to_path_buf) else {
 			self.notices
-				.warn("Save the project first: the archive packs its folder");
+				.warn(tr("Save the project first: the archive packs its folder"));
 			return;
 		};
 		let out = if portable::is_archive(&out) {
@@ -448,26 +479,29 @@ impl AppState {
 					if let Some(cmd) = cmd {
 						self.apply_or_queue(cmd);
 					}
-					let mut text = format!(
-						"Collected {n} file{} ({}){}",
-						if n == 1 { "" } else { "s" },
-						super::export::human_bytes(bytes),
-						if plan.deduplicated > 0 {
-							format!(", {} duplicate(s) shared", plan.deduplicated)
-						} else {
-							String::new()
-						}
+					let mut text = trn_with(
+						"Collected {n} file ({size})",
+						"Collected {n} files ({size})",
+						n,
+						&[("size", &super::export::human_bytes(bytes))],
 					);
+					if plan.deduplicated > 0 {
+						text.push_str(&trn(
+							", {n} duplicate shared",
+							", {n} duplicates shared",
+							plan.deduplicated,
+						));
+					}
 					if !plan.missing.is_empty() {
-						text.push_str(&format!(" — {} missing", plan.missing.len()));
+						text.push_str(&trf(" — {n} missing", &[("n", &plan.missing.len())]));
 					}
 					if n > 0 || plan.deduplicated > 0 {
-						text.push_str("; save to keep the new references");
+						text.push_str(tr("; save to keep the new references"));
 					}
 					self.notices.info(text);
 				}
-				Some(Err(e)) => self.notices.error(format!("Collect failed: {e}")),
-				None => self.notices.error("Collect failed: the worker stopped"),
+				Some(Err(e)) => self.notices.error(trf("Collect failed: {e}", &[("e", &e)])),
+				None => self.notices.error(tr("Collect failed: the worker stopped")),
 			}
 		}
 		if let Some(r) = self.files_jobs.relink.as_ref().and_then(Job::poll) {
@@ -484,34 +518,38 @@ impl AppState {
 					let dialog = self.relink.get_or_insert_with(RelinkDialog::default);
 					dialog.missing = missing;
 					dialog.last = Some((folder, n));
-					self.notices.info(format!(
-						"Relinked {n} file{}",
-						if n == 1 { "" } else { "s" }
-					));
+					self.notices
+						.info(trn("Relinked {n} file", "Relinked {n} files", n));
 				}
-				Some(Err(e)) => self.notices.error(format!("Search failed: {e}")),
-				None => self.notices.error("Search failed: the worker stopped"),
+				Some(Err(e)) => self.notices.error(trf("Search failed: {e}", &[("e", &e)])),
+				None => self.notices.error(tr("Search failed: the worker stopped")),
 			}
 		}
 		if let Some(r) = self.files_jobs.pack.as_ref().and_then(Job::poll) {
 			self.files_jobs.pack = None;
 			match r {
 				Some(Ok(out)) => {
-					self.notices.info(format!(
-						"Wrote {} ({} files, {})",
-						out.path,
+					self.notices.info(trn_with(
+						"Wrote {path} ({n} file, {size})",
+						"Wrote {path} ({n} files, {size})",
 						out.files,
-						super::export::human_bytes(out.bytes)
+						&[
+							("path", &out.path),
+							("size", &super::export::human_bytes(out.bytes)),
+						],
 					));
 					if !out.outside.is_empty() {
-						self.notices.warn(format!(
-							"{} file(s) outside the project folder are not in the archive — use File → Collect Project Files first",
-							out.outside.len()
+						self.notices.warn(trn(
+							"{n} file outside the project folder is not in the archive — use File → \
+							 Collect Project Files first",
+							"{n} files outside the project folder are not in the archive — use File → \
+							 Collect Project Files first",
+							out.outside.len(),
 						));
 					}
 				}
-				Some(Err(e)) => self.notices.error(format!("Archive failed: {e}")),
-				None => self.notices.error("Archive failed: the worker stopped"),
+				Some(Err(e)) => self.notices.error(trf("Archive failed: {e}", &[("e", &e)])),
+				None => self.notices.error(tr("Archive failed: the worker stopped")),
 			}
 		}
 		if let Some(r) = self.files_jobs.unpack.as_ref().and_then(Job::poll) {
@@ -522,8 +560,10 @@ impl AppState {
 				}
 				Some(Err(e)) => self
 					.notices
-					.error(format!("Cannot extract the archive: {e}")),
-				None => self.notices.error("Extracting failed: the worker stopped"),
+					.error(trf("Cannot extract the archive: {e}", &[("e", &e)])),
+				None => self
+					.notices
+					.error(tr("Extracting failed: the worker stopped")),
 			}
 		}
 		self.poll_export();
@@ -622,21 +662,21 @@ impl AppState {
 			return;
 		};
 		self.export.running = None;
-		let result = r.unwrap_or_else(|| Err("the export thread stopped".into()));
+		let result = r.unwrap_or_else(|| Err(tr("the export thread stopped").into()));
 		match &result {
 			Ok(report) => {
 				for w in &report.mix.warnings {
 					self.notices.warn(w.clone());
 				}
-				self.notices.info(format!(
-					"Exported {} file{} ({})",
+				self.notices.info(trn_with(
+					"Exported {n} file ({size})",
+					"Exported {n} files ({size})",
 					report.files.len(),
-					if report.files.len() == 1 { "" } else { "s" },
-					super::export::human_bytes(report.bytes())
+					&[("size", &super::export::human_bytes(report.bytes()))],
 				));
 			}
-			Err(e) if e.contains("cancelled") => self.notices.info("Export cancelled"),
-			Err(e) => self.notices.error(format!("Export failed: {e}")),
+			Err(e) if e.contains("cancelled") => self.notices.info(tr("Export cancelled")),
+			Err(e) => self.notices.error(trf("Export failed: {e}", &[("e", &e)])),
 		}
 		self.export.result = Some(result);
 		self.export.open = true;

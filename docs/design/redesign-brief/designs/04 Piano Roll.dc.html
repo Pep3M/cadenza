@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div data-screen-label="04 Piano roll" style="width:1920px;height:1080px;flex:none;background:#111215;display:flex;flex-direction:column;overflow:hidden;font-size:12px;position:relative;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<!-- compact transport -->
+<div style="height:44px;flex:none;display:flex;align-items:center;gap:14px;padding:0 12px;background:#15161a;border-bottom:1px solid #24262b">
+<span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5">CADENZA</span>
+<div style="display:flex;gap:2px"><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">⏮</div><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328"><span style="width:9px;height:9px;background:#a3a6ad;border-radius:1px"></span></div><div style="width:38px;height:28px;display:flex;align-items:center;justify-content:center;background:#1d3a2b;color:#4fc38a;box-shadow:inset 0 0 0 1px #2f6b4b">▶</div><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:10px;height:10px;border-radius:50%;background:#f0524f"></span></div></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 8px;background:#24234a;color:#8f8cf5;border-radius:3px;font-weight:500;box-shadow:inset 0 0 0 1px #3b3970">◆ Pattern</span><span style="padding:2px 8px;color:#a3a6ad">Song</span></div>
+<span style="color:#8f8cf5;font-size:11px">Looping "Chords" · Keys soloed</span>
+<div style="flex:1"></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:500">6.1.000</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">0:13.043</span><span style="font-family:'IBM Plex Mono',monospace">92.00 · 4/4</span>
+<div style="flex:1"></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">F5 Arrange · F7 Editor (max) · F10 AI</span>
+</div>
+<!-- editor toolbar -->
+<div style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 10px;background:#15161a;border-bottom:1px solid #24262b">
+<span style="font-weight:600;font-size:13px">Piano roll</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="width:9px;height:9px;border-radius:2px;background:#e3b24f"></span>Chords <span style="color:#80848c">on Keys ▾</span></span>
+<div style="width:1px;height:18px;background:#24262b"></div>
+<div style="display:flex;gap:2px;background:#0e0f11;border-radius:4px;padding:2px">
+<sc-for list="{{ tools }}" as="t" hint-placeholder-count="4"><span style="padding:2px 8px;display:flex;align-items:center;gap:6px;border-radius:3px;background:{{ t.bg }};color:{{ t.fg }};box-shadow:{{ t.bd }}">{{ t.i }} {{ t.n }}<span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c;border:1px solid #2a2c32;border-radius:2px;padding:0 3px">{{ t.k }}</span></span></sc-for>
+</div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:1px 7px;background:#1d2a3d;color:#7fb4ff;border-radius:3px">Snap</span><span style="padding:1px 7px;color:#a3a6ad;font-family:'IBM Plex Mono',monospace">1/16 ▾</span></div>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="color:#80848c">Key</span>C minor ▾</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#1d2a3d;color:#7fb4ff;border-radius:4px;box-shadow:inset 0 0 0 1px #2c4a73">▤ Scale rows</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="color:#80848c">Ghosts</span>Bass ▾</span>
+<div style="flex:1"></div>
+<span style="color:#a3a6ad">3 of 36 selected</span>
+<span style="height:22px;display:flex;align-items:center;padding:0 9px;background:#212328;border-radius:4px;font-weight:500">Quantize <span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:10.5px;margin-left:6px">Q</span></span>
+<span style="height:22px;display:flex;align-items:center;padding:0 9px;background:#212328;border-radius:4px;font-weight:500">Clip ▾</span>
+<span style="padding:1px 7px;background:#212328;border-radius:3px">Fit</span><span style="padding:1px 7px;background:#212328;border-radius:3px">−</span><span style="padding:1px 7px;background:#212328;border-radius:3px">+</span>
+</div>
+<!-- ruler -->
+<div style="height:24px;flex:none;display:flex;border-bottom:1px solid #24262b">
+<div style="width:64px;flex:none;background:#15161a;border-right:1px solid #24262b"></div>
+<div style="flex:1;position:relative;background:#15161a">
+<div style="position:absolute;left:0;right:0;top:0;height:4px;background:#8f8cf5;opacity:.9"></div>
+<sc-for list="{{ ruler }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.x }}px;bottom:0;height:{{ b.h }}px;border-left:1px solid {{ b.c }};padding-left:4px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ b.tc }};line-height:16px">{{ b.l }}</div></sc-for>
+</div>
+</div>
+<!-- grid -->
+<div style="height:700px;flex:none;display:flex;position:relative">
+<div style="width:64px;flex:none;display:flex;flex-direction:column;border-right:1px solid #24262b">
+<sc-for list="{{ rows }}" as="r" hint-placeholder-count="36"><div style="height:{{ rh }}px;flex:none;display:flex;align-items:center;justify-content:flex-end;padding-right:5px;background:{{ r.key }};border-bottom:1px solid #1d1f23;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ r.kc }}">{{ r.label }}</div></sc-for>
+</div>
+<div style="flex:1;position:relative;overflow:hidden">
+<sc-for list="{{ rows }}" as="r" hint-placeholder-count="36"><div style="height:{{ rh }}px;background:{{ r.bg }};border-bottom:1px solid {{ r.line }};box-sizing:border-box"></div></sc-for>
+<sc-for list="{{ vlines }}" as="v" hint-placeholder-count="64"><div style="position:absolute;top:0;bottom:0;left:{{ v.x }}px;width:1px;background:{{ v.c }}"></div></sc-for>
+<sc-for list="{{ ghosts }}" as="g" hint-placeholder-count="0"><div style="position:absolute;left:{{ g.x }}px;top:{{ g.y }}px;width:{{ g.w }}px;height:{{ g.h }}px;border:1px solid #5aa2f5;border-radius:2px;opacity:.45;box-sizing:border-box"></div></sc-for>
+<sc-for list="{{ notes }}" as="n" hint-placeholder-count="0">
+<div style="position:absolute;left:{{ n.x }}px;top:{{ n.y }}px;width:{{ n.w }}px;height:{{ n.h }}px;background:{{ n.bg }};border-radius:2px;box-shadow:{{ n.bd }};box-sizing:border-box;display:flex;align-items:center;padding-left:4px;overflow:hidden"><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;font-weight:500;color:{{ n.tc }};white-space:nowrap">{{ n.label }}</span><div style="position:absolute;right:0;top:2px;bottom:2px;width:3px;background:rgba(16,17,20,.35);border-radius:1px"></div></div>
+</sc-for>
+<div style="position:absolute;left:{{ ph }}px;top:0;bottom:0;width:1px;background:#f2f3f5"></div>
+<div style="position:absolute;left:{{ pop.x }}px;top:{{ pop.y }}px;width:236px;background:#2a2c32;border:1px solid #363940;border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.6);display:flex;flex-direction:column;z-index:5">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px 6px"><span style="font-weight:600">3 notes</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">Enter to edit · Esc</span></div>
+<div style="display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 8px;padding:0 10px 8px;align-items:center">
+<sc-for list="{{ props }}" as="p" hint-placeholder-count="6"><span style="color:#a3a6ad">{{ p.k }}</span><span style="height:20px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;background:#0e0f11;border:1px solid {{ p.bd }};border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">{{ p.v }}</span></sc-for>
+</div>
+<div style="display:flex;gap:4px;padding:8px 10px;border-top:1px solid #363940"><span style="padding:2px 8px;background:#363940;border-radius:3px">Legato</span><span style="padding:2px 8px;background:#363940;border-radius:3px">Humanize</span><span style="padding:2px 8px;background:#363940;border-radius:3px">Mute</span></div>
+</div>
+</div>
+</div>
+<!-- lane tabs -->
+<div style="height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 6px;background:#15161a;border-top:1px solid #24262b;border-bottom:1px solid #1d1f23">
+<span style="width:56px;color:#80848c;font-size:11px">Lanes</span>
+<sc-for list="{{ laneTabs }}" as="t" hint-placeholder-count="5"><span style="padding:2px 9px;border-radius:3px;background:{{ t.bg }};color:{{ t.fg }}">{{ t.n }}</span></sc-for>
+<span style="padding:2px 9px;color:#80848c">+ CC</span><div style="flex:1"></div><span style="color:#80848c;font-size:11px">Alt drag = line · Shift = only selected</span>
+</div>
+<div style="height:110px;flex:none;display:flex;border-bottom:1px solid #1d1f23">
+<div style="width:64px;flex:none;background:#15161a;border-right:1px solid #24262b;padding:6px;display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#a3a6ad"><span>Velocity</span><span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:10px">127<br>0</span></div>
+<div style="flex:1;position:relative;background:#111215">
+<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:#1d1f23"></div>
+<sc-for list="{{ vel }}" as="v" hint-placeholder-count="0"><div style="position:absolute;left:{{ v.x }}px;bottom:6px;width:2px;height:{{ v.h }}px;background:{{ v.c }}"></div><div style="position:absolute;left:{{ v.x }}px;bottom:{{ v.h }}px;width:7px;height:7px;margin:0 0 3px -2.5px;border-radius:50%;background:{{ v.c }}"></div></sc-for>
+</div>
+</div>
+<div style="height:98px;flex:none;display:flex">
+<div style="width:64px;flex:none;background:#15161a;border-right:1px solid #24262b;padding:6px;display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#a3a6ad"><span>Mod CC1</span><span style="font-family:'IBM Plex Mono',monospace;color:#c884e8;font-size:10.5px">64</span></div>
+<div style="flex:1;position:relative;background:#121216">
+<svg viewBox="0 0 1856 98" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%"><path d="{{ modArea }}" fill="#c884e8" fill-opacity="0.12"></path><path d="{{ modPath }}" fill="none" stroke="#c884e8" stroke-width="1.5" vector-effect="non-scaling-stroke"></path></svg>
+<sc-for list="{{ modPts }}" as="p" hint-placeholder-count="5"><div style="position:absolute;left:{{ p.x }}px;top:{{ p.y }}px;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;background:#121216;border:1.5px solid #c884e8;box-sizing:border-box"></div></sc-for>
+</div>
+</div>
+<div style="flex:1;display:flex;align-items:center;gap:16px;padding:0 12px;background:#0e0f11;border-top:1px solid #1d1f23;font-size:11px;color:#a3a6ad"><span style="color:#f2a944">● Unsaved</span><span>Velocity of 3 notes → 96</span><span style="flex:1"></span><span style="color:#80848c">Chords · 36 notes · C minor</span></div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 04</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Piano roll</span><span style="color:#a3a6ad">Editor dock maximized, Pattern mode on. Scale rows, Bass ghost notes, a note properties popover, velocity and mod wheel lanes.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    const LO = 48, HI = 83, N = HI - LO + 1, GH = 700, rh = GH / N, GW = 1856, BAR = GW / 4, BEAT = BAR / 4, SIX = BEAT / 4;
+    const NAMES = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+    const SCALE = [0, 2, 3, 5, 7, 8, 10], BLACK = [1, 3, 6, 8, 10];
+    const yOf = p => (HI - p) * rh;
+    const rows = [];
+    for (let p = HI; p >= LO; p--) {
+      const pc = p % 12, inS = SCALE.includes(pc), blk = BLACK.includes(pc);
+      rows.push({
+        bg: inS ? (pc === 0 ? '#1a1b20' : '#16171b') : '#111215', line: pc === 0 ? '#2a2c32' : '#17181c',
+        key: blk ? '#1c1d21' : '#c9ccd2', kc: blk ? '#80848c' : '#3a3d44',
+        label: pc === 0 ? 'C' + (Math.floor(p / 12) - 1) : (inS && !blk ? '' : ''),
+      });
+    }
+    const vlines = [];
+    for (let i = 0; i < 64; i++) vlines.push({ x: i * SIX, c: i % 16 === 0 ? '#2a2c32' : i % 4 === 0 ? '#1d1f23' : 'rgba(29,31,35,.45)' });
+    const ruler = [];
+    for (let b = 0; b < 4; b++) for (let q = 0; q < 4; q++) ruler.push({ x: b * BAR + q * BEAT, h: q === 0 ? 20 : 8, c: q === 0 ? '#363940' : '#2a2c32', l: q === 0 ? String(5 + b) : '', tc: '#c4c7cd' });
+    const CH = [[60, 63, 67], [60, 63, 68], [58, 63, 67], [58, 62, 65]];
+    const RH = [[0, 6, [96, 88, 92]], [6, 2, [70, 64, 66]], [8, 8, [104, 96, 100]]];
+    const notes = [], vel = [];
+    const fmt = p => NAMES[p % 12] + (Math.floor(p / 12) - 1);
+    CH.forEach((ch, b) => RH.forEach(([st, len, vs], ri) => ch.forEach((p, k) => {
+      const sel = b === 1 && ri === 0, x = b * BAR + st * SIX, w = len * SIX - 2, v = vs[k];
+      const a = Math.round(90 + (v / 127) * 165).toString(16).padStart(2, '0');
+      notes.push({ x, y: yOf(p) + 1, w, h: rh - 2, bg: sel ? '#f3d27e' : '#e3b24f' + a, bd: sel ? '0 0 0 1px #f2f3f5' : 'none', tc: '#101114', label: w > 50 ? fmt(p) : '' });
+      vel.push({ x: x + 1, h: (v / 127) * 88, c: sel ? '#f2f3f5' : '#e3b24f' });
+    })));
+    const ghosts = [];
+    [48, 56, 51, 58].forEach((p, b) => [0, 3, 6, 8, 11, 14].forEach(s => ghosts.push({ x: b * BAR + s * SIX, y: yOf(p) + 2, w: SIX * 2 - 3, h: rh - 4 })));
+    const pop = { x: BAR + 6 * SIX + 16, y: yOf(68) - 40 };
+    const props = [['Pitch', 'mixed'], ['Start', '6.1.000'], ['Length', '0.1.2.000'], ['Velocity', '96', 1], ['Release', '64'], ['Chance', '100 %']].map(([k, v, f]) => ({ k, v, bd: f ? '#4c9cf5' : '#24262b' }));
+    const tools = [['✎', 'Draw', 'P', 1], ['▦', 'Paint', 'B'], ['↖', 'Select', 'E'], ['✂', 'Slice', 'C']].map(([i, n, k, on]) => ({ i, n, k, bg: on ? '#2a2c32' : 'transparent', fg: on ? '#e8e9ec' : '#a3a6ad', bd: on ? 'inset 0 0 0 1px #363940' : 'none' }));
+    const laneTabs = [['Velocity', 1], ['Mod wheel', 1], ['Pitch bend'], ['Sustain'], ['Expression CC11']].map(([n, on]) => ({ n, bg: on ? '#2a2c32' : 'transparent', fg: on ? '#e8e9ec' : '#a3a6ad' }));
+    const my = v => 90 - v * 82;
+    const mp = [[0, .2], [BAR * 1, .2], [BAR * 1.5, .6], [BAR * 2.25, .5], [BAR * 3, .85], [GW, .85]];
+    let modPath = `M0 ${my(mp[0][1])}`;
+    for (let i = 1; i < mp.length; i++) { const [x0, v0] = mp[i - 1], [x1, v1] = mp[i]; const m = (x0 + x1) / 2; modPath += ` C${m} ${my(v0)} ${m} ${my(v1)} ${x1} ${my(v1)}`; }
+    const ux = [
+      { h: 'What changed and why', items: [
+        'Tools are one segmented control with their keys printed on it (Draw P, Paint B, Select E, Slice C), so the shortcuts are visible without the F1 overlay.',
+        'Key + Scale rows: in-scale rows are one step lighter, C rows have a stronger line, out-of-scale rows stay dark. Drawing snaps to the scale while Scale rows is on; hold Alt to place a chromatic note.',
+        'Notes use the track color with opacity from velocity (quiet = darker), the note name inside when there is room, and a small release grip on the right edge. Selected notes turn pale with a white outline.',
+        'Ghost notes from other tracks (here Bass) are outlined in their own track color at 45 %, so you can write against the bass line without them looking editable.',
+        'Pattern mode is purple everywhere: the transport toggle, a "Looping Chords · Keys soloed" note next to it, and the loop brace across the ruler.',
+        'Lanes below are tabs you can switch on, several at once (Velocity, Mod wheel, Pitch bend, Sustain, any CC). Each lane has a value scale and the current value in the left column.',
+      ]},
+      { h: 'Interaction', items: [
+        'Double-click a note, or press Enter with notes selected, to open the properties popover. Fields that differ across the selection read "mixed"; typing sets them all. Arrow keys in a field nudge by snap.',
+        'Draw P: click to add, drag to set length. Paint B: drag to paint repeated notes at the snap value. Select E: rubber band, and Alt+drag duplicates. Slice C: click to cut at the mouse, Shift slices all notes at that time.',
+        'Velocity lane: drag a stem; Alt+drag draws a line across stems; Shift limits to the selected notes. Controller lanes: click to add a point, drag to move, Alt+drag to bend the curve between points.',
+        'Space plays from the clip start in Pattern mode. The keyboard on the left auditions pitches on click; hovering a row highlights its key.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'Empty clip: faint grid with "Press P and click to draw, or ask the producer: Write a chord progression in C minor", which opens the AI panel with that prompt filled in.',
+        'No clip open: the dock shows the last 3 edited clips as cards and "Double-click a MIDI clip to edit it".',
+      ]},
+    ];
+    this._v = { rows, rh, vlines, ruler, notes, ghosts, vel, ph: BAR + 2 * BEAT, pop, props, tools, laneTabs, modPath, modArea: modPath + ` L${GW} 98 L0 98 Z`, modPts: mp.slice(1, 5).map(([x, v]) => ({ x, y: my(v) })), ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

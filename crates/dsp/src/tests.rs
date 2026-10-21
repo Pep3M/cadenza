@@ -607,7 +607,6 @@ fn new_params_at_their_defaults_keep_the_sound_bit_identical() {
 	}
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 /// [`fingerprint`] for an instrument: a chord, a high note and releases.
 fn note_fingerprint(id: &str, settings: &[(&str, f32)]) -> u64 {
 	let mut p = create(id).unwrap();
@@ -647,24 +646,28 @@ fn note_fingerprint(id: &str, settings: &[(&str, f32)]) -> u64 {
 	h
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
-fn poly_synth_defaults_stay_bit_identical_with_wavetables() {
-	// Hashes recorded before the wavetable oscillator existed (T35).
-	type Case<'a> = (&'a [(&'a str, f32)], u64);
-	let cases: [Case; 3] = [
-		(&[], 0x1fc9_3764_0048_04c9),
-		(
-			&[("unison", 3.0), ("osc2_wave", 2.0), ("osc1_wave", 0.0)],
-			0xd285_69b7_3e51_2bfd,
-		),
-		(
-			&[("osc1_wave", 3.0), ("noise", 20.0), ("filter_slope", 0.0)],
-			0xecd9_0ff2_3eec_a1ed,
-		),
+fn wavetable_params_leave_the_classic_waves_bit_identical() {
+	// The table and position params must not touch an oscillator that is not
+	// on Wavetable. Compared on the same machine: hashes pinned on one machine
+	// do not survive another libm (the CI's glibc differs from a dev box's).
+	let cases: [&[(&str, f32)]; 3] = [
+		&[],
+		&[("unison", 3.0), ("osc2_wave", 2.0), ("osc1_wave", 0.0)],
+		&[("osc1_wave", 3.0), ("noise", 20.0), ("filter_slope", 0.0)],
 	];
-	for (settings, want) in cases {
-		let got = note_fingerprint("poly_synth", settings);
-		assert_eq!(got, want, "{settings:?}: {got:#x}");
+	let moved = [
+		("osc1_table", 3.0),
+		("osc1_position", 0.7),
+		("osc2_table", 2.0),
+		("osc2_position", 0.4),
+	];
+	for settings in cases {
+		let with_moved: Vec<(&str, f32)> = settings.iter().copied().chain(moved).collect();
+		assert_eq!(
+			note_fingerprint("poly_synth", settings),
+			note_fingerprint("poly_synth", &with_moved),
+			"{settings:?}"
+		);
 	}
 }

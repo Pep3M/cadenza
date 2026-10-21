@@ -446,7 +446,7 @@ Hermite up to 1.25x, table windowed-sinc with cutoff 1/ratio above), `util::pitc
 `detect_pitch`). `uses_samples(id)`; factory presets carry `FactoryZone`s naming files of the
 factory sample folder (`factory_samples::*`).
 Wavetables (T35, `util::wavetable`): poly_synth `oscN_wave` 4 = Wavetable (appended choice; defaults
-bit-identical, pinned by `poly_synth_defaults_stay_bit_identical_with_wavetables`) with `oscN_table`
+bit-identical; `wavetable_params_leave_the_classic_waves_bit_identical` checks table/position never touch the other waves) with `oscN_table`
 (Basic sine→tri→saw→square, PWM, Formant vowels, Harmonics sweep, Digital sync/crush) and
 `oscN_position` 0..1 (smoothed; automatable/modulatable). 5 tables × 32 frames, generated once per
 process (`tables()`, own radix-2 FFT, `PolySynth::new`) as 10 mipmaps by harmonic truncation (512..1

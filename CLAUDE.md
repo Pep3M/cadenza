@@ -59,7 +59,7 @@ MPL-2.0 + egui's font licenses; Cadenza crates are `GPL-3.0-or-later`, `publish 
 macOS clippy + release tests (+ `cargo check --target x86_64-apple-darwin`) only on PRs to
 main/staging, pushes to main, `v*` tags and `workflow_dispatch` (`platforms` input); docs-only
 changes skipped, superseded runs cancelled. No secrets: AI tests use the scripted provider.
-Release (`release.yml`, `v*` tags or manual; `packaging/`): Linux tar.gz + AppImage (built on
+Release (`release.yml`, `v*` tags or manual; `packaging/`; every release bumps `[workspace.package] version` and adds its section to `CHANGELOG.md`): Linux tar.gz + AppImage (built on
 ubuntu-22.04), Windows zip (no sandbox binary), macOS universal `Cadenza.app` (lipo, ad-hoc
 signed) in a dmg; each ships `cadenza`, `cadenza-app`, `cadenza-plugin-scanner` (+
 `cadenza-plugin-sandbox` on Unix) side by side, plus LICENSE/README. Tags publish a GitHub Release

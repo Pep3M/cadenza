@@ -37,5 +37,5 @@ pub use openrouter::{OpenRouterConfig, OpenRouterProvider};
 pub use prompt::{AppContext, EngineerBrief};
 pub use provider::LlmProvider;
 pub use session::{
-	ENGINEER_UNDO_LABEL, RequestOutcome, RequestStatus, SessionAgent, SessionConfig,
+	ENGINEER_UNDO_LABEL, EXPLAIN_TOOLS, RequestOutcome, RequestStatus, SessionAgent, SessionConfig,
 };

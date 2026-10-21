@@ -9,6 +9,7 @@
 //! `.cadenza/session.lock` (or `session.lock` in the untitled folder) holds the pid of the
 //! app editing the project; it is removed when the project is closed normally.
 
+use crate::i18n::{tr, trf, trn};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -283,11 +284,11 @@ pub fn push_recent(recent: &mut Vec<PathBuf>, path: &Path) {
 pub fn age(modified: SystemTime, now: SystemTime) -> String {
 	let secs = now.duration_since(modified).map_or(0, |d| d.as_secs());
 	match secs {
-		0..60 => "just now".into(),
-		60..3600 => format!("{} min ago", secs / 60),
-		3600..86_400 => format!("{} h ago", secs / 3600),
-		86_400..172_800 => "yesterday".into(),
-		_ => format!("{} days ago", secs / 86_400),
+		0..60 => tr("just now").into(),
+		60..3600 => trf("{n} min ago", &[("n", &(secs / 60))]),
+		3600..86_400 => trf("{n} h ago", &[("n", &(secs / 3600))]),
+		86_400..172_800 => tr("yesterday").into(),
+		_ => trn("{n} day ago", "{n} days ago", secs / 86_400),
 	}
 }
 

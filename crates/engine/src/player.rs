@@ -54,8 +54,9 @@ use std::collections::HashSet;
 
 use std::collections::HashMap;
 
+use crate::midi_map::{MapTarget, MidiMapMonitor, MidiMapTable};
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
-use cadenza_dsp::MidiEvent;
+use cadenza_dsp::{Listen, MidiEvent};
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
 use cadenza_model::{AutomationLane, Clip, Command, Document, Project};
 use cadenza_plugin_host::{EditorEvent, PluginCatalog};
@@ -151,6 +152,51 @@ enum Cmd {
 	TestTone(bool),
 	/// Device followed by the probe (kept across loads).
 	Probe(Option<DeviceId>),
+	/// Monitoring switches on the device output (kept across loads).
+	MonitorFx(MonitorFx),
+	/// Device playing a listen mode (kept across loads).
+	Listen(Option<(DeviceId, Listen)>),
+}
+
+/// Monitoring-only switches applied to what the output device plays, after the master
+/// meters and the master tap (they show the real mix) and after the metronome: not part of
+/// the project, never in offline renders or exports (see [`Player::set_monitor`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MonitorFx {
+	/// Sum left and right to mono (both channels play `(l + r) / 2`).
+	pub mono: bool,
+	/// Turn the output down by [`DIM_DB`].
+	pub dim: bool,
+}
+
+/// Level change of [`MonitorFx::dim`], dB.
+pub const DIM_DB: f32 = -20.0;
+
+impl MonitorFx {
+	pub fn is_off(self) -> bool {
+		!self.mono && !self.dim
+	}
+
+	/// Applies the switches to one stereo block in place. Realtime safe.
+	pub fn apply(self, left: &mut [f32], right: &mut [f32]) {
+		if self.is_off() {
+			return;
+		}
+		let gain = if self.dim {
+			cadenza_core::db_to_gain(DIM_DB)
+		} else {
+			1.0
+		};
+		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+			if self.mono {
+				let m = 0.5 * (*l + *r);
+				*l = m;
+				*r = m;
+			}
+			*l *= gain;
+			*r *= gain;
+		}
+	}
 }
 
 /// Something that happened in the editor of a plugin device (see [`Player::poll_editors`]).
@@ -212,6 +258,7 @@ struct AudioCore {
 	position: Tick,
 	loop_range: Option<(Tick, Tick)>,
 	probe_target: Option<DeviceId>,
+	listen: Option<(DeviceId, Listen)>,
 	scratch_l: Vec<f32>,
 	scratch_r: Vec<f32>,
 	/// Live MIDI input queue, if a port is attached.
@@ -219,6 +266,11 @@ struct AudioCore {
 	midi_inputs: Consumer<Consumer<TimedMessage>>,
 	midi_garbage: Producer<Consumer<TimedMessage>>,
 	mapped: Vec<MappedEvent>,
+	/// Hardware controller assignments (kept across graph swaps).
+	midi_map: Option<Box<MidiMapTable>>,
+	midi_maps: Consumer<Box<MidiMapTable>>,
+	midi_map_garbage: Producer<Box<MidiMapTable>>,
+	midi_monitor: Arc<MidiMapMonitor>,
 	monitor: Option<TrackId>,
 	/// Previewed pitches held down (bit per pitch) and the track they play on: live
 	/// events go to it until they are released, then back to `monitor`.
@@ -238,6 +290,7 @@ struct AudioCore {
 	tap_garbage: Producer<Box<RecordTap>>,
 	/// Test tone phase (radians) while it plays.
 	test_tone: Option<f32>,
+	monitor_fx: MonitorFx,
 	/// When the first frame of the current block will be heard (backend clock).
 	playback_ns: Option<u64>,
 }
@@ -254,6 +307,9 @@ struct Control {
 	shared: Arc<Shared>,
 	midi_inputs: Producer<Consumer<TimedMessage>>,
 	midi_garbage: Consumer<Consumer<TimedMessage>>,
+	midi_maps: Producer<Box<MidiMapTable>>,
+	midi_map_garbage: Consumer<Box<MidiMapTable>>,
+	midi_monitor: Arc<MidiMapMonitor>,
 	inputs: Producer<Box<InputReader>>,
 	input_garbage: Consumer<Box<InputReader>>,
 	taps: Producer<Box<RecordTap>>,
@@ -270,6 +326,9 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 	let (sched_garbage_tx, sched_garbage_rx) = RingBuffer::new(SCHEDULE_GARBAGE_SLOTS);
 	let (midi_tx, midi_rx) = RingBuffer::new(MIDI_INPUT_SLOTS);
 	let (midi_garbage_tx, midi_garbage_rx) = RingBuffer::new(MIDI_INPUT_SLOTS + 1);
+	let (map_tx, map_rx) = RingBuffer::new(HANDOVER_SLOTS);
+	let (map_garbage_tx, map_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 1);
+	let midi_monitor = Arc::new(MidiMapMonitor::default());
 	let (input_tx, input_rx) = RingBuffer::new(HANDOVER_SLOTS);
 	let (input_garbage_tx, input_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 1);
 	let (tap_tx, tap_rx) = RingBuffer::new(HANDOVER_SLOTS);
@@ -287,6 +346,9 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			shared: shared.clone(),
 			midi_inputs: midi_tx,
 			midi_garbage: midi_garbage_rx,
+			midi_maps: map_tx,
+			midi_map_garbage: map_garbage_rx,
+			midi_monitor: midi_monitor.clone(),
 			inputs: input_tx,
 			input_garbage: input_garbage_rx,
 			taps: tap_tx,
@@ -309,12 +371,17 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			position: Tick::ZERO,
 			loop_range: None,
 			probe_target: None,
+			listen: None,
 			scratch_l: vec![0.0; SCRATCH_FRAMES],
 			scratch_r: vec![0.0; SCRATCH_FRAMES],
 			midi: None,
 			midi_inputs: midi_rx,
 			midi_garbage: midi_garbage_tx,
 			mapped: Vec::with_capacity(MIDI_QUEUE),
+			midi_map: None,
+			midi_maps: map_rx,
+			midi_map_garbage: map_garbage_tx,
+			midi_monitor,
 			monitor: None,
 			preview_held: [0; 2],
 			preview_track: None,
@@ -332,6 +399,7 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			taps: tap_rx,
 			tap_garbage: tap_garbage_tx,
 			test_tone: None,
+			monitor_fx: MonitorFx::default(),
 			playback_ns: None,
 		},
 	)
@@ -345,6 +413,7 @@ impl AudioCore {
 		{
 			next.set_loop(self.loop_range);
 			next.continue_probe(self.probe_target);
+			next.set_listen(self.listen);
 			next.seek(self.position);
 			if self.playing {
 				next.play();
@@ -369,6 +438,16 @@ impl AudioCore {
 			&& let Some(g) = &mut self.graph
 		{
 			g.set_monitor_track(self.monitor);
+		}
+		// The newest map replaces the old one only when the old can be handed back
+		// (before the commands: live values sent after it must reach it).
+		while self.midi_map_garbage.slots() > 0
+			&& let Ok(table) = self.midi_maps.pop()
+		{
+			if let Some(old) = self.midi_map.replace(table) {
+				// Cannot fail: a slot was checked above and only this thread pushes.
+				let _ = self.midi_map_garbage.push(old);
+			}
 		}
 		while let Ok(cmd) = self.commands.pop() {
 			match cmd {
@@ -401,21 +480,34 @@ impl AudioCore {
 				}
 				Cmd::DetachMidi => self.retire_midi(),
 				Cmd::Volume(track, db) => {
+					if let Some(t) = &mut self.midi_map {
+						t.external(MapTarget::Volume(track), db);
+					}
 					if let Some(g) = &mut self.graph {
 						g.set_channel_volume(track, db);
 					}
 				}
 				Cmd::Pan(track, pan) => {
+					if let Some(t) = &mut self.midi_map {
+						t.external(MapTarget::Pan(track), pan);
+					}
 					if let Some(g) = &mut self.graph {
 						g.set_channel_pan(track, pan);
 					}
 				}
 				Cmd::Param(device, index, value) => {
+					if let Some(t) = &mut self.midi_map {
+						let index = index as usize;
+						t.external(MapTarget::Param { device, index }, value);
+					}
 					if let Some(g) = &mut self.graph {
 						g.set_device_param(device, index as usize, value);
 					}
 				}
 				Cmd::SendLevel(send, db) => {
+					if let Some(t) = &mut self.midi_map {
+						t.external(MapTarget::Send(send), db);
+					}
 					if let Some(g) = &mut self.graph {
 						g.set_send_level(send, db);
 					}
@@ -486,6 +578,13 @@ impl AudioCore {
 					if let Some(g) = &mut self.graph {
 						g.play();
 						g.start_count_in(bars);
+					}
+				}
+				Cmd::MonitorFx(fx) => self.monitor_fx = fx,
+				Cmd::Listen(target) => {
+					self.listen = target;
+					if let Some(g) = &mut self.graph {
+						g.set_listen(target);
 					}
 				}
 				Cmd::TestTone(on) => {
@@ -639,6 +738,15 @@ impl AudioCore {
 		};
 		self.mapped.clear();
 		cadenza_midi_io::drain_into_block(queue, DRAIN_ALL, 1, self.sample_rate, &mut self.mapped);
+		// Mapped controllers move their targets and stop here: neither the instrument
+		// nor a MIDI recording gets them.
+		let (table, graph, monitor) = (&mut self.midi_map, &mut self.graph, &self.midi_monitor);
+		self.mapped.retain(|m| {
+			monitor.heard(&m.raw);
+			!table
+				.as_mut()
+				.is_some_and(|t| t.apply(&m.raw, graph.as_deref_mut(), monitor))
+		});
 		if let Some(g) = &mut self.graph {
 			for event in self.mapped.iter().filter_map(|m| m.dsp) {
 				g.push_live_event(event);
@@ -740,6 +848,8 @@ impl AudioCore {
 			self.read_input(frames, at);
 			self.render(frames);
 			self.record(at == 0);
+			self.monitor_fx
+				.apply(&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
 			self.add_test_tone(frames);
 			at += frames;
 			for (i, frame) in chunk.chunks_mut(channels).enumerate() {
@@ -767,6 +877,7 @@ impl Control {
 		while self.automation_garbage.pop().is_ok() {}
 		while self.schedule_garbage.pop().is_ok() {}
 		while self.midi_garbage.pop().is_ok() {}
+		while self.midi_map_garbage.pop().is_ok() {}
 		while self.input_garbage.pop().is_ok() {}
 	}
 
@@ -896,6 +1007,10 @@ pub struct Player {
 	/// Ring every loaded graph writes the probed device into, and that device.
 	probe: Arc<DeviceProbe>,
 	probe_target: Option<DeviceId>,
+	/// Ring every loaded graph writes the master's post-fader output into.
+	master_tap: Arc<DeviceProbe>,
+	monitor_fx: MonitorFx,
+	listen: Option<(DeviceId, Listen)>,
 	/// Address map of the last loaded graph (live parameters and automation).
 	resolver: Option<Resolver>,
 	/// Targets automated in the running graph.
@@ -1154,6 +1269,9 @@ impl Player {
 			meters: None,
 			probe: Arc::new(DeviceProbe::new(sample_rate)),
 			probe_target: None,
+			master_tap: Arc::new(DeviceProbe::new(sample_rate)),
+			monitor_fx: MonitorFx::default(),
+			listen: None,
 			resolver: None,
 			automated: HashSet::new(),
 			load_id: 0,
@@ -1494,6 +1612,7 @@ impl Player {
 		let Some(index) = self
 			.resolver
 			.as_ref()
+			.filter(|r| !r.changes_latency(device, param))
 			.and_then(|r| r.param_index(device, param))
 		else {
 			return Ok(false);
@@ -1594,6 +1713,7 @@ impl Player {
 			&self.hosting,
 		)?;
 		graph.attach_probe(Some(self.probe.clone()));
+		graph.attach_master_tap(Some(self.master_tap.clone()));
 		let warnings = graph.warnings().to_vec();
 		let watches = graph.plugin_watches.clone();
 		let meters = graph.meters();
@@ -1616,6 +1736,7 @@ impl Player {
 		self.resolver = Some(resolver);
 		self.automated = automated;
 		self.swap_editors(editor_slots);
+		self.set_midi_map(project)?;
 		Ok(warnings)
 	}
 
@@ -1792,6 +1913,51 @@ impl Player {
 		self.probe_target
 	}
 
+	/// Ring of the master's post-fader output (one per player: survives loads), for live
+	/// loudness. Every rendered quantum is written as both sides of a
+	/// [`crate::ProbeFrame`]; a full ring drops frames, so drain it regularly (the
+	/// first drain after a pause may return up to half a second of older audio).
+	pub fn master_tap(&self) -> Arc<DeviceProbe> {
+		self.master_tap.clone()
+	}
+
+	/// Monitoring switches (mono, dim) on the device output; kept across loads, never
+	/// rendered offline.
+	pub fn set_monitor(&mut self, fx: MonitorFx) -> Result<(), EngineError> {
+		if self.monitor_fx == fx {
+			return Ok(());
+		}
+		self.control.send(Cmd::MonitorFx(fx))?;
+		self.monitor_fx = fx;
+		Ok(())
+	}
+
+	pub fn monitor_fx(&self) -> MonitorFx {
+		self.monitor_fx
+	}
+
+	/// Makes `device` play a listen mode (compressor key, EQ band solo; see
+	/// [`Listen`]) instead of its normal output, or back to normal with [`Listen::Off`].
+	/// One device listens at a time (a new one replaces the previous). Monitoring only:
+	/// kept across loads, never in the document, offline renders or exports.
+	pub fn set_listen(&mut self, device: DeviceId, mode: Listen) -> Result<(), EngineError> {
+		let target = (mode != Listen::Off).then_some((device, mode));
+		if target.is_none() && self.listen.is_some_and(|(d, _)| d != device) {
+			return Ok(());
+		}
+		if self.listen == target {
+			return Ok(());
+		}
+		self.control.send(Cmd::Listen(target))?;
+		self.listen = target;
+		Ok(())
+	}
+
+	/// The device playing a listen mode, if any.
+	pub fn listen(&self) -> Option<(DeviceId, Listen)> {
+		self.listen
+	}
+
 	/// Sets where plugin devices run on subsequent [`Player::load`] calls (default:
 	/// [`PluginHosting::default`], sandboxed unless `CADENZA_PLUGIN_HOSTING=in-process`).
 	pub fn set_hosting(&mut self, hosting: PluginHosting) {
@@ -1849,6 +2015,25 @@ impl Player {
 		self.control.attach_midi(consumer)?;
 		self.midi_input = Some(connection);
 		Ok(())
+	}
+
+	/// Resolves `project.midi_map` (hardware controller assignments) against the loaded
+	/// graph and hands it to the audio thread, without recompiling. [`Player::load`] does
+	/// it too; call this when only the map changed. Mapped controllers move their targets
+	/// live (published in [`Player::midi_map_monitor`]) and do not reach the instrument.
+	pub fn set_midi_map(&mut self, project: &Project) -> Result<(), EngineError> {
+		let table = MidiMapTable::build(project, self.resolver.as_ref());
+		self.control.collect_garbage();
+		self.control
+			.midi_maps
+			.push(Box::new(table))
+			.map_err(|_| EngineError::Busy)
+	}
+
+	/// What the MIDI controllers did: the last controller message (MIDI learn) and the
+	/// values the mapped ones set (one per player, kept across loads).
+	pub fn midi_map_monitor(&self) -> Arc<MidiMapMonitor> {
+		self.control.midi_monitor.clone()
 	}
 
 	/// Feeds the monitored track (and recordings) from `queue` instead of a hardware

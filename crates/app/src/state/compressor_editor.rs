@@ -4,8 +4,11 @@
 //! a device can be keyed from, and the readout texts. The view turns the changes into
 //! one command per gesture.
 
+use crate::i18n::{tr, trf};
 use cadenza_core::{DeviceId, TrackId};
-use cadenza_dsp::response::compressor_curve_db;
+use cadenza_dsp::response::{
+	KEY_HP_OFF_HZ, KEY_LP_OFF_HZ, compressor_curve_db, compressor_key_response_db,
+};
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 use cadenza_model::{Command, Document, Project, SidechainSource, TrackKind};
 
@@ -18,6 +21,10 @@ pub const RELEASE: &str = "release";
 pub const KNEE: &str = "knee";
 pub const MAKEUP: &str = "makeup";
 pub const MIX: &str = "mix";
+pub const KEY_HP: &str = "key_hp";
+pub const KEY_LP: &str = "key_lp";
+/// A key filter node dragged this close (in octaves) to its range end switches off.
+const KEY_OFF_SNAP_OCT: f32 = 0.15;
 
 /// Bottom of the transfer display, both axes (the threshold's own minimum).
 pub const FLOOR_DB: f32 = -60.0;
@@ -196,7 +203,10 @@ pub fn transfer_tag(v: &CompValues) -> String {
 
 /// The threshold line's tag in the history: "Threshold −24.0 dB".
 pub fn threshold_tag(db: f32) -> String {
-	minus(format!("Threshold {db:.1} dB"))
+	minus(trf(
+		"Threshold {db} dB",
+		&[("db", &crate::i18n::decimal(format!("{:.1}", db)))],
+	))
 }
 
 /// The gain reduction readout: "−6.2" ("0.0" when nothing is reduced).
@@ -218,18 +228,74 @@ pub fn signed_db(db: f32) -> String {
 	}
 }
 
-/// The key's level from its track's (post-fader) meter: a pre-fader key is the meter
-/// with the fader taken back out. The meter is the only per-track level the app has;
-/// pan and mute are not undone (a muted pre-fader key reads silent).
-pub fn key_level(meter_peak_db: f32, volume_db: f32, pre_fader: bool, floor_db: f32) -> f32 {
-	if meter_peak_db <= floor_db {
-		return floor_db;
+/// The key level the history draws: the compressor's `KEY_LEVEL_DB` reading (the real
+/// detector signal), floored; no reading (probe idle) = the floor.
+pub fn key_level(reading_db: Option<f32>, floor_db: f32) -> f32 {
+	reading_db.map_or(floor_db, |db| db.max(floor_db))
+}
+
+/// The detector's key filters: (high-pass, low-pass) in Hz, at their range ends when off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeyFilter {
+	pub hp: f32,
+	pub lp: f32,
+}
+
+impl KeyFilter {
+	pub fn from_fn(f: impl Fn(&ParamInfo) -> f32) -> Self {
+		Self {
+			hp: f(param(KEY_HP)),
+			lp: f(param(KEY_LP)),
+		}
 	}
-	if pre_fader {
-		(meter_peak_db - volume_db).max(floor_db)
-	} else {
-		meter_peak_db
+
+	pub fn hp_on(&self) -> bool {
+		self.hp > KEY_HP_OFF_HZ + 0.5
 	}
+
+	pub fn lp_on(&self) -> bool {
+		self.lp < KEY_LP_OFF_HZ - 0.5
+	}
+
+	/// The filters' response (the processor's own coefficients).
+	pub fn response_db(&self, sample_rate: f32, freq: f32) -> f32 {
+		compressor_key_response_db(self.hp, self.lp, sample_rate, freq)
+	}
+
+	/// "Key filter off", "Key 120 Hz – 20 kHz", "Key ≥ 120 Hz", "Key ≤ 8 kHz".
+	pub fn label(&self) -> String {
+		let hz = |f: f32| crate::state::device::format_value(f, "Hz");
+		match (self.hp_on(), self.lp_on()) {
+			(false, false) => tr("Key filter off").to_owned(),
+			(true, false) => trf("Key \u{2265} {freq}", &[("freq", &hz(self.hp))]),
+			(false, true) => trf("Key \u{2264} {freq}", &[("freq", &hz(self.lp))]),
+			(true, true) => trf(
+				"Key {low} \u{2013} {high}",
+				&[("low", &hz(self.hp)), ("high", &hz(self.lp))],
+			),
+		}
+	}
+}
+
+/// The change a key filter node drag makes (`node` 0 = high-pass, 1 = low-pass): the
+/// frequency clamped to the range; near its range end it snaps off.
+pub fn drag_key(node: usize, freq: f32) -> Change {
+	let id = if node == 0 { KEY_HP } else { KEY_LP };
+	let p = param(id);
+	let off = if node == 0 { p.min } else { p.max };
+	if (freq.max(1.0) / off).log2().abs() < KEY_OFF_SNAP_OCT
+		|| (node == 0 && freq < off)
+		|| (node == 1 && freq > off)
+	{
+		return (id, off);
+	}
+	(id, round_to(freq.clamp(p.min, p.max), 1.0))
+}
+
+/// Double-click on a key filter node: off.
+pub fn key_off(node: usize) -> Change {
+	let id = if node == 0 { KEY_HP } else { KEY_LP };
+	(id, param(id).default)
 }
 
 /// A track that can key the device.
@@ -287,7 +353,7 @@ pub fn tap_label(pre_fader: bool) -> &'static str {
 	if pre_fader {
 		"pre-fader"
 	} else {
-		"post-fader send"
+		tr("post-fader send")
 	}
 }
 
@@ -296,6 +362,33 @@ mod tests {
 	use cadenza_model::{Device, Output, Track};
 
 	use super::*;
+
+	#[test]
+	fn key_filter_nodes_snap_off_at_the_range_ends() {
+		let off = KeyFilter::from_fn(|p| p.default);
+		assert!(!off.hp_on() && !off.lp_on());
+		assert_eq!(off.label(), "Key filter off");
+		assert_eq!(off.response_db(48_000.0, 50.0), 0.0);
+		assert_eq!(drag_key(0, 150.4), (KEY_HP, 150.0));
+		assert_eq!(drag_key(0, 21.0), (KEY_HP, KEY_HP_OFF_HZ));
+		assert_eq!(drag_key(0, 5.0), (KEY_HP, KEY_HP_OFF_HZ));
+		assert_eq!(drag_key(1, 19_000.0), (KEY_LP, KEY_LP_OFF_HZ));
+		assert_eq!(drag_key(1, 8_000.0), (KEY_LP, 8_000.0));
+		assert_eq!(drag_key(0, 15_000.0), (KEY_HP, 10_000.0), "kept in range");
+		assert_eq!(key_off(0), (KEY_HP, KEY_HP_OFF_HZ));
+		let on = KeyFilter {
+			hp: 150.0,
+			lp: 8_000.0,
+		};
+		assert!(on.hp_on() && on.lp_on());
+		assert!(on.label().starts_with("Key 150 Hz"), "{}", on.label());
+		assert!(on.response_db(48_000.0, 40.0) < -15.0);
+		let hp = KeyFilter {
+			hp: 150.0,
+			lp: KEY_LP_OFF_HZ,
+		};
+		assert!(hp.label().contains('\u{2265}'), "{}", hp.label());
+	}
 
 	fn values(threshold: f32, ratio: f32, knee: f32, makeup: f32) -> CompValues {
 		CompValues {
@@ -419,11 +512,10 @@ mod tests {
 	}
 
 	#[test]
-	fn key_level_takes_the_fader_out_before_it() {
-		assert_eq!(key_level(-12.0, -6.0, false, -60.0), -12.0);
-		assert_eq!(key_level(-12.0, -6.0, true, -60.0), -6.0);
-		assert_eq!(key_level(-60.0, -6.0, true, -60.0), -60.0, "silence stays");
-		assert_eq!(key_level(-50.0, 20.0, true, -60.0), -60.0);
+	fn key_level_reads_the_detector_or_rests_on_the_floor() {
+		assert_eq!(key_level(Some(-12.0), -60.0), -12.0);
+		assert_eq!(key_level(Some(-144.0), -60.0), -60.0, "silence stays");
+		assert_eq!(key_level(None, -60.0), -60.0);
 	}
 
 	#[test]

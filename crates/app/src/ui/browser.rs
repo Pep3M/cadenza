@@ -4,6 +4,7 @@
 //! drag files onto the arrange view, double-click to import) and the style Library tab
 //! (`ui::library`).
 
+use crate::i18n::{tr, trf};
 use std::path::PathBuf;
 
 use cadenza_dsp::DeviceRole;
@@ -31,10 +32,73 @@ pub struct BrowserUi {
 }
 
 impl BrowserUi {
+	/// The Library tab is open: the browser widens into filters, results and document
+	/// (design 08).
+	pub fn library_open(&self) -> bool {
+		self.tab == Tab::Library
+	}
+
+	/// The browser as a 40 px icon rail (narrow windows, design 12a): an icon opens the
+	/// overlay on its tab, the open tab's icon closes it.
+	pub fn rail(&mut self, ui: &mut Ui, state: &mut AppState) {
+		ui.add_space(6.0);
+		ui.vertical_centered(|ui| {
+			ui.spacing_mut().item_spacing.y = 4.0;
+			for (tab, glyph, name) in [
+				(Tab::Devices, "▤", tr("Devices")),
+				(Tab::Files, "♪", tr("Files")),
+				(Tab::Library, "☰", tr("Library")),
+			] {
+				let open = state.view.panels.browser_overlay && self.tab == tab;
+				let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), Sense::click());
+				let bg = if open {
+					theme::BG_HOVER
+				} else if resp.hovered() {
+					theme::BG_WIDGET
+				} else {
+					egui::Color32::TRANSPARENT
+				};
+				ui.painter()
+					.rect_filled(rect, egui::CornerRadius::same(theme::RADIUS_MD), bg);
+				ui.painter().text(
+					rect.center(),
+					egui::Align2::CENTER_CENTER,
+					glyph,
+					egui::FontId::proportional(15.0),
+					if open { theme::TEXT } else { theme::TEXT_DIM },
+				);
+				resp.widget_info(|| {
+					egui::WidgetInfo::selected(
+						egui::WidgetType::Button,
+						true,
+						open,
+						trf("Browser {name}", &[("name", &name)]),
+					)
+				});
+				if resp
+					.on_hover_text(trf(
+						"{name} (F6): opens the browser over the arrange",
+						&[("name", &name)],
+					))
+					.clicked()
+				{
+					let p = &mut state.view.panels;
+					if open {
+						p.browser_overlay = false;
+					} else {
+						self.tab = tab;
+						p.browser_overlay = true;
+						p.focus = Some(crate::state::layout::PanelKind::Browser);
+					}
+				}
+			}
+		});
+	}
+
 	pub fn show(&mut self, ui: &mut Ui, state: &mut AppState) {
 		ui.add_space(4.0);
 		ui.horizontal(|ui| {
-			super::widgets::panel_title(ui, "Browser", Some("F6"));
+			super::widgets::panel_title(ui, tr("Browser"), Some("F6"));
 			if self.tab != Tab::Devices {
 				return;
 			}
@@ -44,8 +108,8 @@ impl BrowserUi {
 					ui.spinner();
 				}
 				if ui
-					.add_enabled(!scanning, egui::Button::new("Rescan").small())
-					.on_hover_text("Scan the system plugin folders for new or changed CLAP/VST3 plugins (runs in the background)")
+					.add_enabled(!scanning, egui::Button::new(tr("Rescan")).small())
+					.on_hover_text(tr("Scan the system plugin folders for new or changed CLAP/VST3 plugins (runs in the background)"))
 					.clicked()
 				{
 					state.rescan_plugins();
@@ -58,7 +122,9 @@ impl BrowserUi {
 		}
 		let tabs = [Tab::Devices, Tab::Files, Tab::Library];
 		let current = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
-		if let Some(i) = super::widgets::segmented(ui, &["Devices", "Files", "Library"], current) {
+		if let Some(i) =
+			super::widgets::segmented(ui, &[tr("Devices"), tr("Files"), tr("Library")], current)
+		{
 			self.tab = tabs[i];
 		}
 		ui.add_space(4.0);
@@ -69,7 +135,7 @@ impl BrowserUi {
 		}
 		ui.add(
 			egui::TextEdit::singleline(&mut self.query)
-				.hint_text("Search devices…")
+				.hint_text(tr("Search devices…"))
 				.desired_width(f32::INFINITY),
 		);
 		ui.add_space(2.0);
@@ -86,10 +152,14 @@ impl BrowserUi {
 			.auto_shrink([false, false])
 			.show(ui, |ui| {
 				let groups = [
-					("Instruments", Source::Builtin, DeviceRole::Instrument),
-					("Effects", Source::Builtin, DeviceRole::Effect),
-					("Plugin instruments", Source::Plugin, DeviceRole::Instrument),
-					("Plugin effects", Source::Plugin, DeviceRole::Effect),
+					(tr("Instruments"), Source::Builtin, DeviceRole::Instrument),
+					(tr("Effects"), Source::Builtin, DeviceRole::Effect),
+					(
+						tr("Plugin instruments"),
+						Source::Plugin,
+						DeviceRole::Instrument,
+					),
+					(tr("Plugin effects"), Source::Plugin, DeviceRole::Effect),
 				];
 				for (title, source, role) in groups {
 					let list: Vec<&BrowserItem> = items
@@ -115,9 +185,9 @@ impl BrowserUi {
 				if !items.iter().any(|i| i.source == Source::Plugin) {
 					ui.add_space(6.0);
 					ui.label(
-						RichText::new(
+						RichText::new(tr(
 							"No plugins in the catalog. Press Rescan to look for CLAP/VST3 plugins.",
-						)
+						))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 					);
@@ -196,12 +266,17 @@ fn item_row(ui: &mut Ui, state: &mut AppState, item: &BrowserItem) {
 	let response = ui
 		.interact(response.rect, id.with("click"), Sense::click())
 		.on_hover_text(format!(
-			"{name_line}{}\n\nDouble-click: {}. Or drag onto a track, a mixer strip or below the tracks.",
+			"{name_line}{}\n\n{}",
 			item.description,
 			match item.role {
-				DeviceRole::Instrument =>
-					"set as the selected track's instrument (or create a track)",
-				DeviceRole::Effect => "insert on the selected track (or the master)",
+				DeviceRole::Instrument => tr(
+					"Double-click: set as the selected track's instrument (or create a track). Or \
+					 drag onto a track, a mixer strip or below the tracks."
+				),
+				DeviceRole::Effect => tr(
+					"Double-click: insert on the selected track (or the master). Or drag onto a \
+					 track, a mixer strip or below the tracks."
+				),
 			}
 		));
 	if response.hovered() {
@@ -262,12 +337,14 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 		.and_then(|r| state.device(r))
 		.map(|d| d.name.clone());
 	match &device_name {
-		Some(name) => super::widgets::panel_title(ui, &format!("Presets · {name}"), None),
-		None => super::widgets::panel_title(ui, "Presets", None),
+		Some(name) => {
+			super::widgets::panel_title(ui, &trf("Presets · {name}", &[("name", &name)]), None)
+		}
+		None => super::widgets::panel_title(ui, tr("Presets"), None),
 	};
 	let Some(r) = state.selection.device else {
 		ui.label(
-			RichText::new("Select a device to see its presets")
+			RichText::new(tr("Select a device to see its presets"))
 				.font(theme::small())
 				.color(theme::TEXT_FAINT),
 		);
@@ -278,7 +355,7 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 	};
 	let DeviceKind::Builtin { id } = &device.kind else {
 		ui.label(
-			RichText::new("Plugin presets: use the MCP preset tools for now")
+			RichText::new(tr("Plugin presets: use the MCP preset tools for now"))
 				.font(theme::small())
 				.color(theme::TEXT_FAINT),
 		);
@@ -292,7 +369,7 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 		.show(ui, |ui| {
 			if list.is_empty() {
 				ui.label(
-					RichText::new("No factory presets")
+					RichText::new(tr("No factory presets"))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
@@ -312,8 +389,9 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 				let resp = ui
 					.interact(resp.rect, drag_id.with("click"), Sense::click())
 					.on_hover_text(format!(
-						"{}\n\nClick to load (undoable), or drag onto another track or device.",
-						preset.description
+						"{}\n\n{}",
+						preset.description,
+						tr("Click to load (undoable), or drag onto another track or device.")
 					));
 				if resp.hovered() {
 					ui.painter()
@@ -337,7 +415,7 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 			.or_else(|| files::default_bookmarks().into_iter().next());
 	}
 	ui.label(
-		RichText::new("BOOKMARKS")
+		RichText::new(tr("BOOKMARKS"))
 			.font(theme::small())
 			.color(theme::TEXT_DIM),
 	);
@@ -351,7 +429,7 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 			state.files.open(b.clone());
 		}
 		r.context_menu(|ui| {
-			if ui.button("Remove bookmark").clicked() {
+			if ui.button(tr("Remove bookmark")).clicked() {
 				remove = Some(i);
 				ui.close();
 			}
@@ -365,12 +443,12 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal(|ui| {
 		if ui
 			.small_button("⬆")
-			.on_hover_text("Parent folder")
+			.on_hover_text(tr("Parent folder"))
 			.clicked()
 		{
 			state.files.up();
 		}
-		if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
+		if ui.small_button("⟳").on_hover_text(tr("Refresh")).clicked() {
 			state.files.refresh();
 		}
 		let bookmarked = dir
@@ -380,7 +458,7 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 			&& !bookmarked
 			&& ui
 				.small_button("☆")
-				.on_hover_text("Bookmark this folder")
+				.on_hover_text(tr("Bookmark this folder"))
 				.clicked()
 		{
 			state.view.bookmarks.push(d.clone());
@@ -423,7 +501,7 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 			}
 			Ok(list) if list.is_empty() => {
 				ui.label(
-					RichText::new("No audio, MIDI or project files here")
+					RichText::new(tr("No audio, MIDI or project files here"))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
@@ -445,9 +523,9 @@ fn files_tab(ui: &mut Ui, state: &mut AppState) {
 							.response;
 						let r = ui
 							.interact(r.rect, id.with("click"), Sense::click())
-							.on_hover_text(
-								"Click to open; drag onto the drum sampler to map the kit in it 								 onto its pads by name",
-							);
+							.on_hover_text(tr(
+								"Click to open; drag onto the drum sampler to map the kit in it onto its pads by name",
+							));
 						if r.hovered() {
 							ui.painter().rect_filled(
 								r.rect,
@@ -489,12 +567,18 @@ fn file_row(ui: &mut Ui, state: &mut AppState, e: &files::FileEntry) {
 	let response = ui
 		.interact(response.rect, id.with("click"), Sense::click())
 		.on_hover_text(format!(
-			"{}\n\nDrag onto the arrange view (a track or below the tracks; Alt below the tracks: \
-			 new sampler), a sampler pad or zone, or double-click to {}.",
+			"{}\n\n{}",
 			e.path.display(),
 			match e.kind {
-				FileKind::Project => "open it",
-				_ => "import it at the playhead",
+				FileKind::Project => tr(
+					"Drag onto the arrange view (a track or below the tracks; Alt below the \
+					 tracks: new sampler), a sampler pad or zone, or double-click to open it."
+				),
+				_ => tr(
+					"Drag onto the arrange view (a track or below the tracks; Alt below the \
+					 tracks: new sampler), a sampler pad or zone, or double-click to import it at \
+					 the playhead."
+				),
 			}
 		));
 	if response.hovered() {
@@ -503,11 +587,11 @@ fn file_row(ui: &mut Ui, state: &mut AppState, e: &files::FileEntry) {
 	}
 	if e.kind == FileKind::Audio {
 		response.context_menu(|ui| {
-			if ui.button("Import at the playhead").clicked() {
+			if ui.button(tr("Import at the playhead")).clicked() {
 				state.import_audio(&e.path);
 				ui.close();
 			}
-			if ui.button("Load into new sampler").clicked() {
+			if ui.button(tr("Load into new sampler")).clicked() {
 				state.new_sampler_track(&e.path);
 				ui.close();
 			}
@@ -520,12 +604,15 @@ fn file_row(ui: &mut Ui, state: &mut AppState, e: &files::FileEntry) {
 				let drums = state.device(r).and_then(crate::state::samples::kind)
 					== Some(crate::state::samples::SampleKind::Drums);
 				let label = if drums {
-					format!(
-						"Load into pad {}",
-						crate::state::samples::pad_label(state.view.instrument.pad)
+					trf(
+						"Load into pad {pad_label}",
+						&[(
+							"pad_label",
+							&crate::state::samples::pad_label(state.view.instrument.pad),
+						)],
 					)
 				} else {
-					"Map across the open sampler".to_owned()
+					tr("Map across the open sampler").to_owned()
 				};
 				if ui.button(label).clicked() {
 					let slot = if drums {

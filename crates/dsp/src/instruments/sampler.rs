@@ -3,6 +3,7 @@
 use super::sample_voice::{
 	KillFade, Playhead, SlotInfo, ZoneEnv, ZoneRt, pick_slot, select_zones, velocity_gain,
 };
+use super::voice_readings::{self, HeldNotes, NewestVoices, VoiceReading};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::sample::Zone;
 use crate::util::envelope::Adsr;
@@ -306,6 +307,17 @@ struct Voice {
 	coeffs: SvfCoeffs,
 	/// Key up while the sustain pedal is down.
 	pedal: bool,
+	/// Samples since the note-on, or since the release once released (readings).
+	elapsed: u32,
+}
+
+impl Voice {
+	fn release(&mut self) {
+		if !self.slot.released {
+			self.slot.released = true;
+			self.elapsed = 0;
+		}
+	}
 }
 
 /// Multi-zone sampler.
@@ -324,6 +336,7 @@ pub struct Sampler {
 	expr: Expression,
 	/// Bend + vibrato of the span being rendered (semitones).
 	pitch_offset: f32,
+	held: HeldNotes,
 }
 
 impl Default for Sampler {
@@ -349,6 +362,7 @@ impl Sampler {
 			longest: 0.0,
 			expr: Expression::default(),
 			pitch_offset: 0.0,
+			held: HeldNotes::default(),
 		}
 	}
 
@@ -495,6 +509,7 @@ impl Sampler {
 			svf: [Svf::default(); 2],
 			coeffs: SvfCoeffs::default(),
 			pedal: false,
+			elapsed: 0,
 		};
 		self.set_envelopes(&mut v);
 		v.amp.gate_on();
@@ -513,7 +528,7 @@ impl Sampler {
 					v.pedal = true;
 					continue;
 				}
-				v.slot.released = true;
+				v.release();
 				v.amp.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -523,7 +538,7 @@ impl Sampler {
 	fn pedal_up(&mut self) {
 		for v in self.voices.iter_mut() {
 			if v.slot.active && !v.slot.released && v.pedal {
-				v.slot.released = true;
+				v.release();
 				v.amp.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -536,7 +551,7 @@ impl Sampler {
 		for v in self.voices.iter_mut().filter(|v| v.slot.active) {
 			v.kill.start(ALL_OFF_MS, sr);
 			v.slot.fading = true;
-			v.slot.released = true;
+			v.release();
 		}
 	}
 
@@ -612,6 +627,7 @@ impl Sampler {
 				*l += a * rt.gain_l * g;
 				*r += b * rt.gain_r * g;
 			}
+			v.elapsed = v.elapsed.saturating_add(left.len() as u32);
 			self.voices[i] = v;
 		}
 		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
@@ -664,6 +680,9 @@ impl Processor for Sampler {
 		right[..len].fill(0.0);
 		for (start, end, ev) in event_spans(len, events) {
 			self.render(&mut left[start..end], &mut right[start..end]);
+			if let Some(ev) = ev {
+				self.held.apply(ev);
+			}
 			match ev {
 				Some(&MidiEvent::NoteOn {
 					pitch, velocity, ..
@@ -691,6 +710,7 @@ impl Processor for Sampler {
 		self.gain.snap();
 		self.last_pitch = None;
 		self.rr = [0; 17];
+		self.held.clear();
 		self.expr.reset_controllers();
 	}
 
@@ -698,6 +718,31 @@ impl Processor for Sampler {
 		let release = self.params.get(P_AMP_RELEASE) * 0.0014 + 0.05;
 		let one_shot = if self.one_shot() { self.longest } else { 0.0 };
 		(release + one_shot).min(30.0)
+	}
+
+	fn readings(&self, out: &mut [f32]) -> usize {
+		let mut voices = NewestVoices::default();
+		for v in self
+			.voices
+			.iter()
+			.filter(|v| v.slot.active && !v.slot.fading)
+		{
+			let Some(rt) = self.rt.get(v.zone) else {
+				continue;
+			};
+			voices.offer(
+				v.slot.started,
+				VoiceReading {
+					note: v.note,
+					zone: Some(v.zone),
+					position: Some(v.head.seconds(rt)),
+					released: v.slot.released,
+					elapsed_ms: voice_readings::samples_to_ms(v.elapsed, self.sample_rate),
+					level: v.amp.level(),
+				},
+			);
+		}
+		voice_readings::write(out, &self.held, &voices)
 	}
 
 	fn set_zones(&mut self, zones: Vec<Zone>) -> bool {

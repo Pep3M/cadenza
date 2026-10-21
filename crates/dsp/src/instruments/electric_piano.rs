@@ -1,6 +1,7 @@
 //! `electric_piano`: FM tine piano in the spirit of the classic DX-style
 //! "E.Piano" patches (clean-room: two FM pairs plus a bell partial).
 
+use super::voice_readings::{self, HeldNotes, NewestVoices};
 use super::{VoiceSlot, pick_voice};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::envelope::{Adsr, DecayEnv};
@@ -132,6 +133,7 @@ pub struct ElectricPiano {
 	lfo_phase: f32,
 	trem_depth: Smoother,
 	gain: Smoother,
+	held: HeldNotes,
 }
 
 impl Default for ElectricPiano {
@@ -151,6 +153,7 @@ impl ElectricPiano {
 			trem_depth: Smoother::new(params.get(P_TREM_DEPTH) * 0.01),
 			gain: Smoother::new(db_to_gain(params.get(P_GAIN))),
 			expr: Expression::default(),
+			held: HeldNotes::default(),
 			params,
 		}
 	}
@@ -191,6 +194,7 @@ impl ElectricPiano {
 			released: false,
 			started: self.note_counter,
 			pedal: false,
+			elapsed: 0,
 		};
 	}
 
@@ -198,7 +202,7 @@ impl ElectricPiano {
 		let sustain = self.expr.sustain;
 		for v in &mut self.voices {
 			if v.slot.active && !v.slot.released && v.slot.note == pitch && v.slot.key_up(sustain) {
-				v.slot.released = true;
+				v.slot.release();
 				v.amp.gate_off();
 			}
 		}
@@ -206,7 +210,7 @@ impl ElectricPiano {
 
 	fn release_all(&mut self) {
 		for v in &mut self.voices {
-			v.slot.released = true;
+			v.slot.release();
 			v.slot.pedal = false;
 			v.amp.gate_off();
 		}
@@ -240,6 +244,9 @@ impl ElectricPiano {
 			let g = self.gain.tick();
 			*l = mono * (1.0 - depth * (0.5 + 0.5 * s)) * g;
 			*r = mono * (1.0 - depth * (0.5 - 0.5 * s)) * g;
+		}
+		for v in self.voices.iter_mut().filter(|v| v.slot.active) {
+			v.slot.advance(left.len());
 		}
 	}
 }
@@ -277,6 +284,9 @@ impl Processor for ElectricPiano {
 		let len = left.len().min(right.len());
 		for (start, end, ev) in event_spans(len, events) {
 			self.render(&mut left[start..end], &mut right[start..end]);
+			if let Some(ev) = ev {
+				self.held.apply(ev);
+			}
 			match ev {
 				Some(&MidiEvent::NoteOn {
 					pitch, velocity, ..
@@ -296,7 +306,7 @@ impl Processor for ElectricPiano {
 					ExpressionAction::PedalUp => {
 						for v in &mut self.voices {
 							if v.slot.pedal_up() {
-								v.slot.released = true;
+								v.slot.release();
 								v.amp.gate_off();
 							}
 						}
@@ -314,6 +324,7 @@ impl Processor for ElectricPiano {
 			*v = Voice::default();
 		}
 		self.lfo_phase = 0.0;
+		self.held.clear();
 		self.expr.reset_controllers();
 		self.trem_depth.snap();
 		self.gain.snap();
@@ -321,5 +332,16 @@ impl Processor for ElectricPiano {
 
 	fn tail_seconds(&self) -> f32 {
 		self.params.get(P_RELEASE) * 0.001 * 1.4
+	}
+
+	fn readings(&self, out: &mut [f32]) -> usize {
+		let mut voices = NewestVoices::default();
+		for v in self.voices.iter().filter(|v| v.slot.active) {
+			voices.offer(
+				v.slot.started,
+				v.slot.reading(v.amp.level(), self.sample_rate),
+			);
+		}
+		voice_readings::write(out, &self.held, &voices)
 	}
 }

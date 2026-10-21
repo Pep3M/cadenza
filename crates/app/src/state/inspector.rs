@@ -1,6 +1,7 @@
 //! Inspector tabs (Track | Clip | Device): what each tab shows for the selection, which
 //! tab is active and how it follows the selection. View state, not in the project.
 
+use crate::i18n::{tr, trf};
 use cadenza_core::{ClipId, Tick, TimeSignature, TrackId};
 use cadenza_model::{ClipContent, Project};
 
@@ -18,9 +19,9 @@ impl InspectorTab {
 
 	pub fn label(self) -> &'static str {
 		match self {
-			Self::Track => "Track",
-			Self::Clip => "Clip",
-			Self::Device => "Device",
+			Self::Track => tr("Track"),
+			Self::Clip => tr("Clip"),
+			Self::Device => tr("Device"),
 		}
 	}
 
@@ -125,18 +126,18 @@ impl Targets {
 	pub fn hint(&self, tab: InspectorTab) -> String {
 		match tab {
 			InspectorTab::Track => {
-				"Select a track header or a mixer strip to edit its channel".into()
+				tr("Select a track header or a mixer strip to edit its channel").into()
 			}
-			InspectorTab::Clip if self.clips > 1 => format!(
-				"{} clips selected: click one to edit its properties",
-				self.clips
+			InspectorTab::Clip if self.clips > 1 => trf(
+				"{clips} clips selected: click one to edit its properties",
+				&[("clips", &self.clips)],
 			),
-			InspectorTab::Clip => "Select a clip in the arrange to edit it here".into(),
-			InspectorTab::Device => {
+			InspectorTab::Clip => tr("Select a clip in the arrange to edit it here").into(),
+			InspectorTab::Device => tr(
 				"Select an insert or an instrument (mixer, track header, Track tab) to edit it \
-				 here"
-					.into()
-			}
+				 here",
+			)
+			.into(),
 		}
 	}
 }

@@ -4,6 +4,7 @@
 //! `apply_form` builders the MCP tools use, so a dropped pattern and an AI-applied one are
 //! identical.
 
+use crate::i18n::{tr, trf, trn};
 use std::time::Instant;
 
 use cadenza_core::{ClipId, Tick, TrackId};
@@ -81,15 +82,15 @@ pub const SECTIONS: &[&str] = &[
 	"outro",
 ];
 
-/// Genres the installed items use, sorted.
+/// Genres the installed items use, the most used first (then by name).
 pub fn genres(library: &Library) -> Vec<String> {
-	let mut all: Vec<String> = library
-		.items()
-		.flat_map(|i| i.item.common().genres.iter().cloned())
-		.collect();
-	all.sort();
-	all.dedup();
-	all
+	let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+	for g in library.items().flat_map(|i| i.item.common().genres.iter()) {
+		*counts.entry(g.as_str()).or_default() += 1;
+	}
+	let mut all: Vec<(&str, usize)> = counts.into_iter().collect();
+	all.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+	all.into_iter().map(|(g, _)| g.to_owned()).collect()
 }
 
 /// Key and chords patterns are auditioned and dropped with: the first loop of the song's
@@ -164,18 +165,18 @@ fn track_for(project: &Project, pattern: &Pattern) -> Track {
 	let (name, device, preset) = match pattern.role {
 		_ if is_drum_pattern(pattern) => (
 			if pattern.role == Role::Perc {
-				"Percussion"
+				tr("Percussion")
 			} else {
-				"Drums"
+				tr("Drums")
 			},
 			"drum_machine",
 			None,
 		),
-		Role::Bass => ("Bass", "poly_synth", Some("Sub Bass")),
-		Role::Pad => ("Pad", "poly_synth", Some("Warm Pad")),
-		Role::Comping => ("Keys", "electric_piano", None),
-		Role::Arp => ("Arp", "poly_synth", Some("Pluck Lead")),
-		_ => ("Lead", "poly_synth", Some("Pluck Lead")),
+		Role::Bass => (tr("Bass"), "poly_synth", Some("Sub Bass")),
+		Role::Pad => (tr("Pad"), "poly_synth", Some("Warm Pad")),
+		Role::Comping => (tr("Keys"), "electric_piano", None),
+		Role::Arp => (tr("Arp"), "poly_synth", Some("Pluck Lead")),
+		_ => (tr("Lead"), "poly_synth", Some("Pluck Lead")),
 	};
 	let info = cadenza_dsp::registry().iter().find(|d| d.id == device);
 	let mut instrument = Device::builtin(device, info.map_or(device, |i| i.name));
@@ -216,9 +217,12 @@ pub fn add_pattern(
 	track: Option<TrackId>,
 	at: Tick,
 ) -> Result<PatternDrop, String> {
-	let pattern = library
-		.pattern(pattern_id)
-		.ok_or_else(|| format!("'{pattern_id}' is not an installed pattern"))?;
+	let pattern = library.pattern(pattern_id).ok_or_else(|| {
+		trf(
+			"'{pattern_id}' is not an installed pattern",
+			&[("pattern_id", &pattern_id)],
+		)
+	})?;
 	let mut commands = Vec::new();
 	let mut scratch;
 	let (target, project, new_track) = match track {
@@ -323,6 +327,8 @@ pub struct PatternPreview {
 	events: Vec<PreviewEvent>,
 	next: usize,
 	started: Instant,
+	/// The whole pattern in seconds (its last bar included).
+	length: f64,
 }
 
 impl PatternPreview {
@@ -335,9 +341,12 @@ impl PatternPreview {
 		at: Tick,
 		now: Instant,
 	) -> Result<Self, String> {
-		let pattern = library
-			.pattern(pattern_id)
-			.ok_or_else(|| format!("'{pattern_id}' is not an installed pattern"))?;
+		let pattern = library.pattern(pattern_id).ok_or_else(|| {
+			trf(
+				"'{pattern_id}' is not an installed pattern",
+				&[("pattern_id", &pattern_id)],
+			)
+		})?;
 		let (key, chords) = default_harmony(project, library);
 		let scale = Scale::parse(&key).map_err(|e| e.to_string())?;
 		let (chords, beats_per_chord) = match library.item(&chords).map(|i| &i.item) {
@@ -385,6 +394,7 @@ impl PatternPreview {
 			events,
 			next: 0,
 			started: now,
+			length: realized.length_beats * seconds,
 		})
 	}
 
@@ -409,6 +419,243 @@ impl PatternPreview {
 	pub fn duration(&self) -> f64 {
 		self.events.last().map_or(0.0, |e| e.at)
 	}
+
+	/// How far the preview is through the pattern, 0..=1 (the card's playhead).
+	pub fn progress(&self, now: Instant) -> f32 {
+		let t = now.saturating_duration_since(self.started).as_secs_f64();
+		(t / self.length.max(1e-6)).clamp(0.0, 1.0) as f32
+	}
+}
+
+/// Quarter notes per bar of a "n/d" meter (4 when it does not parse).
+pub fn beats_per_bar(meter: &str) -> f64 {
+	meter
+		.split_once('/')
+		.and_then(|(n, d)| Some((n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?)))
+		.filter(|(n, d)| *n > 0.0 && *d > 0.0)
+		.map_or(4.0, |(n, d)| n * 4.0 / d)
+}
+
+/// One note of a card's pattern picture: `x`/`w` are fractions of the pattern, `y` goes
+/// from 0 (lowest row or pitch) to 1 (highest), `level` is the velocity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MiniNote {
+	pub x: f32,
+	pub w: f32,
+	pub y: f32,
+	pub level: f32,
+}
+
+/// The picture of a pattern on its card: drum hits on one row per drum (kick at the
+/// bottom), pitched notes at their pitch.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MiniPicture {
+	pub notes: Vec<MiniNote>,
+	/// Distinct drums (or pitches) drawn.
+	pub rows: usize,
+	pub drums: bool,
+	pub bars: u32,
+}
+
+/// Realizes `pattern` over a fixed A minor i-VI-III-VII (whatever the song): the card
+/// shows the shape of the part, not its exact notes in this song.
+pub fn mini_picture(pattern: &Pattern) -> MiniPicture {
+	let drums = is_drum_pattern(pattern);
+	let Ok(key) = Scale::parse("A minor") else {
+		return MiniPicture::default();
+	};
+	let chords = if pattern.harmony == Harmony::Chord {
+		parse_chords("Am F C G", Some(&key)).unwrap_or_default()
+	} else {
+		Vec::new()
+	};
+	let Ok(realized) = realize(
+		pattern,
+		&RealizeOptions {
+			key: Some(key),
+			chords,
+			beats_per_chord: 4.0,
+			..Default::default()
+		},
+	) else {
+		return MiniPicture::default();
+	};
+	let mut pitches: Vec<u8> = realized.notes.iter().map(|n| n.pitch).collect();
+	pitches.sort_unstable();
+	pitches.dedup();
+	// Pitched parts span at least an octave, centred, so a two-note bass line does not
+	// jump from the floor to the ceiling.
+	let (low, high) = (
+		f32::from(pitches.first().copied().unwrap_or(60)),
+		f32::from(pitches.last().copied().unwrap_or(60)),
+	);
+	let pad = ((12.0 - (high - low)) * 0.5).max(0.0);
+	let (low, high) = (low - pad, high + pad);
+	let length = realized.length_beats.max(1e-6);
+	let notes = realized
+		.notes
+		.iter()
+		.map(|n| {
+			let y = if drums {
+				let row = pitches.binary_search(&n.pitch).unwrap_or(0);
+				if pitches.len() > 1 {
+					row as f32 / (pitches.len() - 1) as f32
+				} else {
+					0.5
+				}
+			} else {
+				(f32::from(n.pitch) - low) / (high - low)
+			};
+			MiniNote {
+				x: (n.start_beats / length) as f32,
+				w: (n.length_beats / length) as f32,
+				y,
+				level: n.velocity,
+			}
+		})
+		.collect();
+	MiniPicture {
+		notes,
+		rows: pitches.len(),
+		drums,
+		bars: realized.bars,
+	}
+}
+
+/// "72 bars · 3:04" at `bpm` in `meter`.
+pub fn form_length(bars: u32, bpm: f64, meter: &str) -> String {
+	let seconds = (f64::from(bars) * beats_per_bar(meter) * 60.0 / bpm.max(1.0)).round() as u64;
+	trf(
+		"{bars} bars · {min}:{sec}",
+		&[
+			("bars", &bars),
+			("min", &(seconds / 60)),
+			("sec", &format!("{:02}", seconds % 60)),
+		],
+	)
+}
+
+/// The second line of a card: where the item fits ("latin_pop · drums · verse").
+pub fn card_subtitle(item: &LoadedItem) -> String {
+	let c = item.item.common();
+	let mut parts: Vec<String> = c.genres.iter().take(1).cloned().collect();
+	match &item.item {
+		Item::Pattern(p) => {
+			parts.push(p.role.as_str().to_owned());
+			parts.extend(p.sections.iter().take(2).cloned());
+		}
+		Item::Progression(p) => parts.push(trf("{mode} loop", &[("mode", &p.mode)])),
+		Item::Groove(g) => parts.push(trf("{n} steps", &[("n", &g.timing.len())])),
+		Item::Style(_) => parts.push(tr("style guide").into()),
+		Item::Form(_) => parts.push(tr("song form").into()),
+	}
+	parts.join(" · ").replace('_', " ")
+}
+
+/// The footer of a card ("4 bars · 88-102 bpm", "5 forms · 3 loops").
+pub fn card_meta(item: &LoadedItem) -> String {
+	let bars = |n: u32| {
+		if n == 1 {
+			"1 bar".to_owned()
+		} else {
+			trf("{n} bars", &[("n", &n)])
+		}
+	};
+	match &item.item {
+		Item::Pattern(p) => match p.tempo {
+			Some([lo, hi]) => trf(
+				"{bars} · {lo}–{hi} bpm",
+				&[
+					("bars", &bars(p.bars)),
+					("lo", &crate::i18n::decimal(format!("{:.0}", lo))),
+					("hi", &crate::i18n::decimal(format!("{:.0}", hi))),
+				],
+			),
+			None => bars(p.bars),
+		},
+		Item::Style(s) => format!(
+			"{} · {} · {} bpm",
+			trn("{n} form", "{n} forms", s.forms.len()),
+			trn("{n} loop", "{n} loops", s.harmony.loops.len()),
+			crate::i18n::num(s.tempo.typical, 0)
+		),
+		Item::Form(f) => trf(
+			"{bars} · {n} sections",
+			&[("bars", &bars(f.total_bars())), ("n", &f.sections.len())],
+		),
+		Item::Progression(p) => {
+			let chords = p.numerals.split_whitespace().count();
+			trf(
+				"{chords} chords · {beats_per_chord} beats each",
+				&[
+					("chords", &chords),
+					(
+						"beats_per_chord",
+						&crate::i18n::decimal(format!("{:.0}", p.beats_per_chord)),
+					),
+				],
+			)
+		}
+		Item::Groove(g) => trf(
+			"{steps_per_beat} per beat",
+			&[("steps_per_beat", &g.steps_per_beat)],
+		),
+	}
+}
+
+/// The energy a card shows (1..=5): a pattern's own, a form's peak.
+pub fn card_energy(item: &LoadedItem) -> Option<u8> {
+	match &item.item {
+		Item::Pattern(p) => Some(p.energy),
+		Item::Form(f) => f.sections.iter().map(|s| s.energy).max(),
+		_ => None,
+	}
+}
+
+/// A style's role table flattened for chips: each role's pattern ids once (first
+/// listed first) with the sections naming them, plus its text notes.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RoleRow {
+	pub role: String,
+	pub patterns: Vec<(String, Vec<String>)>,
+	pub notes: Vec<(String, String)>,
+}
+
+pub fn role_rows(style: &cadenza_library::Style) -> Vec<RoleRow> {
+	style
+		.roles
+		.iter()
+		.map(|(role, sections)| {
+			let mut row = RoleRow {
+				role: role.to_owned(),
+				..Default::default()
+			};
+			for (section, value) in sections.iter() {
+				match value {
+					cadenza_library::RoleValue::Ids(ids) => {
+						for id in ids {
+							match row.patterns.iter_mut().find(|(p, _)| p == id) {
+								Some((_, s)) => s.push(section.to_owned()),
+								None => row.patterns.push((id.clone(), vec![section.to_owned()])),
+							}
+						}
+					}
+					cadenza_library::RoleValue::Text(t) => {
+						row.notes.push((section.to_owned(), t.clone()));
+					}
+				}
+			}
+			row
+		})
+		.collect()
+}
+
+/// Items per kind among `found` (the kind tabs' counts), in [`ItemKind::ALL`] order.
+pub fn kind_counts(found: &[&LoadedItem]) -> Vec<(ItemKind, usize)> {
+	ItemKind::ALL
+		.iter()
+		.map(|k| (*k, found.iter().filter(|i| i.item.kind() == *k).count()))
+		.collect()
 }
 
 /// Kind glyph and a short role/kind label for a card.
@@ -527,6 +774,50 @@ mod tests {
 			.filter(|(_, v)| v.is_some())
 			.count();
 		assert_eq!(ons, 4 + 4 + 8);
+	}
+
+	#[test]
+	fn card_pictures_and_texts() {
+		let lib = Library::core();
+		let dembow = lib.pattern("core/dembow_basic").unwrap();
+		let pic = mini_picture(dembow);
+		assert!(pic.drums);
+		assert_eq!(pic.notes.len(), 16);
+		assert!(pic.rows >= 3);
+		assert!(
+			pic.notes
+				.iter()
+				.all(|n| (0.0..1.0).contains(&n.x) && (0.0..=1.0).contains(&n.y))
+		);
+		// The kick (lowest drum) sits on the bottom row.
+		assert!(pic.notes.iter().any(|n| n.x == 0.0 && n.y == 0.0));
+		let bass = mini_picture(lib.pattern("core/bass_tresillo_808").unwrap());
+		assert!(!bass.drums && !bass.notes.is_empty());
+		assert_eq!(beats_per_bar("6/8"), 3.0);
+		assert_eq!(beats_per_bar("nope"), 4.0);
+		assert_eq!(form_length(72, 94.0, "4/4"), "72 bars · 3:04");
+		let item = lib.item("core/dembow_basic").unwrap();
+		assert!(
+			card_subtitle(item).contains("drums"),
+			"{}",
+			card_subtitle(item)
+		);
+		assert!(card_meta(item).starts_with("1 bar"), "{}", card_meta(item));
+		assert!(card_energy(item).is_some());
+		let Item::Style(style) = &lib.item("core/latin_pop").unwrap().item else {
+			panic!()
+		};
+		let rows = role_rows(style);
+		assert!(!rows.is_empty());
+		for r in &rows {
+			let mut ids: Vec<&String> = r.patterns.iter().map(|(id, _)| id).collect();
+			let n = ids.len();
+			ids.dedup();
+			assert_eq!(ids.len(), n, "each pattern once per role");
+		}
+		let all: Vec<&LoadedItem> = lib.items().collect();
+		let counts = kind_counts(&all);
+		assert_eq!(counts.iter().map(|(_, n)| n).sum::<usize>(), all.len());
 	}
 
 	#[test]

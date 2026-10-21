@@ -3,6 +3,7 @@
 //! resets), the loudness target chips (view only, never the sound) and the readout
 //! texts. The view turns the changes into one command per gesture.
 
+use crate::i18n::tr;
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 
 pub use crate::state::compressor_editor::{gr_text, signed_db};
@@ -12,6 +13,30 @@ use crate::state::meters::FLOOR_DB;
 pub const INPUT_GAIN: &str = "input_gain";
 pub const CEILING: &str = "ceiling";
 pub const RELEASE: &str = "release";
+/// 0 = 1x, 1 = 2x, 2 = 4x.
+pub const OVERSAMPLE: &str = "oversample";
+pub const OVERSAMPLE_LABELS: [&str; 3] = ["1x", "2x", "4x"];
+
+/// The segment of an `oversample` value.
+pub fn oversample_index(v: f32) -> usize {
+	(v.round().max(0.0) as usize).min(2)
+}
+
+/// "5.7 ms latency": what the limiter delays its output by at `oversample` (the
+/// processor's own figure: lookahead + the oversampling filters).
+pub fn latency_text(oversample: f32, sample_rate: f32) -> String {
+	let samples = cadenza_dsp::response::limiter_latency_samples(oversample, sample_rate);
+	crate::i18n::trf(
+		"{ms} ms latency",
+		&[(
+			"ms",
+			&crate::i18n::decimal(format!(
+				"{:.1}",
+				samples as f32 * 1000.0 / sample_rate.max(1.0)
+			)),
+		)],
+	)
+}
 
 /// Double-click resets.
 pub const RESET_CEILING: f32 = -1.0;
@@ -117,9 +142,9 @@ impl Target {
 
 	pub fn name(self) -> &'static str {
 		match self {
-			Target::Streaming => "Streaming",
-			Target::Loud => "Loud",
-			Target::Broadcast => "Broadcast",
+			Target::Streaming => tr("Streaming"),
+			Target::Loud => tr("Loud"),
+			Target::Broadcast => tr("Broadcast"),
 		}
 	}
 
@@ -221,5 +246,13 @@ mod tests {
 		assert!(true_peak_ok(-1.02, -1.0));
 		assert!(!true_peak_ok(-0.8, -1.0));
 		assert!(!true_peak_ok(FLOOR_DB, -1.0), "nothing measured: no tick");
+	}
+
+	#[test]
+	fn oversampling_latency_text_follows_the_processor() {
+		assert_eq!(oversample_index(0.0), 0);
+		assert_eq!(oversample_index(2.4), 2);
+		assert_eq!(latency_text(0.0, 48_000.0), "5.0 ms latency");
+		assert_eq!(latency_text(2.0, 48_000.0), "5.7 ms latency");
 	}
 }

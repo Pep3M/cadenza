@@ -5,6 +5,7 @@
 //! Compact: the goniometer, S knobs, toggles. The pure logic lives in
 //! [`crate::state::gain_editor`].
 
+use crate::i18n::{mark, tr, trf};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -155,7 +156,7 @@ fn goniometer(
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::Move);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Goniometer"));
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Goniometer")));
 	let per_pct = radius / 100.0;
 	if resp.drag_started() {
 		v.drag = Some((values.pan, values.width, egui::Vec2::ZERO));
@@ -181,9 +182,9 @@ fn goniometer(
 			"Reset gain pan and width".to_owned()
 		});
 	}
-	let resp = resp.on_hover_text(
+	let resp = resp.on_hover_text(tr(
 		"Drag sideways for pan, up/down for width; double-click centres (width 100 %)",
-	);
+	));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -245,7 +246,7 @@ fn goniometer(
 		p.text(
 			c + vec2(0.0, radius * 0.5),
 			Align2::CENTER_CENTER,
-			"No signal",
+			tr("No signal"),
 			theme::medium(10.5),
 			theme::TEXT_FAINT,
 		);
@@ -287,10 +288,15 @@ fn goniometer(
 			&p,
 			pointer + vec2(14.0, -14.0),
 			Align2::LEFT_BOTTOM,
-			&format!(
-				"Pan {} \u{b7} Width {:.0} %",
-				gn::pan_text(values.pan),
-				values.width
+			&trf(
+				"Pan {pan_text} · Width {width} %",
+				&[
+					("pan_text", &gn::pan_text(values.pan)),
+					(
+						"width",
+						&crate::i18n::decimal(format!("{:.0}", values.width)),
+					),
+				],
 			),
 			theme::TEXT,
 			rect,
@@ -311,7 +317,9 @@ fn correlation_meter(ui: &mut Ui, cx: &BodyCx, v: &mut GainView, rect: Rect, now
 		Id::new(("gain-corr-hover", cx.salt, cx.r.device)),
 		Sense::hover(),
 	);
-	resp.on_hover_text("Phase correlation: +1 mono, 0 wide, below 0 parts cancel in mono");
+	resp.on_hover_text(tr(
+		"Phase correlation: +1 mono, 0 wide, below 0 parts cancel in mono",
+	));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -377,8 +385,8 @@ fn toggles(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 			.layout(Layout::left_to_right(Align::Center)),
 	);
 	let labels = [
-		(INVERT_L, values.invert_left, "\u{d8} Invert L"),
-		(INVERT_R, values.invert_right, "\u{d8} Invert R"),
+		(INVERT_L, values.invert_left, tr("\u{d8} Invert L")),
+		(INVERT_R, values.invert_right, tr("\u{d8} Invert R")),
 	]
 	.map(|(id, on, name)| {
 		let label = if on {
@@ -403,19 +411,19 @@ fn toggles(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	row.spacing_mut().item_spacing.x = 8.0;
 	for (id, label) in labels {
 		device_kit::param_toggle(&mut row, state, cx.r, id, &label, theme::WARNING)
-			.on_hover_text("Flip this channel's polarity");
+			.on_hover_text(tr("Flip this channel's polarity"));
 	}
 }
 
 // --- Dock (16f) ---------------------------------------------------------------------
 
 const KNOBS: [KnobDef; 3] = [
-	KnobDef::new(GAIN, "Gain", KnobSize::XL).step(0.5),
-	KnobDef::new(PAN, "Pan", KnobSize::M),
-	KnobDef::new(WIDTH, "Width", KnobSize::M),
+	KnobDef::new(GAIN, mark("Gain"), KnobSize::XL).step(0.5),
+	KnobDef::new(PAN, mark("Pan"), KnobSize::M),
+	KnobDef::new(WIDTH, mark("Width"), KnobSize::M),
 ];
 
-const WIDTH_HINT: &str = "Width 0 % = mono, 100 % = unchanged, 200 % = side doubled";
+const WIDTH_HINT: &str = mark("Width 0 % = mono, 100 % = unchanged, 200 % = side doubled");
 
 fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut GainView, now: f64) {
 	let body = cx.rect;
@@ -448,15 +456,17 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut GainView, now: f
 	ui.painter().text(
 		pos2(col.center().x, tog.bottom() + 22.0),
 		Align2::CENTER_CENTER,
-		WIDTH_HINT,
+		crate::i18n::tr_str(WIDTH_HINT),
 		theme::medium(11.0),
 		theme::TEXT_FAINT,
 	);
 	devices::footer(
 		ui,
 		body,
-		"Correlation turns amber below 0 and coral below \u{2212}0.5. Drag the goniometer \
+		tr(
+			"Correlation turns amber below 0 and coral below \u{2212}0.5. Drag the goniometer \
 		 sideways for pan, up/down for width; M = mono.",
+		),
 	);
 }
 

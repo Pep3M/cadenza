@@ -1,6 +1,7 @@
 //! The export dialog (File → Export, Ctrl+E): settings (persisted per user), the engine
 //! job they describe, and the running export (progress, cancel, result).
 
+use crate::i18n::{tr, trf};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,10 +34,10 @@ impl RangeKind {
 
 	pub fn label(self) -> &'static str {
 		match self {
-			Self::Song => "Whole song",
-			Self::Loop => "Loop region",
-			Self::Selection => "Selected clips",
-			Self::Bars => "Bars",
+			Self::Song => tr("Whole song"),
+			Self::Loop => tr("Loop region"),
+			Self::Selection => tr("Selected clips"),
+			Self::Bars => tr("Bars"),
 		}
 	}
 }
@@ -57,10 +58,10 @@ impl StemMode {
 
 	pub fn label(self) -> &'static str {
 		match self {
-			Self::Off => "No stems",
-			Self::Tracks => "Every track",
-			Self::Buses => "Buses + direct tracks",
-			Self::Selected => "Chosen tracks",
+			Self::Off => tr("No stems"),
+			Self::Tracks => tr("Every track"),
+			Self::Buses => tr("Buses + direct tracks"),
+			Self::Selected => tr("Chosen tracks"),
 		}
 	}
 }
@@ -97,7 +98,7 @@ impl FormatChoice {
 		match self {
 			Self::Wav16 => "WAV 16-bit",
 			Self::Wav24 => "WAV 24-bit",
-			Self::Wav32f => "WAV 32-bit float",
+			Self::Wav32f => tr("WAV 32-bit float"),
 			Self::Flac16 => "FLAC 16-bit",
 			Self::Flac24 => "FLAC 24-bit",
 			Self::Mp3 => "MP3",
@@ -290,22 +291,22 @@ impl ExportDialog {
 		let (start, end) = match s.range {
 			RangeKind::Song => (Tick::ZERO, None),
 			RangeKind::Loop => {
-				let (a, b) = ranges
-					.loop_range
-					.ok_or("there is no loop region; set one on the ruler or pick another range")?;
+				let (a, b) = ranges.loop_range.ok_or(tr(
+					"there is no loop region; set one on the ruler or pick another range",
+				))?;
 				(a, Some(b))
 			}
 			RangeKind::Selection => {
-				let (a, b) = ranges
-					.selection
-					.ok_or("no clips are selected; select clips or pick another range")?;
+				let (a, b) = ranges.selection.ok_or(tr(
+					"no clips are selected; select clips or pick another range",
+				))?;
 				(a, Some(b))
 			}
 			RangeKind::Bars => {
 				if s.from_bar == 0 || s.to_bar < s.from_bar {
-					return Err(format!(
-						"bars {}..{} are not a range; the first bar is 1 and the last one is included",
-						s.from_bar, s.to_bar
+					return Err(trf(
+						"bars {from_bar}..{to_bar} are not a range; the first bar is 1 and the last one is included",
+						&[("from_bar", &s.from_bar), ("to_bar", &s.to_bar)],
 					));
 				}
 				let meter = project.meter();
@@ -321,7 +322,7 @@ impl ExportDialog {
 			StemMode::Buses => StemSet::Buses,
 			StemMode::Selected => {
 				if self.tracks.is_empty() {
-					return Err("choose the tracks to export as stems".into());
+					return Err(tr("choose the tracks to export as stems").into());
 				}
 				let ids = project
 					.tracks
@@ -333,15 +334,15 @@ impl ExportDialog {
 			}
 		};
 		if !s.mixdown && stems == StemSet::None {
-			return Err("nothing to export: tick Mixdown or choose stems".into());
+			return Err(tr("nothing to export: tick Mixdown or choose stems").into());
 		}
 		let folder = self
 			.folder
 			.clone()
-			.ok_or("choose a folder to export into")?;
+			.ok_or(tr("choose a folder to export into"))?;
 		let name = self.name.trim();
 		if name.is_empty() {
-			return Err("enter a file name".into());
+			return Err(tr("enter a file name").into());
 		}
 		let normalize = match s.normalize {
 			NormalizeChoice::Off => Normalize::Off,

@@ -126,6 +126,17 @@ pub fn note_envelope(v: &EpValues, t: f32) -> f32 {
 	}
 }
 
+/// Where a sounding voice sits on the note picture (seconds of its axis): held voices
+/// run up to the key-up line and wait there, released ones continue after it.
+pub fn voice_time(released: bool, elapsed_ms: f32) -> f32 {
+	let t = elapsed_ms.max(0.0) * 0.001;
+	if released {
+		(NOTE_HOLD + t).min(NOTE_SPAN)
+	} else {
+		t.min(NOTE_HOLD)
+	}
+}
+
 /// The tremolo's gain on the left and right channel `t` seconds in (the processor's
 /// auto-pan: `1 - depth * (0.5 ± 0.5 sin)`), starting at phase 0.
 pub fn tremolo_gains(v: &EpValues, t: f32) -> [f32; 2] {
@@ -151,6 +162,14 @@ pub fn tremolo_label(v: &EpValues) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn voices_ride_the_note_picture() {
+		assert_eq!(voice_time(false, 500.0), 0.5);
+		assert_eq!(voice_time(false, 9000.0), NOTE_HOLD);
+		assert_eq!(voice_time(true, 250.0), NOTE_HOLD + 0.25);
+		assert_eq!(voice_time(true, 1e6), NOTE_SPAN);
+	}
 
 	#[test]
 	fn brightness_flattens_the_roll_off_and_bell_lifts_only_its_partials() {

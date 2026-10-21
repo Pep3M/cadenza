@@ -3,6 +3,7 @@
 //! strip and the readout. Compact: the taps at full width, then one row of S knobs. The
 //! gesture -> parameter mapping lives in [`crate::state::delay_editor`].
 
+use crate::i18n::{tr, trf};
 use std::sync::{Arc, Mutex};
 
 use egui::{
@@ -26,6 +27,8 @@ const GAP: f32 = 10.0;
 const CAPTION_H: f32 = 18.0;
 /// The feedback filter's band (and its nodes).
 const BAND: Color32 = theme::BAND_COLORS[5];
+/// Taps 2..4 (multi-tap), apart from the L/R repeat colours.
+const TAP: Color32 = theme::BAND_COLORS[2];
 const FILTER_RANGE: DbRange = DbRange {
 	min: -24.0,
 	max: 12.0,
@@ -41,9 +44,30 @@ struct EchoDrag {
 	px: egui::Vec2,
 }
 
+/// A drag of tap `n` (2..4): spread and level when it started, pixels moved since.
+#[derive(Debug, Clone, Copy)]
+struct TapDrag {
+	n: usize,
+	start_spread: f32,
+	start_level: f32,
+	px: egui::Vec2,
+}
+
+/// A pan wheel over tap `n` not committed yet.
+#[derive(Debug, Clone, Copy)]
+struct PanWheel {
+	n: usize,
+	value: f32,
+	last: f64,
+}
+
+const WHEEL_REST: f64 = 0.5;
+
 #[derive(Default)]
 struct DelayView {
 	drag: Option<EchoDrag>,
+	tap_drag: Option<TapDrag>,
+	pan_wheel: Option<PanWheel>,
 }
 
 type Shared = Arc<Mutex<DelayView>>;
@@ -183,6 +207,7 @@ fn taps(
 	};
 	let first_lane = dl::tap_lane(1, ping_pong);
 	let first_at = pos2(x_of(ms), tip(dl::tap_level(1, values.feedback), first_lane));
+	let extra = values.extra_taps(bpm);
 
 	if ui.is_rect_visible(rect) {
 		let p = ui.painter().with_clip_rect(rect);
@@ -312,6 +337,67 @@ fn taps(
 			3.0,
 		));
 
+		// Taps 2..4: a bar at each tap's time whose height is its level, its own
+		// feedback repeats as thin lines after it, a handle on the head.
+		for tap in &extra {
+			let x = x_of(tap.ms);
+			let level = tap.level.max(3.0 / half.max(1.0));
+			let end = mid - level * half * 0.95;
+			for k in 1..count as u32 {
+				let t = tap.ms + k as f32 * ms;
+				if t > view_ms {
+					break;
+				}
+				let l = tap.level * dl::tap_level(k, values.feedback);
+				if l * half < 2.0 {
+					break;
+				}
+				plain.vline(
+					x_of(t),
+					mid - l * half * 0.95..=mid,
+					Stroke::new(2.0, TAP.gamma_multiply(0.35)),
+				);
+			}
+			let body = bar(x, mid, end);
+			plain.rect_filled(
+				body.expand(3.0),
+				CornerRadius::same(4),
+				TAP.gamma_multiply(0.12),
+			);
+			plain.rect_filled(body, CornerRadius::same(2), TAP.gamma_multiply(0.75));
+			let lit = v.tap_drag.is_some_and(|d| d.n == tap.n);
+			let head = pos2(x, end);
+			if lit {
+				plain.circle_filled(head, 11.0, TAP.gamma_multiply(0.2));
+			}
+			plain.circle_filled(
+				head,
+				5.5,
+				if lit {
+					theme::mix(TAP, Color32::WHITE, 0.3)
+				} else {
+					TAP
+				},
+			);
+			plain.circle_stroke(head, 5.5, Stroke::new(1.5, theme::DISPLAY_BG));
+			p.text(
+				pos2(x, mid + 4.0),
+				Align2::CENTER_TOP,
+				tap.n.to_string(),
+				theme::mono(9.0),
+				theme::TEXT_FAINT,
+			);
+			if !compact || lit {
+				p.text(
+					pos2(x, end - 9.0),
+					Align2::CENTER_BOTTOM,
+					dl::pan_label(tap.pan),
+					theme::mono(9.0),
+					TAP,
+				);
+			}
+		}
+
 		// The first echo's node.
 		let lit = v.drag.is_some();
 		let node_color = lane_color(first_lane);
@@ -356,11 +442,11 @@ fn taps(
 	let node = ui
 		.interact(node_rect, node_id, Sense::click_and_drag())
 		.on_hover_cursor(CursorIcon::Grab)
-		.on_hover_text(format!(
-			"{} · drag: \u{2194} time, \u{2195} feedback · double-click resets",
-			dl::readout(&values, bpm)
+		.on_hover_text(trf(
+			"{readout} · drag: ↔ time, ↕ feedback · double-click resets",
+			&[("readout", &dl::readout(&values, bpm))],
 		));
-	node.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "First echo"));
+	node.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("First echo")));
 	let ms_per_px = 1.0 / px_per_ms.max(1e-4);
 	let pct_per_px = 100.0 / half.max(1.0);
 	let flip = if first_lane == dl::Lane::Right {
@@ -396,18 +482,165 @@ fn taps(
 		&& let Some(d) = v.drag.take()
 	{
 		let (time, feedback) = change_of(&d);
-		commit(state, r, &[time, (FEEDBACK, feedback)], "Delay echo");
+		commit(state, r, &[time, (FEEDBACK, feedback)], tr("Delay echo"));
 	}
 	if node.double_clicked() {
-		commit(state, r, &dl::reset(), "Reset delay echo");
+		commit(state, r, &dl::reset(), tr("Reset delay echo"));
 	}
+
+	tap_handles(
+		ui,
+		state,
+		cx,
+		v,
+		&extra,
+		&values,
+		ms,
+		(x_of, mid, half, px_per_ms),
+	);
 
 	ui.interact(
 		rect,
 		Id::new(("delay-taps", cx.salt, r.device)),
 		Sense::hover(),
 	)
-	.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Delay taps"));
+	.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Delay taps")));
+}
+
+/// Taps 2..4: drag ⇔ moves the taps (their shared spread), ⇕ the tap's level; the wheel
+/// pans it; double-click resets its level and pan.
+#[allow(clippy::too_many_arguments)]
+fn tap_handles(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	v: &mut DelayView,
+	extra: &[dl::ExtraTap],
+	values: &DelValues,
+	echo_ms: f32,
+	(x_of, mid, half, px_per_ms): (impl Fn(f32) -> f32, f32, f32, f32),
+) {
+	let r = cx.r;
+	for tap in extra {
+		let i = tap.n - 2;
+		let level_id = dl::TAP_LEVELS[i];
+		let pan_id = dl::TAP_PANS[i];
+		let head = pos2(x_of(tap.ms), mid - tap.level.max(0.02) * half * 0.95);
+		let resp = ui
+			.interact(
+				Rect::from_center_size(head, egui::Vec2::splat(20.0)),
+				Id::new(("delay-tap", tap.n, cx.salt, r.device)),
+				Sense::click_and_drag(),
+			)
+			.on_hover_cursor(CursorIcon::Grab)
+			.on_hover_text(trf(
+				"{tap} · drag: \u{2194} spacing, \u{2195} level · wheel: pan · double-click resets",
+				&[("tap", &dl::tap_tag(tap))],
+			));
+		resp.widget_info(|| {
+			egui::WidgetInfo::labeled(
+				egui::WidgetType::Other,
+				true,
+				trf("Tap {n}", &[("n", &tap.n.to_string())]),
+			)
+		});
+		let change_of = |d: &TapDrag| {
+			dl::drag_tap(
+				d.n,
+				echo_ms,
+				d.start_spread,
+				d.start_level,
+				d.px.x / px_per_ms.max(1e-4),
+				-d.px.y / (half * 0.95).max(1.0),
+			)
+		};
+		if resp.drag_started() {
+			v.tap_drag = Some(TapDrag {
+				n: tap.n,
+				start_spread: values.tap_spread,
+				start_level: values.tap_levels[i],
+				px: egui::Vec2::ZERO,
+			});
+		}
+		if resp.dragged()
+			&& let Some(d) = v.tap_drag.as_mut().filter(|d| d.n == tap.n)
+		{
+			d.px += resp.drag_delta();
+			let (spread, level) = change_of(d);
+			state.preview_param(r.device, dl::TAP_SPREAD, spread);
+			state.preview_param(r.device, level_id, level);
+		}
+		if resp.drag_stopped()
+			&& let Some(d) = v.tap_drag.take_if(|d| d.n == tap.n)
+		{
+			let (spread, level) = change_of(&d);
+			commit(
+				state,
+				r,
+				&[(dl::TAP_SPREAD, spread), (level_id, level)],
+				tr("Delay tap"),
+			);
+		}
+		if resp.double_clicked() {
+			commit(state, r, &dl::reset_tap(tap.n), tr("Reset delay tap"));
+		}
+		if resp.hovered()
+			&& let Some(notches) = ui.input(|i| {
+				let n = i.smooth_scroll_delta.y / 48.0;
+				(n.abs() > 0.01).then_some(n)
+			}) {
+			ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+			let now = ui.input(|i| i.time);
+			if let Some(w) = v.pan_wheel.take_if(|w| w.n != tap.n) {
+				let id = dl::TAP_PANS[w.n - 2];
+				commit(state, r, &[(id, w.value)], tr("Delay tap pan"));
+			}
+			let w = v.pan_wheel.get_or_insert(PanWheel {
+				n: tap.n,
+				value: tap.pan,
+				last: now,
+			});
+			w.value = dl::wheel_pan(w.value, notches);
+			w.last = now;
+			state.preview_param(r.device, pan_id, w.value);
+		}
+	}
+	if let Some(w) = v.pan_wheel {
+		let idle = ui.input(|i| i.time) - w.last;
+		if idle >= WHEEL_REST {
+			v.pan_wheel = None;
+			commit(
+				state,
+				r,
+				&[(dl::TAP_PANS[w.n - 2], w.value)],
+				tr("Delay tap pan"),
+			);
+		} else {
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_REST - idle));
+		}
+	}
+}
+
+/// "Taps 1 | 2 | 3 | 4": how many read heads the delay plays.
+fn taps_selector(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
+	let r = cx.r;
+	let values = shown_values(state, r);
+	ui.label(
+		egui::RichText::new(tr("Taps"))
+			.font(theme::medium(11.0))
+			.color(theme::TEXT_FAINT),
+	);
+	let selected = (values.taps.round().clamp(1.0, 4.0) as usize) - 1;
+	if let Some(i) = device_kit::segmented(
+		ui,
+		Id::new(("delay-taps-count", cx.salt, r.device)),
+		&["1", "2", "3", "4"],
+		selected,
+	) && i != selected
+	{
+		commit(state, r, &[(dl::TAPS, (i + 1) as f32)], tr("Delay taps"));
+	}
 }
 
 fn row(ui: &mut Ui, rect: Rect) -> Ui {
@@ -427,12 +660,12 @@ fn sync_mode(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 	if let Some(i) = device_kit::segmented(
 		ui,
 		Id::new(("delay-sync-mode", cx.salt, r.device)),
-		&["Sync", "Free"],
+		&[tr("Sync"), tr("Free")],
 		selected,
 	) {
 		let sync = if i == 1 { 0.0 } else { dl::SYNC_1_8 as f32 };
 		if differs(sync, values.sync) {
-			commit(state, r, &[(SYNC, sync)], "Delay sync");
+			commit(state, r, &[(SYNC, sync)], tr("Delay sync"));
 		}
 	}
 }
@@ -461,7 +694,7 @@ fn note_grid(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, columns: usize, cel
 			columns,
 			cell,
 		) {
-			commit(state, r, &[(SYNC, (i + 1) as f32)], "Delay sync");
+			commit(state, r, &[(SYNC, (i + 1) as f32)], tr("Delay sync"));
 		}
 	});
 }
@@ -472,7 +705,7 @@ fn ping_pong_toggle(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 		state,
 		r,
 		PING_PONG,
-		"\u{21c4} Ping-pong",
+		tr("\u{21c4} Ping-pong"),
 		theme::STEREO_L,
 	);
 }
@@ -485,7 +718,7 @@ fn filter_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	p.text(
 		cap.left_center(),
 		Align2::LEFT_CENTER,
-		"Feedback filter",
+		tr("Feedback filter"),
 		theme::medium(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -510,6 +743,7 @@ fn filter_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 		dormant: false,
 		x_only: true,
 		ai: state.ai_change(r.device, id).is_some(),
+		dynamic: None,
 	};
 	let nodes = [
 		node("LC", values.low_cut, LOW_CUT),
@@ -537,7 +771,7 @@ fn filter_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 			} => {
 				let id = if node == 0 { LOW_CUT } else { HIGH_CUT };
 				if done {
-					commit(state, r, &[(id, freq)], "Delay feedback filter");
+					commit(state, r, &[(id, freq)], tr("Delay feedback filter"));
 				} else {
 					state.preview_param(r.device, id, freq);
 				}
@@ -545,14 +779,17 @@ fn filter_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 			FreqEvent::Reset { node } => {
 				let id = if node == 0 { LOW_CUT } else { HIGH_CUT };
 				let default = dl::info().param(id).unwrap().default;
-				commit(state, r, &[(id, default)], "Reset delay filter");
+				commit(state, r, &[(id, default)], tr("Reset delay filter"));
 			}
 			_ => {}
 		}
 	}
-	out.response.on_hover_text(format!(
-		"{}: what each repeat keeps. Drag a node, double-click resets",
-		dl::filter_label(values.low_cut, values.high_cut)
+	out.response.on_hover_text(trf(
+		"{filter_label}: what each repeat keeps. Drag a node, double-click resets",
+		&[(
+			"filter_label",
+			&dl::filter_label(values.low_cut, values.high_cut),
+		)],
 	));
 }
 
@@ -582,11 +819,13 @@ fn knob_grid(
 		.map(|c| crate::state::device::short_choice(c))
 		.collect();
 	let names: Vec<&str> = names.iter().map(String::as_str).collect();
-	let knobs: [(&str, &str); 4] = [
-		(if values.is_free() { TIME } else { SYNC }, "Time"),
-		(FEEDBACK, "Feedback"),
-		(LOW_CUT, "Low cut"),
-		(HIGH_CUT, "High cut"),
+	let knobs: [(&str, &str); 6] = [
+		(if values.is_free() { TIME } else { SYNC }, tr("Time")),
+		(FEEDBACK, tr("Feedback")),
+		(LOW_CUT, tr("Low cut")),
+		(HIGH_CUT, tr("High cut")),
+		(dl::TAP_SPREAD, tr("Tap spread")),
+		(dl::TAPS, tr("Taps")),
 	];
 	let rows = knobs.len().div_ceil(cols);
 	let cell = vec2(rect.width() / cols as f32, rect.height() / rows as f32);
@@ -600,7 +839,11 @@ fn knob_grid(
 		let mut knob = ParamKnob::new(cx.r, id)
 			.size(size)
 			.label(label)
-			.color(if i >= 2 { BAND } else { theme::TEXT })
+			.color(match i {
+				2 | 3 => BAND,
+				4 | 5 => TAP,
+				_ => theme::TEXT,
+			})
 			.id_salt(Id::new(cx.salt));
 		if id == SYNC {
 			knob = knob.choices(&names);
@@ -653,12 +896,18 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DelayView) {
 		4,
 		vec2((col.width() - 4.0) / 4.0, NOTE_CELL_H),
 	);
-	let strip = Rect::from_min_max(pos2(col.left(), grid_top + grid_h + 10.0), col.max);
+	let taps_row = Rect::from_min_size(
+		pos2(col.left(), grid_top + grid_h + 8.0),
+		vec2(col.width(), MODE_ROW_H),
+	);
+	let mut tr_ui = row(ui, taps_row);
+	taps_selector(&mut tr_ui, state, cx);
+	let strip = Rect::from_min_max(pos2(col.left(), taps_row.bottom() + 8.0), col.max);
 	filter_strip(ui, state, cx, strip);
 
 	if knobs_w > 0.0 {
 		let knobs = Rect::from_min_max(pos2(col.right() + GAP, top.top()), top.max);
-		knob_grid(ui, state, cx, knobs.shrink2(vec2(0.0, 6.0)), KnobSize::M, 2);
+		knob_grid(ui, state, cx, knobs.shrink2(vec2(0.0, 6.0)), KnobSize::S, 3);
 	}
 
 	let foot = Rect::from_min_size(
@@ -678,10 +927,10 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DelayView) {
 		ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
 			ui.add(
 				egui::Label::new(
-					egui::RichText::new(
+					egui::RichText::new(tr(
 						"Drag the first echo: \u{2194} time, \u{2195} feedback. Each repeat gets \
 					 darker as the feedback filter removes highs and lows.",
-					)
+					))
 					.font(theme::medium(12.0))
 					.color(theme::TEXT_DIM),
 				)
@@ -700,7 +949,7 @@ const COMPACT_GRID_H: f32 = COMPACT_CELL_H * 2.0 + 4.0;
 
 /// How tall the compact form is at `width`.
 pub fn compact_height(width: f32) -> f32 {
-	compact_taps_h(width) + COMPACT_ROW_H + COMPACT_GRID_H + COMPACT_KNOBS_H + 8.0
+	compact_taps_h(width) + COMPACT_ROW_H + COMPACT_GRID_H + COMPACT_KNOBS_H * 2.0 + 8.0
 }
 
 fn compact_taps_h(width: f32) -> f32 {
@@ -742,7 +991,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DelayView) {
 				vec2((width - 4.0) / 6.0, COMPACT_CELL_H),
 			);
 			ui.add_space(8.0);
-			let (k, _) = ui.allocate_exact_size(vec2(width, COMPACT_KNOBS_H), Sense::hover());
-			knob_grid(ui, state, cx, k, KnobSize::S, 4);
+			let (k, _) = ui.allocate_exact_size(vec2(width, COMPACT_KNOBS_H * 2.0), Sense::hover());
+			knob_grid(ui, state, cx, k, KnobSize::S, 3);
 		});
 }

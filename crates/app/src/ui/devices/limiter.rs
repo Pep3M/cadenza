@@ -6,6 +6,7 @@
 //! row of S knobs. The gesture -> parameter mapping lives in
 //! [`crate::state::limiter_editor`], the loudness in [`crate::state::loudness_meter`].
 
+use crate::i18n::{mark, tr, trf};
 use std::sync::{Arc, Mutex};
 
 use cadenza_dsp::readings;
@@ -264,7 +265,7 @@ fn finish_wheel(ui: &Ui, state: &mut AppState, r: DeviceRef, v: &mut LimView) {
 	let idle = ui.input(|i| i.time) - w.last;
 	if idle >= WHEEL_REST {
 		v.wheel = None;
-		commit(state, r, &[(RELEASE, w.value)], "Limiter release");
+		commit(state, r, &[(RELEASE, w.value)], tr("Limiter release"));
 	} else {
 		ui.ctx()
 			.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_REST - idle));
@@ -293,18 +294,24 @@ fn wheel_release(ui: &Ui, state: &mut AppState, r: DeviceRef, v: &mut LimView, n
 fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView, rect: Rect, big: bool) {
 	let r = cx.r;
 	let values = shown_values(state, r);
-	let time = format!("{:.0} s · now →", v.seconds);
+	let time = trf(
+		"{seconds} s · now →",
+		&[(
+			"seconds",
+			&crate::i18n::decimal(format!("{:.0}", v.seconds)),
+		)],
+	);
 	let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
 	let out =
 		device_kit::LevelHistoryView::new(Id::new(("lim-history", cx.salt, r.device)), rect.size())
 			.waveform(WAVE_MAX_DB)
 			.range(-24.0, 0.0)
 			.gr_range(HISTORY_GR_DB)
-			.input_label("Input + gain")
+			.input_label(tr("Input + gain"))
 			.line(Some(HistoryLine {
 				db: values.ceiling,
 				default: lim::RESET_CEILING,
-				label: "Ceiling",
+				label: tr("Ceiling"),
 				color: theme::TEXT,
 			}))
 			.legend(big, big)
@@ -313,7 +320,8 @@ fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView, rect
 			.wheel(big)
 			.stopped(stopped(state, cx, v))
 			.show_full(&mut child, &v.history);
-	let tip = "Drag up or down for input gain · wheel for release · double-click resets the gain";
+	let tip =
+		tr("Drag up or down for input gain · wheel for release · double-click resets the gain");
 	out.response.on_hover_text(tip);
 	match out.line {
 		Gesture::Preview(db) => state.preview_param(r.device, CEILING, lim::drag_ceiling(db)),
@@ -321,7 +329,7 @@ fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView, rect
 			state,
 			r,
 			&[(CEILING, lim::drag_ceiling(db))],
-			"Limiter ceiling",
+			tr("Limiter ceiling"),
 		),
 		Gesture::Idle => {}
 	}
@@ -336,14 +344,19 @@ fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView, rect
 				state,
 				r,
 				&[(INPUT_GAIN, lim::drag_gain(start, dy))],
-				"Limiter input gain",
+				tr("Limiter input gain"),
 			);
 		}
 		Gesture::Idle => {}
 	}
 	if out.body_reset {
 		v.gain_drag = None;
-		commit(state, r, &[lim::reset_gain()], "Reset limiter input gain");
+		commit(
+			state,
+			r,
+			&[lim::reset_gain()],
+			tr("Reset limiter input gain"),
+		);
 	}
 	if out.wheel != 0.0 {
 		wheel_release(ui, state, r, v, out.wheel);
@@ -362,7 +375,7 @@ fn meters(ui: &mut Ui, cx: &BodyCx, v: &LimView, rect: Rect) {
 	let in_peak = peak(v.input_db);
 	let items: [(&str, f32, String, Color32); 3] = [
 		(
-			"IN",
+			tr("IN"),
 			30.0,
 			level_text(in_peak),
 			if in_peak > 0.0 {
@@ -377,7 +390,7 @@ fn meters(ui: &mut Ui, cx: &BodyCx, v: &LimView, rect: Rect) {
 			lim::gr_text(v.gr_db),
 			theme::GAIN_REDUCTION_TEXT,
 		),
-		("OUT", 30.0, level_text(peak(v.output_db)), theme::TEXT),
+		(tr("OUT"), 30.0, level_text(peak(v.output_db)), theme::TEXT),
 	];
 	let gap = 26.0;
 	let total: f32 = items.iter().map(|i| i.1).sum::<f32>() + gap * 2.0;
@@ -405,15 +418,17 @@ fn meters(ui: &mut Ui, cx: &BodyCx, v: &LimView, rect: Rect) {
 		match i {
 			0 => {
 				device_kit::level_meter(&mut child, id, &v.input_db, bar.size())
-					.on_hover_text("Input after the gain · the white tick holds for 1.5 s");
+					.on_hover_text(tr("Input after the gain · the white tick holds for 1.5 s"));
 			}
 			1 => {
 				device_kit::gr_meter(&mut child, id, v.gr_db, GR_METER_DB, bar.size())
-					.on_hover_text("Gain reduction · the white tick holds the largest for 1.5 s");
+					.on_hover_text(tr(
+						"Gain reduction · the white tick holds the largest for 1.5 s",
+					));
 			}
 			_ => {
 				device_kit::level_meter(&mut child, id, &v.output_db, bar.size())
-					.on_hover_text("Output, never above the ceiling");
+					.on_hover_text(tr("Output, never above the ceiling"));
 			}
 		}
 		x += w + gap;
@@ -454,7 +469,7 @@ fn loudness_panel(
 	p.text(
 		rect.left_top(),
 		Align2::LEFT_TOP,
-		"LOUDNESS",
+		tr("LOUDNESS"),
 		theme::medium(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -469,7 +484,7 @@ fn loudness_panel(
 	p.text(
 		pos2(rect.left() + big_w + 8.0, y + 34.0),
 		Align2::LEFT_BOTTOM,
-		"LUFS short-term",
+		tr("LUFS short-term"),
 		theme::medium(12.0),
 		theme::TEXT_DIM,
 	);
@@ -480,13 +495,13 @@ fn loudness_panel(
 	let ok = lim::true_peak_ok(tp, values.ceiling);
 	for (i, (name, value, unit, color)) in [
 		(
-			"Integrated",
+			tr("Integrated"),
 			lim::lufs_text(l.integrated()),
-			"LUFS",
+			tr("LUFS"),
 			theme::TEXT,
 		),
 		(
-			"True peak",
+			tr("True peak"),
 			lim::lufs_text(tp),
 			if ok { "dBTP ✓" } else { "dBTP" },
 			if ok {
@@ -643,7 +658,9 @@ fn target_chips(ui: &mut Ui, cx: &BodyCx, v: &mut LimView, rect: Rect) {
 		);
 		if resp
 			.on_hover_cursor(CursorIcon::PointingHand)
-			.on_hover_text("Loudness target: only moves the green band, never the sound")
+			.on_hover_text(tr(
+				"Loudness target: only moves the green band, never the sound",
+			))
 			.clicked()
 		{
 			v.target = t;
@@ -679,9 +696,9 @@ fn knob(
 }
 
 const KNOBS: [(&str, &str); 3] = [
-	(INPUT_GAIN, "Input gain"),
-	(CEILING, "Ceiling"),
-	(RELEASE, "Release"),
+	(INPUT_GAIN, mark("Input gain")),
+	(CEILING, mark("Ceiling")),
+	(RELEASE, mark("Release")),
 ];
 
 /// A small text button; returns whether it was clicked.
@@ -708,10 +725,10 @@ fn chip_button(ui: &mut Ui, text: &str, name: &str, on: bool, tip: &str) -> bool
 fn reset_button(ui: &mut Ui, v: &mut LimView) {
 	if chip_button(
 		ui,
-		"Reset integrated",
-		"Reset integrated",
+		tr("Reset integrated"),
+		tr("Reset integrated"),
 		false,
-		"Start the integrated loudness and true peak over (R)",
+		tr("Start the integrated loudness and true peak over (R)"),
 	) {
 		v.loudness.reset_integrated();
 	}
@@ -719,18 +736,18 @@ fn reset_button(ui: &mut Ui, v: &mut LimView) {
 
 fn display_toggle(ui: &mut Ui, v: &mut LimView, more: bool) {
 	let arrow = if v.footer { "▾" } else { "▸" };
-	let text = format!("{arrow}  {}", if more { "More" } else { "Display" });
+	let text = format!("{arrow}  {}", if more { tr("More") } else { tr("Display") });
 	let name = if more {
-		"More options"
+		tr("More options")
 	} else {
-		"Display options"
+		tr("Display options")
 	};
 	if chip_button(
 		ui,
 		&text,
 		name,
 		v.footer,
-		"Display options (no effect on the sound)",
+		tr("Display options (no effect on the sound)"),
 	) {
 		v.footer = !v.footer;
 	}
@@ -738,7 +755,7 @@ fn display_toggle(ui: &mut Ui, v: &mut LimView, more: bool) {
 
 fn display_settings(ui: &mut Ui, cx: &BodyCx, v: &mut LimView) {
 	ui.label(
-		egui::RichText::new("History")
+		egui::RichText::new(tr("History"))
 			.font(theme::medium(12.0))
 			.color(theme::TEXT_FAINT),
 	);
@@ -754,6 +771,64 @@ fn display_settings(ui: &mut Ui, cx: &BodyCx, v: &mut LimView) {
 	) {
 		let rate = v.rate;
 		v.resize(HISTORY_SECONDS[i], rate);
+	}
+}
+
+/// "Oversampling 1x | 2x | 4x · 5.7 ms latency" (the latency is PDC'd: a reload), read
+/// left to right in either layout direction.
+fn oversample_selector(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, label: bool) {
+	let r = cx.r;
+	let current = state
+		.param_value(r.track, r.device, lim::OVERSAMPLE)
+		.unwrap_or(0.0);
+	let selected = lim::oversample_index(current);
+	let rate = state
+		.probe()
+		.map(|p| p.sample_rate() as f32)
+		.unwrap_or(48_000.0);
+	let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
+	let mut parts = [0, 1, 2];
+	if rtl {
+		parts.reverse();
+	}
+	for part in parts {
+		match part {
+			0 if label => {
+				ui.label(
+					egui::RichText::new(tr("Oversampling"))
+						.font(theme::medium(12.0))
+						.color(theme::TEXT_FAINT),
+				);
+			}
+			1 => {
+				if let Some(i) = device_kit::segmented(
+					ui,
+					Id::new(("lim-oversample", cx.salt, r.device)),
+					&lim::OVERSAMPLE_LABELS,
+					selected,
+				) && i != selected
+				{
+					commit(
+						state,
+						r,
+						&[(lim::OVERSAMPLE, i as f32)],
+						tr("Limiter oversampling"),
+					);
+				}
+			}
+			2 => {
+				ui.label(
+					egui::RichText::new(lim::latency_text(current, rate))
+						.font(theme::mono(11.0))
+						.color(theme::TEXT_DIM),
+				)
+				.on_hover_text(tr(
+					"2x / 4x run the limiter at a higher rate: tighter true peaks, less aliasing, more CPU \
+					 and latency (compensated)",
+				));
+			}
+			_ => {}
+		}
 	}
 }
 
@@ -830,10 +905,10 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView) {
 	bar.spacing_mut().item_spacing.x = 8.0;
 	if !narrow {
 		bar.label(
-			egui::RichText::new(
+			egui::RichText::new(tr(
 				"Loudness meters are measured after the ceiling. Target chip only sets the \
 				 green band, it never changes the sound.",
-			)
+			))
 			.font(theme::medium(12.0))
 			.color(theme::TEXT_DIM),
 		);
@@ -841,6 +916,8 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView) {
 	bar.with_layout(Layout::right_to_left(Align::Center), |ui| {
 		display_toggle(ui, v, false);
 		reset_button(ui, v);
+		ui.add_space(8.0);
+		oversample_selector(ui, state, cx, true);
 	});
 	if v.footer {
 		let settings = Rect::from_min_size(
@@ -854,7 +931,7 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView) {
 		display_settings(&mut r, cx, v);
 		r.with_layout(Layout::right_to_left(Align::Center), |ui| {
 			ui.label(
-				egui::RichText::new("Display only. No effect on the sound.")
+				egui::RichText::new(tr("Display only. No effect on the sound."))
 					.font(theme::medium(12.0))
 					.color(theme::TEXT_FAINT),
 			);
@@ -869,7 +946,7 @@ pub fn compact_height(width: f32, footer: bool) -> f32 {
 	COMPACT_READOUT_H
 		+ compact_history_h(width)
 		+ COMPACT_KNOBS_H
-		+ COMPACT_ROW_H
+		+ COMPACT_ROW_H * 2.0
 		+ if footer {
 			COMPACT_ROW_H * 2.0 + 8.0
 		} else {
@@ -907,12 +984,16 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut LimView) {
 					vec2(slot, k.height() - 8.0),
 				);
 				let label = if knob_.0 == INPUT_GAIN {
-					(INPUT_GAIN, "Gain")
+					(INPUT_GAIN, tr("Gain"))
 				} else {
 					knob_
 				};
 				knob(ui, state, cx, cell, label, KnobSize::S);
 			}
+			let (os, _) = ui.allocate_exact_size(vec2(width, COMPACT_ROW_H), Sense::hover());
+			let mut os_row = row(ui, os.shrink2(vec2(2.0, 0.0)));
+			os_row.spacing_mut().item_spacing.x = 6.0;
+			oversample_selector(&mut os_row, state, cx, false);
 			let (foot, _) = ui.allocate_exact_size(vec2(width, COMPACT_ROW_H), Sense::hover());
 			ui.painter().hline(
 				foot.x_range(),
@@ -955,15 +1036,15 @@ fn readouts(ui: &mut Ui, state: &AppState, cx: &BodyCx, v: &LimView, rect: Rect)
 	let half = rect.width() * 0.4;
 	for (i, (name, value, unit, color)) in [
 		(
-			"GAIN REDUCTION",
+			tr("GAIN REDUCTION"),
 			lim::gr_text(v.gr_db),
 			"dB",
 			theme::GAIN_REDUCTION_TEXT,
 		),
 		(
-			"LOUDNESS",
+			tr("LOUDNESS"),
 			lim::lufs_text(l.short_term()),
-			"LUFS short-term",
+			tr("LUFS short-term"),
 			theme::TEXT,
 		),
 	]
@@ -996,17 +1077,22 @@ fn readouts(ui: &mut Ui, state: &AppState, cx: &BodyCx, v: &LimView, rect: Rect)
 	dimmed.text(
 		pos2(rect.left() + 2.0, y),
 		Align2::LEFT_BOTTOM,
-		format!("Integrated {} LUFS", lim::lufs_text(l.integrated())),
+		trf(
+			"Integrated {lufs_text} LUFS",
+			&[("lufs_text", &lim::lufs_text(l.integrated()))],
+		),
 		theme::small(),
 		theme::TEXT_DIM,
 	);
 	dimmed.text(
 		pos2(rect.right() - 2.0, y),
 		Align2::RIGHT_BOTTOM,
-		format!(
-			"True peak {} dBTP{}",
-			lim::lufs_text(tp),
-			if ok { " ✓" } else { "" }
+		trf(
+			"True peak {lufs_text} dBTP{ok}",
+			&[
+				("lufs_text", &lim::lufs_text(tp)),
+				("ok", &if ok { " ✓" } else { "" }),
+			],
 		),
 		theme::small(),
 		if ok { TARGET_GREEN } else { theme::TEXT_DIM },

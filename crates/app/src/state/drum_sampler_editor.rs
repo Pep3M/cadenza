@@ -6,6 +6,7 @@
 //! ([`cadenza_dsp::readings::DRUM_PAD_TRIGGERS_START`]). Every builder returns one command
 //! (one undo step) through [`super::samples::set_zones`].
 
+use crate::i18n::{tr, trf, trn};
 use std::path::{Path, PathBuf};
 
 use cadenza_dsp::instruments::drum_sampler::PADS;
@@ -58,23 +59,23 @@ pub fn note_label(note: u8) -> String {
 /// A short name for small pads ("Cl Hat").
 pub fn pad_short(note: u8) -> &'static str {
 	match note {
-		35 => "Kick 2",
-		36 => "Kick",
-		37 => "Rim",
-		38 => "Snare",
-		39 => "Clap",
-		40 => "Snr 2",
-		41 => "Lo Tom",
-		42 => "Cl Hat",
-		44 => "Pd Hat",
-		45 => "Md Tom",
-		46 => "Op Hat",
-		48 => "Hi Tom",
-		49 => "Crash",
-		51 => "Ride",
-		54 => "Tamb",
-		56 => "Cowb",
-		_ => "Pad",
+		35 => tr("Kick 2"),
+		36 => tr("Kick"),
+		37 => tr("Rim"),
+		38 => tr("Snare"),
+		39 => tr("Clap"),
+		40 => tr("Snr 2"),
+		41 => tr("Lo Tom"),
+		42 => tr("Cl Hat"),
+		44 => tr("Pd Hat"),
+		45 => tr("Md Tom"),
+		46 => tr("Op Hat"),
+		48 => tr("Hi Tom"),
+		49 => tr("Crash"),
+		51 => tr("Ride"),
+		54 => tr("Tamb"),
+		56 => tr("Cowb"),
+		_ => tr("Pad"),
 	}
 }
 
@@ -611,10 +612,10 @@ pub fn kit_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 
 /// The notice after a mapping: what went where, and the files left out.
 pub fn mapping_notice(m: &KitMapping) -> String {
-	let mut text = format!(
-		"Mapped {} file{} onto pads",
+	let mut text = trn(
+		"Mapped {n} file onto pads",
+		"Mapped {n} files onto pads",
 		m.placed.len(),
-		if m.placed.len() == 1 { "" } else { "s" }
 	);
 	if !m.unplaced.is_empty() {
 		let names: Vec<String> = m
@@ -629,15 +630,14 @@ pub fn mapping_notice(m: &KitMapping) -> String {
 			})
 			.collect();
 		let more = m.unplaced.len().saturating_sub(names.len());
-		text.push_str(&format!(
-			"; could not place {}{} (rename them after the drum, e.g. \"snare_02\", or drop \
+		let mut names = names.join(", ");
+		if more > 0 {
+			names.push_str(&trf(" and {n} more", &[("n", &more)]));
+		}
+		text.push_str(&trf(
+			"; could not place {files} (rename them after the drum, e.g. \"snare_02\", or drop \
 			 them on a pad)",
-			names.join(", "),
-			if more > 0 {
-				format!(" and {more} more")
-			} else {
-				String::new()
-			}
+			&[("files", &names)],
 		));
 	}
 	text
@@ -670,6 +670,23 @@ pub fn envelope(attack_ms: f32, decay_ms: Option<f32>, t_ms: f32) -> f32 {
 }
 
 /// How fast pad samples play (tune and kit tune in semitones): sample seconds per second.
+/// How much a pad glows from what the processor plays: half while its key is held,
+/// else the loudest of its sounding hits at half strength (the trigger flash adds the
+/// full-strength blink).
+pub fn live_glow(live: &super::live_voices::LiveVoices, note: u8) -> f32 {
+	let sounding = live
+		.voices
+		.iter()
+		.filter(|v| v.note == note)
+		.map(|v| v.level * 0.5)
+		.fold(0.0, f32::max);
+	if live.held.is_held(note) {
+		sounding.max(0.5)
+	} else {
+		sounding
+	}
+}
+
 pub fn playback_rate(tune: f32, kit_tune: f32) -> f64 {
 	2.0_f64.powf(f64::from(tune + kit_tune) / 12.0)
 }
@@ -809,15 +826,17 @@ impl super::AppState {
 		let files = match kit_files(dir) {
 			Ok(f) => f,
 			Err(e) => {
-				self.notices
-					.error(format!("Cannot read the folder {}: {e}", dir.display()));
+				self.notices.error(trf(
+					"Cannot read the folder {dir}: {e}",
+					&[("dir", &dir.display()), ("e", &e)],
+				));
 				return false;
 			}
 		};
 		if files.is_empty() {
-			self.notices.warn(format!(
-				"{} holds no audio files to map onto the pads",
-				dir.display()
+			self.notices.warn(trf(
+				"{dir} holds no audio files to map onto the pads",
+				&[("dir", &dir.display())],
 			));
 			return false;
 		}
@@ -891,9 +910,9 @@ impl super::AppState {
 	/// Shows `path` in the browser's Files tab (its folder opened).
 	pub fn locate_file(&mut self, path: &Path) {
 		if !path.exists() {
-			self.notices.warn(format!(
-				"{} is missing; File \u{2192} Locate Missing Files can find it",
-				path.display()
+			self.notices.warn(trf(
+				"{path} is missing; File → Locate Missing Files can find it",
+				&[("path", &path.display())],
 			));
 		}
 		if let Some(dir) = path.parent() {
@@ -909,6 +928,22 @@ impl super::AppState {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn pads_glow_while_held_or_sounding() {
+		use cadenza_dsp::instruments::voice_readings::VoiceReading;
+		let mut live = super::super::live_voices::LiveVoices::default();
+		assert_eq!(live_glow(&live, 38), 0.0);
+		live.voices.push(VoiceReading {
+			note: 38,
+			level: 0.8,
+			..Default::default()
+		});
+		assert!((live_glow(&live, 38) - 0.4).abs() < 1e-6);
+		assert_eq!(live_glow(&live, 36), 0.0);
+		live.held.press(36);
+		assert_eq!(live_glow(&live, 36), 0.5);
+	}
 	use cadenza_model::{Document, OutputRoute, Track, TrackKind};
 
 	fn fixture() -> (Project, DeviceRef) {

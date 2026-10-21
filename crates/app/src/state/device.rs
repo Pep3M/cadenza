@@ -3,6 +3,7 @@
 //! "-6 dB", "250ms", "C4", "1/8"); the device editor's preset status and how the
 //! generic body groups and draws a built-in's params.
 
+use crate::i18n::{mark, tr, tr_str};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -128,12 +129,15 @@ pub fn parse_value(
 	max: f32,
 	choices: Option<&[&str]>,
 ) -> Result<Parsed, ParseError> {
-	let text = text.trim().replace('\u{2212}', "-");
+	let text = crate::i18n::delocalize(text.trim()).replace('\u{2212}', "-");
 	if text.is_empty() {
 		return Err(ParseError::Empty);
 	}
 	if let Some(choices) = choices {
-		if let Some(i) = choices.iter().position(|c| choice_matches(&text, c)) {
+		if let Some(i) = choices
+			.iter()
+			.position(|c| choice_matches(&text, c) || choice_matches(&text, tr_str(c)))
+		{
 			return Ok(clamped(min + i as f32, min, max));
 		}
 		// A bare index also works ("6").
@@ -184,7 +188,7 @@ pub fn parse_value(
 	let scale = unit_scale(suffix, unit).ok_or_else(|| ParseError::WrongUnit {
 		unit: suffix.to_owned(),
 		expected: if unit.is_empty() {
-			"plain numbers".to_owned()
+			tr("plain numbers").to_owned()
 		} else {
 			unit.to_owned()
 		},
@@ -346,6 +350,10 @@ pub fn minus(text: String) -> String {
 }
 
 pub fn format_value(value: f32, unit: &str) -> String {
+	crate::i18n::decimal(format_value_en(value, unit))
+}
+
+fn format_value_en(value: f32, unit: &str) -> String {
 	let v = value;
 	match unit {
 		"Hz" => {
@@ -432,7 +440,7 @@ pub fn format_choice(value: f32, min: f32, choices: &[&str]) -> String {
 	let i = (value - min).round().max(0.0) as usize;
 	choices
 		.get(i.min(choices.len().saturating_sub(1)))
-		.map(|c| short_choice(c))
+		.map(|c| tr_str(&short_choice(c)).to_owned())
 		.unwrap_or_default()
 }
 
@@ -541,13 +549,16 @@ pub fn step_preset(list: &[PresetEntry], current: &PresetStatus, step: i32) -> O
 /// Named choices of a built-in's discrete params (index = value - min).
 pub fn param_choices(device: &str, param: &str) -> Option<&'static [&'static str]> {
 	Some(match (device, param) {
-		("eq", "hp_slope" | "lp_slope") => &["Off", "12 dB", "24 dB", "48 dB"],
+		("eq", "hp_slope" | "lp_slope") => &const { [mark("Off"), "12 dB", "24 dB", "48 dB"] },
 		("delay", "sync") => delay_sync_choices(),
-		("saturator", "mode") => &["Tape", "Tube", "Hard clip"],
-		("poly_synth", "osc1_wave" | "osc2_wave") => &["Sine", "Saw", "Square", "Triangle"],
+		("saturator", "mode") => &const { [mark("Tape"), mark("Tube"), mark("Hard clip")] },
+		("poly_synth", "osc1_wave" | "osc2_wave") => &crate::state::poly_synth_editor::WAVE_NAMES,
+		("poly_synth", "osc1_table" | "osc2_table") => {
+			&crate::state::poly_synth_editor::TABLE_NAMES
+		}
 		("poly_synth", "filter_slope") => &["12 dB", "24 dB"],
-		("sampler", "mode") => &["Gate", "One-shot"],
-		("sampler", "filter_type") => &["Off", "LP", "HP", "BP"],
+		("sampler", "mode") => &const { [mark("Gate"), mark("One-shot")] },
+		("sampler", "filter_type") => &const { [mark("Off"), "LP", "HP", "BP"] },
 		_ => return None,
 	})
 }
@@ -578,10 +589,10 @@ pub fn param_control(device: &str, param: &ParamInfo) -> ParamControl {
 	}
 	if is_switch(param.min, param.max, param.unit) {
 		let label = match (device, param.id) {
-			("delay", "ping_pong") => "⇄ Ping-pong".to_owned(),
-			("gain", "invert_left") => "Ø Invert L".to_owned(),
-			("gain", "invert_right") => "Ø Invert R".to_owned(),
-			_ => param.name.to_owned(),
+			("delay", "ping_pong") => tr("⇄ Ping-pong").to_owned(),
+			("gain", "invert_left") => tr("Ø Invert L").to_owned(),
+			("gain", "invert_right") => tr("Ø Invert R").to_owned(),
+			_ => tr_str(param.name).to_owned(),
 		};
 		return ParamControl::Toggle(label);
 	}
@@ -761,9 +772,55 @@ fn capitalize(word: &str) -> String {
 		.unwrap_or_default()
 }
 
+/// One ↑ / ↓ key press on a parameter (`dir` ±1): 0.5 dB (Shift: 0.1) on dB values, one
+/// step on whole-number ones, else 1 % of the knob travel (Shift: 0.1 %).
+pub fn nudge(p: &ParamInfo, value: f32, dir: f32, fine: bool) -> f32 {
+	let spec = KnobSpec::for_param(p.min, p.max, p.default, p.unit);
+	let v = if p.unit == "dB" {
+		let step = if fine { 0.1 } else { 0.5 };
+		((value + dir * step) / step).round() * step
+	} else if spec.integer {
+		value.round() + dir
+	} else {
+		spec.from_pos(spec.to_pos(value) + dir * if fine { 0.001 } else { 0.01 })
+	};
+	v.clamp(p.min, p.max)
+}
+
+/// The parameter ↑ / ↓ nudge in an editor until the user touches a control: the one
+/// that defines the device.
+pub fn main_param(device: &str) -> Option<&'static str> {
+	Some(match device {
+		"compressor" => "threshold",
+		"limiter" => "input_gain",
+		"reverb" => "decay",
+		"delay" => "feedback",
+		"chorus" => "depth",
+		"saturator" => "drive",
+		"gain" => "gain",
+		"poly_synth" => "filter_cutoff",
+		"electric_piano" => "brightness",
+		_ => return None,
+	})
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn nudges_step_in_units_and_main_params_exist() {
+		let info = cadenza_dsp::device_info("compressor").unwrap();
+		let threshold = info.params.iter().find(|p| p.id == "threshold").unwrap();
+		assert!((nudge(threshold, -18.0, 1.0, false) + 17.5).abs() < 1e-4);
+		assert!((nudge(threshold, -18.0, -1.0, true) + 18.1).abs() < 1e-4);
+		assert_eq!(nudge(threshold, threshold.max, 1.0, false), threshold.max);
+		for d in cadenza_dsp::registry() {
+			if let Some(id) = main_param(d.id) {
+				assert!(d.params.iter().any(|p| p.id == id), "{}: {id}", d.id);
+			}
+		}
+	}
 
 	fn parse(text: &str, unit: &str, min: f32, max: f32) -> Parsed {
 		parse_value(text, unit, min, max, None).unwrap()

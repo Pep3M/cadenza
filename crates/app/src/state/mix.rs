@@ -4,13 +4,16 @@
 //! session agent in engineer mode, measured before and after, kept or reverted as one undo
 //! step.
 
+use crate::i18n::{mark, tr, trf};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::time::Instant;
 
 use cadenza_agent::{ENGINEER_UNDO_LABEL, EngineerBrief};
+use cadenza_analysis::spectrum::OCTAVE_HZ;
 use cadenza_engine::RenderOptions;
 use cadenza_mcp::ChangeKey;
 use cadenza_mcp::tools::mix::{
@@ -117,6 +120,8 @@ pub struct MixAssistant {
 	pub error: Option<String>,
 	/// Report sections folded by the user (`None`: automatic, by the panel height).
 	pub folded: Option<BTreeSet<MixSection>>,
+	/// When the current report was measured.
+	pub analyzed_at: Option<Instant>,
 }
 
 impl MixAssistant {
@@ -232,7 +237,7 @@ impl AppState {
 				wake();
 			});
 		if let Err(e) = spawned {
-			self.mix.error = Some(format!("Cannot start the analysis: {e}"));
+			self.mix.error = Some(trf("Cannot start the analysis: {e}", &[("e", &e)]));
 			return;
 		}
 		self.mix.job = Some(AnalysisJob {
@@ -294,8 +299,9 @@ impl AppState {
 	/// Runs the AI sound engineer on the project: measure, mix, measure again, then review.
 	pub fn mix_ai_pass(&mut self) {
 		if self.ai.busy() || self.mix.busy() {
-			self.notices
-				.info("The AI is busy — wait for it or press Stop in the chat (F10)");
+			self.notices.info(tr(
+				"The AI is busy — wait for it or press Stop in the chat (F10)",
+			));
 			return;
 		}
 		let before = (!self.mix_report_stale())
@@ -336,7 +342,8 @@ impl AppState {
 			(Some(pass), true) => pass.phase = PassPhase::Running,
 			(_, false) => {
 				self.mix.pass = None;
-				self.notices.error("The AI could not start the mix pass");
+				self.notices
+					.error(tr("The AI could not start the mix pass"));
 			}
 			(None, true) => {}
 		}
@@ -380,8 +387,9 @@ impl AppState {
 			return;
 		}
 		if self.undo_label() != Some(ENGINEER_UNDO_LABEL) {
-			self.notices
-				.warn("The mix pass is no longer the last step: undo it from the history instead");
+			self.notices.warn(tr(
+				"The mix pass is no longer the last step: undo it from the history instead",
+			));
 			return;
 		}
 		self.undo();
@@ -407,7 +415,7 @@ impl AppState {
 				}
 				Err(mpsc::TryRecvError::Empty) => break,
 				Err(mpsc::TryRecvError::Disconnected) => {
-					done = Some(Err("the analysis thread stopped".into()));
+					done = Some(Err(tr("the analysis thread stopped").into()));
 					break;
 				}
 			}
@@ -422,7 +430,7 @@ impl AppState {
 				if e.contains("cancelled") || e.contains("Cancelled") {
 					return;
 				}
-				self.mix.error = Some(format!("Analysis failed: {e}"));
+				self.mix.error = Some(trf("Analysis failed: {e}", &[("e", &e)]));
 				if let Some(pass) = &mut self.mix.pass {
 					match pass.phase {
 						PassPhase::Before => self.mix.pass = None,
@@ -436,11 +444,13 @@ impl AppState {
 			Purpose::Report => {
 				self.mix.report = Some(analysis);
 				self.mix.report_key = Some(job.key);
+				self.mix.analyzed_at = Some(Instant::now());
 				self.mix.fixed.clear();
 			}
 			Purpose::BeforePass => {
 				self.mix.report = Some(analysis.clone());
 				self.mix.report_key = Some(job.key);
+				self.mix.analyzed_at = Some(Instant::now());
 				self.mix.fixed.clear();
 				if let Some(pass) = &mut self.mix.pass {
 					pass.before = Some(analysis);
@@ -468,6 +478,299 @@ fn issue_label(message: &str) -> String {
 		s.push('…');
 	}
 	s
+}
+
+/// Loudness targets offered by the Mix tab's target menu (name, LUFS).
+pub const TARGET_PRESETS: [(&str, f32); 4] = [
+	(mark("Streaming"), -14.0),
+	(mark("Apple Music"), -16.0),
+	(mark("Club / loud"), -9.0),
+	(mark("Broadcast"), -23.0),
+];
+
+/// The target menu's label: the preset a value matches, else the number.
+pub fn target_label(target: Option<f32>, style_lufs: f32) -> String {
+	match target {
+		None => trf("Style {lufs}", &[("lufs", &signed(style_lufs, 0))]),
+		Some(v) => TARGET_PRESETS
+			.iter()
+			.find(|(_, l)| (l - v).abs() < 0.05)
+			.map_or_else(
+				|| trf("Custom {lufs}", &[("lufs", &signed(v, 1))]),
+				|(n, l)| format!("{} {}", crate::i18n::tr_str(n), signed(*l, 0)),
+			),
+	}
+}
+
+/// A number with a real minus sign ("−14", "+2.8").
+pub fn signed(v: f32, decimals: usize) -> String {
+	let s = format!("{:.*}", decimals, v.abs());
+	if s.trim_start_matches(['0', '.']).is_empty() {
+		s
+	} else if v < 0.0 {
+		format!("−{s}")
+	} else {
+		s
+	}
+}
+
+/// The same with an explicit plus for positive values.
+pub fn delta(v: f32, decimals: usize) -> String {
+	let s = signed(v, decimals);
+	if v > 0.0 && !s.trim_start_matches(['0', '.']).is_empty() {
+		format!("+{s}")
+	} else {
+		s
+	}
+}
+
+/// An issue message split into its headline and the detail after the first colon
+/// ("'Bass' and 'Keys' collide around 125 Hz: cut 'Keys' 4 dB there").
+pub fn issue_parts(message: &str) -> (String, Option<String>) {
+	let capital = |s: &str| {
+		let mut c = s.chars();
+		c.next().map_or_else(String::new, |f| {
+			f.to_uppercase().collect::<String>() + c.as_str()
+		})
+	};
+	match message.split_once(": ") {
+		Some((head, rest)) if !rest.trim().is_empty() => {
+			(capital(head.trim()), Some(capital(rest.trim())))
+		}
+		_ => (capital(message.trim()), None),
+	}
+}
+
+/// Suggested loudness band half width around a channel's balance level, dB.
+pub const BAND_HALF_DB: f32 = 3.0;
+
+/// One row of the Channels card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelRow {
+	/// Index into `MixAnalysis::channels`.
+	pub index: usize,
+	pub silent: bool,
+	pub lufs: f32,
+	pub peak_db: f32,
+	/// The level its role usually sits at ± [`BAND_HALF_DB`] (sources only, not buses).
+	pub band: Option<(f32, f32)>,
+	/// How far outside the band (+ = too loud), 0 inside.
+	pub out_db: f32,
+}
+
+/// The Channels card: every channel with the band its role suggests, anchored on the
+/// median like the analysis's balance check.
+pub fn channel_rows(r: &MixAnalysis) -> Vec<ChannelRow> {
+	let source = |c: &cadenza_mcp::tools::mix::ChannelAnalysis| {
+		c.kind != cadenza_model::TrackKind::Bus && !c.detail.is_silent()
+	};
+	let mut anchors: Vec<f32> = r
+		.channels
+		.iter()
+		.filter(|c| source(c))
+		.map(|c| c.detail.stats.lufs_integrated - r.targets.balance_db(c.role))
+		.collect();
+	anchors.sort_by(f32::total_cmp);
+	let anchor = match anchors.len() {
+		0 | 1 => None,
+		n if n.is_multiple_of(2) => Some((anchors[n / 2 - 1] + anchors[n / 2]) * 0.5),
+		n => Some(anchors[n / 2]),
+	};
+	r.channels
+		.iter()
+		.enumerate()
+		.map(|(index, c)| {
+			let lufs = c.detail.stats.lufs_integrated;
+			let band = anchor.filter(|_| source(c)).map(|a| {
+				let mid = a + r.targets.balance_db(c.role);
+				(mid - BAND_HALF_DB, mid + BAND_HALF_DB)
+			});
+			let out_db = band.map_or(0.0, |(lo, hi)| {
+				if lufs > hi {
+					lufs - hi
+				} else if lufs < lo {
+					lufs - lo
+				} else {
+					0.0
+				}
+			});
+			ChannelRow {
+				index,
+				silent: c.detail.is_silent(),
+				lufs,
+				peak_db: c.detail.stats.peak_db,
+				band,
+				out_db,
+			}
+		})
+		.collect()
+}
+
+/// Band balance minus the target profile's curve (+ = too much): lows, low-mids,
+/// high-mids, highs.
+pub fn tone_deviation(r: &MixAnalysis) -> [(&'static str, f32); 4] {
+	let b = &r.master.stats.band_energy_db;
+	let c = r.targets.profile.curve();
+	[
+		("lows", b.low - b.mid - c.low),
+		("low-mids", b.low_mid - b.mid - c.low_mid),
+		("high-mids", b.high_mid - b.mid - c.high_mid),
+		("highs", b.high - b.mid - c.high),
+	]
+}
+
+/// Which tone band (0 lows, 1 low-mids, 2 mids, 3 high-mids, 4 highs; crossovers 150,
+/// 500, 2k, 6k Hz) an octave of [`OCTAVE_HZ`] belongs to.
+pub fn tone_band_of(octave: usize) -> usize {
+	match OCTAVE_HZ[octave] {
+		f if f < 150.0 => 0,
+		f if f < 500.0 => 1,
+		f if f < 2_000.0 => 2,
+		f if f < 6_000.0 => 3,
+		_ => 4,
+	}
+}
+
+/// The dashed target line of the Tone card per octave (same scale as `shape`): each tone
+/// band's mean mix level minus its deviation from the profile, so the gap between the
+/// two lines in a band is exactly the deviation the report states.
+pub fn tone_target(shape: &[f32], deviation: &[(&str, f32); 4]) -> Vec<f32> {
+	let dev = |band: usize| match band {
+		0 => deviation[0].1,
+		1 => deviation[1].1,
+		2 => 0.0,
+		3 => deviation[2].1,
+		_ => deviation[3].1,
+	};
+	let mut sum = [0.0f32; 5];
+	let mut n = [0usize; 5];
+	for (i, v) in shape.iter().enumerate().take(OCTAVE_HZ.len()) {
+		let b = tone_band_of(i);
+		sum[b] += v;
+		n[b] += 1;
+	}
+	(0..shape.len().min(OCTAVE_HZ.len()))
+		.map(|i| {
+			let b = tone_band_of(i);
+			sum[b] / n[b].max(1) as f32 - dev(b)
+		})
+		.collect()
+}
+
+/// A masking pair's severity: lit steps of a 5-step meter and its word.
+pub fn masking_level(overlap: f32) -> (usize, &'static str) {
+	let steps = ((overlap * 5.0).ceil() as usize).clamp(1, 5);
+	let word = match steps {
+		4.. => mark("High"),
+		3 => mark("Medium"),
+		_ => mark("Low"),
+	};
+	(steps, word)
+}
+
+/// The frequency range of an octave band around `center` ("88–177 Hz", "1.4–2.8 kHz").
+pub fn octave_range(center: f32) -> String {
+	let (lo, hi) = (
+		center / std::f32::consts::SQRT_2,
+		center * std::f32::consts::SQRT_2,
+	);
+	let f = |v: f32| {
+		if v >= 10_000.0 {
+			format!("{:.0}", v / 1_000.0)
+		} else {
+			format!("{:.1}", v / 1_000.0)
+		}
+	};
+	if hi < 1_000.0 {
+		format!("{lo:.0}–{hi:.0} Hz")
+	} else if lo < 1_000.0 {
+		trf(
+			"{lo} Hz–{f} kHz",
+			&[
+				("lo", &crate::i18n::decimal(format!("{:.0}", lo))),
+				("f", &f(hi)),
+			],
+		)
+	} else {
+		trf("{f}–{f2} kHz", &[("f", &f(lo)), ("f2", &f(hi))])
+	}
+}
+
+/// One row of the before → after table of an AI mix pass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewRow {
+	pub label: String,
+	pub before: String,
+	pub after: String,
+	pub target: String,
+	/// The before value misses its target (drawn amber).
+	pub before_bad: bool,
+	/// The after value meets it (drawn green).
+	pub after_good: bool,
+	/// A channel's loudness row (the label is the track name).
+	pub channel: bool,
+}
+
+/// The pass's changes against the report's targets; unchanged rows without a target
+/// are left out, the loudness row is always first.
+pub fn review_rows(changes: &[MetricChange], lufs: f32, ceiling: f32) -> Vec<ReviewRow> {
+	let num = |v: f64, unit: &str| {
+		let s = if v.fract().abs() < 1e-9 && v.abs() < 1000.0 {
+			signed(v as f32, 0)
+		} else {
+			signed(v as f32, 1)
+		};
+		match unit {
+			"" => s,
+			"%" => format!("{s} %"),
+			u => format!("{s} {u}"),
+		}
+	};
+	changes
+		.iter()
+		.filter_map(|c| {
+			let lufs = f64::from(lufs);
+			let ceiling = f64::from(ceiling);
+			let tolerance = f64::from(cadenza_analysis::targets::LOUDNESS_TOLERANCE_LU);
+			// (target text, the range of values that meet it)
+			let (target, meets) = match c.label.as_str() {
+				"Loudness" => (
+					format!("{} LUFS", signed(lufs as f32, 0)),
+					Some((lufs - tolerance, lufs + tolerance)),
+				),
+				"True peak" => (
+					format!("≤ {}", signed(ceiling as f32, 1)),
+					Some((f64::NEG_INFINITY, ceiling + 0.05)),
+				),
+				"Issues" | "Severe issues" | "Masking pairs" => {
+					("0".into(), Some((f64::NEG_INFINITY, 0.5)))
+				}
+				_ => (String::new(), None),
+			};
+			let ok = |v: f64| meets.map(|(lo, hi)| (lo..=hi).contains(&v));
+			let changed = c.delta().abs() >= 0.05;
+			if !changed && meets.is_none() {
+				return None;
+			}
+			let channel = !matches!(
+				c.label.as_str(),
+				"Loudness"
+					| "True peak" | "Crest factor"
+					| "Width" | "Issues"
+					| "Severe issues"
+					| "Masking pairs"
+			);
+			Some(ReviewRow {
+				label: c.label.clone(),
+				before: num(c.before, &c.unit),
+				after: num(c.after, &c.unit),
+				target,
+				before_bad: ok(c.before) == Some(false),
+				after_good: ok(c.after) == Some(true) && changed,
+				channel,
+			})
+		})
+		.collect()
 }
 
 #[cfg(test)]
@@ -573,6 +876,97 @@ mod tests {
 		assert!(s.mix.pass.is_none());
 		assert!(s.project().master.inserts.is_empty());
 		assert_ne!(s.undo_label(), Some(ENGINEER_UNDO_LABEL));
+	}
+
+	#[test]
+	fn report_card_helpers() {
+		assert_eq!(signed(-14.0, 0), "−14");
+		assert_eq!(signed(-0.04, 1), "0.0");
+		assert_eq!(delta(2.84, 1), "+2.8");
+		assert_eq!(target_label(None, -14.0), "Style −14");
+		assert_eq!(target_label(Some(-16.0), -14.0), "Apple Music −16");
+		assert_eq!(target_label(Some(-12.5), -14.0), "Custom −12.5");
+		let (head, detail) =
+			issue_parts("'Bass' and 'Keys' collide around 125 Hz: cut 'Keys' 4 dB");
+		assert_eq!(head, "'Bass' and 'Keys' collide around 125 Hz");
+		assert_eq!(detail.as_deref(), Some("Cut 'Keys' 4 dB"));
+		assert_eq!(issue_parts("master is too loud").0, "Master is too loud");
+		assert_eq!(masking_level(0.7), (4, "High"));
+		assert_eq!(masking_level(0.5), (3, "Medium"));
+		assert_eq!(masking_level(0.0), (1, "Low"));
+		assert_eq!(octave_range(125.0), "88–177 Hz");
+		assert_eq!(octave_range(1_000.0), "707 Hz–1.4 kHz");
+		assert_eq!(octave_range(16_000.0), "11–23 kHz");
+		assert_eq!(tone_band_of(0), 0);
+		assert_eq!(tone_band_of(3), 1);
+		assert_eq!(tone_band_of(5), 2);
+		assert_eq!(tone_band_of(7), 3);
+		assert_eq!(tone_band_of(9), 4);
+		// The target line sits each band's deviation away from the band's mean.
+		let shape = [-10.0, -8.0, -6.0, -4.0, 0.0, -2.0, -6.0, -8.0, -12.0, -20.0];
+		let dev = [
+			("lows", 3.0),
+			("low-mids", -1.0),
+			("high-mids", 0.0),
+			("highs", 2.0),
+		];
+		let t = tone_target(&shape, &dev);
+		assert_eq!(t[0], -8.0 - 3.0);
+		assert_eq!(t[3], -4.0 + 1.0);
+		assert_eq!(t[4], -1.0);
+		assert_eq!(t[9], -16.0 - 2.0);
+		// Review rows: targets judge before / after; unchanged rows without one go.
+		let m = |label: &str, before, after, unit: &str| MetricChange {
+			label: label.into(),
+			before,
+			after,
+			unit: unit.into(),
+		};
+		let rows = review_rows(
+			&[
+				m("Loudness", -11.8, -14.1, "LUFS"),
+				m("True peak", -0.4, -1.2, "dBTP"),
+				m("Width", 30.0, 30.0, "%"),
+				m("Issues", 3.0, 0.0, ""),
+				m("Bass", -13.0, -15.0, "LUFS"),
+			],
+			-14.0,
+			-1.0,
+		);
+		assert_eq!(rows.len(), 4);
+		assert_eq!(rows[0].target, "−14 LUFS");
+		assert!(rows[0].before_bad && rows[0].after_good);
+		assert_eq!(rows[1].before, "−0.4 dBTP");
+		assert!(rows[1].before_bad && rows[1].after_good);
+		assert!(rows[3].channel && rows[3].target.is_empty());
+	}
+
+	#[test]
+	fn channel_rows_band_around_the_role_level() {
+		let mut c = chat_state(Vec::new(), 0, true);
+		let s = &mut c.state;
+		s.mix_analyze();
+		settle(s);
+		let r = s.mix.report.clone().unwrap();
+		let rows = channel_rows(&r);
+		assert_eq!(rows.len(), r.channels.len());
+		let sources = rows
+			.iter()
+			.filter(|row| {
+				!row.silent && r.channels[row.index].kind != cadenza_model::TrackKind::Bus
+			})
+			.count();
+		for row in &rows {
+			let ch = &r.channels[row.index];
+			if ch.kind == cadenza_model::TrackKind::Bus || row.silent || sources < 2 {
+				assert!(row.band.is_none());
+			} else {
+				let (lo, hi) = row.band.expect("sources get a band");
+				assert!((hi - lo - 2.0 * BAND_HALF_DB).abs() < 1e-4);
+				let inside = (lo..=hi).contains(&row.lufs);
+				assert_eq!(inside, row.out_db == 0.0, "{row:?}");
+			}
+		}
 	}
 
 	#[test]

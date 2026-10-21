@@ -2,6 +2,7 @@
 //! a thumbnail of its clips, when it was saved), read on a worker so the page never waits
 //! on the disk, plus the page's own inputs (the producer prompt).
 
+use crate::i18n::{tr, trf, trn};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -96,14 +97,14 @@ pub fn when(modified: SystemTime, now: SystemTime) -> String {
 	let day = 86_400;
 	let secs = now.duration_since(modified).map_or(0, |d| d.as_secs());
 	match secs {
-		0..60 => "Just now".into(),
-		60..3600 => format!("{} min ago", secs / 60),
-		3600..86_400 => format!("{} h ago", secs / 3600),
-		86_400..172_800 => "Yesterday".into(),
-		s if s < 7 * day => format!("{} days ago", s / day),
-		s if s < 14 * day => "1 week ago".into(),
-		s if s < 60 * day => format!("{} weeks ago", s / (7 * day)),
-		s => format!("{} months ago", s / (30 * day)),
+		0..60 => tr("Just now").into(),
+		60..3600 => trf("{n} min ago", &[("n", &(secs / 60))]),
+		3600..86_400 => trf("{n} h ago", &[("n", &(secs / 3600))]),
+		86_400..172_800 => tr("Yesterday").into(),
+		s if s < 7 * day => trn("{n} day ago", "{n} days ago", s / day),
+		s if s < 14 * day => tr("1 week ago").into(),
+		s if s < 60 * day => trn("{n} week ago", "{n} weeks ago", s / (7 * day)),
+		s => trn("{n} month ago", "{n} months ago", s / (30 * day)),
 	}
 }
 

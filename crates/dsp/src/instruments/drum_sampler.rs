@@ -3,6 +3,7 @@
 use super::sample_voice::{
 	KillFade, Playhead, SlotInfo, ZoneEnv, ZoneRt, pick_slot, select_zones, velocity_gain,
 };
+use super::voice_readings::{self, HeldNotes, NewestVoices, VoiceReading};
 use crate::processor::{
 	DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport, readings,
 };
@@ -111,6 +112,9 @@ const RETRIGGER_MS: f32 = 3.0;
 #[derive(Clone, Copy, Default)]
 struct Voice {
 	slot: SlotInfo,
+	note: u8,
+	/// Samples since the hit (readings).
+	elapsed: u32,
 	zone: usize,
 	head: Playhead,
 	env: ZoneEnv,
@@ -135,6 +139,7 @@ pub struct DrumSampler {
 	aux_len: usize,
 	/// Note-ons per pad of [`PADS`] (editor flashes, [`readings::DRUM_PAD_TRIGGERS_START`]).
 	triggers: [f32; readings::DRUM_PADS],
+	held: HeldNotes,
 }
 
 impl Default for DrumSampler {
@@ -160,6 +165,7 @@ impl DrumSampler {
 			aux: (0..AUX_OUTPUTS).map(|_| [Vec::new(), Vec::new()]).collect(),
 			aux_len: 0,
 			triggers: [0.0; readings::DRUM_PADS],
+			held: HeldNotes::default(),
 		}
 	}
 
@@ -239,6 +245,8 @@ impl DrumSampler {
 				released: true,
 				started: self.clock,
 			},
+			note: pitch,
+			elapsed: 0,
 			zone,
 			head: Playhead::start(rt, z.reverse),
 			env: ZoneEnv::trigger(z, sr),
@@ -294,6 +302,7 @@ impl DrumSampler {
 				*l += a * rt.gain_l * g;
 				*r += b * rt.gain_r * g;
 			}
+			v.elapsed = v.elapsed.saturating_add((end - start) as u32);
 			self.voices[i] = v;
 		}
 	}
@@ -343,6 +352,9 @@ impl Processor for DrumSampler {
 		self.aux_len = len;
 		for (start, end, ev) in event_spans(len, events) {
 			self.render(left, right, start, end);
+			if let Some(ev) = ev {
+				self.held.apply(ev);
+			}
 			match ev {
 				Some(&MidiEvent::NoteOn {
 					pitch, velocity, ..
@@ -369,6 +381,7 @@ impl Processor for DrumSampler {
 		}
 		self.gain.snap();
 		self.rr = [0; 17];
+		self.held.clear();
 	}
 
 	fn tail_seconds(&self) -> f32 {
@@ -379,7 +392,32 @@ impl Processor for DrumSampler {
 		let start = readings::DRUM_PAD_TRIGGERS_START;
 		let n = out.len().saturating_sub(start).min(readings::DRUM_PADS);
 		out[start..start + n].copy_from_slice(&self.triggers[..n]);
-		if n == 0 { 0 } else { start + n }
+		let mut voices = NewestVoices::default();
+		for v in self
+			.voices
+			.iter()
+			.filter(|v| v.slot.active && !v.slot.fading)
+		{
+			let Some(rt) = self.rt.get(v.zone) else {
+				continue;
+			};
+			voices.offer(
+				v.slot.started,
+				VoiceReading {
+					note: v.note,
+					zone: Some(v.zone),
+					position: Some(v.head.seconds(rt)),
+					released: false,
+					elapsed_ms: voice_readings::samples_to_ms(v.elapsed, self.sample_rate),
+					level: v.env.level(),
+				},
+			);
+		}
+		match voice_readings::write(out, &self.held, &voices) {
+			0 if n == 0 => 0,
+			0 => start + n,
+			end => end,
+		}
 	}
 
 	fn aux_output_count(&self) -> usize {
@@ -548,7 +586,7 @@ mod tests {
 		]);
 		let counters = |d: &DrumSampler| {
 			let mut out = [0.0; readings::MAX];
-			assert_eq!(d.readings(&mut out), readings::DRUM_PADS);
+			assert_eq!(d.readings(&mut out), readings::VOICES_END);
 			out
 		};
 		assert!(counters(&d).iter().all(|c| *c == 0.0));
@@ -568,7 +606,7 @@ mod tests {
 		let at = |note: u8| PADS.iter().position(|(n, _)| *n == note).unwrap();
 		assert_eq!(c[at(36)], 2.0);
 		assert_eq!(c[at(38)], 1.0);
-		assert_eq!(c.iter().sum::<f32>(), 3.0, "{c:?}");
+		assert_eq!(c[..readings::DRUM_PADS].iter().sum::<f32>(), 3.0, "{c:?}");
 		// Reset and new zones keep counting up (readers compare with their last value).
 		d.reset();
 		assert_eq!(counters(&d)[at(36)], 2.0);

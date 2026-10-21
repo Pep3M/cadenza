@@ -190,6 +190,14 @@ impl Resolver {
 		})
 	}
 
+	/// Whether a live value for `param` would change `device`'s latency (PDC needs
+	/// a recompile instead).
+	pub fn changes_latency(&self, device: DeviceId, param: &str) -> bool {
+		self.devices
+			.get(&device)
+			.is_some_and(|e| cadenza_dsp::param_changes_latency(e.info.id, param))
+	}
+
 	/// Index of `param` on `device` (built-in id or plugin param id).
 	pub fn param_index(&self, device: DeviceId, param: &str) -> Option<usize> {
 		self.devices.get(&device)?.info.param_index(param)

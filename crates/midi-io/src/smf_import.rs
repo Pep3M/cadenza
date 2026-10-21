@@ -414,6 +414,7 @@ fn builtin_instrument(is_drum: bool) -> Device {
 		sidechain: None,
 		aux_outputs: Vec::new(),
 		zones: Vec::new(),
+		modulators: Vec::new(),
 	}
 }
 
@@ -534,6 +535,8 @@ pub fn build_import_command(
 						controllers: group.controllers,
 					},
 					take: None,
+					muted: false,
+					link: None,
 				};
 				let track = Track {
 					id: ids.track_id(),
@@ -582,6 +585,8 @@ pub fn build_import_command(
 				length: clip_length(&all_notes).max(lanes_end(&controllers)),
 				content: ClipContent::Midi { notes, controllers },
 				take: None,
+				muted: false,
+				link: None,
 			};
 			commands.push(Command::AddClip {
 				track: *track,

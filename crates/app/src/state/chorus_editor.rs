@@ -3,6 +3,7 @@
 //! display phase, the wave and width-fan gestures and the label texts. The view turns
 //! the changes into one command per gesture.
 
+use crate::i18n::trf;
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 
 pub use crate::state::device::minus;
@@ -186,24 +187,38 @@ pub fn reset_width() -> Change {
 
 /// "Voice R · 63° apart (width)".
 pub fn apart_label(values: &ChorusValues) -> String {
-	format!(
-		"Voice R \u{b7} {:.0}\u{b0} apart (width)",
-		values.offset_degrees()
+	trf(
+		"Voice R · {offset_degrees}° apart (width)",
+		&[(
+			"offset_degrees",
+			&crate::i18n::decimal(format!("{:.0}", values.offset_degrees())),
+		)],
 	)
 }
 
 /// "rate 0.60 Hz · one cycle = 1.67 s".
 pub fn rate_label(values: &ChorusValues) -> String {
-	format!(
-		"rate {:.2} Hz \u{b7} one cycle = {:.2} s",
-		values.rate,
-		values.cycle_seconds()
+	trf(
+		"rate {rate} Hz · one cycle = {cycle_seconds} s",
+		&[
+			("rate", &crate::i18n::decimal(format!("{:.2}", values.rate))),
+			(
+				"cycle_seconds",
+				&crate::i18n::decimal(format!("{:.2}", values.cycle_seconds())),
+			),
+		],
 	)
 }
 
 /// "modulated delay ±2.3 ms".
 pub fn excursion_label(values: &ChorusValues) -> String {
-	format!("modulated delay \u{b1}{:.1} ms", values.excursion_ms())
+	trf(
+		"modulated delay ±{excursion_ms} ms",
+		&[(
+			"excursion_ms",
+			&crate::i18n::decimal(format!("{:.1}", values.excursion_ms())),
+		)],
+	)
 }
 
 /// The undo label of a wave drag that changed `rate` and/or `depth`.

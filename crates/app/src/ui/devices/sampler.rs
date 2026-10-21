@@ -19,14 +19,15 @@
 //! the compact form (a small map and the zone's main knobs). Every gesture is one undo
 //! step; the pure logic lives in [`crate::state::sampler_editor`].
 
+use crate::i18n::{mark, tr, tr_str, trf};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use cadenza_core::TrackId;
 use cadenza_model::{Device, LoopMode, SampleZone};
 use egui::{
-	Align, Align2, Color32, CornerRadius, CursorIcon, Id, Key, Layout, Pos2, Rect, Sense, Shape,
-	Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
+	Align, Align2, Color32, CornerRadius, CursorIcon, Id, Layout, Pos2, Rect, Sense, Shape, Stroke,
+	StrokeKind, Ui, UiBuilder, pos2, vec2,
 };
 
 use crate::jobs::Peaks;
@@ -230,45 +231,36 @@ pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef) {
 		return;
 	}
 	let index = state.view.instrument.zone.min(count - 1);
-	for (key, dk, dv) in [
-		(Key::ArrowLeft, -1, 0),
-		(Key::ArrowRight, 1, 0),
-		(Key::ArrowUp, 0, 1),
-		(Key::ArrowDown, 0, -1),
-	] {
-		let (plain, shift) = ctx.input_mut(|i| {
-			(
-				i.consume_key(egui::Modifiers::NONE, key),
-				i.consume_key(egui::Modifiers::SHIFT, key),
-			)
-		});
-		if !(plain || shift) {
-			continue;
-		}
-		let (dk, dv) = if shift { (dk * 12, dv * 8) } else { (dk, dv) };
+	let keys = crate::ui::device_editor::arrows(ctx);
+	if keys.h == 0 && keys.v == 0 {
+		return;
+	}
+	if keys.alt {
+		// Alt: move the zone (Shift: an octave / 8 velocity steps).
+		let (dk, dv) = if keys.shift {
+			(keys.h * 12, keys.v * 8)
+		} else {
+			(keys.h, keys.v)
+		};
 		let cmd = se::drag_command(state.project(), r, index, ZonePart::Body, dk, dv)
 			.map(|c| crate::state::drum_sampler_editor::labeled(c, "Nudge zone".to_owned()));
+		state.apply_sample_edit(cmd);
+		return;
+	}
+	// ← → the zone, ↑ ↓ its gain.
+	state.view.instrument.zone = (index as i32 + keys.h).clamp(0, count as i32 - 1) as usize;
+	if keys.v != 0 {
+		let step = if keys.shift { 0.1 } else { 0.5 } * keys.v as f32;
+		let cmd = crate::state::samples::edit_zone(state.project(), r, index, |z| {
+			z.gain_db = (((z.gain_db + step) * 10.0).round() / 10.0).clamp(-60.0, 24.0);
+		})
+		.map(|c| crate::state::drum_sampler_editor::labeled(c, "Zone gain".to_owned()));
 		state.apply_sample_edit(cmd);
 	}
 }
 
 fn value(state: &AppState, cx: &BodyCx, id: &str) -> f32 {
 	devices::shown(state, cx.r, cx.info, id)
-}
-
-/// The notes sounding on the sampler's track (previews: the map, the keys, the piano
-/// roll, pattern auditions).
-fn held_notes(state: &AppState, cx: &BodyCx) -> Vec<u8> {
-	cx.r.track
-		.map(|t| {
-			state
-				.previewing
-				.iter()
-				.filter(|(tr, _)| *tr == t)
-				.map(|(_, n)| *n)
-				.collect()
-		})
-		.unwrap_or_default()
 }
 
 // --- Body ------------------------------------------------------------------------------
@@ -309,6 +301,9 @@ pub fn sampler_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, hits: &mut Z
 		row(ui, state, cx, &mut v, hits, &d, rect);
 	}
 	hits.held = v.held;
+	if !state.live_voices(cx.r.device).is_idle() {
+		ui.ctx().request_repaint();
+	}
 }
 
 /// `add` in a vertical scroll area over the body, `height` tall.
@@ -462,9 +457,9 @@ fn zone_map_section(
 	d: &Device,
 	rect: Rect,
 ) {
-	let t = title(ui, rect, "ZONE MAP");
+	let t = title(ui, rect, tr("ZONE MAP"));
 	let hint =
-		"x = key \u{b7} y = velocity \u{b7} drag to move, edges to resize, drop files to add";
+		tr("x = key \u{b7} y = velocity \u{b7} drag to move, edges to resize, drop files to add");
 	let room = rect.right() - t.right() - 12.0;
 	if room > 120.0 {
 		let hint = crate::ui::mixer::elide(ui, hint, &theme::medium(11.0), room);
@@ -497,7 +492,11 @@ fn zone_map(
 	let map = Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - keys_h));
 	let strip = Rect::from_min_max(pos2(rect.left(), map.bottom()), rect.max);
 	let mut w = v.window.unwrap_or_else(|| MapWindow::fit(&d.zones));
-	let held = held_notes(state, cx);
+	// Lit: previews on the track and the keys / zones the processor plays (playback,
+	// live MIDI input).
+	let live = state.live_voices(cx.r.device);
+	let held = state.lit_keys(cx.r, &live);
+	let previews = state.lit_keys(cx.r, &Default::default());
 	let selected = state
 		.view
 		.instrument
@@ -589,13 +588,13 @@ fn zone_map(
 			}
 			None => state
 				.notices
-				.info("Drop an audio file on the map to make the first zone"),
+				.info(tr("Drop an audio file on the map to make the first zone")),
 		}
 	}
-	let _ = bg.on_hover_text_at_pointer(
+	let _ = bg.on_hover_text_at_pointer(tr(
 		"Click to hear this key at this velocity \u{b7} double-click: a new zone of the last \
 		 loaded file \u{b7} wheel zooms the keys, Shift+wheel the velocities",
-	);
+	));
 	let colors = se::zone_colors(&d.zones);
 	let mut order: Vec<usize> = (0..d.zones.len()).filter(|i| *i != selected).collect();
 	if selected < d.zones.len() {
@@ -626,9 +625,12 @@ fn zone_map(
 		let root_x = (map.left() + w.key_center(zone.root_key) * map.width())
 			.clamp(zr.left() + 5.0, (zr.right() - 5.0).max(zr.left() + 5.0));
 		let root = pos2(root_x, zr.bottom() - 6.5);
-		let lit = held
-			.iter()
-			.any(|n| (zone.key_low..=zone.key_high).contains(n));
+		// The processor's voices say which velocity layer sounds; previews light the
+		// key range at once (before the probe answers).
+		let lit = live.sounds(i)
+			|| previews
+				.iter()
+				.any(|n| (zone.key_low..=zone.key_high).contains(n));
 		zone_box(&p, ui, &zone, zr, root, c, i == selected, lit, mini);
 		let resp = ui.interact(
 			shown,
@@ -636,7 +638,7 @@ fn zone_map(
 			Sense::click_and_drag(),
 		);
 		hits.zones.push((shown, i));
-		let label = format!("Zone {}", i + 1);
+		let label = trf("Zone {n}", &[("n", &(i + 1))]);
 		resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
 		let hover_part = ui
 			.ctx()
@@ -701,19 +703,11 @@ fn zone_map(
 		}
 		if resp.double_clicked() {
 			let cmd = se::fit_to_neighbours(&d.zones, i)
-				.and_then(|zs| se::set(state.project(), cx.r, zs, "Fit zone to neighbours"));
+				.and_then(|zs| se::set(state.project(), cx.r, zs, tr("Fit zone to neighbours")));
 			state.apply_sample_edit(cmd);
 		}
 		resp.context_menu(|ui| zone_menu(ui, state, cx.r, d, i));
-		let _ = resp.on_hover_text(format!(
-			"Zone {}: {} \u{2014} {}, root {}\nDrag to move \u{b7} edges resize \u{b7} the dot \
-			 sets the root \u{b7} double-click fits it to its neighbours \u{b7} right-click for \
-			 more",
-			i + 1,
-			zone.sample.display_name(),
-			se::zone_title(&zone),
-			cadenza_model::note_name(zone.root_key)
-		));
+		let _ = resp.on_hover_text(trf("Zone {zone}: {display_name} — {zone_title}, root {note_name}\nDrag to move · edges resize · the dot sets the root · double-click fits it to its neighbours · right-click for more", &[("zone", &(i + 1)), ("display_name", &zone.sample.display_name()), ("zone_title", &se::zone_title(&zone)), ("note_name", &cadenza_model::note_name(zone.root_key))]));
 	}
 	if !ui.input(|i| i.pointer.any_down()) {
 		v.pressed = None;
@@ -736,8 +730,10 @@ fn zone_map(
 		p.text(
 			map.center(),
 			Align2::CENTER_CENTER,
-			"No zones \u{2014} drop audio files here (a zone each) or on the keys (across the \
+			tr(
+				"No zones \u{2014} drop audio files here (a zone each) or on the keys (across the \
 			 keyboard)",
+			),
 			theme::medium(11.5),
 			theme::TEXT_FAINT,
 		);
@@ -858,53 +854,53 @@ fn zone_box(
 /// The zone's right-click menu.
 fn zone_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, i: usize) {
 	ui.set_min_width(190.0);
-	if ui.button("Auto-map by file name").clicked() {
+	if ui.button(tr("Auto-map by file name")).clicked() {
 		let cmd = se::set(
 			state.project(),
 			r,
 			se::auto_map(&d.zones),
-			"Auto-map zones by name",
+			tr("Auto-map zones by name"),
 		);
 		if !state.apply_sample_edit(cmd) {
 			state
 				.notices
-				.info("The zones already sit where their file names put them");
+				.info(tr("The zones already sit where their file names put them"));
 		}
 		ui.close();
 	}
 	let split = se::split_velocity(&d.zones, i);
 	if ui
-		.add_enabled(split.is_some(), egui::Button::new("Split velocity"))
+		.add_enabled(split.is_some(), egui::Button::new(tr("Split velocity")))
 		.clicked()
 	{
-		let cmd = split.and_then(|zs| se::set(state.project(), r, zs, "Split zone velocity"));
+		let cmd = split.and_then(|zs| se::set(state.project(), r, zs, tr("Split zone velocity")));
 		state.apply_sample_edit(cmd);
 		ui.close();
 	}
-	if ui.button("Duplicate").clicked() {
+	if ui.button(tr("Duplicate")).clicked() {
 		let cmd = se::duplicate(&d.zones, i)
-			.and_then(|zs| se::set(state.project(), r, zs, "Duplicate zone"));
+			.and_then(|zs| se::set(state.project(), r, zs, tr("Duplicate zone")));
 		if state.apply_sample_edit(cmd) {
 			state.view.instrument.zone = i + 1;
 		}
 		ui.close();
 	}
-	if ui.button("Fit to neighbours").clicked() {
+	if ui.button(tr("Fit to neighbours")).clicked() {
 		let cmd = se::fit_to_neighbours(&d.zones, i)
-			.and_then(|zs| se::set(state.project(), r, zs, "Fit zone to neighbours"));
+			.and_then(|zs| se::set(state.project(), r, zs, tr("Fit zone to neighbours")));
 		state.apply_sample_edit(cmd);
 		ui.close();
 	}
 	let z = &d.zones[i];
-	ui.menu_button("Round-robin group", |ui| {
+	ui.menu_button(tr("Round-robin group"), |ui| {
 		for g in 0..=8u8 {
 			let label = if g == 0 {
-				"Off".to_owned()
+				tr("Off").to_owned()
 			} else {
-				format!("Group {g}")
+				trf("Group {g}", &[("g", &g)])
 			};
 			if ui.radio(z.round_robin == g, label).clicked() {
-				let cmd = se::edit(state.project(), r, i, "Zone round-robin", |z| {
+				let cmd = se::edit(state.project(), r, i, tr("Zone round-robin"), |z| {
 					z.round_robin = g
 				});
 				state.apply_sample_edit(cmd);
@@ -912,12 +908,12 @@ fn zone_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, i: usi
 			}
 		}
 	});
-	if ui.button("Locate file").clicked() {
+	if ui.button(tr("Locate file")).clicked() {
 		state.locate_file(&z.sample.path);
 		ui.close();
 	}
 	ui.separator();
-	if ui.button("Delete").clicked() {
+	if ui.button(tr("Delete")).clicked() {
 		let cmd = sm::remove_zone(state.project(), r, i)
 			.map(|c| crate::state::drum_sampler_editor::labeled(c, "Delete zone".to_owned()));
 		if state.apply_sample_edit(cmd) {
@@ -993,7 +989,7 @@ fn keys_strip(
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::PointingHand);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Zone keys"));
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr("Zone keys")));
 	if resp.is_pointer_button_down_on()
 		&& let (Some(pos), Some(track)) = (ui.ctx().pointer_interact_pos(), cx.r.track)
 	{
@@ -1007,9 +1003,9 @@ fn keys_strip(
 			v.held = Some((track, k));
 		}
 	}
-	let _ = resp.on_hover_text(
+	let _ = resp.on_hover_text(tr(
 		"Click or drag to play \u{b7} drop an audio file to map it across the keyboard",
-	);
+	));
 }
 
 // --- Selected zone --------------------------------------------------------------------
@@ -1040,7 +1036,7 @@ fn zone_panel(
 		p.text(
 			rect.center(),
 			Align2::CENTER_CENTER,
-			"No zone selected \u{2014} drop an audio file on the map",
+			tr("No zone selected \u{2014} drop an audio file on the map"),
 			theme::medium(12.0),
 			theme::TEXT_FAINT,
 		);
@@ -1080,13 +1076,13 @@ fn zone_header(
 		ui,
 		Id::new(("smp-rev", cx.salt, cx.r.device)),
 		rev,
-		"\u{21c6} Rev",
+		tr("\u{21c6} Rev"),
 		zone.reverse,
 	)
-	.on_hover_text("Play the zone backwards (loops are ignored then)");
+	.on_hover_text(tr("Play the zone backwards (loops are ignored then)"));
 	if resp.clicked() {
 		let on = !zone.reverse;
-		let cmd = se::edit(state.project(), cx.r, index, "Zone reverse", |z| {
+		let cmd = se::edit(state.project(), cx.r, index, tr("Zone reverse"), |z| {
 			z.reverse = on
 		});
 		state.apply_sample_edit(cmd);
@@ -1105,12 +1101,12 @@ fn zone_header(
 	if let Some(i) = device_kit::segmented(
 		&mut child,
 		Id::new(("smp-loop", cx.salt, cx.r.device)),
-		&["Off", "Forward", "Ping-pong"],
+		&[tr("Off"), tr("Forward"), tr("Ping-pong")],
 		current,
 	) && i != current
 	{
 		let mode = modes[i];
-		let cmd = se::edit(state.project(), cx.r, index, "Zone loop mode", |z| {
+		let cmd = se::edit(state.project(), cx.r, index, tr("Zone loop mode"), |z| {
 			z.loop_mode = mode
 		});
 		state.apply_sample_edit(cmd);
@@ -1166,16 +1162,17 @@ fn zone_header(
 		)
 		.on_hover_cursor(CursorIcon::PointingHand)
 		.on_hover_text(format!(
-			"{}\nClick for the file menu \u{b7} drop another file on the zone to replace it",
-			zone.sample.path.display()
+			"{}\n{}",
+			zone.sample.path.display(),
+			tr("Click for the file menu \u{b7} drop another file on the zone to replace it")
 		));
 	egui::Popup::menu(&resp).show(|ui| {
 		ui.set_min_width(170.0);
-		if ui.button("Locate file").clicked() {
+		if ui.button(tr("Locate file")).clicked() {
 			state.locate_file(&zone.sample.path);
 			ui.close();
 		}
-		if ui.button("Delete zone").clicked() {
+		if ui.button(tr("Delete zone")).clicked() {
 			let cmd = sm::remove_zone(state.project(), cx.r, index)
 				.map(|c| crate::state::drum_sampler_editor::labeled(c, "Delete zone".to_owned()));
 			if state.apply_sample_edit(cmd) {
@@ -1214,7 +1211,7 @@ fn wave_editor(
 			ui.painter().text(
 				rect.center(),
 				Align2::CENTER_CENTER,
-				"loading waveform\u{2026}",
+				tr("loading waveform\u{2026}"),
 				theme::small(),
 				theme::TEXT_FAINT,
 			);
@@ -1224,7 +1221,7 @@ fn wave_editor(
 			ui.painter().text(
 				rect.center(),
 				Align2::CENTER_CENTER,
-				format!("\u{26a0} {e} \u{2014} drop another file on the zone"),
+				trf("⚠ {e} — drop another file on the zone", &[("e", &e)]),
 				theme::small(),
 				theme::WARNING,
 			);
@@ -1329,6 +1326,13 @@ fn wave_editor(
 			Stroke::new(1.25, theme::ACCENT_TEXT),
 		));
 	}
+	let heads: Vec<f32> = state
+		.live_voices(cx.r.device)
+		.playheads(index)
+		.into_iter()
+		.map(|s| x_of(f64::from(s), &window))
+		.collect();
+	devices::playheads(&p, area, &heads, false);
 	let mut flags = vec![
 		(Marker::Start, sx, theme::PLAYING),
 		(Marker::End, ex, theme::ERROR),
@@ -1348,10 +1352,10 @@ fn wave_editor(
 			)
 			.on_hover_cursor(CursorIcon::ResizeHorizontal);
 		let label = match m {
-			Marker::Start => "Start flag",
+			Marker::Start => tr("Start flag"),
 			Marker::End => "End flag",
-			Marker::LoopStart => "Loop start flag",
-			Marker::LoopEnd => "Loop end flag",
+			Marker::LoopStart => tr("Loop start flag"),
+			Marker::LoopEnd => tr("Loop end flag"),
 		};
 		resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, label));
 		if resp.dragged()
@@ -1385,10 +1389,10 @@ fn wave_editor(
 			state.apply_sample_edit(cmd);
 		}
 		let _ = resp.on_hover_text(match m {
-			Marker::Start => "Start: drag where the zone starts playing, double-click resets",
-			Marker::End => "End: drag where it stops, double-click resets to the sample end",
-			Marker::LoopStart => "Loop start: drag, double-click puts it on the start flag",
-			Marker::LoopEnd => "Loop end: drag, double-click puts it on the end flag",
+			Marker::Start => tr("Start: drag where the zone starts playing, double-click resets"),
+			Marker::End => tr("End: drag where it stops, double-click resets to the sample end"),
+			Marker::LoopStart => tr("Loop start: drag, double-click puts it on the start flag"),
+			Marker::LoopEnd => tr("Loop end: drag, double-click puts it on the end flag"),
 		});
 	}
 	if looping && shown.loop_mode == LoopMode::Forward {
@@ -1400,7 +1404,9 @@ fn wave_editor(
 				Sense::click_and_drag(),
 			)
 			.on_hover_cursor(CursorIcon::ResizeHorizontal);
-		resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Crossfade"));
+		resp.widget_info(|| {
+			egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, tr("Crossfade"))
+		});
 		let active = resp.hovered() || resp.dragged();
 		p.circle(
 			foot,
@@ -1417,22 +1423,22 @@ fn wave_editor(
 		if resp.drag_stopped()
 			&& let Some(xf) = v.xfade.take()
 		{
-			let cmd = se::edit(state.project(), cx.r, index, "Loop crossfade", |z| {
+			let cmd = se::edit(state.project(), cx.r, index, tr("Loop crossfade"), |z| {
 				z.loop_crossfade = xf
 			});
 			state.apply_sample_edit(cmd);
 		}
 		if resp.double_clicked() {
 			v.xfade = None;
-			let cmd = se::edit(state.project(), cx.r, index, "Loop crossfade", |z| {
+			let cmd = se::edit(state.project(), cx.r, index, tr("Loop crossfade"), |z| {
 				z.loop_crossfade = 0.0
 			});
 			state.apply_sample_edit(cmd);
 		}
-		let _ = resp.on_hover_text(
+		let _ = resp.on_hover_text(tr(
 			"Crossfade: drag the ramp's foot sideways (blends the loop end into its start), \
 			 double-click removes it",
-		);
+		));
 	}
 	if !ui.input(|i| i.pointer.any_down()) {
 		v.flag = None;
@@ -1463,11 +1469,11 @@ fn wave_editor(
 	let s_tag = tag(
 		sx,
 		false,
-		format!("Start {}", ms_label(start)),
+		trf("Start {ms_label}", &[("ms_label", &ms_label(start))]),
 		theme::PLAYING,
 		theme::PLAYING_SOFT,
 	);
-	let e_text = format!("End {}", ms_label(end));
+	let e_text = trf("End {ms_label}", &[("ms_label", &ms_label(end))]);
 	let e_w = p
 		.layout_no_wrap(e_text.clone(), theme::mono(10.5), END_FG)
 		.size()
@@ -1479,7 +1485,7 @@ fn wave_editor(
 		p.text(
 			area.right_top() + vec2(-6.0, 4.0),
 			Align2::RIGHT_TOP,
-			"\u{25c0} reversed",
+			tr("\u{25c0} reversed"),
 			theme::small(),
 			theme::TEXT_DIM,
 		);
@@ -1492,10 +1498,10 @@ fn wave_editor(
 			theme::TEXT_FAINT,
 		);
 	}
-	let _ = bg.on_hover_text_at_pointer(
+	let _ = bg.on_hover_text_at_pointer(tr(
 		"Wheel zooms, Shift+wheel scrolls; drag the start / end and loop flags and the \
 		 crossfade foot",
-	);
+	));
 }
 
 /// Root key readout + tune / gain / pan / crossfade knobs in the zone colour.
@@ -1541,13 +1547,13 @@ fn root_readout(
 		field.size(),
 		ReadoutState::Rest,
 	);
-	let _ = resp.on_hover_text(
+	let _ = resp.on_hover_text(tr(
 		"The key that plays the sample at its recorded pitch: click and type a note (F#3) \
 		 or a MIDI number, or drag the zone's dot",
-	);
+	));
 	if let Some(t) = typed {
 		let root = t.round().clamp(0.0, 127.0) as u8;
-		let cmd = se::edit(state.project(), cx.r, index, "Zone root key", |z| {
+		let cmd = se::edit(state.project(), cx.r, index, tr("Zone root key"), |z| {
 			z.root_key = root
 		});
 		state.apply_sample_edit(cmd);
@@ -1555,7 +1561,7 @@ fn root_readout(
 	ui.painter().text(
 		pos2(cell.center().x, field.bottom() + 12.0),
 		Align2::CENTER_CENTER,
-		"Root key",
+		tr("Root key"),
 		theme::medium(11.0),
 		theme::TEXT_DIM,
 	);
@@ -1587,7 +1593,7 @@ fn zone_knob_grid(
 	let forward = zone.loop_mode == LoopMode::Forward && !zone.reverse;
 	let knobs = [
 		K {
-			name: "Tune",
+			name: mark("Tune"),
 			value: zone.tune,
 			spec: KnobSpec::new(-24.0, 24.0, 0.0),
 			unit: "semitones",
@@ -1596,7 +1602,7 @@ fn zone_knob_grid(
 			apply: |z, v| z.tune = (v * 100.0).round() / 100.0,
 		},
 		K {
-			name: "Gain",
+			name: mark("Gain"),
 			value: zone.gain_db,
 			spec: KnobSpec::new(-60.0, 24.0, 0.0),
 			unit: "dB",
@@ -1605,7 +1611,7 @@ fn zone_knob_grid(
 			apply: |z, v| z.gain_db = (v * 10.0).round() / 10.0,
 		},
 		K {
-			name: "Pan",
+			name: mark("Pan"),
 			value: zone.pan * 100.0,
 			spec: KnobSpec::new(-100.0, 100.0, 0.0),
 			unit: "pan%",
@@ -1614,7 +1620,7 @@ fn zone_knob_grid(
 			apply: |z, v| z.pan = (v.round() / 100.0).clamp(-1.0, 1.0),
 		},
 		K {
-			name: "Crossfade",
+			name: mark("Crossfade"),
 			value: (zone.loop_crossfade * 1000.0) as f32,
 			spec: KnobSpec::new(0.0, 500.0, 0.0),
 			unit: "ms",
@@ -1650,11 +1656,11 @@ fn zone_knob_grid(
 		}
 		let (g, resp) = knob.show(&mut child);
 		if !k.enabled {
-			let _ = resp.on_hover_text("The crossfade blends forward loops; pick Forward");
+			let _ = resp.on_hover_text(tr("The crossfade blends forward loops; pick Forward"));
 		}
 		if let Gesture::Commit(value) = g {
 			let apply = k.apply;
-			let label = format!("Zone {}", k.name.to_lowercase());
+			let label = trf("Zone {name}", &[("name", &tr_str(k.name).to_lowercase())]);
 			let cmd = se::edit(state.project(), cx.r, index, &label, |z| apply(z, value));
 			state.apply_sample_edit(cmd);
 		}
@@ -1670,7 +1676,7 @@ fn globals_section(
 	v: &mut SamplerView,
 	rect: Rect,
 ) {
-	title(ui, rect, "GLOBAL \u{b7} ALL ZONES");
+	title(ui, rect, tr("GLOBAL \u{b7} ALL ZONES"));
 	let body = Rect::from_min_max(pos2(rect.left(), rect.top() + TITLE_H + 2.0), rect.max);
 	let knob_h = devices::knob_height(KnobSize::S);
 	let lower_h = if v.filter_env {
@@ -1683,12 +1689,12 @@ fn globals_section(
 	let col = (upper.width() - 8.0) * 0.5;
 	let amp = upper.with_max_x(upper.left() + col);
 	let filter = upper.with_min_x(amp.right() + 8.0);
-	envelope_block(ui, state, cx, Env::Amp, "Amp envelope", amp);
+	envelope_block(ui, state, cx, Env::Amp, tr("Amp envelope"), amp);
 	filter_block(ui, state, cx, v, filter);
 	if v.filter_env {
 		let knobs_w = 120.0_f32.min(lower.width() * 0.4);
 		let env = lower.with_max_x(lower.right() - knobs_w - 8.0);
-		envelope_block(ui, state, cx, Env::Filter, "Filter envelope", env);
+		envelope_block(ui, state, cx, Env::Filter, tr("Filter envelope"), env);
 		let knobs = Rect::from_min_max(pos2(env.right() + 8.0, lower.top()), lower.max);
 		devices::knob_grid(
 			ui,
@@ -1696,8 +1702,8 @@ fn globals_section(
 			cx,
 			knobs,
 			&[
-				KnobDef::new(ENV_AMOUNT, "Env amt", KnobSize::S).color(VIOLET_LIGHT),
-				KnobDef::new(FILTER_VELOCITY, "Flt vel", KnobSize::S).color(VIOLET_LIGHT),
+				KnobDef::new(ENV_AMOUNT, tr("Env amt"), KnobSize::S).color(VIOLET_LIGHT),
+				KnobDef::new(FILTER_VELOCITY, tr("Flt vel"), KnobSize::S).color(VIOLET_LIGHT),
 			],
 			if knobs.height() >= 2.0 * knob_h { 1 } else { 2 },
 		);
@@ -1708,10 +1714,10 @@ fn globals_section(
 			cx,
 			lower,
 			&[
-				KnobDef::new(CUTOFF, "Cutoff", KnobSize::S).color(VIOLET_LIGHT),
-				KnobDef::new(RESONANCE, "Reso", KnobSize::S).color(VIOLET_LIGHT),
-				KnobDef::new(ENV_AMOUNT, "Env amt", KnobSize::S).color(VIOLET_LIGHT),
-				KnobDef::new(FILTER_VELOCITY, "Flt vel", KnobSize::S).color(VIOLET_LIGHT),
+				KnobDef::new(CUTOFF, tr("Cutoff"), KnobSize::S).color(VIOLET_LIGHT),
+				KnobDef::new(RESONANCE, tr("Reso"), KnobSize::S).color(VIOLET_LIGHT),
+				KnobDef::new(ENV_AMOUNT, tr("Env amt"), KnobSize::S).color(VIOLET_LIGHT),
+				KnobDef::new(FILTER_VELOCITY, tr("Flt vel"), KnobSize::S).color(VIOLET_LIGHT),
 			],
 			4,
 		);
@@ -1755,7 +1761,7 @@ fn envelope_block(
 		&ranges,
 		color,
 		display.size(),
-		&[],
+		&state.live_voices(r.device).envelope_dots(),
 	);
 	let mut commits: Vec<(&'static str, f32)> = Vec::new();
 	let mut stages = Vec::new();
@@ -1819,7 +1825,7 @@ fn filter_block(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerV
 	ui.painter().text(
 		rect.left_top() + vec2(0.0, 1.0),
 		Align2::LEFT_TOP,
-		"Filter",
+		tr("Filter"),
 		theme::medium(10.5),
 		theme::TEXT_DIM,
 	);
@@ -1863,6 +1869,7 @@ fn filter_block(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerV
 		dormant: kind == 0,
 		x_only: false,
 		ai,
+		dynamic: None,
 	}];
 	let mut child = ui.new_child(UiBuilder::new().max_rect(display));
 	let out = FreqDisplay::new(Id::new(("smp-filter", cx.salt, r.device)), display.size())
@@ -1919,10 +1926,10 @@ fn filter_block(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerV
 	if out.dragging.is_none() && !ui.input(|i| i.pointer.any_down()) {
 		v.node = None;
 	}
-	out.response.on_hover_text_at_pointer(
+	out.response.on_hover_text_at_pointer(tr(
 		"Drag the node: \u{21d4} cutoff, \u{21d5} resonance (Shift fine) \u{b7} wheel over it: \
 		 env amount \u{b7} double-click resets",
-	);
+	));
 	summary(ui, rect, &se::filter_summary(kind, cutoff, res, env));
 }
 
@@ -1959,12 +1966,12 @@ fn bottom_row(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerVie
 		);
 	};
 	let gap = |ui: &mut Ui| ui.add_space(10.0);
-	label(ui, "Trigger");
+	label(ui, tr("Trigger"));
 	let mode = (value(state, cx, MODE) >= 0.5) as usize;
 	if let Some(i) = device_kit::segmented(
 		ui,
 		Id::new(("smp-trigger", cx.salt, cx.r.device)),
-		&["Gate", "One-shot"],
+		&[tr("Gate"), tr("One-shot")],
 		mode,
 	) && i != mode
 	{
@@ -1972,9 +1979,9 @@ fn bottom_row(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerVie
 	}
 	gap(ui);
 	for (id, name, w) in [
-		(POLYPHONY, "Polyphony", 34.0),
-		(TRANSPOSE, "Transpose", 44.0),
-		(GLIDE, "Glide", 56.0),
+		(POLYPHONY, tr("Polyphony"), 34.0),
+		(TRANSPOSE, tr("Transpose"), 44.0),
+		(GLIDE, tr("Glide"), 56.0),
 	] {
 		ui.horizontal(|ui| {
 			ui.spacing_mut().item_spacing.x = 4.0;
@@ -1985,10 +1992,12 @@ fn bottom_row(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerVie
 	}
 	ui.horizontal(|ui| {
 		ui.spacing_mut().item_spacing.x = 4.0;
-		label(ui, "Legato");
+		label(ui, tr("Legato"));
 		let on = value(state, cx, LEGATO) >= 0.5;
 		if device_kit::toggle(ui, on, if on { "on" } else { "off" }, theme::ACCENT)
-			.on_hover_text("Monophonic legato: overlapping notes glide without restarting")
+			.on_hover_text(tr(
+				"Monophonic legato: overlapping notes glide without restarting",
+			))
 			.clicked()
 		{
 			state.commit_param(cx.r.track, cx.r.device, LEGATO, if on { 0.0 } else { 1.0 });
@@ -1997,21 +2006,21 @@ fn bottom_row(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerVie
 	gap(ui);
 	ui.horizontal(|ui| {
 		ui.spacing_mut().item_spacing.x = 4.0;
-		label(ui, "Velocity");
+		label(ui, tr("Velocity"));
 		row_readout(ui, state, cx, v, VELOCITY, 46.0);
-		label(ui, "\u{b7} curve");
+		label(ui, tr("\u{b7} curve"));
 		curve_menu(ui, state, cx);
 	});
 	gap(ui);
 	ui.horizontal(|ui| {
 		ui.spacing_mut().item_spacing.x = 4.0;
-		label(ui, "Key track");
+		label(ui, tr("Key track"));
 		row_readout(ui, state, cx, v, KEY_TRACK, 46.0);
 	});
 	let text = if v.filter_env {
-		"\u{25be} Filter envelope"
+		tr("\u{25be} Filter envelope")
 	} else {
-		"\u{25b8} Filter envelope"
+		tr("\u{25b8} Filter envelope")
 	};
 	let bw = 128.0;
 	let cur = ui.cursor();
@@ -2028,7 +2037,9 @@ fn bottom_row(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerVie
 		text,
 		v.filter_env,
 	)
-	.on_hover_text("Show the filter envelope (attack, decay, sustain, release) in the globals")
+	.on_hover_text(tr(
+		"Show the filter envelope (attack, decay, sustain, release) in the globals",
+	))
 	.clicked()
 	{
 		v.filter_env = !v.filter_env;
@@ -2082,6 +2093,7 @@ fn row_readout(
 			max: info.max,
 			default: info.default,
 			fmt: ValueFmt::unit(info.unit),
+			tip: Some(info.description),
 		},
 	);
 	if let Some(m) = menu {
@@ -2089,8 +2101,7 @@ fn row_readout(
 	}
 	let drag = ui
 		.interact(resp.rect, base.with("drag"), Sense::drag())
-		.on_hover_cursor(CursorIcon::ResizeVertical)
-		.on_hover_text(info.description);
+		.on_hover_cursor(CursorIcon::ResizeVertical);
 	if drag.drag_started() {
 		v.readout = Some((id, current, 0.0));
 	}
@@ -2129,12 +2140,12 @@ fn curve_menu(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 			Sense::click(),
 		)
 		.on_hover_cursor(CursorIcon::PointingHand)
-		.on_hover_text(format!(
-			"Velocity curve {:.0} %: soft = quiet notes louder, hard = more dynamic",
-			current
+		.on_hover_text(trf(
+			"Velocity curve {current} %: soft = quiet notes louder, hard = more dynamic",
+			&[("current", &crate::i18n::decimal(format!("{:.0}", current)))],
 		));
 	resp.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Velocity curve")
+		egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, tr("Velocity curve"))
 	});
 	if resp.hovered() {
 		ui.painter()
@@ -2234,12 +2245,12 @@ fn compact(
 	if let Some(i) = device_kit::segmented(
 		&mut child,
 		Id::new(("smp-loop", cx.salt, cx.r.device)),
-		&["Off", "Forward", "Ping-pong"],
+		&[tr("Off"), tr("Forward"), tr("Ping-pong")],
 		current,
 	) && i != current
 	{
 		let mode = modes[i];
-		let cmd = se::edit(state.project(), cx.r, index, "Zone loop mode", |z| {
+		let cmd = se::edit(state.project(), cx.r, index, tr("Zone loop mode"), |z| {
 			z.loop_mode = mode
 		});
 		state.apply_sample_edit(cmd);

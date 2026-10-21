@@ -5,10 +5,11 @@
 //! sidechain key picker. The gesture -> parameter mapping lives in
 //! [`crate::state::compressor_editor`].
 
+use crate::i18n::{tr, trf};
 use std::sync::{Arc, Mutex};
 
 use cadenza_core::{ParamAddress, TrackId};
-use cadenza_dsp::readings;
+use cadenza_dsp::{Listen, readings};
 use egui::{
 	Align, Align2, Color32, CornerRadius, CursorIcon, Id, Layout, Mesh, Pos2, Rect, Sense, Shape,
 	Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2,
@@ -18,12 +19,15 @@ use crate::state::AppState;
 use crate::state::compressor_editor::{
 	self as comp, ATTACK, CompValues, Hit, KNEE, MAKEUP, MIX, RATIO, RELEASE, THRESHOLD,
 };
+use crate::state::device_display::DbRange;
 use crate::state::device_display::{HistoryColumn, LevelHistory};
 use crate::state::meters::FLOOR_DB;
 use crate::state::selection::DeviceRef;
 use crate::theme;
 use crate::ui::device_editor::BodyCx;
-use crate::ui::device_kit::{self, HistoryKey, HistoryLine, KnobSize, NOTCH, ParamKnob};
+use crate::ui::device_kit::{
+	self, FreqDisplay, FreqEvent, FreqNode, HistoryKey, HistoryLine, KnobSize, NOTCH, ParamKnob,
+};
 use crate::ui::widgets::Gesture;
 
 /// Wheel notches over the knee are committed as one step once the wheel rests this long.
@@ -46,6 +50,15 @@ const CHIP_H: f32 = 22.0;
 const COMPACT_HISTORY_H: f32 = 64.0;
 const COMPACT_KNOBS_H: f32 = 86.0;
 const COMPACT_ROW_H: f32 = 30.0;
+/// The key filter strip under the history: caption + a small frequency display.
+const KEY_STRIP_H: f32 = 70.0;
+const KEY_CAPTION_H: f32 = 16.0;
+const KEY_COLOR: Color32 = theme::BAND_COLORS[5];
+const KEY_RANGE: DbRange = DbRange {
+	min: -24.0,
+	max: 12.0,
+	step: 12.0,
+};
 
 /// Knee wheel notches not committed yet.
 #[derive(Debug, Clone, Copy)]
@@ -220,8 +233,8 @@ pub fn compressor_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 	}
 }
 
-/// Feeds the history from this frame's probe frames, the GR from the device's reading
-/// and the key from its track's meter; levels fall once the probe goes quiet.
+/// Feeds the history from this frame's probe frames, the GR and the detector's key level
+/// from the device's readings; levels fall once the probe goes quiet.
 fn update_levels(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut CompView) {
 	if v.synthetic {
 		return;
@@ -238,21 +251,12 @@ fn update_levels(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut CompView) {
 		.abs();
 	let fall = FALL_DB_PER_S * dt;
 	if ours && !cx.frames.is_empty() {
-		let key = key_of(state, cx.r)
-			.filter(|_| v.key_trace)
-			.map(|(t, _, _, pre)| {
-				let meter = state.meters.get(Some(t));
-				let volume = state
-					.project()
-					.track(t)
-					.map_or(0.0, |t| t.channel.volume_db);
-				comp::key_level(
-					meter.peak_db[0].max(meter.peak_db[1]),
-					volume,
-					pre,
-					FLOOR_DB,
-				)
-			});
+		let key = key_of(state, cx.r).filter(|_| v.key_trace).map(|_| {
+			comp::key_level(
+				probe.and_then(|p| p.reading(readings::KEY_LEVEL_DB)),
+				FLOOR_DB,
+			)
+		});
 		v.history.set_key(key);
 		v.history.push_frames(cx.frames, gr);
 		let peak = cx
@@ -289,7 +293,7 @@ fn finish_wheel(ui: &Ui, state: &mut AppState, r: DeviceRef, v: &mut CompView) {
 	let idle = now - w.last;
 	if idle >= WHEEL_REST {
 		v.wheel = None;
-		commit(state, r, &[(KNEE, w.value)], "Compressor knee");
+		commit(state, r, &[(KNEE, w.value)], tr("Compressor knee"));
 	} else {
 		ui.ctx()
 			.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_REST - idle));
@@ -316,13 +320,105 @@ fn wheel_knee(ui: &Ui, state: &mut AppState, r: DeviceRef, v: &mut CompView, not
 		.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_REST));
 }
 
+// --- Key filter -------------------------------------------------------------------------
+
+/// The detector's key filter: HP / LP nodes on the 0 dB line over the filters' response
+/// (the processor's own coefficients). Drag a node (to its end = off), double-click = off.
+fn key_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
+	let r = cx.r;
+	let key = comp::KeyFilter::from_fn(|p| {
+		state
+			.param_value(r.track, r.device, p.id)
+			.unwrap_or(p.default)
+	});
+	let cap = Rect::from_min_size(rect.min, vec2(rect.width(), KEY_CAPTION_H));
+	let p = ui.painter();
+	p.text(
+		cap.left_center(),
+		Align2::LEFT_CENTER,
+		tr("KEY FILTER"),
+		theme::medium(10.5),
+		theme::TEXT_FAINT,
+	);
+	p.text(
+		cap.right_center(),
+		Align2::RIGHT_CENTER,
+		key.label(),
+		theme::mono(10.5),
+		if key.hp_on() || key.lp_on() {
+			theme::TEXT_DIM
+		} else {
+			theme::TEXT_FAINT
+		},
+	);
+	let display_rect = Rect::from_min_max(pos2(rect.left(), cap.bottom() + 2.0), rect.max);
+	let mut child = ui.new_child(UiBuilder::new().max_rect(display_rect));
+	let node = |label, freq, id, on: bool| FreqNode {
+		label,
+		freq,
+		db: 0.0,
+		color: KEY_COLOR,
+		dormant: !on,
+		x_only: true,
+		ai: state.ai_change(r.device, id).is_some(),
+		dynamic: None,
+	};
+	let nodes = [
+		node("HP", key.hp, comp::KEY_HP, key.hp_on()),
+		node("LP", key.lp, comp::KEY_LP, key.lp_on()),
+	];
+	let rate = state.probe().map_or(48_000.0, |p| p.sample_rate() as f32);
+	let response = move |f: f32| key.response_db(rate, f);
+	let out = FreqDisplay::new(
+		Id::new(("comp-key-filter", cx.salt, r.device)),
+		display_rect.size(),
+	)
+	.range(KEY_RANGE)
+	.sum(&response, KEY_COLOR)
+	.sum_fill(0.16)
+	.small_nodes()
+	.nodes(&nodes)
+	.show(&mut child);
+	for e in out.events {
+		match e {
+			FreqEvent::Move {
+				node,
+				freq,
+				commit: done,
+				..
+			} => {
+				let (id, value) = comp::drag_key(node, freq);
+				if done {
+					commit(state, r, &[(id, value)], tr("Compressor key filter"));
+				} else {
+					state.preview_param(r.device, id, value);
+				}
+			}
+			FreqEvent::Reset { node } => {
+				commit(state, r, &[comp::key_off(node)], tr("Key filter off"));
+			}
+			_ => {}
+		}
+	}
+	out.response.on_hover_text(tr(
+		"What the detector hears (own input or key), never the audio. Drag HP / LP; to the \
+		 end or double-click = off. Listen to key plays it filtered",
+	));
+}
+
 // --- Level history ----------------------------------------------------------------------
 
 fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &CompView, rect: Rect, big: bool) {
 	let r = cx.r;
 	let threshold = shown_values(state, r).threshold;
 	let key = key_of(state, r);
-	let time = format!("{:.0} s · now →", v.seconds);
+	let time = trf(
+		"{seconds} s · now →",
+		&[(
+			"seconds",
+			&crate::i18n::decimal(format!("{:.0}", v.seconds)),
+		)],
+	);
 	let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
 	let view = device_kit::LevelHistoryView::new(
 		Id::new(("comp-history", cx.salt, r.device)),
@@ -341,7 +437,7 @@ fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &CompView, rect: R
 	.line(Some(HistoryLine {
 		db: threshold,
 		default: comp::RESET_THRESHOLD,
-		label: "Threshold",
+		label: tr("Threshold"),
 		color: theme::TEXT,
 	}))
 	.legend(big, big)
@@ -351,7 +447,12 @@ fn history(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &CompView, rect: R
 	let (gesture, _) = view.show(&mut child, &v.history);
 	match gesture {
 		Gesture::Preview(db) => state.preview_param(r.device, THRESHOLD, round1(db)),
-		Gesture::Commit(db) => commit(state, r, &[(THRESHOLD, round1(db))], "Compressor threshold"),
+		Gesture::Commit(db) => commit(
+			state,
+			r,
+			&[(THRESHOLD, round1(db))],
+			tr("Compressor threshold"),
+		),
 		Gesture::Idle => {}
 	}
 }
@@ -401,7 +502,9 @@ fn transfer(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView, re
 	let axes = Axes { rect };
 	let id = Id::new(("comp-transfer", cx.salt, r.device));
 	let resp = ui.interact(rect, id, Sense::click_and_drag());
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Transfer curve"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Transfer curve"))
+	});
 	let values = shown_values(state, r);
 	let dot_tol = 11.0 * axes.db_per_px();
 	let hover = resp
@@ -451,8 +554,8 @@ fn transfer(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView, re
 	if resp.drag_stopped() {
 		if let (Some(d), Some(c)) = (v.drag.take(), change) {
 			let label = match d.hit {
-				Hit::Threshold => "Compressor threshold",
-				_ => "Compressor ratio",
+				Hit::Threshold => tr("Compressor threshold"),
+				_ => tr("Compressor ratio"),
 			};
 			commit(state, r, &[c], label);
 		}
@@ -461,7 +564,7 @@ fn transfer(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView, re
 	}
 	if resp.double_clicked() {
 		v.drag = None;
-		commit(state, r, &comp::reset(), "Reset threshold and ratio");
+		commit(state, r, &comp::reset(), tr("Reset threshold and ratio"));
 	}
 	let scroll = ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y);
 	if matches!(hover, Some(Hit::Knee | Hit::Threshold)) && scroll != 0.0 && !resp.dragged() {
@@ -477,10 +580,10 @@ fn transfer(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView, re
 		Some(c) => resp.on_hover_cursor(c),
 		None => resp,
 	};
-	resp.on_hover_text_at_pointer(
+	resp.on_hover_text_at_pointer(tr(
 		"Drag the dot for the threshold (⇔), above the knee for the ratio (⇕) · wheel over \
 		 the knee: knee width · Shift fine · double-click: −24 dB, 4:1",
-	);
+	));
 
 	let values = shown_values(state, r);
 	paint_transfer(ui, axes, &values, v.input_db, big);
@@ -585,7 +688,7 @@ fn paint_transfer(ui: &Ui, axes: Axes, v: &CompValues, input_db: f32, big: bool)
 	p.text(
 		rect.left_top() + vec2(8.0, 6.0),
 		Align2::LEFT_TOP,
-		"Transfer",
+		tr("Transfer"),
 		font.clone(),
 		theme::TEXT_FAINT,
 	);
@@ -653,7 +756,9 @@ fn gr_column(ui: &mut Ui, cx: &BodyCx, v: &CompView, rect: Rect) {
 		GR_RANGE_DB,
 		meter.size(),
 	)
-	.on_hover_text("Gain reduction · the white tick holds the largest for 1.5 s");
+	.on_hover_text(tr(
+		"Gain reduction · the white tick holds the largest for 1.5 s",
+	));
 	let p = ui.painter();
 	for db in [0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0] {
 		let y = meter.top() + db / GR_RANGE_DB * meter.height();
@@ -706,16 +811,24 @@ fn makeup_chip(ui: &mut Ui, state: &mut AppState, r: DeviceRef, compact: bool) {
 		return;
 	};
 	let text = if compact {
-		format!("Auto makeup {}", comp::signed_db(suggested))
+		trf(
+			"Auto makeup {signed_db}",
+			&[("signed_db", &comp::signed_db(suggested))],
+		)
 	} else {
-		format!("Auto suggests {} · Apply", comp::signed_db(suggested))
+		trf(
+			"Auto suggests {signed_db} · Apply",
+			&[("signed_db", &comp::signed_db(suggested))],
+		)
 	};
 	let font = theme::medium(11.0);
 	let g = ui
 		.painter()
 		.layout_no_wrap(text.clone(), font, theme::ACCENT_TEXT);
 	let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + 14.0, 20.0), Sense::click());
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Auto makeup"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr("Auto makeup"))
+	});
 	let p = ui.painter();
 	if !compact || resp.hovered() {
 		p.rect(
@@ -733,39 +846,59 @@ fn makeup_chip(ui: &mut Ui, state: &mut AppState, r: DeviceRef, compact: bool) {
 	p.galley(rect.center() - g.size() * 0.5, g, theme::ACCENT_TEXT);
 	let resp = resp
 		.on_hover_cursor(CursorIcon::PointingHand)
-		.on_hover_text(
+		.on_hover_text(tr(
 			"Makeup that gives back the gain reduction of a −18 dBFS program level at these \
 		 threshold, ratio and knee settings",
-		);
+		));
 	if resp.clicked() {
 		commit(
 			state,
 			r,
 			&[(MAKEUP, suggested)],
-			&format!("Auto makeup {}", comp::signed_db(suggested)),
+			&trf(
+				"Auto makeup {signed_db}",
+				&[("signed_db", &comp::signed_db(suggested))],
+			),
 		);
 	}
 }
 
 /// The sidechain picker: "Key from Kick · post-fader send ▾" (compact: "Key ▪ Kick ▾").
 fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32>) {
+	key_picker_with(
+		ui,
+		state,
+		r,
+		width,
+		tr("Sidechain: the track whose level drives the compressor"),
+	);
+}
+
+/// [`key_picker`] with its own hover text (other keyable devices: the reverb's duck).
+pub(crate) fn key_picker_with(
+	ui: &mut Ui,
+	state: &mut AppState,
+	r: DeviceRef,
+	width: Option<f32>,
+	hover: &str,
+) {
 	let key = key_of(state, r);
 	let compact = width.is_some();
 	let name_font = theme::medium(12.0);
 	let (lead, name, tail) = match &key {
-		Some((_, name, _, _)) if compact => ("Key".to_owned(), name.clone(), String::new()),
+		Some((_, name, _, _)) if compact => (tr("Key").to_owned(), name.clone(), String::new()),
 		Some((_, name, _, pre)) => (
-			"Key from".to_owned(),
+			tr("Key from").to_owned(),
 			name.clone(),
 			format!("· {}", comp::tap_label(*pre)),
 		),
 		None => (
-			"Key".to_owned(),
-			"Own input".to_owned(),
+			tr("Key").to_owned(),
+			tr("Own input").to_owned(),
 			if compact {
 				String::new()
 			} else {
-				"· no sidechain".to_owned()
+				tr("· no sidechain").to_owned()
 			},
 		),
 	};
@@ -790,7 +923,9 @@ fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32
 	let w = width.unwrap_or(content);
 	let h = if compact { 24.0 } else { CHIP_H };
 	let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Key source"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, tr("Key source"))
+	});
 	let p = ui.painter();
 	p.rect(
 		rect,
@@ -842,7 +977,7 @@ fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32
 	);
 	let resp = resp
 		.on_hover_cursor(CursorIcon::PointingHand)
-		.on_hover_text("Sidechain: the track whose level drives the compressor");
+		.on_hover_text(hover);
 	egui::Popup::menu(&resp).show(|ui| {
 		ui.set_min_width(200.0);
 		let current = key.as_ref().map(|k| k.0);
@@ -850,8 +985,8 @@ fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32
 		let mut pick: Option<(Option<TrackId>, bool)> = None;
 		if menu_row(
 			ui,
-			"Key from none",
-			"None · own input",
+			tr("Key from none"),
+			tr("None · own input"),
 			None,
 			current.is_none(),
 		) {
@@ -865,7 +1000,7 @@ fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32
 			let color = theme::track_color(s.color.as_deref());
 			if menu_row(
 				ui,
-				&format!("Key from {}", s.name),
+				&trf("Key from {name}", &[("name", &s.name)]),
 				&s.name,
 				Some(color),
 				current == Some(s.track),
@@ -875,7 +1010,7 @@ fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32
 		}
 		if let Some(track) = current {
 			ui.separator();
-			for (label, tap) in [("Post-fader", false), ("Pre-fader", true)] {
+			for (label, tap) in [(tr("Post-fader"), false), (tr("Pre-fader"), true)] {
 				if menu_row(ui, label, label, None, pre == tap) {
 					pick = Some((Some(track), tap));
 				}
@@ -888,6 +1023,28 @@ fn key_picker(ui: &mut Ui, state: &mut AppState, r: DeviceRef, width: Option<f32
 			ui.close();
 		}
 	});
+}
+
+/// "🎧 Listen to key": hear the detector's key instead of the output (monitoring only).
+fn listen_key(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
+	listen_key_labeled(ui, state, r, tr("Listen to key"));
+}
+
+fn listen_key_labeled(ui: &mut Ui, state: &mut AppState, r: DeviceRef, label: &str) {
+	let on = state.listen_mode(r.device) == Listen::Key;
+	let resp = device_kit::glyph_toggle(
+		ui,
+		on,
+		device_kit::Glyph::Headphones,
+		label,
+		theme::SOLO,
+	)
+	.on_hover_text(tr(
+		"Hear the signal that drives the compressor (the key, else its input). Monitoring only: not saved, never rendered",
+	));
+	if resp.clicked() {
+		state.set_listen(r.device, if on { Listen::Off } else { Listen::Key });
+	}
 }
 
 /// A popup row with an optional colour square; returns whether it was clicked.
@@ -934,9 +1091,9 @@ fn automated_hint(state: &AppState, r: DeviceRef) -> Option<String> {
 	comp::info().params.iter().find_map(|p| {
 		let address = ParamAddress::device(r.track, r.device, p.id);
 		state.is_automated(&address).then(|| {
-			format!(
-				"{} is automated (Read) · ring shows the playing value",
-				p.name
+			trf(
+				"{name} is automated (Read) · ring shows the playing value",
+				&[("name", &p.name)],
 			)
 		})
 	})
@@ -946,14 +1103,20 @@ fn automated_hint(state: &AppState, r: DeviceRef) -> Option<String> {
 fn footer_toggle(ui: &mut Ui, v: &mut CompView, full: bool) {
 	let arrow = if v.footer { "▾" } else { "▸" };
 	let text = if full {
-		format!(
-			"{arrow}  Display: history {:.0} s · range {} dB · key trace {}",
-			v.seconds,
-			if v.range60 { 60 } else { 30 },
-			if v.key_trace { "on" } else { "off" }
+		trf(
+			"{arrow}  Display: history {seconds} s · range {range} dB · key trace {trace}",
+			&[
+				("arrow", &arrow),
+				(
+					"seconds",
+					&crate::i18n::decimal(format!("{:.0}", v.seconds)),
+				),
+				("range", &if v.range60 { 60 } else { 30 }),
+				("trace", &if v.key_trace { tr("on") } else { tr("off") }),
+			],
 		)
 	} else {
-		format!("{arrow}  More")
+		trf("{arrow}  More", &[("arrow", &arrow)])
 	};
 	let g = ui
 		.painter()
@@ -964,7 +1127,7 @@ fn footer_toggle(ui: &mut Ui, v: &mut CompView, full: bool) {
 			egui::WidgetType::Checkbox,
 			true,
 			v.footer,
-			"Display options",
+			tr("Display options"),
 		)
 	});
 	let bg = if v.footer || resp.hovered() {
@@ -992,7 +1155,7 @@ fn display_settings(ui: &mut Ui, cx: &BodyCx, v: &mut CompView) {
 				.color(theme::TEXT_FAINT),
 		);
 	};
-	dim(ui, "History");
+	dim(ui, tr("History"));
 	let selected = HISTORY_SECONDS
 		.iter()
 		.position(|&s| s == v.seconds)
@@ -1006,7 +1169,7 @@ fn display_settings(ui: &mut Ui, cx: &BodyCx, v: &mut CompView) {
 		let rate = v.rate;
 		v.resize_history(HISTORY_SECONDS[i], rate);
 	}
-	dim(ui, "Range");
+	dim(ui, tr("Range"));
 	if let Some(i) = device_kit::segmented(
 		ui,
 		Id::new(("comp-range", cx.salt, cx.r.device)),
@@ -1015,8 +1178,8 @@ fn display_settings(ui: &mut Ui, cx: &BodyCx, v: &mut CompView) {
 	) {
 		v.range60 = i == 1;
 	}
-	if device_kit::toggle(ui, v.key_trace, "Key trace", theme::GAIN_REDUCTION)
-		.on_hover_text("Draw the sidechain key's level in the history")
+	if device_kit::toggle(ui, v.key_trace, tr("Key trace"), theme::GAIN_REDUCTION)
+		.on_hover_text(tr("Draw the sidechain key's level in the history"))
 		.clicked()
 	{
 		v.key_trace = !v.key_trace;
@@ -1047,21 +1210,25 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView) {
 		if let Some(i) = device_kit::segmented(
 			&mut tab_row,
 			Id::new(("comp-tabs", cx.salt, cx.r.device)),
-			&["History", "Transfer"],
+			&[tr("History"), tr("Transfer")],
 			usize::from(!v.history_tab),
 		) {
 			v.history_tab = i == 0;
 		}
 		let area = displays.with_min_y(tabs.bottom() + 6.0);
 		if v.history_tab {
-			history(ui, state, cx, v, area, true);
+			let (h, strip) = split_key_strip(area);
+			history(ui, state, cx, v, h, true);
+			key_strip(ui, state, cx, strip);
 		} else {
 			let s = area.width().min(area.height());
 			transfer(ui, state, cx, v, Rect::from_min_size(area.min, vec2(s, s)));
 		}
 	} else {
 		let history_rect = displays.with_max_x(displays.right() - side - 8.0);
-		history(ui, state, cx, v, history_rect, true);
+		let (h, strip) = split_key_strip(history_rect);
+		history(ui, state, cx, v, h, true);
+		key_strip(ui, state, cx, strip);
 		let t = Rect::from_min_size(
 			pos2(history_rect.right() + 8.0, top.top()),
 			vec2(side, side),
@@ -1077,17 +1244,25 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView) {
 	let gap = (knobs.height() - 112.0 - 122.0).clamp(4.0, 18.0);
 	let block = 112.0 + gap + 122.0;
 	let y0 = knobs.top() + ((knobs.height() - block) * 0.5).max(0.0);
-	for (i, (id, label)) in [(THRESHOLD, "Threshold"), (RATIO, "Ratio"), (KNEE, "Knee")]
-		.into_iter()
-		.enumerate()
+	for (i, (id, label)) in [
+		(THRESHOLD, tr("Threshold")),
+		(RATIO, tr("Ratio")),
+		(KNEE, tr("Knee")),
+	]
+	.into_iter()
+	.enumerate()
 	{
 		let cell = Rect::from_min_size(pos2(knobs.left() + col * i as f32, y0), vec2(col, 112.0));
 		knob(ui, state, cx, cell, id, label, KnobSize::L);
 	}
 	let y1 = y0 + 112.0 + gap;
-	for (i, (id, label)) in [(ATTACK, "Attack"), (RELEASE, "Release"), (MAKEUP, "Makeup")]
-		.into_iter()
-		.enumerate()
+	for (i, (id, label)) in [
+		(ATTACK, tr("Attack")),
+		(RELEASE, tr("Release")),
+		(MAKEUP, tr("Makeup")),
+	]
+	.into_iter()
+	.enumerate()
 	{
 		let cell = Rect::from_min_size(pos2(knobs.left() + col * i as f32, y1), vec2(col, 94.0));
 		knob(ui, state, cx, cell, id, label, KnobSize::M);
@@ -1113,6 +1288,7 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView) {
 	let mut bar = row(ui, foot.shrink2(vec2(10.0, 0.0)));
 	bar.spacing_mut().item_spacing.x = 12.0;
 	key_picker(&mut bar, state, cx.r, None);
+	listen_key(&mut bar, state, cx.r);
 	if let Some(hint) = automated_hint(state, cx.r) {
 		bar.label(
 			egui::RichText::new(hint)
@@ -1139,12 +1315,19 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView) {
 		display_settings(&mut r, cx, v);
 		r.with_layout(Layout::right_to_left(Align::Center), |ui| {
 			ui.label(
-				egui::RichText::new("Display only. No effect on the sound.")
+				egui::RichText::new(tr("Display only. No effect on the sound."))
 					.font(theme::medium(12.0))
 					.color(theme::TEXT_FAINT),
 			);
 		});
 	}
+}
+
+/// The history above, the key filter strip below.
+fn split_key_strip(rect: Rect) -> (Rect, Rect) {
+	let top = rect.with_max_y(rect.bottom() - KEY_STRIP_H - 6.0);
+	let strip = rect.with_min_y(top.bottom() + 6.0);
+	(top, strip)
 }
 
 // --- Compact (15d) ----------------------------------------------------------------------
@@ -1160,6 +1343,7 @@ fn transfer_side(width: f32) -> f32 {
 
 fn compact_rest(footer: bool) -> f32 {
 	8.0 + COMPACT_HISTORY_H
+		+ 6.0 + KEY_STRIP_H
 		+ COMPACT_KNOBS_H
 		+ COMPACT_ROW_H
 		+ if footer {
@@ -1194,27 +1378,30 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView) {
 			ui.add_space(8.0);
 			let (h, _) = ui.allocate_exact_size(vec2(width, COMPACT_HISTORY_H), Sense::hover());
 			history(ui, state, cx, v, h, false);
+			ui.add_space(6.0);
+			let (strip, _) = ui.allocate_exact_size(vec2(width, KEY_STRIP_H), Sense::hover());
+			key_strip(ui, state, cx, strip);
 			// Five S knobs need about 64 px each; narrower, Makeup moves behind ▸.
 			let wide = width >= 320.0;
 			let slots = if wide { 5 } else { 4 };
 			let mut main = vec![
-				(THRESHOLD, "Thresh"),
-				(RATIO, "Ratio"),
-				(ATTACK, "Attack"),
-				(RELEASE, "Release"),
+				(THRESHOLD, tr("Thresh")),
+				(RATIO, tr("Ratio")),
+				(ATTACK, tr("Attack")),
+				(RELEASE, tr("Release")),
 			];
 			if wide {
-				main.push((MAKEUP, "Makeup"));
+				main.push((MAKEUP, tr("Makeup")));
 			}
 			knob_row(ui, state, cx, width, slots, &main);
 			compact_footer(ui, state, cx, v, width);
 			if v.footer {
-				let mut rest = vec![(KNEE, "Knee")];
+				let mut rest = vec![(KNEE, tr("Knee"))];
 				if !wide {
-					rest.push((MAKEUP, "Makeup"));
+					rest.push((MAKEUP, tr("Makeup")));
 				}
 				if cx.info.param(MIX).is_some() {
-					rest.push((MIX, "Mix"));
+					rest.push((MIX, tr("Mix")));
 				}
 				knob_row(ui, state, cx, width, slots, &rest);
 				settings_row(ui, cx, v, width);
@@ -1242,17 +1429,19 @@ fn wide_compact(
 	let panel = Rect::from_min_size(pos2(t.right() + 8.0, top.top()), vec2(170.0, side));
 	gr_panel(ui, state, cx, v, panel);
 	let h = top.with_min_x(panel.right() + 8.0);
+	let (h, strip) = split_key_strip(h);
 	history(ui, state, cx, v, h, h.width() >= 360.0);
+	key_strip(ui, state, cx, strip);
 	let mut knobs = vec![
-		(THRESHOLD, "Thresh"),
-		(RATIO, "Ratio"),
-		(KNEE, "Knee"),
-		(ATTACK, "Attack"),
-		(RELEASE, "Release"),
-		(MAKEUP, "Makeup"),
+		(THRESHOLD, tr("Thresh")),
+		(RATIO, tr("Ratio")),
+		(KNEE, tr("Knee")),
+		(ATTACK, tr("Attack")),
+		(RELEASE, tr("Release")),
+		(MAKEUP, tr("Makeup")),
 	];
 	if cx.info.param(MIX).is_some() {
-		knobs.push((MIX, "Mix"));
+		knobs.push((MIX, tr("Mix")));
 	}
 	knob_row(ui, state, cx, width.min(80.0 * 7.0), 7, &knobs);
 	compact_footer(ui, state, cx, v, width);
@@ -1261,7 +1450,7 @@ fn wide_compact(
 	}
 }
 
-/// "▸ More" and the auto makeup chip.
+/// "▸ More", "Listen to key" and the auto makeup chip.
 fn compact_footer(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompView, width: f32) {
 	let (foot, _) = ui.allocate_exact_size(vec2(width, COMPACT_ROW_H), Sense::hover());
 	ui.painter().hline(
@@ -1272,6 +1461,12 @@ fn compact_footer(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut CompVi
 	let mut bar = row(ui, foot.shrink2(vec2(2.0, 0.0)));
 	bar.spacing_mut().item_spacing.x = 6.0;
 	footer_toggle(&mut bar, v, false);
+	// The inspector's narrow form says just "Listen" beside the makeup chip.
+	if width < 360.0 {
+		listen_key_labeled(&mut bar, state, cx.r, tr("Listen"));
+	} else {
+		listen_key(&mut bar, state, cx.r);
+	}
 	bar.with_layout(Layout::right_to_left(Align::Center), |ui| {
 		makeup_chip(ui, state, cx.r, true);
 	});
@@ -1310,7 +1505,7 @@ fn gr_panel(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &CompView, rect: 
 	p.text(
 		rect.left_top() + vec2(2.0, 4.0),
 		Align2::LEFT_TOP,
-		"GAIN REDUCTION",
+		tr("GAIN REDUCTION"),
 		theme::medium(10.5),
 		theme::TEXT_FAINT,
 	);

@@ -1,5 +1,6 @@
 //! `poly_synth`: 16-voice subtractive synthesizer.
 
+use super::voice_readings::{self, HeldNotes, NewestVoices};
 use super::{VoiceSlot, pick_voice};
 use crate::processor::{DeviceInfo, DeviceRole, MidiEvent, ParamInfo, Processor, Transport};
 use crate::util::envelope::Adsr;
@@ -7,6 +8,7 @@ use crate::util::expression::{Expression, ExpressionAction};
 use crate::util::oscillator::{Oscillator, Waveform};
 use crate::util::smoother::Smoother;
 use crate::util::svf::{Svf, SvfCoeffs};
+use crate::util::wavetable::{self, N_TABLES, Table, WavetableOsc, Wavetables};
 use crate::util::{ParamValues, Rng, db_to_gain, event_spans, midi_to_hz, one_pole_coeff};
 
 const VOICES: usize = 16;
@@ -41,13 +43,27 @@ const P_FLT_R: usize = 20;
 const P_VEL_SENS: usize = 21;
 const P_GLIDE: usize = 22;
 const P_GAIN: usize = 23;
-const N_PARAMS: usize = 24;
+const P_OSC1_TABLE: usize = 24;
+const P_OSC1_POS: usize = 25;
+const P_OSC2_TABLE: usize = 26;
+const P_OSC2_POS: usize = 27;
+const N_PARAMS: usize = 28;
 
-const WAVE_DESC: &str = "0 = sine, 1 = saw, 2 = square, 3 = triangle.";
+/// `oscN_wave` value of the wavetable oscillator.
+pub const WAVE_WAVETABLE: usize = 4;
+
+const WAVE_DESC: &str = "0 = sine, 1 = saw, 2 = square, 3 = triangle, 4 = wavetable (morphs through \
+	the built-in table picked by oscN_table at oscN_position).";
+const TABLE_DESC: &str = "Built-in wavetable used when the wave is 4 (wavetable). 0 = Basic \
+	(sine -> triangle -> saw -> square), 1 = PWM (square -> narrow pulse), 2 = Formant (vowels \
+	a-e-i-o-u), 3 = Harmonics (a bright partial sweeping up), 4 = Digital (hard-synced, \
+	bit-reduced saw).";
+const POS_DESC: &str = "Morph position through the wavetable (0 = first frame, 1 = last). \
+	Automate it or modulate it with an LFO/envelope for evolving pads and talking basses.";
 
 static PARAMS: [ParamInfo; N_PARAMS] = [
-	ParamInfo::new("osc1_wave", "Osc 1 Wave", 0.0, 3.0, 1.0, "", WAVE_DESC),
-	ParamInfo::new("osc2_wave", "Osc 2 Wave", 0.0, 3.0, 1.0, "", WAVE_DESC),
+	ParamInfo::new("osc1_wave", "Osc 1 Wave", 0.0, 4.0, 1.0, "", WAVE_DESC),
+	ParamInfo::new("osc2_wave", "Osc 2 Wave", 0.0, 4.0, 1.0, "", WAVE_DESC),
 	ParamInfo::new(
 		"osc2_semitones",
 		"Osc 2 Semitones",
@@ -246,6 +262,26 @@ static PARAMS: [ParamInfo; N_PARAMS] = [
 		"dB",
 		"Output level of the instrument.",
 	),
+	ParamInfo::new("osc1_table", "Osc 1 Table", 0.0, 4.0, 0.0, "", TABLE_DESC),
+	ParamInfo::new(
+		"osc1_position",
+		"Osc 1 Position",
+		0.0,
+		1.0,
+		0.0,
+		"",
+		POS_DESC,
+	),
+	ParamInfo::new("osc2_table", "Osc 2 Table", 0.0, 4.0, 0.0, "", TABLE_DESC),
+	ParamInfo::new(
+		"osc2_position",
+		"Osc 2 Position",
+		0.0,
+		1.0,
+		0.0,
+		"",
+		POS_DESC,
+	),
 ];
 
 pub static INFO: DeviceInfo = DeviceInfo {
@@ -253,7 +289,8 @@ pub static INFO: DeviceInfo = DeviceInfo {
 	name: "Poly Synth",
 	role: DeviceRole::Instrument,
 	description: "16-voice subtractive (virtual analog) synthesizer: 2 band-limited oscillators \
-		(sine/saw/square/triangle) with unison, noise, 12/24 dB resonant low-pass filter with its \
+		(sine/saw/square/triangle) or morphing wavetables (wave 4: Basic, PWM, Formant, Harmonics, \
+		Digital tables; oscN_position sweeps the table, great to automate or modulate) with unison, noise, 12/24 dB resonant low-pass filter with its \
 		own ADSR, amp ADSR and glide. The general-purpose melodic instrument for pads, plucks, \
 		basses, leads and chords in pop, EDM, synthwave, hip-hop and ambient. Recipes — \
 		WARM PAD: saw+saw, osc2_cents 8, unison 3, cutoff 1200, env 6, amp attack 600 / release 2500, \
@@ -262,7 +299,7 @@ pub static INFO: DeviceInfo = DeviceInfo {
 		mix 30, cutoff 300, env 12, attack 2, release 80. ACID/EDM BASS: saw, slope 1, cutoff 300, \
 		resonance 70, env 40, filter decay 200, glide 60. LEAD: square+saw, osc2 12 semitones, cutoff \
 		4000, resonance 20, glide 40, release 300. SUPERSAW: saw+saw, unison 4, unison_detune 35, \
-		cutoff 6000.",
+		cutoff 6000. WAVETABLE PAD: osc1_wave 4, osc1_table 2 (Formant), LFO on osc1_position.",
 	params: &PARAMS,
 };
 
@@ -305,6 +342,11 @@ struct Voice {
 	slot: VoiceSlot,
 	osc1: [Oscillator; MAX_UNISON],
 	osc2: [Oscillator; MAX_UNISON],
+	wt1: [WavetableOsc; MAX_UNISON],
+	wt2: [WavetableOsc; MAX_UNISON],
+	/// Mipmap levels of the wavetable oscillators, updated at control rate.
+	lvl1: [usize; MAX_UNISON],
+	lvl2: [usize; MAX_UNISON],
 	filters: [[Svf; 2]; 2],
 	coeffs: SvfCoeffs,
 	/// Non-resonant first stage of the 24 dB mode, so resonance peaks only once.
@@ -327,16 +369,22 @@ pub struct PolySynth {
 	expr: Expression,
 	rng: Rng,
 	envelopes_dirty: bool,
+	held: HeldNotes,
 	cutoff_oct: Smoother,
 	resonance: Smoother,
 	mix: Smoother,
 	noise: Smoother,
 	gain: Smoother,
+	pos1: Smoother,
+	pos2: Smoother,
+	tables: &'static Wavetables,
 	// Per-chunk scratch for smoothed parameters shared by all voices.
 	s_cutoff: [f32; CHUNK],
 	s_res: [f32; CHUNK],
 	s_mix: [f32; CHUNK],
 	s_noise: [f32; CHUNK],
+	s_pos1: [f32; CHUNK],
+	s_pos2: [f32; CHUNK],
 }
 
 impl Default for PolySynth {
@@ -356,15 +404,22 @@ impl PolySynth {
 			expr: Expression::default(),
 			rng: Rng::new(0x5EED_1234),
 			envelopes_dirty: true,
+			held: HeldNotes::default(),
 			cutoff_oct: Smoother::new(params.get(P_CUTOFF).log2()),
 			resonance: Smoother::new(params.get(P_RESONANCE) * 0.01),
 			mix: Smoother::new(params.get(P_OSC_MIX) * 0.01),
 			noise: Smoother::new(params.get(P_NOISE) * 0.01),
 			gain: Smoother::new(db_to_gain(params.get(P_GAIN))),
+			pos1: Smoother::new(params.get(P_OSC1_POS)),
+			pos2: Smoother::new(params.get(P_OSC2_POS)),
+			// Generates the tables here, never on the audio thread.
+			tables: wavetable::tables(),
 			s_cutoff: [0.0; CHUNK],
 			s_res: [0.0; CHUNK],
 			s_mix: [0.0; CHUNK],
 			s_noise: [0.0; CHUNK],
+			s_pos1: [0.0; CHUNK],
+			s_pos2: [0.0; CHUNK],
 			params,
 		};
 		s.apply_envelopes();
@@ -406,6 +461,10 @@ impl PolySynth {
 				o1.set_phase(j as f32 * 0.37);
 				o2.set_phase(j as f32 * 0.61 + 0.25);
 			}
+			for (j, (o1, o2)) in v.wt1.iter_mut().zip(&mut v.wt2).enumerate() {
+				o1.set_phase(j as f32 * 0.37);
+				o2.set_phase(j as f32 * 0.61 + 0.25);
+			}
 			for f in v.filters.iter_mut().flatten() {
 				f.reset();
 			}
@@ -425,6 +484,7 @@ impl PolySynth {
 			released: false,
 			started: self.note_counter,
 			pedal: false,
+			elapsed: 0,
 		};
 		v.amp_env.gate_on();
 		v.filter_env.gate_on();
@@ -435,7 +495,7 @@ impl PolySynth {
 		let sustain = self.expr.sustain;
 		for v in &mut self.voices {
 			if v.slot.active && !v.slot.released && v.slot.note == pitch && v.slot.key_up(sustain) {
-				v.slot.released = true;
+				v.slot.release();
 				v.amp_env.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -445,7 +505,7 @@ impl PolySynth {
 	fn pedal_up(&mut self) {
 		for v in &mut self.voices {
 			if v.slot.pedal_up() {
-				v.slot.released = true;
+				v.slot.release();
 				v.amp_env.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -455,7 +515,7 @@ impl PolySynth {
 	fn all_notes_off(&mut self) {
 		for v in &mut self.voices {
 			if v.slot.active {
-				v.slot.released = true;
+				v.slot.release();
 				v.amp_env.gate_off();
 				v.filter_env.gate_off();
 			}
@@ -463,6 +523,7 @@ impl PolySynth {
 	}
 
 	fn handle(&mut self, ev: &MidiEvent) {
+		self.held.apply(ev);
 		match *ev {
 			MidiEvent::NoteOn {
 				pitch, velocity, ..
@@ -493,6 +554,8 @@ impl PolySynth {
 			self.s_res[i] = self.resonance.tick();
 			self.s_mix[i] = self.mix.tick();
 			self.s_noise[i] = self.noise.tick();
+			self.s_pos1[i] = self.pos1.tick();
+			self.s_pos2[i] = self.pos2.tick();
 		}
 		left.fill(0.0);
 		right.fill(0.0);
@@ -501,6 +564,10 @@ impl PolySynth {
 		let sr = self.sample_rate;
 		let w1 = Waveform::from_index(p.choice(P_OSC1_WAVE));
 		let w2 = Waveform::from_index(p.choice(P_OSC2_WAVE));
+		let table1: Option<&Table> = (p.choice(P_OSC1_WAVE) == WAVE_WAVETABLE)
+			.then(|| self.tables.table(p.choice(P_OSC1_TABLE).min(N_TABLES - 1)));
+		let table2: Option<&Table> = (p.choice(P_OSC2_WAVE) == WAVE_WAVETABLE)
+			.then(|| self.tables.table(p.choice(P_OSC2_TABLE).min(N_TABLES - 1)));
 		let osc2_ratio = 2.0_f32.powf((p.get(P_OSC2_SEMI) + p.get(P_OSC2_CENTS) * 0.01) / 12.0);
 		let unison = p.choice(P_UNISON).clamp(1, MAX_UNISON);
 		let spread = p.get(P_UNISON_DETUNE);
@@ -541,6 +608,15 @@ impl PolySynth {
 				let aenv = v.amp_env.tick();
 				if v.control_counter == 0 {
 					inc = midi_to_hz(v.pitch + pitch_offset) / sr;
+					let lanes = v.lvl1.iter_mut().zip(&mut v.lvl2).zip(&detune);
+					for ((l1, l2), d) in lanes.take(unison) {
+						if table1.is_some() {
+							*l1 = Table::level_for(inc * d);
+						}
+						if table2.is_some() {
+							*l2 = Table::level_for(inc * d * osc2_ratio);
+						}
+					}
 					let semis = fenv * env_amount * vel_scale
 						+ key_track * (v.pitch - 60.0)
 						+ pressure_semis;
@@ -560,8 +636,14 @@ impl PolySynth {
 				let mut r = 0.0;
 				for j in 0..unison {
 					let i1 = inc * detune[j];
-					let a = v.osc1[j].next(w1, i1);
-					let b = v.osc2[j].next(w2, i1 * osc2_ratio);
+					let a = match table1 {
+						Some(t) => v.wt1[j].next(t, v.lvl1[j], self.s_pos1[i], i1),
+						None => v.osc1[j].next(w1, i1),
+					};
+					let b = match table2 {
+						Some(t) => v.wt2[j].next(t, v.lvl2[j], self.s_pos2[i], i1 * osc2_ratio),
+						None => v.osc2[j].next(w2, i1 * osc2_ratio),
+					};
 					let s = a + (b - a) * mix;
 					l += s * pan_l[j];
 					r += s * pan_r[j];
@@ -584,6 +666,7 @@ impl PolySynth {
 				left[i] += yl * g;
 				right[i] += yr * g;
 			}
+			v.slot.advance(n);
 			if !v.amp_env.is_active() {
 				v.slot.active = false;
 				v.filter_env.reset();
@@ -611,6 +694,8 @@ impl Processor for PolySynth {
 			&mut self.mix,
 			&mut self.noise,
 			&mut self.gain,
+			&mut self.pos1,
+			&mut self.pos2,
 		] {
 			s.prepare(self.sample_rate, 15.0);
 		}
@@ -628,6 +713,8 @@ impl Processor for PolySynth {
 			P_OSC_MIX => self.mix.set_target(v * 0.01),
 			P_NOISE => self.noise.set_target(v * 0.01),
 			P_GAIN => self.gain.set_target(db_to_gain(v)),
+			P_OSC1_POS => self.pos1.set_target(v),
+			P_OSC2_POS => self.pos2.set_target(v),
 			P_AMP_A..=P_FLT_R => self.envelopes_dirty = true,
 			_ => {}
 		}
@@ -667,6 +754,7 @@ impl Processor for PolySynth {
 			}
 		}
 		self.last_pitch = None;
+		self.held.clear();
 		self.expr.reset_controllers();
 		for s in [
 			&mut self.cutoff_oct,
@@ -674,6 +762,8 @@ impl Processor for PolySynth {
 			&mut self.mix,
 			&mut self.noise,
 			&mut self.gain,
+			&mut self.pos1,
+			&mut self.pos2,
 		] {
 			s.snap();
 		}
@@ -681,6 +771,17 @@ impl Processor for PolySynth {
 
 	fn tail_seconds(&self) -> f32 {
 		self.params.get(P_AMP_R) * 0.001 * 1.4
+	}
+
+	fn readings(&self, out: &mut [f32]) -> usize {
+		let mut voices = NewestVoices::default();
+		for v in self.voices.iter().filter(|v| v.slot.active) {
+			voices.offer(
+				v.slot.started,
+				v.slot.reading(v.amp_env.level(), self.sample_rate),
+			);
+		}
+		voice_readings::write(out, &self.held, &voices)
 	}
 }
 
@@ -735,6 +836,57 @@ mod tests {
 		// (velocity_sensitivity 0, amp envelope settled at sustain 100%).
 		let input_rms = std::f32::consts::FRAC_1_SQRT_2 * VOICE_GAIN;
 		crate::util::gain_to_db(rms / input_rms)
+	}
+
+	fn render_note(s: &mut PolySynth, pitch: u8, frames: usize) -> Vec<f32> {
+		s.handle(&MidiEvent::NoteOn {
+			offset: 0,
+			pitch,
+			velocity: 1.0,
+		});
+		let mut left = vec![0.0_f32; frames];
+		let mut right = vec![0.0_f32; frames];
+		for (l, r) in left.chunks_mut(256).zip(right.chunks_mut(256)) {
+			s.process(l, r, &[], &Transport::default());
+		}
+		left
+	}
+
+	#[test]
+	fn wavetable_voice_plays_and_position_morphs() {
+		let open = [
+			("osc1_wave", 4.0),
+			("osc_mix", 0.0),
+			("filter_cutoff", 20_000.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+		];
+		let mut a = synth_with(&open);
+		let mut b = synth_with(&open);
+		b.set_param(INFO.param_index("osc1_position").unwrap(), 1.0);
+		b.reset();
+		let sine = render_note(&mut a, 57, 9_600);
+		let square = render_note(&mut b, 57, 9_600);
+		let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+		assert!(rms(&sine[4_800..]) > 0.1, "wavetable voice is silent");
+		// Position 0 is a sine, 1 a square: louder RMS at the same peak.
+		assert!(
+			rms(&square[4_800..]) > rms(&sine[4_800..]) * 1.1,
+			"{} {}",
+			rms(&square[4_800..]),
+			rms(&sine[4_800..])
+		);
+		// A position change glides (smoothed) instead of clicking.
+		let idx = INFO.param_index("osc1_position").unwrap();
+		a.set_param(idx, 1.0);
+		let mut l = vec![0.0_f32; 256];
+		let mut r = vec![0.0_f32; 256];
+		a.process(&mut l, &mut r, &[], &Transport::default());
+		let jump = l
+			.windows(2)
+			.fold(0.0_f32, |m, w| m.max((w[1] - w[0]).abs()));
+		assert!(jump < 0.2, "position step clicked: {jump}");
 	}
 
 	#[test]

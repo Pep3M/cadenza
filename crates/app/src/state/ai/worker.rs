@@ -4,6 +4,7 @@
 //! waits on the network or the keyring. The agent edits the app's shared session one
 //! tool call at a time; the app picks those edits up with its per-frame sync.
 
+use crate::i18n::{tr, trf};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -38,6 +39,8 @@ pub enum Command {
 		request: String,
 		/// A mix pass by the sound engineer instead of a chat request.
 		engineer: Option<EngineerBrief>,
+		/// A read-only explain request (the text sent; `request` is what the chat shows).
+		explain: Option<String>,
 		context: Box<AppContext>,
 		settings: AiSettings,
 	},
@@ -190,8 +193,9 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 	{
 		Ok(r) => r,
 		Err(e) => {
-			forward.send(Event::Finished(failure(format!(
-				"the AI thread could not start: {e}"
+			forward.send(Event::Finished(failure(trf(
+				"the AI thread could not start: {e}",
+				&[("e", &e)],
 			))));
 			return;
 		}
@@ -203,17 +207,19 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 			Command::Run {
 				request,
 				engineer,
+				explain,
 				context,
 				settings,
 			} => {
 				let (key, source) =
 					resolve_key(settings.provider, &setup.env_dir, setup.store.as_ref());
 				if key.is_none() && settings.provider.needs_key() {
-					let mut f = failure(format!(
-						"No API key for {}: add one in AI settings, or set {} in the \
-						 environment or a .env file.",
-						settings.provider.name(),
-						settings.provider.key_env()
+					let mut f = failure(trf(
+						"No API key for {name}: add one in AI settings, or set {key_env} in the environment or a .env file.",
+						&[
+							("name", &settings.provider.name()),
+							("key_env", &settings.provider.key_env()),
+						],
 					));
 					f.needs_settings = true;
 					forward.send(Event::KeyStatus(source));
@@ -224,8 +230,9 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 				let provider = match (setup.factory)(&settings, key) {
 					Ok(p) => p,
 					Err(e) => {
-						forward.send(Event::Finished(failure(format!(
-							"Cannot set up the provider: {e}"
+						forward.send(Event::Finished(failure(trf(
+							"Cannot set up the provider: {e}",
+							&[("e", &e)],
 						))));
 						continue;
 					}
@@ -241,12 +248,15 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 				}
 				let a = agent.as_mut().expect("set above");
 				let result = runtime.block_on(async {
-					match &engineer {
-						Some(brief) => {
+					match (&engineer, &explain) {
+						(Some(brief), _) => {
 							a.run_engineer_pass(brief, &context, &forward, &setup.cancel)
 								.await
 						}
-						None => {
+						(None, Some(text)) => {
+							a.run_explain(text, &context, &forward, &setup.cancel).await
+						}
+						(None, None) => {
 							a.run_request(&request, &context, &forward, &setup.cancel)
 								.await
 						}
@@ -266,7 +276,7 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 							(_, Some(err)) => Some(actionable_error(err)),
 							(RequestStatus::Failed(why), None) => Some(why.clone()),
 							(RequestStatus::Refused, _) => {
-								Some("The model declined to continue.".into())
+								Some(tr("The model declined to continue.").into())
 							}
 							_ => None,
 						};
@@ -296,11 +306,11 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 					Some(k) => setup
 						.store
 						.set(account, k.trim())
-						.map(|_| format!("Key saved in {}", setup.store.name())),
+						.map(|_| trf("Key saved in {name}", &[("name", &setup.store.name())])),
 					None => setup
 						.store
 						.delete(account)
-						.map(|_| "Stored key removed".to_owned()),
+						.map(|_| tr("Stored key removed").to_owned()),
 				};
 				forward.send(Event::KeyStored(result));
 				let (_, source) =

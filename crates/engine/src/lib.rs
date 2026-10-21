@@ -20,6 +20,8 @@ pub mod hosting;
 pub mod input;
 mod meter;
 pub mod metronome;
+mod midi_map;
+pub mod modulation;
 mod pdc;
 mod player;
 mod probe;
@@ -34,6 +36,7 @@ pub use bounce::{BounceScope, bounce_project, render_track};
 pub use cadenza_analysis::detail::Detail;
 pub use cadenza_audio_io::Metadata;
 pub use cadenza_audio_io::{Dither, ExportFormat, ExportOptions, FlacBitDepth, WavSampleFormat};
+pub use cadenza_dsp::Listen;
 pub use cadenza_midi_io::PortInfo as MidiPort;
 pub use cadenza_plugin_host::PluginCatalog;
 pub use cadenza_plugin_host::{CrashReason, HostingMode, SandboxOptions, SandboxStats};
@@ -50,9 +53,10 @@ pub use hosting::{HOSTING_ENV, PluginCrash, PluginHosting, PluginXruns};
 pub use input::{AudioDeviceInfo, AudioDevices, InputInfo, InputMode, InputStats, audio_devices};
 pub use meter::{MeterBank, MeterReading};
 pub use metronome::MetronomeSettings;
+pub use midi_map::{ControllerInput, MidiMapMonitor};
 pub use player::{
-	AUDIO_RT_PRIORITY, AUDIO_RT_PRIORITY_ENV, AudioConfig, AuditionScope, CountInStatus,
-	EditorState, EditorUpdate, Player, PlayerClock, VirtualDevice, find_midi_input,
+	AUDIO_RT_PRIORITY, AUDIO_RT_PRIORITY_ENV, AudioConfig, AuditionScope, CountInStatus, DIM_DB,
+	EditorState, EditorUpdate, MonitorFx, Player, PlayerClock, VirtualDevice, find_midi_input,
 	midi_input_ports,
 };
 pub use probe::{DeviceProbe, ProbeFrame};

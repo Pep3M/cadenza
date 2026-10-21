@@ -2,6 +2,7 @@
 //! `render_track`), then ONE undoable command each. Pure builders here; `AppState` runs
 //! the jobs.
 
+use crate::i18n::tr;
 use std::path::{Path, PathBuf};
 
 use cadenza_core::{ClipId, Tick, TrackId};
@@ -55,7 +56,7 @@ pub fn can_freeze(track: &Track) -> bool {
 pub fn finish(project: &Project, job: &BounceJob, seconds: f64) -> Result<Command, String> {
 	let track = project
 		.track(job.track)
-		.ok_or("the track was removed before the render finished")?;
+		.ok_or(tr("the track was removed before the render finished"))?;
 	let tempo = &project.tempo;
 	let end = tempo.seconds_to_tick(tempo.tick_to_seconds(job.start) + seconds.max(0.001));
 	let length = Tick((end - job.start).0.max(1));
@@ -100,7 +101,7 @@ pub fn finish(project: &Project, job: &BounceJob, seconds: f64) -> Result<Comman
 				.filter(|c| job.clips.contains(&c.id))
 				.collect();
 			if gone.is_empty() {
-				return Err("the clips were removed before the render finished".into());
+				return Err(tr("the clips were removed before the render finished").into());
 			}
 			let mut clip = Clip::audio(
 				format!("{} (consolidated)", gone[0].name),
@@ -133,11 +134,11 @@ pub fn consolidation(project: &Project, clips: &[ClipId]) -> Result<(TrackId, Ti
 		.filter_map(|id| project.find_clip(*id).map(|(t, c)| (t.id, c)))
 		.collect();
 	if found.len() < 2 {
-		return Err("Select two or more clips on one track to consolidate".into());
+		return Err(tr("Select two or more clips on one track to consolidate").into());
 	}
 	let track = found[0].0;
 	if found.iter().any(|(t, _)| *t != track) {
-		return Err("Consolidate works on clips of one track".into());
+		return Err(tr("Consolidate works on clips of one track").into());
 	}
 	let start = found.iter().map(|(_, c)| c.start).min().expect("non-empty");
 	let end = found.iter().map(|(_, c)| c.end()).max().expect("non-empty");

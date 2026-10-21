@@ -15,6 +15,8 @@ the briefs are in `redesign-brief/`). Part 1 (`PROMPT.md`) is the app shell, par
   pictures, device editor host/header (presets, A/B, undo hint, Ask AI + AI change card,
   pop-out), dedicated editors for all 13 built-ins (dock + inspector compact).
 
+- Shell batch 4, FL parity (floating windows, playlist editing, linked clips), 10 languages, device gaps and new DSP (T19-T41, 2026-10-21): see `redesign-progress.md`.
+
 ## Shell, still to do (queued as batch 4, T19–T26 in `redesign-progress.md`)
 
 1. Inspector tabs Track / Clip / Device (01, 02).

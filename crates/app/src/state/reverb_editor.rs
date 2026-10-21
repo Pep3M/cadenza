@@ -4,6 +4,7 @@
 //! sample-exact with the processor's FDN — it only has to move the way the params do. The
 //! view turns the changes into one command per gesture.
 
+use crate::i18n::trf;
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 
 pub use crate::state::device::minus;
@@ -15,6 +16,22 @@ pub const PRE_DELAY: &str = "pre_delay";
 pub const WIDTH: &str = "width";
 pub const LOW_CUT: &str = "low_cut";
 pub const MIX: &str = "mix";
+/// 1 = the tail is held forever (infinite sustain, new input muted).
+pub const FREEZE: &str = "freeze";
+/// Wet ducking amount (dB) and its release (ms).
+pub const DUCK: &str = "duck";
+pub const DUCK_RELEASE: &str = "duck_release";
+/// Range of the wet meter's duck bar: the param's whole range.
+pub const DUCK_RANGE_DB: f32 = 24.0;
+
+/// The duck readout under the wet meter: "−6.0" while ducking, else empty.
+pub fn duck_label(duck_db: f32) -> String {
+	if duck_db < 0.05 {
+		String::new()
+	} else {
+		minus(format!("-{duck_db:.1}"))
+	}
+}
 
 /// Below this level the tail is drawn as silence.
 pub const FLOOR_DB: f32 = -60.0;
@@ -318,22 +335,43 @@ pub fn reset_width() -> Change {
 
 /// "Pre-delay 40 ms".
 pub fn pre_delay_label(ms: f32) -> String {
-	format!("Pre-delay {ms:.0} ms")
+	trf(
+		"Pre-delay {ms} ms",
+		&[("ms", &crate::i18n::decimal(format!("{:.0}", ms)))],
+	)
 }
 
 /// "Decay 2.4 s".
 pub fn decay_label(s: f32) -> String {
-	format!("Decay {s:.1} s")
+	trf(
+		"Decay {s} s",
+		&[("s", &crate::i18n::decimal(format!("{:.1}", s)))],
+	)
 }
 
 /// "Damping 40 %".
 pub fn damping_label(pct: f32) -> String {
-	format!("Damping {pct:.0} %")
+	trf(
+		"Damping {pct} %",
+		&[("pct", &crate::i18n::decimal(format!("{:.0}", pct)))],
+	)
 }
 
 /// "Size 62 % · Width 80 %".
 pub fn space_label(size_pct: f32, width_pct: f32) -> String {
-	format!("Size {size_pct:.0} % · Width {width_pct:.0} %")
+	trf(
+		"Size {size_pct} % · Width {width_pct} %",
+		&[
+			(
+				"size_pct",
+				&crate::i18n::decimal(format!("{:.0}", size_pct)),
+			),
+			(
+				"width_pct",
+				&crate::i18n::decimal(format!("{:.0}", width_pct)),
+			),
+		],
+	)
 }
 
 #[cfg(test)]
@@ -577,5 +615,11 @@ mod tests {
 		assert_eq!(decay_label(2.4), "Decay 2.4 s");
 		assert_eq!(damping_label(40.0), "Damping 40 %");
 		assert_eq!(space_label(62.0, 80.0), "Size 62 % · Width 80 %");
+	}
+
+	#[test]
+	fn duck_label_shows_only_while_ducking() {
+		assert_eq!(duck_label(0.0), "");
+		assert_eq!(duck_label(6.04), "\u{2212}6.0");
 	}
 }

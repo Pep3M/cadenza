@@ -3,7 +3,9 @@
 //! gesture makes (drag, wheel, double-click, wake, sleep). The view turns the changes
 //! into one command per gesture.
 
-use cadenza_dsp::{DeviceInfo, ParamInfo};
+use crate::i18n::mark;
+use cadenza_dsp::response::EqChannel;
+use cadenza_dsp::{DeviceInfo, Listen, ParamInfo};
 
 pub const N_BANDS: usize = 7;
 
@@ -17,7 +19,7 @@ const WAKE_MIN_DB: f32 = 1.0;
 const Q_STEP: f32 = 1.1;
 
 /// Slope choices of the high-pass and low-pass (param values 0..=3).
-pub const SLOPES: [&str; 4] = ["Off", "12", "24", "48"];
+pub const SLOPES: [&str; 4] = [mark("Off"), "12", "24", "48"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandKind {
@@ -46,81 +48,151 @@ pub struct Band {
 	pub gain: Option<&'static str>,
 	pub q: Option<&'static str>,
 	pub slope: Option<&'static str>,
+	/// Channel mode: stereo / mid / side ([`EqChannel`]).
+	pub channel: &'static str,
 }
 
 impl Band {
-	/// Every parameter of the band.
+	/// Every parameter of the band (its dynamics and channel mode included).
 	pub fn params(&self) -> impl Iterator<Item = &'static str> {
-		[Some(self.freq), self.gain, self.q, self.slope]
-			.into_iter()
-			.flatten()
+		let dynamic = self.dynamic().map(|d| [d.on, d.threshold, d.ratio]);
+		[
+			Some(self.freq),
+			self.gain,
+			self.q,
+			self.slope,
+			Some(self.channel),
+		]
+		.into_iter()
+		.chain(dynamic.into_iter().flatten().map(Some))
+		.flatten()
+	}
+
+	/// The dynamics params of a shelf or peak (`None`: high-pass / low-pass).
+	pub fn dynamic(&self) -> Option<&'static DynIds> {
+		DYNAMICS.iter().find(|d| Some(d.gain) == self.gain)
 	}
 }
+
+/// Param ids of one dynamic band (see the dynamic law in `cadenza_dsp::effects::eq`).
+#[derive(Debug, Clone, Copy)]
+pub struct DynIds {
+	pub gain: &'static str,
+	pub on: &'static str,
+	pub threshold: &'static str,
+	pub ratio: &'static str,
+}
+
+const DYNAMICS: [DynIds; 5] = [
+	DynIds {
+		gain: "low_shelf_gain",
+		on: "low_shelf_dyn",
+		threshold: "low_shelf_threshold",
+		ratio: "low_shelf_ratio",
+	},
+	DynIds {
+		gain: "peak1_gain",
+		on: "peak1_dyn",
+		threshold: "peak1_threshold",
+		ratio: "peak1_ratio",
+	},
+	DynIds {
+		gain: "peak2_gain",
+		on: "peak2_dyn",
+		threshold: "peak2_threshold",
+		ratio: "peak2_ratio",
+	},
+	DynIds {
+		gain: "peak3_gain",
+		on: "peak3_dyn",
+		threshold: "peak3_threshold",
+		ratio: "peak3_ratio",
+	},
+	DynIds {
+		gain: "high_shelf_gain",
+		on: "high_shelf_dyn",
+		threshold: "high_shelf_threshold",
+		ratio: "high_shelf_ratio",
+	},
+];
+
+/// Shared attack / release of every dynamic band.
+pub const DYN_ATTACK: &str = "dyn_attack";
+pub const DYN_RELEASE: &str = "dyn_release";
+/// The depth a dynamic band gets when switched on at 0 dB (a cut when loud).
+pub const DYN_WAKE_DB: f32 = -6.0;
 
 /// The bands in display order (also [`cadenza_dsp::response::EqBands`] band order).
 pub const BANDS: [Band; N_BANDS] = [
 	Band {
 		kind: BandKind::HighPass,
 		label: "HP",
-		name: "High-pass",
+		name: mark("High-pass"),
 		freq: "hp_freq",
 		gain: None,
 		q: None,
 		slope: Some("hp_slope"),
+		channel: "hp_ms",
 	},
 	Band {
 		kind: BandKind::LowShelf,
 		label: "LS",
-		name: "Low shelf",
+		name: mark("Low shelf"),
 		freq: "low_shelf_freq",
 		gain: Some("low_shelf_gain"),
 		q: None,
 		slope: None,
+		channel: "low_shelf_ms",
 	},
 	Band {
 		kind: BandKind::Peak,
 		label: "1",
-		name: "Peak 1",
+		name: mark("Peak 1"),
 		freq: "peak1_freq",
 		gain: Some("peak1_gain"),
 		q: Some("peak1_q"),
 		slope: None,
+		channel: "peak1_ms",
 	},
 	Band {
 		kind: BandKind::Peak,
 		label: "2",
-		name: "Peak 2",
+		name: mark("Peak 2"),
 		freq: "peak2_freq",
 		gain: Some("peak2_gain"),
 		q: Some("peak2_q"),
 		slope: None,
+		channel: "peak2_ms",
 	},
 	Band {
 		kind: BandKind::Peak,
 		label: "3",
-		name: "Peak 3",
+		name: mark("Peak 3"),
 		freq: "peak3_freq",
 		gain: Some("peak3_gain"),
 		q: Some("peak3_q"),
 		slope: None,
+		channel: "peak3_ms",
 	},
 	Band {
 		kind: BandKind::HighShelf,
 		label: "HS",
-		name: "High shelf",
+		name: mark("High shelf"),
 		freq: "high_shelf_freq",
 		gain: Some("high_shelf_gain"),
 		q: None,
 		slope: None,
+		channel: "high_shelf_ms",
 	},
 	Band {
 		kind: BandKind::LowPass,
 		label: "LP",
-		name: "Low-pass",
+		name: mark("Low-pass"),
 		freq: "lp_freq",
 		gain: None,
 		q: None,
 		slope: Some("lp_slope"),
+		channel: "lp_ms",
 	},
 ];
 
@@ -188,6 +260,104 @@ impl EqValues {
 	pub fn as_slice(&self) -> &[f32] {
 		&self.values
 	}
+}
+
+/// Whether `band` has its dynamics on.
+pub fn is_dynamic(v: &EqValues, band: usize) -> bool {
+	BANDS[band].dynamic().is_some_and(|d| v.get(d.on) >= 0.5)
+}
+
+/// The "Dynamic" toggle: on (a dormant band also gets a [`DYN_WAKE_DB`] depth, so it
+/// does something) or off.
+pub fn toggle_dynamic(v: &EqValues, band: usize) -> Vec<Change> {
+	let Some(d) = BANDS[band].dynamic() else {
+		return Vec::new();
+	};
+	if is_dynamic(v, band) {
+		return vec![(d.on, 0.0)];
+	}
+	let mut out = vec![(d.on, 1.0)];
+	if is_dormant(v, band) {
+		out.push((d.gain, DYN_WAKE_DB));
+	}
+	out
+}
+
+/// Per-band live gain offsets (dB, [`N_BANDS`] order) for the live curve: a dynamic
+/// band's published gain (`readings::EQ_BAND_GAIN_DB_START`) minus its static gain,
+/// kept between 0 dB and the static gain (the law never goes past either). Static
+/// bands, or no readings (probe idle), give 0.
+pub fn live_offsets(v: &EqValues, readings: Option<&[f32]>) -> [f32; N_BANDS] {
+	let mut out = [0.0; N_BANDS];
+	let Some(readings) = readings else {
+		return out;
+	};
+	let start = cadenza_dsp::readings::EQ_BAND_GAIN_DB_START;
+	for (band, slot) in out.iter_mut().enumerate() {
+		let (Some(g), Some(&live)) = (BANDS[band].gain, readings.get(start + band)) else {
+			continue;
+		};
+		if !is_dynamic(v, band) {
+			continue;
+		}
+		let gain = v.get(g);
+		let live = if gain >= 0.0 {
+			live.clamp(0.0, gain)
+		} else {
+			live.clamp(gain, 0.0)
+		};
+		*slot = live - gain;
+	}
+	out
+}
+
+/// How far a dynamic band has moved toward its gain, 0 (at 0 dB) ..= 1 (full depth).
+pub fn activity(v: &EqValues, band: usize, offset_db: f32) -> f32 {
+	let Some(g) = BANDS[band].gain else {
+		return 0.0;
+	};
+	let gain = v.get(g);
+	if gain.abs() <= DORMANT_DB {
+		return 0.0;
+	}
+	((gain + offset_db) / gain).clamp(0.0, 1.0)
+}
+
+/// Channel mode choices of every band (param values 0..=2).
+pub const CHANNELS: [&str; 3] = [mark("Stereo"), mark("Mid"), mark("Side")];
+
+/// Which channel `band` shapes.
+pub fn channel(v: &EqValues, band: usize) -> EqChannel {
+	EqChannel::from_value(v.get(BANDS[band].channel))
+}
+
+/// The segmented index (0 stereo, 1 mid, 2 side) of `band`'s channel.
+pub fn channel_index(v: &EqValues, band: usize) -> usize {
+	match channel(v, band) {
+		EqChannel::Stereo => 0,
+		EqChannel::Mid => 1,
+		EqChannel::Side => 2,
+	}
+}
+
+/// The change that puts `band` on channel `index` (0 stereo, 1 mid, 2 side).
+pub fn set_channel(band: usize, index: usize) -> Vec<Change> {
+	vec![(BANDS[band].channel, index.min(2) as f32)]
+}
+
+/// The node badge of a mid ("M") or side ("S") band.
+pub fn badge(v: &EqValues, band: usize) -> Option<&'static str> {
+	match channel(v, band) {
+		EqChannel::Stereo => None,
+		EqChannel::Mid => Some("M"),
+		EqChannel::Side => Some("S"),
+	}
+}
+
+/// Whether any awake band is mid or side only (the display then draws the mid and the
+/// side curves instead of one sum).
+pub fn uses_mid_side(v: &EqValues) -> bool {
+	(0..N_BANDS).any(|b| !is_dormant(v, b) && channel(v, b) != EqChannel::Stereo)
 }
 
 /// The slope index (0 off .. 3 = 48 dB/oct) of a slope value.
@@ -342,6 +512,18 @@ pub fn param_word(id: &str) -> &'static str {
 		"Q"
 	} else if id.ends_with("_slope") {
 		"slope"
+	} else if id.ends_with("_ms") {
+		"channel"
+	} else if id.ends_with("_dyn") {
+		"dynamics"
+	} else if id.ends_with("_threshold") {
+		"threshold"
+	} else if id.ends_with("_ratio") {
+		"ratio"
+	} else if id == DYN_ATTACK {
+		"attack"
+	} else if id == DYN_RELEASE {
+		"release"
 	} else {
 		"output"
 	}
@@ -358,9 +540,103 @@ pub fn label(band: usize, changes: &[Change]) -> String {
 	format!("{} {what}", BANDS[band].name)
 }
 
+/// The listen mode after the selected band's Listen toggle (or Alt+click on its node):
+/// on for `band`, off when that band was already listened to.
+pub fn toggle_listen(current: Listen, band: usize) -> Listen {
+	let mode = Listen::Band(band as u8);
+	if current == mode { Listen::Off } else { mode }
+}
+
+/// While a band is listened to, the solo follows the selection: the new mode when the
+/// selected band differs from the listened one (`None`: nothing to change).
+pub fn listen_follow(current: Listen, selected: usize) -> Option<Listen> {
+	match current {
+		Listen::Band(b) if b as usize != selected => Some(Listen::Band(selected as u8)),
+		_ => None,
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn mid_side_channels() {
+		let mut v = values(&[("peak2_gain", 4.0)]);
+		assert!(!uses_mid_side(&v));
+		assert_eq!(badge(&v, 3), None);
+		assert_eq!(set_channel(3, 2), vec![("peak2_ms", 2.0)]);
+		v.apply(&set_channel(3, 2));
+		assert_eq!(channel(&v, 3), EqChannel::Side);
+		assert_eq!(channel_index(&v, 3), 2);
+		assert_eq!(badge(&v, 3), Some("S"));
+		assert!(uses_mid_side(&v));
+		// A dormant mid band does not split the display.
+		v.apply(&[("peak2_ms", 0.0), ("peak1_ms", 1.0)]);
+		assert!(!uses_mid_side(&v));
+		assert_eq!(badge(&v, 2), Some("M"));
+		assert_eq!(label(3, &[("peak2_ms", 1.0)]), "Peak 2 channel");
+		assert!(reset_band(6).contains(&("lp_ms", 0.0)));
+		assert!(BANDS.iter().all(|b| info().param(b.channel).is_some()));
+	}
+
+	#[test]
+	fn dynamics_toggle_and_live_offsets() {
+		let mut v = values(&[("peak2_gain", -9.0)]);
+		assert!(BANDS[0].dynamic().is_none() && BANDS[6].dynamic().is_none());
+		for b in &BANDS[1..6] {
+			let d = b.dynamic().unwrap();
+			assert_eq!(Some(d.gain), b.gain);
+			for id in [d.on, d.threshold, d.ratio] {
+				assert!(info().param(id).is_some(), "{id}");
+				assert!(b.params().any(|p| p == id));
+			}
+		}
+		assert!(!is_dynamic(&v, 3));
+		assert_eq!(toggle_dynamic(&v, 3), vec![("peak2_dyn", 1.0)]);
+		// A dormant band gets a depth.
+		assert_eq!(
+			toggle_dynamic(&v, 2),
+			vec![("peak1_dyn", 1.0), ("peak1_gain", DYN_WAKE_DB)]
+		);
+		assert!(toggle_dynamic(&v, 0).is_empty());
+		v.apply(&toggle_dynamic(&v, 3));
+		assert!(is_dynamic(&v, 3));
+		assert_eq!(toggle_dynamic(&v, 3), vec![("peak2_dyn", 0.0)]);
+		// Peak 2 plays -4 dB of its -9: offset +5, activity 4/9.
+		let mut readings = [0.0; cadenza_dsp::readings::MAX];
+		readings[3] = -4.0;
+		readings[2] = -2.0;
+		let off = live_offsets(&v, Some(&readings));
+		assert!((off[3] - 5.0).abs() < 1e-5);
+		assert_eq!(off[2], 0.0, "static bands never move");
+		assert!((activity(&v, 3, off[3]) - 4.0 / 9.0).abs() < 1e-5);
+		// Readings out of range are kept between 0 dB and the gain.
+		readings[3] = 3.0;
+		assert_eq!(live_offsets(&v, Some(&readings))[3], 9.0);
+		readings[3] = -20.0;
+		assert_eq!(live_offsets(&v, Some(&readings))[3], 0.0);
+		assert_eq!(live_offsets(&v, None), [0.0; N_BANDS]);
+		assert_eq!(
+			label(3, &[("peak2_threshold", -30.0), ("peak2_ratio", 4.0)]),
+			"Peak 2 threshold and ratio"
+		);
+		assert_eq!(param_word(DYN_ATTACK), "attack");
+	}
+
+	#[test]
+	fn listen_toggles_and_follows_the_selected_band() {
+		assert_eq!(toggle_listen(Listen::Off, 3), Listen::Band(3));
+		assert_eq!(toggle_listen(Listen::Band(3), 3), Listen::Off);
+		assert_eq!(toggle_listen(Listen::Band(1), 3), Listen::Band(3));
+		assert_eq!(listen_follow(Listen::Band(1), 4), Some(Listen::Band(4)));
+		assert_eq!(listen_follow(Listen::Band(4), 4), None);
+		assert_eq!(
+			listen_follow(Listen::Off, 4),
+			None,
+			"no solo, nothing follows"
+		);
+	}
 
 	fn values(changes: &[Change]) -> EqValues {
 		let mut v = EqValues::default();
@@ -482,8 +758,13 @@ mod tests {
 			vec![
 				("peak2_freq", 1000.0),
 				("peak2_gain", 0.0),
-				("peak2_q", 1.0)
-			]
+				("peak2_q", 1.0),
+				("peak2_ms", 0.0),
+				("peak2_dyn", 0.0),
+				("peak2_threshold", -24.0),
+				("peak2_ratio", 3.0)
+			],
+			"the band's channel and dynamics reset too"
 		);
 	}
 

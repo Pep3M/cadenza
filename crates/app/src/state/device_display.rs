@@ -517,6 +517,24 @@ impl SampleWindow {
 		}
 	}
 
+	/// Like [`SampleWindow::push_frames`] with the side `(L - R) / 2` when `side` is set
+	/// (the mono sum is the mid).
+	pub fn push_channel(&mut self, frames: &[ProbeFrame], tap: Tap, side: bool) {
+		if !side {
+			return self.push_frames(frames, tap);
+		}
+		for f in frames {
+			if self.samples.len() == self.capacity {
+				self.samples.pop_front();
+			}
+			let s = match tap {
+				Tap::Input => f.input,
+				Tap::Output => f.output,
+			};
+			self.samples.push_back((s[0] - s[1]) * 0.5);
+		}
+	}
+
 	/// The samples, oldest first.
 	pub fn samples(&mut self) -> &[f32] {
 		self.samples.make_contiguous()

@@ -1,6 +1,7 @@
 //! Drag-and-drop helpers shared by the views: the hint shown next to the pointer (the
 //! "ghost" label describing what a drop would do) and OS file hovers.
 
+use crate::i18n::trf;
 use std::path::PathBuf;
 
 use egui::{Align2, Context, Frame, Id, Margin, RichText};
@@ -45,7 +46,10 @@ pub fn paint_hint(ctx: &Context) {
 				.or_else(|| hovered_file(ctx).map(|p| Payload::File(p).label()))
 				.unwrap_or_default();
 			(
-				format!("{label} — drop on a track, the mixer or the arrange view"),
+				trf(
+					"{label} — drop on a track, the mixer or the arrange view",
+					&[("label", &label)],
+				),
 				true,
 			)
 		}

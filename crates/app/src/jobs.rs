@@ -2,6 +2,7 @@
 //! scans, renders and native file dialogs. Each runs on its own thread and is polled
 //! once per frame.
 
+use crate::i18n::tr;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -179,6 +180,8 @@ pub enum FileAction {
 	PackArchive,
 	/// A reference track for the mix assistant.
 	MixReference,
+	/// A reference for an EQ's Match EQ.
+	MatchReference,
 	/// A drum sampler pad's sample (`InstrumentView::dialog`).
 	PadSample,
 	/// One more layer of a drum sampler pad.
@@ -190,18 +193,19 @@ pub enum FileAction {
 impl FileAction {
 	fn title(self) -> &'static str {
 		match self {
-			Self::Open => "Open project",
-			Self::SaveAs => "Save project as",
-			Self::ImportAudio => "Import audio file",
-			Self::ImportMidi => "Import MIDI file",
-			Self::ExportFolder => "Export into folder",
-			Self::UnpackFolder => "Extract the project archive into",
-			Self::RelinkFolder => "Search for missing files in",
-			Self::PackArchive => "Export project archive",
-			Self::MixReference => "Choose a reference track",
-			Self::PadSample => "Load a sample into the pad",
-			Self::PadLayer => "Add a layer to the pad",
-			Self::KitFolder => "Map a folder of drum samples onto the pads",
+			Self::Open => tr("Open project"),
+			Self::SaveAs => tr("Save project as"),
+			Self::ImportAudio => tr("Import audio file"),
+			Self::ImportMidi => tr("Import MIDI file"),
+			Self::ExportFolder => tr("Export into folder"),
+			Self::UnpackFolder => tr("Extract the project archive into"),
+			Self::RelinkFolder => tr("Search for missing files in"),
+			Self::PackArchive => tr("Export project archive"),
+			Self::MixReference => tr("Choose a reference track"),
+			Self::MatchReference => tr("Match the EQ to an audio file"),
+			Self::PadSample => tr("Load a sample into the pad"),
+			Self::PadLayer => tr("Add a layer to the pad"),
+			Self::KitFolder => tr("Map a folder of drum samples onto the pads"),
 		}
 	}
 }
@@ -221,7 +225,7 @@ pub fn file_dialog(
 		match action {
 			FileAction::Open => dialog
 				.add_filter(
-					"Cadenza project or archive",
+					tr("Cadenza project or archive"),
 					&["json", "zip", "cadenzapack"],
 				)
 				.pick_file(),
@@ -231,6 +235,7 @@ pub fn file_dialog(
 				.save_file(),
 			FileAction::ImportAudio
 			| FileAction::MixReference
+			| FileAction::MatchReference
 			| FileAction::PadSample
 			| FileAction::PadLayer => dialog
 				.add_filter("Audio", crate::state::AUDIO_EXTENSIONS)

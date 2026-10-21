@@ -2,12 +2,13 @@
 //! the clip being recorded drawn live, take lanes (pick or swipe-comp takes) and the
 //! audio settings dialog.
 
+use crate::i18n::{tr, trf, trn_with};
 use cadenza_core::{ClipId, Tick, TrackId};
 use cadenza_engine::record::PEAK_BLOCK;
 use cadenza_model::{Clip, Command, MonitorMode, Track, TrackInput, TrackKind};
 use egui::{
-	Align2, Color32, CornerRadius, FontId, Frame, Id, Margin, Painter, PointerButton, Rect,
-	RichText, Sense, Stroke, Ui, pos2, vec2,
+	Align2, Color32, CornerRadius, FontId, Id, Painter, PointerButton, Rect, RichText, Sense,
+	Stroke, Ui, pos2, vec2,
 };
 
 use crate::state::AppState;
@@ -56,7 +57,7 @@ pub fn header_buttons(
 		let resp = ui.interact(r, id.with("takes"), Sense::click());
 		widgets::paint_toggle(&p, r, open, "T", theme::ACCENT, resp.hovered());
 		if resp
-			.on_hover_text("Show / hide the take lanes (comping)")
+			.on_hover_text(tr("Show / hide the take lanes (comping)"))
 			.clicked()
 		{
 			state.toggle_takes(track.id);
@@ -67,15 +68,15 @@ pub fn header_buttons(
 		let r = Rect::from_min_size(pos2(left - 21.0, right_of.top()), right_of.size());
 		let armed = state.is_armed(track.id);
 		let resp = ui.interact(r, id.with("arm"), Sense::click());
-		let label = format!("Arm {}", track.name);
+		let label = trf("Arm {name}", &[("name", &track.name)]);
 		resp.widget_info(|| {
 			egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, armed, &label)
 		});
 		paint_arm(&p, r, armed, resp.hovered());
 		let tip = if track.kind == TrackKind::Audio {
-			"Arm for recording (audio input)"
+			tr("Arm for recording (audio input)")
 		} else {
-			"Arm for recording (MIDI input; also plays live MIDI)"
+			tr("Arm for recording (MIDI input; also plays live MIDI)")
 		};
 		if resp.on_hover_text(tip).clicked() {
 			state.toggle_arm(track.id);
@@ -101,7 +102,7 @@ pub fn input_controls(ui: &mut Ui, state: &mut AppState, track: &Track, id: Id, 
 	let p = ui.painter().clone();
 	let input = track.input;
 	let in_rect = Rect::from_min_size(rect.min, vec2(52.0, rect.height()));
-	let label = input.map_or("No input".to_owned(), |i| i.label());
+	let label = input.map_or(tr("No input").to_owned(), |i| i.label());
 	let resp = ui.interact(in_rect, id.with("input"), Sense::click());
 	p.rect_filled(
 		in_rect,
@@ -126,7 +127,10 @@ pub fn input_controls(ui: &mut Ui, state: &mut AppState, track: &Track, id: Id, 
 	let channels = state.input_channels();
 	egui::Popup::menu(&resp).show(|ui| {
 		ui.set_min_width(120.0);
-		if ui.selectable_label(input.is_none(), "No input").clicked() {
+		if ui
+			.selectable_label(input.is_none(), tr("No input"))
+			.clicked()
+		{
 			state.set_track_input(track.id, None);
 		}
 		for choice in input_choices(channels) {
@@ -138,7 +142,7 @@ pub fn input_controls(ui: &mut Ui, state: &mut AppState, track: &Track, id: Id, 
 			}
 		}
 	});
-	resp.on_hover_text("Audio input this track records (and monitors)");
+	resp.on_hover_text(tr("Audio input this track records (and monitors)"));
 	let Some(input) = input else {
 		return;
 	};
@@ -166,25 +170,25 @@ pub fn monitor_button(
 			egui::WidgetType::Checkbox,
 			true,
 			mode != MonitorMode::Off,
-			"Input monitoring",
+			tr("Input monitoring"),
 		)
 	});
 	paint_speaker(ui.painter(), rect, mode, resp.hovered());
 	let resp = resp.on_hover_text(match mode {
-		MonitorMode::Off => "Input monitoring off (click: on; right-click: auto)",
+		MonitorMode::Off => tr("Input monitoring off (click: on; right-click: auto)"),
 		MonitorMode::Auto => {
-			"Input monitoring auto: while armed and stopped or recording (click: off)"
+			tr("Input monitoring auto: while armed and stopped or recording (click: off)")
 		}
-		MonitorMode::On => "Input monitoring on: the input replaces the clips (click: off)",
+		MonitorMode::On => tr("Input monitoring on: the input replaces the clips (click: off)"),
 	});
 	if resp.clicked() {
 		state.toggle_monitor(track);
 	}
 	resp.context_menu(|ui| {
 		for (m, label) in [
-			(MonitorMode::Off, "Off"),
-			(MonitorMode::Auto, "Auto (armed: stopped or recording)"),
-			(MonitorMode::On, "On (always)"),
+			(MonitorMode::Off, tr("Off")),
+			(MonitorMode::Auto, tr("Auto (armed: stopped or recording)")),
+			(MonitorMode::On, tr("On (always)")),
 		] {
 			if ui.selectable_label(mode == m, label).clicked() {
 				state.set_monitor(track, m);
@@ -295,7 +299,7 @@ pub fn header_input_meter(p: &Painter, state: &AppState, track: &Track, header: 
 pub fn mixer_arm(ui: &mut Ui, state: &mut AppState, track: TrackId, width: f32) {
 	let (rect, resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());
 	paint_arm(ui.painter(), rect, state.is_armed(track), resp.hovered());
-	if resp.on_hover_text("Arm for recording").clicked() {
+	if resp.on_hover_text(tr("Arm for recording")).clicked() {
 		state.toggle_arm(track);
 	}
 }
@@ -443,7 +447,7 @@ pub fn take_header(ui: &mut Ui, state: &mut AppState, track: TrackId, lane: u32,
 	p.text(
 		pos2(rect.left() + 24.0, rect.center().y),
 		Align2::LEFT_CENTER,
-		format!("Take {}", lane + 1),
+		trf("Take {n}", &[("n", &(lane + 1))]),
 		theme::small(),
 		if playing {
 			theme::TEXT
@@ -462,11 +466,11 @@ pub fn take_header(ui: &mut Ui, state: &mut AppState, track: TrackId, lane: u32,
 	if resp.double_clicked() {
 		state.select_lane(track, lane);
 	}
-	resp.on_hover_text(
+	resp.on_hover_text(tr(
 		"Double-click: play this take everywhere; click or drag a take in its lane to comp",
-	)
+	))
 	.context_menu(|ui| {
-		if ui.button("Play this take everywhere").clicked() {
+		if ui.button(tr("Play this take everywhere")).clicked() {
 			state.select_lane(track, lane);
 			ui.close();
 		}
@@ -592,48 +596,40 @@ pub fn take_lane(
 		}
 	}
 	let menu_clip = resp.interact_pointer_pos().and_then(|pos| clip_at(pos.x));
-	resp.on_hover_text("Click: play this take here; drag: play it for the swiped range")
-		.context_menu(|ui| {
-			let Some(clip) = menu_clip else {
-				ui.label("No take here");
-				return;
-			};
-			if ui.button("Play this take").clicked() {
-				state.select_take(clip);
-				ui.close();
-			}
-			let group = state
-				.project()
-				.find_clip(clip)
-				.and_then(|(_, c)| c.take_group());
-			if let Some(group) = group
-				&& ui.button("Flatten takes (keep only what plays)").clicked()
-			{
-				state.flatten_takes(group);
-				ui.close();
-			}
-			if ui.button("Delete this take").clicked() {
-				state.apply(Command::RemoveClip { clip });
-				ui.close();
-			}
-		});
-}
-
-fn modal_frame() -> Frame {
-	Frame::new()
-		.fill(theme::BG_RAISED)
-		.stroke(Stroke::new(1.0, theme::BORDER_STRONG))
-		.corner_radius(6)
-		.inner_margin(Margin::same(16))
+	resp.on_hover_text(tr(
+		"Click: play this take here; drag: play it for the swiped range",
+	))
+	.context_menu(|ui| {
+		let Some(clip) = menu_clip else {
+			ui.label(tr("No take here"));
+			return;
+		};
+		if ui.button(tr("Play this take")).clicked() {
+			state.select_take(clip);
+			ui.close();
+		}
+		let group = state
+			.project()
+			.find_clip(clip)
+			.and_then(|(_, c)| c.take_group());
+		if let Some(group) = group
+			&& ui
+				.button(tr("Flatten takes (keep only what plays)"))
+				.clicked()
+		{
+			state.flatten_takes(group);
+			ui.close();
+		}
+		if ui.button(tr("Delete this take")).clicked() {
+			state.apply(Command::RemoveClip { clip });
+			ui.close();
+		}
+	});
 }
 
 fn section(ui: &mut Ui, title: &str) {
-	ui.add_space(6.0);
-	ui.label(
-		RichText::new(title.to_uppercase())
-			.font(theme::small())
-			.color(theme::ACCENT),
-	);
+	ui.add_space(10.0);
+	theme::section_label(ui, title);
 	ui.add_space(2.0);
 }
 
@@ -682,41 +678,45 @@ pub fn audio_settings(ctx: &egui::Context, state: &mut AppState) {
 	let status = state.record.status.clone();
 	let mut test_tone = state.record.test_tone;
 	egui::Modal::new(Id::new("audio-settings"))
-		.frame(modal_frame())
+		.frame(theme::dialog_frame())
 		.show(ctx, |ui| {
 			ui.set_width(520.0);
-			ui.heading("Audio settings");
+			theme::dialog_header(ui, tr("Audio settings"), "", |_| {});
 			let d: &mut AudioPrefs = &mut dialog.draft;
 			if state.record.devices.is_none() {
 				ui.label(
-					RichText::new("Looking for devices…")
+					RichText::new(tr("Looking for devices…"))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
 			}
-			section(ui, "Output");
+			section(ui, tr("Output"));
 			egui::Grid::new("audio-out")
 				.num_columns(2)
 				.spacing([12.0, 6.0])
 				.show(ui, |ui| {
-					ui.label("Device");
+					ui.label(tr("Device"));
 					device_combo(
 						ui,
 						"audio-output",
 						&mut d.config.output,
-						"System default",
+						tr("System default"),
 						&outputs,
 					);
 					ui.end_row();
-					ui.label("Sample rate");
+					ui.label(tr("Sample rate"));
 					egui::ComboBox::from_id_salt("audio-rate")
 						.selected_text(
 							d.config
 								.sample_rate
-								.map_or("Device default".into(), |r| format!("{r} Hz")),
+								.map_or(tr("Device default").into(), |r| format!("{r} Hz")),
 						)
 						.show_ui(ui, |ui| {
-							ui.selectable_value(&mut d.config.sample_rate, None, "Device default");
+							ui.selectable_value(
+								&mut d.config.sample_rate,
+								None,
+								tr("Device default"),
+							);
 							for r in [44_100u32, 48_000, 88_200, 96_000] {
 								ui.selectable_value(
 									&mut d.config.sample_rate,
@@ -726,63 +726,66 @@ pub fn audio_settings(ctx: &egui::Context, state: &mut AppState) {
 							}
 						});
 					ui.end_row();
-					ui.label("Buffer size");
+					ui.label(tr("Buffer size"));
 					egui::ComboBox::from_id_salt("audio-buffer")
 						.selected_text(
 							d.config
 								.buffer_frames
-								.map_or("Device default".into(), |b| format!("{b} samples")),
+								.map_or(tr("Device default").into(), |b| {
+									trf("{b} samples", &[("b", &b)])
+								}),
 						)
 						.show_ui(ui, |ui| {
 							ui.selectable_value(
 								&mut d.config.buffer_frames,
 								None,
-								"Device default",
+								tr("Device default"),
 							);
 							for b in [64u32, 128, 256, 512, 1024, 2048] {
 								ui.selectable_value(
 									&mut d.config.buffer_frames,
 									Some(b),
-									format!("{b} samples"),
+									trf("{b} samples", &[("b", &b)]),
 								);
 							}
 						});
 					ui.end_row();
 				});
-			section(ui, "Input");
+			section(ui, tr("Input"));
 			egui::Grid::new("audio-in")
 				.num_columns(2)
 				.spacing([12.0, 6.0])
 				.show(ui, |ui| {
-					ui.label("Audio input");
-					ui.checkbox(
+					ui.label(tr("Audio input"));
+					crate::ui::widgets::checkbox(
+						ui,
 						&mut d.config.input_enabled,
-						"Record and monitor audio input",
+						tr("Record and monitor audio input"),
 					);
 					ui.end_row();
-					ui.label("Device");
+					ui.label(tr("Device"));
 					ui.add_enabled_ui(d.config.input_enabled, |ui| {
 						device_combo(
 							ui,
 							"audio-input",
 							&mut d.config.input,
-							"System default",
+							tr("System default"),
 							&inputs,
 						);
 					});
 					ui.end_row();
-					ui.label("MIDI input");
+					ui.label(tr("MIDI input"));
 					egui::ComboBox::from_id_salt("midi-input")
 						.width(300.0)
-						.selected_text(d.midi_input.clone().unwrap_or_else(|| "None".into()))
+						.selected_text(d.midi_input.clone().unwrap_or_else(|| tr("None").into()))
 						.show_ui(ui, |ui| {
-							ui.selectable_value(&mut d.midi_input, None, "None");
+							ui.selectable_value(&mut d.midi_input, None, tr("None"));
 							for m in &midi {
 								ui.selectable_value(&mut d.midi_input, Some(m.clone()), m);
 							}
 						});
 					ui.end_row();
-					ui.label("Latency offset");
+					ui.label(tr("Latency offset"));
 					ui.horizontal(|ui| {
 						ui.add(
 							egui::DragValue::new(&mut d.latency_offset_ms)
@@ -791,71 +794,102 @@ pub fn audio_settings(ctx: &egui::Context, state: &mut AppState) {
 								.suffix(" ms"),
 						);
 						ui.label(
-							RichText::new(
+							RichText::new(tr(
 								"added to the measured latency; positive moves recordings earlier",
-							)
+							))
 							.font(theme::small())
 							.color(theme::TEXT_FAINT),
 						);
 					});
 					ui.end_row();
 				});
-			section(ui, "Status");
+			section(ui, tr("Status"));
 			match &status {
 				Some(s) => {
-					ui.label(format!(
-						"Output: {} at {} Hz (latency {:.1} ms)",
-						s.output,
-						s.sample_rate,
-						s.output_latency as f64 * 1000.0 / f64::from(s.sample_rate.max(1))
+					ui.label(trf(
+						"Output: {output} at {sample_rate} Hz (latency {latency} ms)",
+						&[
+							("output", &s.output),
+							("sample_rate", &s.sample_rate),
+							(
+								"latency",
+								&crate::i18n::decimal(format!(
+									"{:.1}",
+									s.output_latency as f64 * 1000.0
+										/ f64::from(s.sample_rate.max(1))
+								)),
+							),
+						],
 					));
 					match (&s.input, &s.input_error) {
-						(Some(i), _) => ui.label(format!(
-							"Input: {} — {} channel(s) at {} Hz{}; recordings shift by {:.1} ms",
-							i.device,
+						(Some(i), _) => ui.label(trn_with(
+							"Input: {device} — {n} channel at {rate} Hz{clock}; recordings shift by \
+							 {ms} ms",
+							"Input: {device} — {n} channels at {rate} Hz{clock}; recordings shift by \
+							 {ms} ms",
 							i.channels,
-							i.sample_rate,
-							if matches!(i.mode, cadenza_engine::InputMode::Exact) {
-								", same clock as the output"
-							} else {
-								", resampled with drift correction"
-							},
-							s.recording_latency as f64 * 1000.0 / f64::from(s.sample_rate.max(1))
+							&[
+								("device", &i.device),
+								("rate", &i.sample_rate),
+								(
+									"clock",
+									&if matches!(i.mode, cadenza_engine::InputMode::Exact) {
+										tr(", same clock as the output")
+									} else {
+										tr(", resampled with drift correction")
+									},
+								),
+								(
+									"ms",
+									&crate::i18n::num(
+										s.recording_latency as f64 * 1000.0
+											/ f64::from(s.sample_rate.max(1)),
+										1,
+									),
+								),
+							],
 						)),
-						(None, Some(e)) => ui.colored_label(theme::ERROR, format!("Input: {e}")),
-						(None, None) => ui.label("Input: off"),
+						(None, Some(e)) => {
+							ui.colored_label(theme::ERROR, trf("Input: {e}", &[("e", e)]))
+						}
+						(None, None) => ui.label(tr("Input: off")),
 					};
 					if let Some(e) = &s.midi_error {
 						ui.colored_label(theme::ERROR, e);
 					}
 					if let Some(t) = &s.audio_thread {
-						ui.label(format!("Audio thread: {t}"));
+						ui.label(trf("Audio thread: {t}", &[("t", &t)]));
 					}
 				}
 				None => {
-					ui.label("No audio device is open.");
+					ui.label(tr("No audio device is open."));
 				}
 			}
 			ui.add_space(6.0);
-			if ui
-				.checkbox(&mut test_tone, "Test tone (440 Hz, -20 dBFS)")
-				.on_hover_text("Plays through the output to check the device; off by default")
+			if crate::ui::widgets::checkbox(ui, &mut test_tone, tr("Test tone (440 Hz, -20 dBFS)"))
+				.on_hover_text(tr(
+					"Plays through the output to check the device; off by default",
+				))
 				.changed()
 			{
 				// Applied below, outside the dialog borrow.
 			}
 			ui.add_space(10.0);
+			ui.separator();
+			ui.add_space(8.0);
 			ui.horizontal(|ui| {
-				if ui.button("Apply").clicked() {
-					apply = true;
-				}
-				if ui.button("OK").clicked() {
-					apply = true;
-					close = true;
-				}
-				if ui.button("Close").clicked() {
-					close = true;
-				}
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					if theme::primary_button(ui, "OK").clicked() {
+						apply = true;
+						close = true;
+					}
+					if ui.button(tr("Apply")).clicked() {
+						apply = true;
+					}
+					if ui.button(tr("Close")).clicked() {
+						close = true;
+					}
+				});
 			});
 		});
 	if test_tone != state.record.test_tone {

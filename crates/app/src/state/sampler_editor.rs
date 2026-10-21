@@ -6,6 +6,7 @@
 //! bindings (amp / filter envelopes, the filter node, the bottom row's readouts). Every
 //! builder returns one command: one undo step per gesture.
 
+use crate::i18n::{mark, tr, trf};
 use std::path::{Path, PathBuf};
 
 use cadenza_dsp::{DeviceInfo, ParamInfo};
@@ -33,7 +34,7 @@ pub const LEGATO: &str = "legato";
 pub const TRANSPOSE: &str = "transpose";
 
 /// The filter types in parameter order.
-pub const FILTER_TYPES: [&str; 4] = ["Off", "LP", "HP", "BP"];
+pub const FILTER_TYPES: [&str; 4] = [mark("Off"), "LP", "HP", "BP"];
 /// The filter display draws the response at this rate (the engine default).
 pub const DISPLAY_RATE: f32 = 48_000.0;
 /// A full-height drag on the filter display sweeps resonance by this much (%).
@@ -603,18 +604,28 @@ pub fn loop_label(z: &SampleZone, length: f64) -> Option<String> {
 	let le = Marker::LoopEnd.get(z, length);
 	let tail = match z.loop_mode {
 		LoopMode::PingPong => "ping-pong".to_owned(),
-		_ => format!("xfade {}", ms_label(effective_crossfade(z, length))),
+		_ => trf(
+			"xfade {ms_label}",
+			&[("ms_label", &ms_label(effective_crossfade(z, length)))],
+		),
 	};
-	Some(format!("Loop {ls:.2} \u{2013} {le:.2} s \u{b7} {tail}"))
+	Some(trf(
+		"Loop {ls} – {le} s · {tail}",
+		&[
+			("ls", &crate::i18n::decimal(format!("{:.2}", ls))),
+			("le", &crate::i18n::decimal(format!("{:.2}", le))),
+			("tail", &tail),
+		],
+	))
 }
 
 /// The undo step name of a waveform flag drag.
 pub fn marker_label(m: Marker) -> &'static str {
 	match m {
-		Marker::Start => "Zone start",
-		Marker::End => "Zone end",
-		Marker::LoopStart => "Loop start",
-		Marker::LoopEnd => "Loop end",
+		Marker::Start => tr("Zone start"),
+		Marker::End => tr("Zone end"),
+		Marker::LoopStart => tr("Loop start"),
+		Marker::LoopEnd => tr("Loop end"),
 	}
 }
 
@@ -667,8 +678,8 @@ impl Env {
 	/// The undo step's name for a node gesture that moved `stages`.
 	pub fn label(self, stages: &[AdsrStage]) -> String {
 		let env = match self {
-			Env::Amp => "Amp",
-			Env::Filter => "Filter",
+			Env::Amp => tr("Amp"),
+			Env::Filter => tr("Filter"),
 		};
 		let names: Vec<&str> = stages
 			.iter()
@@ -731,7 +742,7 @@ pub fn wheel_env(start: f32, notches: f32) -> f32 {
 /// "4.2 kHz · res 20 % · env +12 st" ("Filter off" when off).
 pub fn filter_summary(kind: usize, cutoff: f32, resonance: f32, env: f32) -> String {
 	if kind == 0 {
-		return "Filter off \u{b7} pick LP, HP or BP".to_owned();
+		return tr("Filter off \u{b7} pick LP, HP or BP").to_owned();
 	}
 	let env =
 		crate::state::device::minus(crate::state::device::format_value(env.round(), "semitones"));

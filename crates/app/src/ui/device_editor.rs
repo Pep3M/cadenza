@@ -1,13 +1,15 @@
 //! The device editor of the bottom editor dock (design `14 Device Kit`, "Device header ·
 //! dock and compact"): the shared header (power, name, track chip, presets, Save, A/B
 //! compare, undo hint, IN/OUT meters from the probe, Mix, pop-out, close) over a body
-//! chosen by device id. Built-ins only; plugins keep their own windows. Popped out, the
-//! same editor floats in a window over the workspace (design 15f: Dock, Keep on top, ×).
+//! chosen by device id. Built-ins only; plugins keep their own windows. By default each
+//! device opens in its own floating window (`ui::windows`, design 15f: Dock, Keep on
+//! top, ×), one [`DeviceEditorUi`] per window; the dock stays an option.
 //!
 //! Bodies are plain functions dispatched in [`DeviceEditorUi::body`]: the samplers' pads
 //! / zones editor, else [`generic_body`] (every param as a kit control, grouped in rows).
 //! A dedicated body (`eq_body(ui, state, cx)`) is one more match arm there.
 
+use crate::i18n::{tr, trf};
 use cadenza_core::ParamAddress;
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 use cadenza_engine::ProbeFrame;
@@ -31,8 +33,6 @@ use crate::ui::instrument_editor::InstrumentEditorUi;
 pub const COMPACT_BELOW: f32 = 800.0;
 /// From this width on the header also shows the undo hint and the A→B copy label.
 pub const WIDE_FROM: f32 = 1600.0;
-const POPOUT_BAR_H: f32 = 28.0;
-const POPOUT_DEFAULT: egui::Vec2 = vec2(1240.0, 460.0);
 const HEADER_H: f32 = 36.0;
 const COMPACT_HEADER_H: f32 = 62.0;
 const MIX_BAR_FILL: Color32 = Color32::from_rgb(0xc4, 0xc7, 0xcd);
@@ -57,6 +57,54 @@ fn plays_keys(id: &str) -> bool {
 	matches!(id, "poly_synth" | "electric_piano")
 }
 
+/// The arrow keys pressed this frame (consumed): ← → as `h`, ↑ ↓ as `v` (±1), with
+/// Shift and Alt held.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Arrows {
+	pub h: i32,
+	pub v: i32,
+	pub shift: bool,
+	pub alt: bool,
+}
+
+/// Consumes this frame's arrow keys (any of Shift / Alt; Ctrl / Cmd stay global).
+pub fn arrows(ctx: &egui::Context) -> Arrows {
+	ctx.input_mut(|i| {
+		let mut a = Arrows {
+			shift: i.modifiers.shift,
+			alt: i.modifiers.alt,
+			..Arrows::default()
+		};
+		for (key, h, v) in [
+			(egui::Key::ArrowLeft, -1, 0),
+			(egui::Key::ArrowRight, 1, 0),
+			(egui::Key::ArrowUp, 0, 1),
+			(egui::Key::ArrowDown, 0, -1),
+		] {
+			let n = i.count_and_consume_key(egui::Modifiers::NONE, key) as i32;
+			a.h += h * n;
+			a.v += v * n;
+		}
+		a.h = a.h.signum();
+		a.v = a.v.signum();
+		a
+	})
+}
+
+/// One ↑ / ↓ step on a built-in's parameter (see [`device::nudge`]), one command.
+pub fn nudge_param(state: &mut AppState, r: DeviceRef, param: &str, dir: f32, fine: bool) {
+	let Some(info) = device_kit::param_info(state, r, param) else {
+		return;
+	};
+	let value = state
+		.param_value(r.track, r.device, info.id)
+		.unwrap_or(info.default);
+	let to = device::nudge(info, value, dir, fine);
+	if (to - value).abs() > f32::EPSILON {
+		state.commit_param(r.track, r.device, info.id, to);
+	}
+}
+
 /// [`BodyCx::salt`] of the dock editor.
 pub const DOCK: &str = "dock";
 
@@ -77,10 +125,6 @@ pub struct DeviceEditorUi {
 	/// Header and body of the last frame (headless tests).
 	pub header_rect: Option<Rect>,
 	pub body_rect: Option<Rect>,
-	/// The floating window in the last frame, and whether the last click landed in it
-	/// (its keys then go to the editor).
-	pub popout_rect: Option<Rect>,
-	popout_focused: bool,
 	ask: crate::ui::device_ai::AskAi,
 	/// The AI change card of the last frame (headless tests).
 	pub ai_card_rect: Option<Rect>,
@@ -92,6 +136,11 @@ impl DeviceEditorUi {
 		self.instrument.target_at(pos)
 	}
 
+	/// The header's IN / OUT meter levels of the last frame.
+	pub fn levels(&self) -> IoLevels {
+		self.levels
+	}
+
 	/// Releases notes held by the body (dock hidden, device changed).
 	pub fn release(&mut self, state: &mut AppState) {
 		self.instrument.release(state);
@@ -100,145 +149,27 @@ impl DeviceEditorUi {
 
 	/// The editor in the bottom dock.
 	pub fn show(&mut self, ui: &mut Ui, state: &mut AppState) {
-		self.show_in(ui, state, false);
+		let target = state.view.instrument.device;
+		self.show_in(ui, state, target, false);
 	}
 
-	/// Whether the floating editor has the keyboard (the last click landed in it).
-	pub fn popout_focused(&self, state: &AppState) -> bool {
-		self.popout_focused && state.view.device_popout
+	/// The editor of `r` in a floating window (the window draws its own title bar).
+	pub fn show_window(&mut self, ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
+		self.show_in(ui, state, Some(r), true);
 	}
 
-	/// The floating device editor (popped out of the dock): a window over the workspace
-	/// with its own title bar, resizable from every edge, its size and position kept per
-	/// device kind for the session (egui memory).
-	pub fn popout(&mut self, ctx: &egui::Context, state: &mut AppState, locked: bool) {
-		self.popout_rect = None;
-		if !state.view.device_popout {
-			self.popout_focused = false;
-			return;
-		}
-		let Some(r) = state.view.instrument.device else {
-			return;
-		};
-		let Some(device) = state.device(r).cloned() else {
-			return;
-		};
-		let Some(info) = device.builtin_id().and_then(cadenza_dsp::device_info) else {
-			return;
-		};
-		let screen = ctx.content_rect();
-		let size = POPOUT_DEFAULT.min(screen.size() * 0.9);
-		let default = Rect::from_center_size(screen.center() + vec2(0.0, -40.0), size);
-		let order = if state.view.popout_on_top {
-			egui::Order::Foreground
-		} else {
-			egui::Order::Middle
-		};
-		let frame = egui::Frame::new()
-			.fill(theme::BG_PANEL)
-			.stroke(Stroke::new(1.0, theme::BORDER_STRONG))
-			.corner_radius(CornerRadius::same(theme::RADIUS_XL))
-			.shadow(theme::FLOATING_SHADOW);
-		let title = format!("{} · {}", device.name, channel_name(state, r));
-		let shown = egui::Window::new(title.clone())
-			.id(Id::new(("device-popout", info.id)))
-			.title_bar(false)
-			.collapsible(false)
-			.resizable(true)
-			.scroll(false)
-			.default_rect(default)
-			.min_size(vec2(360.0, 220.0))
-			.order(order)
-			.frame(frame)
-			.show(ctx, |ui| {
-				if locked {
-					ui.disable();
-				}
-				let full = ui.available_rect_before_wrap();
-				ui.allocate_rect(full, Sense::hover());
-				let bar = Rect::from_min_size(full.min, vec2(full.width(), POPOUT_BAR_H));
-				let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
-				// The title bar (no widgets under it) moves the window; the body's own
-				// background must not, or dragging an empty display would.
-				ui.interact(body, Id::new("device-popout-body"), Sense::drag());
-				self.popout_bar(ui, state, bar, &device.name, &channel_name(state, r));
-				let mut inner = ui.new_child(UiBuilder::new().max_rect(body));
-				self.show_in(&mut inner, state, true);
-			});
-		self.popout_rect = shown.map(|s| s.response.rect);
-		if ctx.input(|i| i.pointer.any_pressed())
-			&& let Some(pos) = ctx.pointer_interact_pos()
-		{
-			self.popout_focused = self.popout_rect.is_some_and(|r| r.contains(pos));
-		}
-	}
-
-	/// The floating window's title bar: "<Device> · <Track>", Dock, Keep on top, ×.
-	fn popout_bar(
+	fn show_in(
 		&mut self,
 		ui: &mut Ui,
 		state: &mut AppState,
-		bar: Rect,
-		name: &str,
-		track: &str,
+		target: Option<DeviceRef>,
+		popped: bool,
 	) {
-		let radius = theme::RADIUS_XL.saturating_sub(1);
-		ui.painter().rect_filled(
-			bar,
-			CornerRadius {
-				nw: radius,
-				ne: radius,
-				..CornerRadius::ZERO
-			},
-			theme::BG_RAISED,
-		);
-		ui.painter().hline(
-			bar.x_range(),
-			bar.bottom() - 0.5,
-			Stroke::new(1.0, theme::BORDER),
-		);
-		let p = ui.painter();
-		let g = p.layout_no_wrap(name.to_owned(), theme::semibold(12.5), theme::TEXT);
-		let w = g.size().x;
-		let cy = bar.center().y;
-		p.galley(
-			pos2(bar.left() + 10.0, cy - g.size().y * 0.5),
-			g,
-			theme::TEXT,
-		);
-		p.text(
-			pos2(bar.left() + 10.0 + w + 6.0, cy),
-			Align2::LEFT_CENTER,
-			format!("· {track}"),
-			theme::medium(12.0),
-			theme::TEXT_FAINT,
-		);
-		let mut row = row(ui, bar.shrink2(vec2(6.0, 0.0)));
-		row.with_layout(Layout::right_to_left(Align::Center), |ui| {
-			ui.spacing_mut().item_spacing.x = 4.0;
-			if close_button(ui, 22.0).clicked() {
-				self.release(state);
-				state.close_device_editor();
-			}
-			let on_top = state.view.popout_on_top;
-			let hint = "Keep this window above other windows";
-			if small_button(ui, "Keep on top", Some(on_top), hint).clicked() {
-				state.view.popout_on_top = !on_top;
-			}
-			if small_button(ui, "Dock", None, "Put the editor back into the bottom dock").clicked()
-			{
-				state.dock_device_editor();
-			}
-		});
-	}
-
-	fn show_in(&mut self, ui: &mut Ui, state: &mut AppState, popped: bool) {
 		let full = ui.available_rect_before_wrap();
 		ui.allocate_rect(full, Sense::hover());
 		ui.painter().rect_filled(full, 0.0, theme::BG_DEEP);
 		self.header_rect = None;
 		self.body_rect = None;
-		let target = state.view.instrument.device;
 		let device = target.and_then(|r| state.device(r).cloned());
 		let info = device
 			.as_ref()
@@ -251,14 +182,16 @@ impl DeviceEditorUi {
 			ui.painter().text(
 				full.center(),
 				Align2::CENTER_CENTER,
-				"Double-click a device in the mixer or its track header, or use \"Edit\" in the \
-				 inspector, to open it here",
+				tr(
+					"Devices open in floating windows: click one in the mixer; a window's \"Dock\" \
+				 puts it here",
+				),
 				theme::small(),
 				theme::TEXT_FAINT,
 			);
 			return;
 		};
-		self.drain_probe(ui, state);
+		self.drain_probe(ui, state, r);
 		let compact = full.width() < COMPACT_BELOW;
 		let wide = full.width() >= WIDE_FROM;
 		state.compare(r);
@@ -287,7 +220,10 @@ impl DeviceEditorUi {
 		} else if state.hearing_before() == Some(r.device) {
 			state.hear_before(None);
 		}
-		let body = Rect::from_min_max(pos2(full.left(), top), full.max).shrink(8.0);
+		let mut body = Rect::from_min_max(pos2(full.left(), top), full.max).shrink(8.0);
+		let mod_h = crate::ui::devices::modulation::height(ui.ctx(), &device, body.height());
+		let mod_rect = Rect::from_min_max(pos2(body.left(), body.bottom() - mod_h), body.max);
+		body.max.y = mod_rect.top() - 6.0;
 		self.body_rect = Some(body);
 		let frames = std::mem::take(&mut self.frames);
 		let cx = BodyCx {
@@ -300,6 +236,7 @@ impl DeviceEditorUi {
 			salt: DOCK,
 		};
 		self.body(ui, state, &cx);
+		crate::ui::devices::modulation::section(ui, state, r, info, mod_rect);
 		self.frames = frames;
 		self.save_dialog(ui.ctx(), state);
 	}
@@ -374,27 +311,40 @@ impl DeviceEditorUi {
 	}
 
 	/// Keys of the open editor while it has focus (the dock or the floating window): A
-	/// switches the A/B compare; EQ: 1-7 select a band, Del sleeps it; Limiter: R resets
-	/// the integrated loudness; Saturator: 1/2/3 pick the mode; Gain: M = mono; Poly
-	/// Synth and Electric Piano: A–K play notes (so A/B has no key there), Z / X octave;
-	/// Drum Machine: ← → voices; Drum Sampler: 1–8 (Shift: 9–16) play the pads; Sampler:
-	/// arrows nudge the selected zone.
-	pub fn shortcuts(&mut self, ctx: &egui::Context, state: &mut AppState) {
-		let Some(r) = state.view.instrument.device else {
-			return;
-		};
+	/// (Shift+A on the Poly Synth and Electric Piano, whose A–K play notes) switches the
+	/// A/B compare; B bypasses; ← → select the band / pad / zone / voice and ↑ ↓ nudge
+	/// its value (EQ band gain, pad / zone gain, voice level; elsewhere the control
+	/// touched last, else the device's main one; Shift: fine). EQ: 1-7 select a band,
+	/// Del sleeps it; Limiter: R resets the integrated loudness; Saturator: 1/2/3 pick
+	/// the mode; Gain: M = mono; Delay: S / P sync / ping-pong; Z / X octave on the
+	/// keyboards; Drum Sampler: 1–8 (Shift: 9–16) play the pads; Sampler: Alt+arrows
+	/// move the selected zone.
+	pub fn shortcuts(&mut self, ctx: &egui::Context, state: &mut AppState, r: DeviceRef) {
 		let id = state
 			.device(r)
 			.and_then(|d| d.builtin_id())
 			.map(str::to_owned);
-		if !id.as_deref().is_some_and(plays_keys)
-			&& ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::A))
-		{
+		let plays = id.as_deref().is_some_and(plays_keys);
+		let compare = ctx.input_mut(|i| {
+			i.consume_key(egui::Modifiers::SHIFT, egui::Key::A)
+				|| (!plays && i.consume_key(egui::Modifiers::NONE, egui::Key::A))
+		});
+		if compare {
 			state.toggle_compare(r);
+		}
+		if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::B))
+			&& let Some(d) = state.device(r)
+		{
+			let bypass = !d.bypass;
+			state.apply(Command::SetDeviceBypass {
+				track: r.track,
+				device: r.device,
+				bypass,
+			});
 		}
 		match id.as_deref() {
 			Some("poly_synth" | "electric_piano") => self.synth.shortcuts(ctx, state, r),
-			Some("drum_machine") => crate::ui::devices::drum_machine::shortcuts(ctx, r),
+			Some("drum_machine") => crate::ui::devices::drum_machine::shortcuts(ctx, state, r),
 			Some("drum_sampler") => crate::ui::devices::drum_sampler::shortcuts(
 				ctx,
 				state,
@@ -409,12 +359,26 @@ impl DeviceEditorUi {
 			Some("gain") => crate::ui::devices::gain::shortcuts(ctx, state, r),
 			_ => {}
 		}
+		// ↑ ↓ the editors above left alone: the control touched last, else the main one.
+		let keys = arrows(ctx);
+		if keys.v != 0
+			&& let Some(id) = id.as_deref()
+		{
+			let param = device_kit::touched(ctx, r.device)
+				.or_else(|| device::main_param(id).map(str::to_owned));
+			if let Some(param) = param {
+				nudge_param(state, r, &param, keys.v as f32, keys.shift);
+			}
+		}
 	}
 
 	/// Takes this frame's probe frames and moves the header meters.
-	fn drain_probe(&mut self, ui: &Ui, state: &AppState) {
+	fn drain_probe(&mut self, ui: &Ui, state: &AppState, r: DeviceRef) {
 		self.frames.clear();
-		if let Some(probe) = state.probe() {
+		// One probe for every editor: only the device it points at drains it.
+		if state.probe_target() == Some(r.device)
+			&& let Some(probe) = state.probe()
+		{
 			probe.drain(&mut self.frames);
 		}
 		let dt = ui.input(|i| i.stable_dt).min(0.25);
@@ -480,7 +444,7 @@ impl DeviceEditorUi {
 			ui.spacing_mut().item_spacing.x = 2.0;
 			self.preset_bar(ui, state, r, &status, items.preset_width, true);
 			ui.spacing_mut().item_spacing.x = 8.0;
-			if header_button(ui, "Save", "Save these settings as a user preset").clicked() {
+			if header_button(ui, tr("Save"), tr("Save these settings as a user preset")).clicked() {
 				self.open_save(r, &status);
 			}
 			ab_switch(ui, state, r);
@@ -510,6 +474,7 @@ impl DeviceEditorUi {
 					}
 				}
 				crate::ui::device_ai::ask_button(ui, state, r, &mut self.ask);
+				crate::ui::device_ai::explain_button(ui, state, r);
 				if let Some(mix) = mix {
 					mix_control(ui, state, r, mix);
 				}
@@ -544,16 +509,17 @@ impl DeviceEditorUi {
 				}
 			}
 			crate::ui::device_ai::ask_button(ui, state, r, &mut self.ask);
-			let more = header_button(ui, "⋯", "More: save preset, A/B copy, undo");
+			crate::ui::device_ai::explain_button(ui, state, r);
+			let more = header_button(ui, "⋯", tr("More: save preset, A/B copy, undo"));
 			egui::Popup::menu(&more).show(|ui| {
-				if ui.button("Save preset…").clicked() {
+				if ui.button(tr("Save preset…")).clicked() {
 					self.open_save(r, &status);
 					ui.close();
 				}
 				let copy = state.compare(r).copy_label();
 				if ui
-					.button(format!("Copy {copy}"))
-					.on_hover_text("Copy the slot you are on onto the other one")
+					.button(trf("Copy {copy}", &[("copy", &copy)]))
+					.on_hover_text(tr("Copy the slot you are on onto the other one"))
 					.clicked()
 				{
 					state.copy_compare(r);
@@ -610,7 +576,7 @@ impl DeviceEditorUi {
 		};
 		let name_w = text_w(&d.name, theme::semibold(13.0));
 		let track_chip_w = text_w(track_name, theme::medium(12.0)) + 29.0;
-		let save_w = (text_w("Save", theme::medium(12.0)) + 16.0).max(22.0);
+		let save_w = (text_w(tr("Save"), theme::medium(12.0)) + 16.0).max(22.0);
 		// power + gaps + name + chip + divider + preset steps (back/forward) + Save + A/B.
 		let mut left_fixed = 173.0 + name_w + track_chip_w + save_w;
 		if mode.wide {
@@ -620,8 +586,9 @@ impl DeviceEditorUi {
 				left_fixed += text_w(hint, theme::mono(10.5)) + 18.0;
 			}
 		}
-		let ask_w = text_w("Ask AI", theme::medium(12.0)) + 16.0;
-		let mut right_fixed = ask_w + 8.0;
+		let ask_w = text_w(tr("Ask AI"), theme::medium(12.0)) + 16.0;
+		let explain_w = text_w(tr("Explain"), theme::medium(12.0)) + 16.0;
+		let mut right_fixed = ask_w + explain_w + 16.0;
 		if !mode.popped {
 			right_fixed += 60.0;
 		}
@@ -629,7 +596,7 @@ impl DeviceEditorUi {
 			right_fixed += 8.0 + 138.0;
 		}
 		let sidechain_width = sidechain.as_ref().map(|(name, _)| {
-			61.0 + text_w("Sidechain", theme::medium(11.0)) + text_w(name, theme::medium(12.0))
+			61.0 + text_w(tr("Sidechain"), theme::medium(11.0)) + text_w(name, theme::medium(12.0))
 		});
 		device::header_items(width, left_fixed, right_fixed, sidechain_width)
 	}
@@ -649,14 +616,14 @@ impl DeviceEditorUi {
 			(
 				"‹",
 				-1,
-				"Previous preset",
+				tr("Previous preset"),
 				CornerRadius {
 					nw: theme::RADIUS_MD,
 					sw: theme::RADIUS_MD,
 					..CornerRadius::ZERO
 				},
 			),
-			("›", 1, "Next preset", CornerRadius::ZERO),
+			("›", 1, tr("Next preset"), CornerRadius::ZERO),
 		] {
 			let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
 			resp.widget_info(|| {
@@ -682,7 +649,9 @@ impl DeviceEditorUi {
 			}
 		}
 		let (rect, resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click());
-		resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Presets"));
+		resp.widget_info(|| {
+			egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, tr("Presets"))
+		});
 		let p = ui.painter();
 		p.rect(
 			rect,
@@ -701,7 +670,7 @@ impl DeviceEditorUi {
 		);
 		let mut x = rect.left() + 8.0;
 		if label {
-			let g = p.layout_no_wrap("Preset".into(), theme::medium(11.0), theme::TEXT_FAINT);
+			let g = p.layout_no_wrap(tr("Preset").into(), theme::medium(11.0), theme::TEXT_FAINT);
 			let w = g.size().x;
 			p.galley(
 				pos2(x, rect.center().y - g.size().y * 0.5),
@@ -713,7 +682,7 @@ impl DeviceEditorUi {
 		let name = status
 			.name
 			.clone()
-			.unwrap_or_else(|| "No preset".to_owned());
+			.unwrap_or_else(|| tr("No preset").to_owned());
 		let color = if status.name.is_some() {
 			theme::TEXT
 		} else {
@@ -735,19 +704,19 @@ impl DeviceEditorUi {
 		let resp = resp
 			.on_hover_cursor(CursorIcon::PointingHand)
 			.on_hover_text(if status.dirty {
-				"Presets · ● the settings differ from the loaded preset"
+				tr("Presets · ● the settings differ from the loaded preset")
 			} else {
-				"Presets"
+				tr("Presets")
 			});
 		egui::Popup::menu(&resp).show(|ui| {
 			ui.set_min_width(width.max(180.0));
 			if list.is_empty() {
 				ui.label(
-					egui::RichText::new("No presets yet: Save stores the current settings")
+					egui::RichText::new(tr("No presets yet: Save stores the current settings"))
 						.color(theme::TEXT_FAINT),
 				);
 			}
-			for (user, title) in [(false, "Factory"), (true, "User")] {
+			for (user, title) in [(false, tr("Factory")), (true, tr("User"))] {
 				let entries: Vec<&PresetEntry> = list.iter().filter(|e| e.user == user).collect();
 				if entries.is_empty() {
 					continue;
@@ -804,33 +773,37 @@ impl DeviceEditorUi {
 		egui::Modal::new(Id::new("device-preset-save")).show(ctx, |ui| {
 			ui.set_width(320.0);
 			ui.label(
-				egui::RichText::new("Save preset")
+				egui::RichText::new(tr("Save preset"))
 					.font(theme::heading())
 					.color(theme::TEXT),
 			);
 			ui.add_space(6.0);
 			let edit = ui.add(
 				egui::TextEdit::singleline(&mut dialog.name)
-					.hint_text("Preset name")
+					.hint_text(tr("Preset name"))
 					.desired_width(f32::INFINITY),
 			);
 			edit.request_focus();
 			let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 			if exists {
 				ui.label(
-					egui::RichText::new("A user preset with this name exists: it will be replaced")
-						.font(theme::small())
-						.color(theme::WARNING),
+					egui::RichText::new(tr(
+						"A user preset with this name exists: it will be replaced",
+					))
+					.font(theme::small())
+					.color(theme::WARNING),
 				);
 			}
 			ui.add_space(6.0);
 			ui.horizontal(|ui| {
 				let ok = !dialog.name.trim().is_empty();
-				let label = if exists { "Replace" } else { "Save" };
+				let label = if exists { tr("Replace") } else { tr("Save") };
 				if ui.add_enabled(ok, egui::Button::new(label)).clicked() || (enter && ok) {
 					save = Some(dialog.name.clone());
 				}
-				if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+				if ui.button(tr("Cancel")).clicked()
+					|| ui.input(|i| i.key_pressed(egui::Key::Escape))
+				{
 					done = true;
 				}
 			});
@@ -856,13 +829,13 @@ struct HeaderMode {
 }
 
 /// "Master" or the name of the track `r` sits on.
-fn channel_name(state: &AppState, r: DeviceRef) -> String {
+pub(crate) fn channel_name(state: &AppState, r: DeviceRef) -> String {
 	match r.track {
 		Some(t) => state
 			.project()
 			.track(t)
 			.map_or(String::new(), |t| t.name.clone()),
-		None => "Master".to_owned(),
+		None => tr("Master").to_owned(),
 	}
 }
 
@@ -905,11 +878,14 @@ fn ab_switch(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 			if on { theme::TEXT } else { theme::TEXT_FAINT },
 		);
 		let hint = if on {
-			format!("Compare: {} is playing; your edits go to it", slot.name())
+			trf(
+				"Compare: {name} is playing; your edits go to it",
+				&[("name", &slot.name())],
+			)
 		} else {
-			format!(
-				"Compare: switch to {} (A key while the editor is focused)",
-				slot.name()
+			trf(
+				"Compare: switch to {name} (A key while the editor is focused)",
+				&[("name", &slot.name())],
 			)
 		};
 		if resp
@@ -927,7 +903,7 @@ fn copy_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 	let label = state.compare(r).copy_label();
 	let resp = text_button(ui, &label, theme::medium(11.0));
 	if resp
-		.on_hover_text("Copy the slot you are on onto the other one")
+		.on_hover_text(tr("Copy the slot you are on onto the other one"))
 		.clicked()
 	{
 		state.copy_compare(r);
@@ -939,7 +915,10 @@ fn undo_chip(ui: &mut Ui, state: &mut AppState, hint: &str) {
 	let font = theme::mono(10.5);
 	let shown = crate::ui::mixer::elide(ui, hint, &font, 280.0);
 	let resp = text_button(ui, &shown, font);
-	if resp.on_hover_text(format!("Undo: {hint}")).clicked() {
+	if resp
+		.on_hover_text(trf("Undo: {hint}", &[("hint", &hint)]))
+		.clicked()
+	{
 		state.undo();
 	}
 }
@@ -964,7 +943,12 @@ fn text_button(ui: &mut Ui, label: &str, font: egui::FontId) -> egui::Response {
 
 /// A title-bar button of the floating window (20 px high, raised); `check` = a toggle
 /// that shows a check mark while on.
-fn small_button(ui: &mut Ui, label: &str, check: Option<bool>, hint: &str) -> egui::Response {
+pub(crate) fn small_button(
+	ui: &mut Ui,
+	label: &str,
+	check: Option<bool>,
+	hint: &str,
+) -> egui::Response {
 	let g = ui
 		.painter()
 		.layout_no_wrap(label.to_owned(), theme::medium(11.0), theme::TEXT_DIM);
@@ -1011,7 +995,7 @@ fn small_button(ui: &mut Ui, label: &str, check: Option<bool>, hint: &str) -> eg
 fn pop_out_button(ui: &mut Ui, size: f32) -> egui::Response {
 	let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
 	resp.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Pop out device editor")
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr("Pop out device editor"))
 	});
 	let p = ui.painter();
 	if resp.hovered() {
@@ -1044,11 +1028,11 @@ fn pop_out_button(ui: &mut Ui, size: f32) -> egui::Response {
 	p.line_segment([tip, tip + vec2(-4.0, 0.0)], stroke);
 	p.line_segment([tip, tip + vec2(0.0, 4.0)], stroke);
 	resp.on_hover_cursor(CursorIcon::PointingHand)
-		.on_hover_text("Pop out into a floating window")
+		.on_hover_text(tr("Pop out into a floating window"))
 }
 
 /// A left-to-right row in `rect`.
-fn row(ui: &mut Ui, rect: Rect) -> Ui {
+pub(crate) fn row(ui: &mut Ui, rect: Rect) -> Ui {
 	ui.new_child(
 		UiBuilder::new()
 			.max_rect(rect)
@@ -1081,7 +1065,9 @@ fn chevron(p: &egui::Painter, center: Pos2, color: Color32) {
 fn power_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, size: f32) {
 	let on = !d.bypass;
 	let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-	resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, "Power"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, tr("Power"))
+	});
 	let (bg, ring, fg) = if on {
 		(
 			theme::PLAYING_SOFT,
@@ -1118,9 +1104,9 @@ fn power_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, siz
 	let resp = resp
 		.on_hover_cursor(CursorIcon::PointingHand)
 		.on_hover_text(if on {
-			"Bypass the device"
+			tr("Bypass the device")
 		} else {
-			"Enable the device"
+			tr("Enable the device")
 		});
 	if resp.clicked() {
 		state.apply(Command::SetDeviceBypass {
@@ -1155,7 +1141,11 @@ fn track_chip(ui: &mut Ui, name: &str, color: Color32) {
 /// The sidechain key of the device: "Sidechain ▪ Kick".
 fn sidechain_chip(ui: &mut Ui, name: &str, color: Color32) {
 	let p = ui.painter();
-	let lead = p.layout_no_wrap("Sidechain".into(), theme::medium(11.0), theme::TEXT_FAINT);
+	let lead = p.layout_no_wrap(
+		tr("Sidechain").into(),
+		theme::medium(11.0),
+		theme::TEXT_FAINT,
+	);
 	let g = p.layout_no_wrap(name.to_owned(), theme::medium(12.0), theme::TEXT_DIM);
 	let (lw, gw) = (lead.size().x, g.size().x);
 	let (rect, resp) = ui.allocate_exact_size(vec2(lw + gw + 36.0, 20.0), Sense::hover());
@@ -1174,7 +1164,7 @@ fn sidechain_chip(ui: &mut Ui, name: &str, color: Color32) {
 		color,
 	);
 	p.galley(pos2(x + 13.0, cy - g.size().y * 0.5), g, theme::TEXT_DIM);
-	resp.on_hover_text("The track keying this device's sidechain");
+	resp.on_hover_text(tr("The track keying this device's sidechain"));
 }
 
 /// The compact header's track: a colour dot and the name.
@@ -1215,11 +1205,24 @@ fn header_button(ui: &mut Ui, label: &str, hint: &str) -> egui::Response {
 		.on_hover_text(hint)
 }
 
-fn close_button(ui: &mut Ui, size: f32) -> egui::Response {
+pub(crate) fn close_button(ui: &mut Ui, size: f32) -> egui::Response {
+	close_button_labeled(
+		ui,
+		size,
+		tr("Close device editor"),
+		tr("Close the device editor"),
+	)
+}
+
+/// The × button with its accessibility label and tooltip.
+pub(crate) fn close_button_labeled(
+	ui: &mut Ui,
+	size: f32,
+	label: &str,
+	hint: &str,
+) -> egui::Response {
 	let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-	resp.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close device editor")
-	});
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
 	let p = ui.painter();
 	if resp.hovered() {
 		p.rect_filled(rect, CornerRadius::same(theme::RADIUS_MD), theme::BG_HOVER);
@@ -1235,7 +1238,7 @@ fn close_button(ui: &mut Ui, size: f32) -> egui::Response {
 	p.line_segment([c + vec2(-s, -s), c + vec2(s, s)], stroke);
 	p.line_segment([c + vec2(-s, s), c + vec2(s, -s)], stroke);
 	resp.on_hover_cursor(CursorIcon::PointingHand)
-		.on_hover_text("Close the device editor")
+		.on_hover_text(hint)
 }
 
 /// The header's dry/wet control: a mini slider bound to the `mix` param (drag previews,
@@ -1246,7 +1249,7 @@ fn mix_control(ui: &mut Ui, state: &mut AppState, r: DeviceRef, info: &ParamInfo
 	let value = state
 		.param_value(r.track, r.device, info.id)
 		.unwrap_or(info.default);
-	resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(value), "Mix"));
+	resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(value), tr("Mix")));
 	let bar = Rect::from_min_size(
 		pos2(rect.left() + 34.0, rect.center().y - 2.0),
 		vec2(56.0, 4.0),
@@ -1282,7 +1285,7 @@ fn mix_control(ui: &mut Ui, state: &mut AppState, r: DeviceRef, info: &ParamInfo
 	p.text(
 		pos2(rect.left() + 7.0, rect.center().y),
 		Align2::LEFT_CENTER,
-		"Mix",
+		tr("Mix"),
 		theme::medium(11.0),
 		theme::TEXT_DIM,
 	);
@@ -1310,7 +1313,7 @@ fn mix_control(ui: &mut Ui, state: &mut AppState, r: DeviceRef, info: &ParamInfo
 	);
 	let resp = resp
 		.on_hover_cursor(CursorIcon::ResizeHorizontal)
-		.on_hover_text("Dry/wet: drag, double-click resets");
+		.on_hover_text(tr("Dry/wet: drag, double-click resets"));
 	if let Some(v) = device_kit::control_menu(
 		&resp,
 		state,
@@ -1321,6 +1324,7 @@ fn mix_control(ui: &mut Ui, state: &mut AppState, r: DeviceRef, info: &ParamInfo
 			max: info.max,
 			default: info.default,
 			fmt: ValueFmt::unit(info.unit),
+			tip: None,
 		},
 	) {
 		state.commit_param(r.track, r.device, info.id, v);
@@ -1346,7 +1350,7 @@ pub fn generic_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 			.layout(Layout::top_down(Align::Min)),
 	);
 	if params.is_empty() {
-		inner.label(egui::RichText::new("No parameters").color(theme::TEXT_FAINT));
+		inner.label(egui::RichText::new(tr("No parameters")).color(theme::TEXT_FAINT));
 		return;
 	}
 	let groups = device::param_groups(&params);

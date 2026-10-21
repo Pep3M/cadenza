@@ -15,6 +15,7 @@ use egui::{
 	StrokeKind, Ui, UiBuilder, pos2, vec2,
 };
 
+use crate::i18n::{mark, tr};
 use crate::state::AppState;
 use crate::state::electric_piano_editor::{
 	self as ep, BELL, BRIGHTNESS, DECAY, EpValues, GAIN, RELEASE, TREM_DEPTH, TREM_RATE, VEL_SENS,
@@ -38,8 +39,10 @@ const ROW_MIN: f32 = 1000.0;
 const STACK_BELOW: f32 = 560.0;
 const CARD_MIN_H: f32 = 270.0;
 const PICTURE_MIN_H: f32 = 210.0;
-const SUBTITLE: &str = "tine \u{b7} 1974 suitcase voicing";
-const TONE_CAPTION: &str = "Bell lifts the 7th\u{2013}9th partials (pale bars): the tine \u{201c}ping\u{201d} on hard hits.";
+const SUBTITLE: &str = mark("tine \u{b7} 1974 suitcase voicing");
+const TONE_CAPTION: &str = mark(
+	"Bell lifts the 7th\u{2013}9th partials (pale bars): the tine \u{201c}ping\u{201d} on hard hits.",
+);
 
 fn values(state: &AppState, cx: &BodyCx) -> EpValues {
 	EpValues::from_fn(|p| devices::shown(state, cx.r, cx.info, p.id))
@@ -153,7 +156,7 @@ fn tone_panel(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, captio
 	p.text(
 		rect.left_top() + vec2(8.0, 6.0),
 		Align2::LEFT_TOP,
-		"Tone \u{b7} partials of a held C4",
+		tr("Tone \u{b7} partials of a held C4"),
 		theme::medium(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -175,7 +178,7 @@ fn tone_panel(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, captio
 		);
 		c.add(
 			egui::Label::new(
-				egui::RichText::new(TONE_CAPTION)
+				egui::RichText::new(crate::i18n::tr_str(TONE_CAPTION))
 					.font(theme::medium(11.0))
 					.color(theme::TEXT_FAINT),
 			)
@@ -233,14 +236,14 @@ fn slider(
 	let mellow = ui.painter().text(
 		pos2(left, cy),
 		Align2::LEFT_CENTER,
-		"Mellow",
+		tr("Mellow"),
 		font.clone(),
 		theme::TEXT_DIM,
 	);
 	let bright = ui.painter().text(
 		pos2(right, cy),
 		Align2::RIGHT_CENTER,
-		"Bright",
+		tr("Bright"),
 		font,
 		theme::TEXT_DIM,
 	);
@@ -259,7 +262,7 @@ fn slider(
 		)
 		.on_hover_cursor(CursorIcon::ResizeHorizontal);
 	resp.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, "Brightness slider")
+		egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, tr("Brightness slider"))
 	});
 	let at = |x: f32| ep::slider_brightness((x - track.left()) / track.width());
 	if (resp.is_pointer_button_down_on() || resp.dragged())
@@ -272,7 +275,7 @@ fn slider(
 	{
 		state.commit_param(cx.r.track, cx.r.device, BRIGHTNESS, at(pos.x));
 	}
-	let resp = resp.on_hover_text("Brightness: drag from mellow to bright");
+	let resp = resp.on_hover_text(tr("Brightness: drag from mellow to bright"));
 	let p = ui.painter();
 	// The gradient as one mesh: dark amber -> amber -> cream.
 	let mut mesh = egui::Mesh::default();
@@ -338,7 +341,7 @@ fn face_card(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, tremolo
 	let title = p.text(
 		pos2(rect.left() + 18.0, rect.top() + 13.0),
 		Align2::LEFT_TOP,
-		"Electric Piano",
+		tr("Electric Piano"),
 		theme::semibold(20.0),
 		theme::TEXT,
 	);
@@ -346,7 +349,7 @@ fn face_card(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, tremolo
 		p.text(
 			pos2(title.right() + 10.0, title.bottom() - 3.0),
 			Align2::LEFT_BOTTOM,
-			SUBTITLE,
+			crate::i18n::tr_str(SUBTITLE),
 			theme::medium(12.0),
 			theme::TEXT_FAINT,
 		);
@@ -369,9 +372,9 @@ fn face_card(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, tremolo
 		cx,
 		big_area,
 		&[
-			KnobDef::new(BRIGHTNESS, "Brightness", big).color(AMBER),
-			KnobDef::new(BELL, "Bell", big).color(AMBER),
-			KnobDef::new(DECAY, "Decay", big).color(AMBER),
+			KnobDef::new(BRIGHTNESS, tr("Brightness"), big).color(AMBER),
+			KnobDef::new(BELL, tr("Bell"), big).color(AMBER),
+			KnobDef::new(DECAY, tr("Decay"), big).color(AMBER),
 		],
 		3,
 	);
@@ -382,13 +385,13 @@ fn face_card(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, tremolo
 	);
 	let s = KnobSize::S;
 	let mut knobs = vec![
-		KnobDef::new(VEL_SENS, "Velocity", s),
-		KnobDef::new(RELEASE, "Release", s),
-		KnobDef::new(GAIN, "Gain", s).step(0.5),
+		KnobDef::new(VEL_SENS, tr("Velocity"), s),
+		KnobDef::new(RELEASE, tr("Release"), s),
+		KnobDef::new(GAIN, tr("Gain"), s).step(0.5),
 	];
 	if tremolo {
-		knobs.push(KnobDef::new(TREM_RATE, "Trem rate", s).color(CREAM));
-		knobs.push(KnobDef::new(TREM_DEPTH, "Trem depth", s).color(CREAM));
+		knobs.push(KnobDef::new(TREM_RATE, tr("Trem rate"), s).color(CREAM));
+		knobs.push(KnobDef::new(TREM_DEPTH, tr("Trem depth"), s).color(CREAM));
 	}
 	let small_w = (rect.width() * 0.6)
 		.max(knobs.len() as f32 * 64.0)
@@ -418,8 +421,8 @@ fn tremolo_panel(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, kno
 		cx,
 		knobs,
 		&[
-			KnobDef::new(TREM_RATE, "Tremolo rate", knob).color(CREAM),
-			KnobDef::new(TREM_DEPTH, "Tremolo depth", knob).color(CREAM),
+			KnobDef::new(TREM_RATE, tr("Tremolo rate"), knob).color(CREAM),
+			KnobDef::new(TREM_DEPTH, tr("Tremolo depth"), knob).color(CREAM),
 		],
 		2,
 	);
@@ -487,20 +490,33 @@ fn tremolo_picture(ui: &Ui, state: &AppState, cx: &BodyCx, rect: Rect, labels: b
 		4.0,
 		3.0,
 	));
+	// The processor's voices on the picture (newest brightest).
+	let live = state.live_voices(cx.r.device);
+	for (k, voice) in live.voices.iter().enumerate() {
+		let t = ep::voice_time(voice.released, voice.elapsed_ms);
+		let env = ep::note_envelope(&v, t).sqrt();
+		let [gl, _] = ep::tremolo_gains(&v, t);
+		let at = pos2(x_at(t), cy - env * gl * half * 0.76);
+		let alpha = if k == 0 { 1.0 } else { 0.6 };
+		p.circle_filled(at, 3.0, theme::TEXT.gamma_multiply(alpha));
+	}
+	if !live.is_idle() {
+		ui.ctx().request_repaint();
+	}
 	if !labels {
 		return;
 	}
 	p.text(
 		pos2(up + 5.0, cy - 3.0),
 		Align2::LEFT_BOTTOM,
-		"key up",
+		tr("key up"),
 		theme::medium(10.0),
 		theme::TEXT_FAINT,
 	);
 	p.text(
 		rect.left_top() + vec2(8.0, 6.0),
 		Align2::LEFT_TOP,
-		"Tremolo \u{b7} one note over 3 s \u{b7} line = LFO",
+		tr("Tremolo \u{b7} one note over 3 s \u{b7} line = LFO"),
 		theme::medium(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -545,11 +561,11 @@ const COMPACT_TREM_H: f32 = 96.0;
 fn compact_knobs() -> [KnobDef; 5] {
 	let s = KnobSize::S;
 	[
-		KnobDef::new(VEL_SENS, "Velocity", s),
-		KnobDef::new(RELEASE, "Release", s),
-		KnobDef::new(TREM_RATE, "Trem rate", s).color(CREAM),
-		KnobDef::new(TREM_DEPTH, "Trem depth", s).color(CREAM),
-		KnobDef::new(GAIN, "Gain", s).step(0.5),
+		KnobDef::new(VEL_SENS, tr("Velocity"), s),
+		KnobDef::new(RELEASE, tr("Release"), s),
+		KnobDef::new(TREM_RATE, tr("Trem rate"), s).color(CREAM),
+		KnobDef::new(TREM_DEPTH, tr("Trem depth"), s).color(CREAM),
+		KnobDef::new(GAIN, tr("Gain"), s).step(0.5),
 	]
 }
 
@@ -575,9 +591,9 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 		cx,
 		knobs,
 		&[
-			KnobDef::new(BRIGHTNESS, "Brightness", m).color(AMBER),
-			KnobDef::new(BELL, "Bell", m).color(AMBER),
-			KnobDef::new(DECAY, "Decay", m).color(AMBER),
+			KnobDef::new(BRIGHTNESS, tr("Brightness"), m).color(AMBER),
+			KnobDef::new(BELL, tr("Bell"), m).color(AMBER),
+			KnobDef::new(DECAY, tr("Decay"), m).color(AMBER),
 		],
 		3,
 	);

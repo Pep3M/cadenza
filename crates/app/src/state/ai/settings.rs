@@ -1,6 +1,7 @@
 //! Non-secret AI settings, persisted with the user's preferences (eframe storage). API
 //! keys never live here: see [`super::secrets`].
 
+use crate::i18n::tr;
 use cadenza_agent::budget::Price;
 use cadenza_agent::config::{
 	DEFAULT_MODEL, MODEL_PRESETS, OPENAI_KEY_ENV, OPENROUTER_KEY_ENV, ProviderConfig,
@@ -24,8 +25,8 @@ impl ProviderKind {
 
 	pub fn name(self) -> &'static str {
 		match self {
-			ProviderKind::OpenRouter => "OpenRouter",
-			ProviderKind::OpenAiCompatible => "OpenAI-compatible",
+			ProviderKind::OpenRouter => tr("OpenRouter"),
+			ProviderKind::OpenAiCompatible => tr("OpenAI-compatible"),
 		}
 	}
 
@@ -48,6 +49,45 @@ impl ProviderKind {
 	/// Whether requests fail without a key (local OpenAI-compatible servers need none).
 	pub fn needs_key(self) -> bool {
 		self == ProviderKind::OpenRouter
+	}
+}
+
+/// Language the AI producer replies in. Tool arguments, ids and code always stay English
+/// (see `prompt::SESSION_SYSTEM_PROMPT`); this only steers the prose.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ReplyLanguage {
+	/// Follows the app's UI language (View > Language), whatever it resolves to.
+	#[default]
+	UiLanguage,
+	English,
+	/// Any language, typed by the user ("Italiano", "Catalan", "Haitian Creole").
+	Other(String),
+}
+
+impl ReplyLanguage {
+	/// The name to pass to the agent (`AppContext::reply_language`); `None` = English, no
+	/// hint needed.
+	pub fn resolve_name(&self, ui_language: crate::i18n::Language) -> Option<String> {
+		match self {
+			ReplyLanguage::UiLanguage => (ui_language != crate::i18n::Language::English)
+				.then(|| ui_language.native_name().to_owned()),
+			ReplyLanguage::English => None,
+			ReplyLanguage::Other(s) => {
+				let s = s.trim();
+				(!s.is_empty()).then(|| s.to_owned())
+			}
+		}
+	}
+
+	/// The picker label.
+	pub fn label(&self) -> String {
+		match self {
+			ReplyLanguage::UiLanguage => tr("UI language").to_owned(),
+			ReplyLanguage::English => tr("English").to_owned(),
+			ReplyLanguage::Other(s) if s.trim().is_empty() => tr("Other…").to_owned(),
+			ReplyLanguage::Other(s) => s.clone(),
+		}
 	}
 }
 
@@ -95,6 +135,8 @@ pub struct AiSettings {
 	pub custom_price: Option<(f64, f64)>,
 	/// Let the AI use installed third-party plugins.
 	pub allow_plugins: bool,
+	/// Language the AI producer answers in.
+	pub reply_language: ReplyLanguage,
 }
 
 impl Default for AiSettings {
@@ -108,6 +150,7 @@ impl Default for AiSettings {
 			max_cost_usd: DEFAULT_SESSION_MAX_COST_USD,
 			custom_price: None,
 			allow_plugins: false,
+			reply_language: ReplyLanguage::UiLanguage,
 		}
 	}
 }
@@ -208,9 +251,37 @@ mod tests {
 		assert!(!s.presets().is_empty());
 		// Old prefs without the field, nonsense values.
 		let partial: AiSettings = serde_json::from_str("{\"max_cost_usd\": -3}").unwrap();
+		assert_eq!(partial.reply_language, ReplyLanguage::UiLanguage);
 		assert_eq!(
 			partial.sanitized().max_cost_usd,
 			DEFAULT_SESSION_MAX_COST_USD
+		);
+	}
+
+	#[test]
+	fn reply_language_resolves_to_a_hint_or_none() {
+		use crate::i18n::Language;
+		assert_eq!(
+			ReplyLanguage::UiLanguage.resolve_name(Language::English),
+			None
+		);
+		assert_eq!(
+			ReplyLanguage::UiLanguage.resolve_name(Language::Spanish),
+			Some("Español".to_owned())
+		);
+		assert_eq!(ReplyLanguage::English.resolve_name(Language::Spanish), None);
+		assert_eq!(
+			ReplyLanguage::Other("Italiano".into()).resolve_name(Language::English),
+			Some("Italiano".to_owned())
+		);
+		assert_eq!(
+			ReplyLanguage::Other("   ".into()).resolve_name(Language::English),
+			None
+		);
+		let json = serde_json::to_string(&ReplyLanguage::Other("Català".into())).unwrap();
+		assert_eq!(
+			serde_json::from_str::<ReplyLanguage>(&json).unwrap(),
+			ReplyLanguage::Other("Català".into())
 		);
 	}
 }

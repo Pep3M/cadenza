@@ -120,6 +120,18 @@ pub const GAIN_REDUCTION_TEXT: Color32 = Color32::from_rgb(0xff, 0x9a, 0x80);
 pub const LEVEL_OUTPUT: Color32 = Color32::from_rgb(0x8c, 0xc8, 0xf0);
 pub const STEREO_L: Color32 = BAND_COLORS[4];
 pub const STEREO_R: Color32 = BAND_COLORS[1];
+/// An EQ with mid/side bands draws two sums: the mid in the usual curve colour, the side
+/// in a pale amber (outside the band palette, so no band reads as "the side").
+pub const EQ_MID: Color32 = TEXT;
+pub const EQ_SIDE: Color32 = Color32::from_rgb(0xff, 0xd2, 0x9a);
+/// Modulation (LFO / envelope sources, the rings they draw on knobs): the kit's teal,
+/// apart from automation violet and the AI blue.
+/// MIDI learn ring and mapped-control badges (T36).
+pub const LEARN: Color32 = Color32::from_rgb(0xf2, 0xa1, 0x3c);
+pub const LEARN_SOFT: Color32 = Color32::from_rgb(0x3a, 0x2a, 0x14);
+pub const MOD: Color32 = Color32::from_rgb(0x4f, 0xd6, 0xc8);
+pub const MOD_SOFT: Color32 = Color32::from_rgb(0x15, 0x2e, 0x2c);
+pub const MOD_TEXT: Color32 = Color32::from_rgb(0x8e, 0xe8, 0xdd);
 /// Readout of an automated control.
 pub const AUTOMATION_TEXT: Color32 = Color32::from_rgb(0xd9, 0xa8, 0xf0);
 
@@ -168,11 +180,13 @@ pub const KEYBOARD_WIDTH: f32 = 64.0;
 // Piano roll.
 pub const KEY_WHITE: Color32 = Color32::from_rgb(0xc9, 0xcc, 0xd2);
 pub const KEY_BLACK: Color32 = Color32::from_rgb(0x1c, 0x1d, 0x21);
-pub const ROW_WHITE: Color32 = Color32::from_rgb(0x15, 0x16, 0x1a);
+pub const ROW_WHITE: Color32 = Color32::from_rgb(0x16, 0x17, 0x1b);
 pub const ROW_BLACK: Color32 = Color32::from_rgb(0x11, 0x12, 0x15);
 /// Rows of pitches outside the selected scale.
-pub const ROW_OUT_OF_SCALE: Color32 = Color32::from_rgb(0x0e, 0x0f, 0x11);
-pub const ROW_ROOT: Color32 = Color32::from_rgb(0x1a, 0x21, 0x2c);
+pub const ROW_OUT_OF_SCALE: Color32 = Color32::from_rgb(0x11, 0x12, 0x15);
+pub const ROW_ROOT: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x20);
+/// The line under a piano roll row (C rows use [`PIANO_GRID_BAR`]).
+pub const PIANO_ROW_LINE: Color32 = Color32::from_rgb(0x17, 0x18, 0x1c);
 
 /// The 16 track colors: readable on dark lanes and as clip fills with dark ink.
 pub const TRACK_COLORS: [&str; 16] = [
@@ -311,15 +325,138 @@ fn applied_id() -> egui::Id {
 	egui::Id::new("cadenza-theme-applied")
 }
 
-/// Whether [`apply`] already ran on `ctx` (a fresh context needs the fonts again).
+/// Whether [`apply`] already ran on `ctx` with the fonts the current language needs (a
+/// fresh context needs the fonts again, and so does one whose language just switched
+/// into or out of CJK: see [`needs_cjk_fallback`]/[`cjk_fallback_font`]).
 pub fn applied(ctx: &egui::Context) -> bool {
 	ctx.data(|d| d.get_temp::<bool>(applied_id()).unwrap_or(false))
 }
 
-/// Applies the Cadenza style to `ctx`.
-pub fn apply(ctx: &egui::Context) {
-	ctx.data_mut(|d| d.insert_temp(applied_id(), true));
-	ctx.set_fonts(fonts());
+fn applied_cjk_id() -> egui::Id {
+	egui::Id::new("cadenza-theme-applied-cjk")
+}
+
+/// Whether [`apply`] needs to run again: never applied yet, or the active language's
+/// script needs the CJK fallback and the context wasn't built with it (or the other way
+/// around, switching back to a non-CJK language).
+pub fn needs_apply(ctx: &egui::Context) -> bool {
+	let needs = crate::i18n::current().needs_cjk_fallback();
+	!applied(ctx) || ctx.data(|d| d.get_temp::<bool>(applied_cjk_id())) != Some(needs)
+}
+
+/// Whether `c` is a CJK character (Hiragana, Katakana, Hangul or a Han ideograph): these
+/// need the system [`find_cjk_font`] fallback, never the embedded IBM Plex Sans.
+#[cfg(test)]
+pub(crate) fn is_cjk(c: char) -> bool {
+	matches!(c as u32,
+		0x3000..=0x303F   // CJK symbols and punctuation
+		| 0x3040..=0x30FF // Hiragana, Katakana
+		| 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
+		| 0x4E00..=0x9FFF // CJK Unified Ideographs
+		| 0xAC00..=0xD7A3 // Hangul syllables
+		| 0x1100..=0x11FF // Hangul Jamo
+		| 0xFF00..=0xFFEF // Halfwidth and fullwidth forms
+	)
+}
+
+/// Looks up a system font file that can draw CJK glyphs (Noto Sans CJK, Source Han
+/// Sans, Droid Sans Fallback, WenQuanYi on Linux; PingFang/Hiragino on macOS; Microsoft
+/// YaHei/Malgun Gothic/Yu Gothic/MS Gothic on Windows), in the order a desktop install is
+/// likely to have them. `None` when no candidate file exists on this machine: callers
+/// show a clear notice instead of silently drawing empty boxes.
+const CJK_FONT_CANDIDATES: &[&str] = &[
+	// Linux: common package install paths (fontconfig's own cache varies by distro, so
+	// this checks the files directly rather than shelling out to `fc-match`).
+	"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+	"/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+	"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+	"/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+	"/usr/share/fonts/adobe-source-han-sans/SourceHanSans-Regular.otf",
+	"/usr/share/fonts/source-han-sans/SourceHanSans-Regular.otf",
+	"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+	"/usr/share/fonts/truetype/droid/DroidSansFallback.ttf",
+	"/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
+	"/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
+	// macOS.
+	"/System/Library/Fonts/PingFang.ttc",
+	"/System/Library/Fonts/Hiragino Sans GB.ttc",
+	"/Library/Fonts/Microsoft/Microsoft YaHei.ttf",
+	// Windows.
+	"C:\\Windows\\Fonts\\msyh.ttc",
+	"C:\\Windows\\Fonts\\msyh.ttf",
+	"C:\\Windows\\Fonts\\malgun.ttf",
+	"C:\\Windows\\Fonts\\YuGothR.ttc",
+	"C:\\Windows\\Fonts\\msgothic.ttc",
+];
+
+/// A CJK fallback face found on this machine.
+pub struct CjkFont {
+	pub path: &'static str,
+	pub bytes: Vec<u8>,
+}
+
+/// Reads the first [`CJK_FONT_CANDIDATES`] path that exists, if any.
+pub fn find_cjk_font() -> Option<CjkFont> {
+	CJK_FONT_CANDIDATES.iter().find_map(|&path| {
+		std::fs::read(path)
+			.ok()
+			.map(|bytes| CjkFont { path, bytes })
+	})
+}
+
+/// [`fonts`] plus a system CJK fallback appended after Hack, when `needs_cjk` and one is
+/// found on this machine. Returns the definitions and, when a CJK fallback was needed but
+/// none was found, a notice to show the user (no glyphs: the UI would draw empty boxes).
+pub fn fonts_for_language(needs_cjk: bool) -> (egui::FontDefinitions, Option<String>) {
+	let mut defs = fonts();
+	if !needs_cjk {
+		return (defs, None);
+	}
+	match find_cjk_font() {
+		Some(cjk) => {
+			defs.font_data.insert(
+				"cjk-fallback".to_owned(),
+				egui::FontData::from_owned(cjk.bytes).into(),
+			);
+			// Every family UI text actually draws with, not just `Proportional`: egui
+			// has no font weights, so buttons/tabs (`medium`), panel titles/track names
+			// (`semibold`) and the position counter (`mono_medium`) are each their own
+			// named family (see `fonts`) and would otherwise show CJK text as boxes.
+			for family in [
+				FontFamily::Proportional,
+				FontFamily::Monospace,
+				FontFamily::Name(MEDIUM.into()),
+				FontFamily::Name(SEMIBOLD.into()),
+				FontFamily::Name(MONO_MEDIUM.into()),
+			] {
+				defs.families
+					.entry(family)
+					.or_default()
+					.push("cjk-fallback".to_owned());
+			}
+			(defs, None)
+		}
+		None => (
+			defs,
+			Some(
+				"No CJK font found on this system: install one (e.g. Noto Sans CJK) for \
+				 Japanese, Chinese or Korean text to show."
+					.to_owned(),
+			),
+		),
+	}
+}
+
+/// Applies the Cadenza style to `ctx`; returns a notice when the language needs a CJK
+/// fallback font that is not installed on this machine.
+pub fn apply(ctx: &egui::Context) -> Option<String> {
+	let needs_cjk = crate::i18n::current().needs_cjk_fallback();
+	let (defs, notice) = fonts_for_language(needs_cjk);
+	ctx.data_mut(|d| {
+		d.insert_temp(applied_id(), true);
+		d.insert_temp(applied_cjk_id(), needs_cjk);
+	});
+	ctx.set_fonts(defs);
 	ctx.set_theme(egui::Theme::Dark);
 	ctx.all_styles_mut(|style| {
 		style.text_styles = [
@@ -403,6 +540,78 @@ pub fn apply(ctx: &egui::Context) {
 		w.open.weak_bg_fill = BG_HOVER;
 		w.open.corner_radius = r;
 	});
+	notice
+}
+
+/// Frame of a modal dialog (Export, Locate missing files, recovery/collect prompts, Audio
+/// settings): the Graphite card look (raised surface, a border a shade lighter than the
+/// panel, large radius). Callers lay out their own header/footer bars inside.
+pub fn dialog_frame() -> egui::Frame {
+	egui::Frame::new()
+		.fill(BG_RAISED)
+		.stroke(Stroke::new(1.0, BG_HOVER))
+		.corner_radius(RADIUS_XL)
+		.inner_margin(Margin::same(16))
+}
+
+/// A dialog's primary action (filled accent, dark bold text): "Export 9 files", "Recover"…
+pub fn primary_button(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+	ui.add(
+		egui::Button::new(
+			egui::RichText::new(text.into())
+				.font(semibold(12.5))
+				.color(TEXT_ON_ACCENT),
+		)
+		.fill(ACCENT)
+		.corner_radius(RADIUS_MD),
+	)
+}
+
+/// A dialog's destructive primary action ("Cancel export"): filled error-soft with an
+/// error border, matching the Graphite warning/error button look.
+pub fn danger_button(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+	ui.add(
+		egui::Button::new(
+			egui::RichText::new(text.into())
+				.font(semibold(12.5))
+				.color(ERROR),
+		)
+		.fill(ERROR_SOFT)
+		.stroke(Stroke::new(1.0, Color32::from_rgb(0x6b, 0x2a, 0x2a)))
+		.corner_radius(RADIUS_MD),
+	)
+}
+
+/// A dialog's bold section header ("Range", "Format", "Save to"…).
+pub fn section_label(ui: &mut egui::Ui, text: &str) {
+	ui.label(egui::RichText::new(text).font(semibold(12.5)).color(TEXT));
+}
+
+/// A dialog's title row: bold name, dimmer subtitle, then whatever the caller puts at the
+/// right (preset picker, close glyph...), with a divider below (Export, Locate missing files,
+/// recovery/collect prompts, Audio settings).
+pub fn dialog_header(
+	ui: &mut egui::Ui,
+	title: &str,
+	subtitle: &str,
+	right: impl FnOnce(&mut egui::Ui),
+) {
+	ui.horizontal(|ui| {
+		ui.label(egui::RichText::new(title).font(semibold(15.0)));
+		if !subtitle.is_empty() {
+			ui.label(egui::RichText::new(subtitle).color(TEXT_DIM));
+		}
+		ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+	});
+	ui.add_space(8.0);
+	ui.separator();
+	ui.add_space(8.0);
+}
+
+/// A dialog's close "×" (header, top right).
+pub fn close_glyph(ui: &mut egui::Ui) -> bool {
+	ui.add(egui::Label::new(egui::RichText::new("×").color(TEXT_DIM)).sense(egui::Sense::click()))
+		.clicked()
 }
 
 #[cfg(test)]
@@ -422,6 +631,53 @@ mod tests {
 			Color32::from_rgb(128, 128, 128)
 		);
 		assert_eq!(text_on(Color32::WHITE), Color32::from_rgb(0x12, 0x14, 0x17));
+	}
+
+	/// `fonts_for_language` is a no-op pass-through when the language needs no CJK
+	/// fallback, and otherwise either appends a working fallback family or returns a
+	/// clear notice — whichever this machine's font set allows (CI boxes rarely carry a
+	/// CJK font, so the test exercises the search logic rather than asserting one path).
+	#[test]
+	fn fonts_for_language_adds_a_cjk_fallback_or_explains_its_absence() {
+		let (no_cjk, notice) = fonts_for_language(false);
+		assert!(notice.is_none());
+		assert_eq!(
+			no_cjk.families[&FontFamily::Proportional].len(),
+			fonts().families[&FontFamily::Proportional].len()
+		);
+
+		let (with_cjk, notice) = fonts_for_language(true);
+		match find_cjk_font() {
+			Some(_) => {
+				assert!(notice.is_none());
+				assert!(
+					with_cjk.families[&FontFamily::Proportional]
+						.last()
+						.is_some_and(|f| f == "cjk-fallback")
+				);
+				assert!(with_cjk.font_data.contains_key("cjk-fallback"));
+			}
+			None => {
+				assert!(notice.is_some_and(|n| n.contains("CJK")));
+				assert_eq!(
+					with_cjk.families[&FontFamily::Proportional].len(),
+					fonts().families[&FontFamily::Proportional].len()
+				);
+			}
+		}
+	}
+
+	/// `needs_apply` is true until `apply` runs, and again when the language's CJK need
+	/// changes (modeled directly since no shipped language needs it yet).
+	#[test]
+	fn needs_apply_tracks_the_cjk_fallback_across_calls() {
+		let ctx = egui::Context::default();
+		assert!(needs_apply(&ctx));
+		apply(&ctx);
+		assert!(!needs_apply(&ctx));
+		// Flip the stored flag to simulate a switch into a CJK language.
+		ctx.data_mut(|d| d.insert_temp(applied_cjk_id(), true));
+		assert!(needs_apply(&ctx));
 	}
 
 	/// Every non-ASCII character the app draws in proportional text has a glyph in one of
@@ -446,19 +702,61 @@ mod tests {
 			}
 		}
 		assert!(symbols.contains(&'◆') && symbols.contains(&'●'));
-		let defs = fonts();
-		let faces: Vec<_> = defs.families[&FontFamily::Proportional]
-			.iter()
-			.map(|name| &defs.font_data[name])
-			.collect();
-		let covered = |c: char| {
+		// Every translation too (accents, ¿ ¡ ñ...), including the CJK languages' own
+		// `native_name()` literals above: CJK characters are split out below (checked
+		// against the system fallback instead of the embedded faces).
+		for lang in crate::i18n::Language::ALL {
+			for text in crate::i18n::all_translations(lang) {
+				symbols.extend(text.chars().filter(|c| !c.is_ascii()));
+			}
+		}
+		assert!(symbols.contains(&'ñ') && symbols.contains(&'¿'));
+		let cjk_symbols: std::collections::BTreeSet<char> =
+			symbols.iter().copied().filter(|c| is_cjk(*c)).collect();
+		symbols.retain(|c| !is_cjk(*c));
+		let covered = |c: char, faces: &[&std::sync::Arc<egui::FontData>]| {
 			faces.iter().any(|data| {
 				skrifa::FontRef::from_index(&data.font, data.index)
 					.is_ok_and(|f| f.charmap().map(c).is_some())
 			})
 		};
-		let missing: String = symbols.iter().filter(|&&c| !covered(c)).collect();
+		let defs = fonts();
+		let faces: Vec<_> = defs.families[&FontFamily::Proportional]
+			.iter()
+			.map(|name| &defs.font_data[name])
+			.collect();
+		let missing: String = symbols.iter().filter(|&&c| !covered(c, &faces)).collect();
 		assert!(missing.is_empty(), "no glyph for {missing:?}");
-		assert!(covered('←'), "arrows for library/back links");
+		assert!(covered('←', &faces), "arrows for library/back links");
+
+		// CJK characters (ideographs, kana, hangul — from the CJK languages' translations
+		// and their own `native_name()`s, always visible in the language picker) are
+		// checked against the system fallback only when one is actually found on this
+		// machine (CI/dev boxes without a CJK font installed would otherwise fail here for
+		// a reason outside the code's control — they see the notice instead).
+		assert!(
+			!cjk_symbols.is_empty(),
+			"expected some CJK symbols (native names at least)"
+		);
+		if let Some(cjk) = find_cjk_font() {
+			let (cjk_defs, notice) = fonts_for_language(true);
+			assert!(
+				notice.is_none(),
+				"a CJK font was found but still produced a notice"
+			);
+			let cjk_faces: Vec<_> = cjk_defs.families[&FontFamily::Proportional]
+				.iter()
+				.map(|name| &cjk_defs.font_data[name])
+				.collect();
+			let missing: String = cjk_symbols
+				.iter()
+				.filter(|&&c| !covered(c, &cjk_faces))
+				.collect();
+			assert!(
+				missing.is_empty(),
+				"no glyph for {missing:?} in {}",
+				cjk.path
+			);
+		}
 	}
 }

@@ -11,7 +11,7 @@
 //! captured from a plugin editor; see `state::editors`).
 
 use cadenza_core::{DeviceId, TrackId};
-use cadenza_model::{Channel, Device, Project, TrackKind};
+use cadenza_model::{Channel, Device, DeviceKind, Project, TrackKind};
 
 /// Edits the player can apply live.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -26,6 +26,8 @@ pub struct LiveChanges {
 	pub automation: bool,
 	/// Instrument tracks whose MIDI clips changed (reschedule them).
 	pub clips: Vec<TrackId>,
+	/// The MIDI controller assignments changed (`Player::set_midi_map`).
+	pub midi_map: bool,
 }
 
 impl LiveChanges {
@@ -77,6 +79,10 @@ pub fn diff(old: &Project, new: &Project, live_state: LiveState) -> Option<LiveC
 	// Song metadata does not sound; arm states reach the player on their own.
 	normalized.meta = new.meta.clone();
 	normalized.armed = new.armed.clone();
+	if normalized.midi_map != new.midi_map {
+		changes.midi_map = true;
+		normalized.midi_map = new.midi_map.clone();
+	}
 	(normalized == *new).then_some(changes)
 }
 
@@ -130,6 +136,11 @@ fn device(
 	}
 	for (k, &v) in &n.params {
 		if o.params.get(k) != Some(&v) {
+			if let DeviceKind::Builtin { id } = &n.kind
+				&& cadenza_dsp::param_changes_latency(id, k)
+			{
+				return None;
+			}
 			o.params.insert(k.clone(), v);
 			changes.params.push((n.id, k.clone(), v));
 		}

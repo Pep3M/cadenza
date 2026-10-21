@@ -2,6 +2,7 @@
 //! popover (suggestions per device), and the card listing what the last AI request
 //! changed on the open device, with Keep, Undo and "Hold to hear before".
 
+use crate::i18n::{tr, trf, trn};
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 use egui::{
 	Align, Align2, Color32, CornerRadius, CursorIcon, Id, Layout, Rect, Sense, Stroke, StrokeKind,
@@ -29,11 +30,64 @@ pub fn input_id(r: DeviceRef) -> Id {
 	Id::new(("device-ask-ai-input", r.device))
 }
 
+fn popover_id(r: DeviceRef) -> Id {
+	Id::new(("device-ask-ai", r.device))
+}
+
+fn prefill_id(r: DeviceRef) -> Id {
+	Id::new(("device-ask-ai-prefill", r.device))
+}
+
+/// Opens the Ask AI popover of `r` with `text` typed in (a control's "Ask AI about
+/// this"), opening its editor first when it is not shown.
+pub fn ask_about(ctx: &egui::Context, state: &mut AppState, r: DeviceRef, text: String) {
+	ctx.data_mut(|d| d.insert_temp(prefill_id(r), text));
+	state.open_device_editor(r);
+	ctx.request_repaint();
+}
+
+/// "Explain" (header, next to Ask AI): asks the AI producer to explain the device's
+/// current settings, read only; the answer streams into the chat.
+pub fn explain_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
+	let font = theme::medium(12.0);
+	let label = tr("Explain");
+	let g = ui
+		.painter()
+		.layout_no_wrap(label.to_owned(), font, theme::TEXT_DIM);
+	let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + 16.0, 22.0), Sense::click());
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+	let p = ui.painter();
+	let fill = if resp.hovered() {
+		theme::BG_HOVER
+	} else {
+		theme::BG_RAISED
+	};
+	p.rect(
+		rect,
+		CornerRadius::same(theme::RADIUS_MD),
+		fill,
+		Stroke::new(1.0, theme::ACCENT_BORDER),
+		StrokeKind::Inside,
+	);
+	p.galley(rect.center() - g.size() * 0.5, g, theme::TEXT_DIM);
+	let busy = state.ai.busy();
+	let resp = resp
+		.on_hover_cursor(CursorIcon::PointingHand)
+		.on_hover_text(if busy {
+			tr("The AI producer is busy with a request")
+		} else {
+			tr("Ask the AI producer to explain this device's settings (changes nothing)")
+		});
+	if resp.clicked() && !busy {
+		state.explain_device(r);
+	}
+}
+
 /// "Ask AI" (accent-tinted) and its popover: a text field (Enter sends) and suggestion
 /// chips that send at once. Sending opens the chat so the reply shows.
 pub fn ask_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef, ask: &mut AskAi) {
 	let font = theme::medium(12.0);
-	let label = "Ask AI";
+	let label = tr("Ask AI");
 	let g = ui
 		.painter()
 		.layout_no_wrap(label.to_owned(), font, theme::ACCENT_TEXT);
@@ -55,9 +109,15 @@ pub fn ask_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef, ask: &mut Ask
 	p.galley(rect.center() - g.size() * 0.5, g, theme::ACCENT_TEXT);
 	let resp = resp
 		.on_hover_cursor(CursorIcon::PointingHand)
-		.on_hover_text("Ask the AI producer to change this device");
+		.on_hover_text(tr("Ask the AI producer to change this device"));
 	if resp.clicked() {
 		ask.focus = true;
+	}
+	let ctx = ui.ctx().clone();
+	if let Some(text) = ctx.data_mut(|d| d.remove_temp::<String>(prefill_id(r))) {
+		ask.text = text;
+		ask.focus = true;
+		egui::Popup::open_id(&ctx, popover_id(r));
 	}
 	let Some(d) = state.device(r) else {
 		return;
@@ -67,24 +127,31 @@ pub fn ask_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef, ask: &mut Ask
 		.builtin_id()
 		.map_or(ai_changes::GENERIC, ai_changes::suggestions);
 	egui::Popup::menu(&resp)
-		.id(Id::new(("device-ask-ai", r.device)))
+		.id(popover_id(r))
 		.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
 		.width(340.0)
 		.show(|ui| {
 			ui.set_width(340.0);
 			ui.spacing_mut().item_spacing = vec2(6.0, 8.0);
 			ui.label(
-				egui::RichText::new(format!("Ask AI about {name}"))
+				egui::RichText::new(trf("Ask AI about {name}", &[("name", &name)]))
 					.font(theme::semibold(12.5))
 					.color(theme::TEXT),
 			);
 			let edit = egui::TextEdit::singleline(&mut ask.text)
 				.id(input_id(r))
-				.hint_text("What should change? (Enter sends)")
+				.hint_text(tr("What should change? (Enter sends)"))
 				.desired_width(f32::INFINITY);
 			let out = ui.add(edit);
 			if ask.focus {
 				out.request_focus();
+				// The caret after a prefilled question, ready to type the rest.
+				if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), input_id(r)) {
+					let end = egui::text::CCursor::new(ask.text.chars().count());
+					st.cursor
+						.set_char_range(Some(egui::text::CCursorRange::one(end)));
+					st.store(ui.ctx(), input_id(r));
+				}
 				ask.focus = false;
 			}
 			let enter = out.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -100,18 +167,19 @@ pub fn ask_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef, ask: &mut Ask
 						.filter(|_| suggestions != ai_changes::GENERIC)
 						.take(1),
 				) {
+					let s = crate::i18n::tr_str(s);
 					if chip(ui, s).clicked() {
-						send = Some((*s).to_owned());
+						send = Some(s.to_owned());
 					}
 				}
 			});
 			ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 				let ok = !ask.text.trim().is_empty();
-				if ui.add_enabled(ok, egui::Button::new("Send")).clicked() {
+				if ui.add_enabled(ok, egui::Button::new(tr("Send"))).clicked() {
 					send = Some(ask.text.clone());
 				}
 				ui.label(
-					egui::RichText::new("The reply shows in the chat (F10)")
+					egui::RichText::new(tr("The reply shows in the chat (F10)"))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
@@ -217,9 +285,12 @@ pub fn card(
 	row.spacing_mut().item_spacing.x = 8.0;
 	ai_badge(&mut row);
 	let n = changes.len();
-	let mut title = format!("AI changed {n} param{}", if n == 1 { "" } else { "s" });
+	let mut title = trn("AI changed {n} param", "AI changed {n} params", n);
 	if elsewhere > 0 {
-		title.push_str(&format!(" (+{elsewhere} on other devices)"));
+		title.push_str(&trf(
+			" (+{elsewhere} on other devices)",
+			&[("elsewhere", &elsewhere)],
+		));
 	}
 	row.label(
 		egui::RichText::new(title)
@@ -239,8 +310,8 @@ pub fn card(
 	);
 	row.with_layout(Layout::right_to_left(Align::Center), |ui| {
 		ui.spacing_mut().item_spacing.x = 6.0;
-		if card_button(ui, "Keep", true, true)
-			.on_hover_text("Keep the AI's changes and clear the blue rings")
+		if card_button(ui, tr("Keep"), true, true)
+			.on_hover_text(tr("Keep the AI's changes and clear the blue rings"))
 			.clicked()
 		{
 			state.keep_ai_changes();
@@ -250,25 +321,29 @@ pub fn card(
 		} else {
 			"Ctrl+Z"
 		};
-		let undo = card_button(ui, &format!("Undo  {key}"), false, last);
+		let undo = card_button(ui, &trf("Undo  {key}", &[("key", &key)]), false, last);
 		let undo = if last {
-			undo.on_hover_text(format!("Undo \"{}\" (one step)", all_label(state)))
+			undo.on_hover_text(trf(
+				"Undo \"{all_label}\" (one step)",
+				&[("all_label", &all_label(state))],
+			))
 		} else {
-			undo.on_hover_text(
+			undo.on_hover_text(tr(
 				"Other edits came after the AI step: undo them first (Ctrl+Z) or use Keep",
-			)
+			))
 		};
 		if undo.clicked() {
 			state.undo_ai_changes();
 		}
 		let held_now = state.hearing_before() == Some(r.device);
 		let label = if held_now {
-			"Hearing before…"
+			tr("Hearing before…")
 		} else {
-			"Hold to hear before"
+			tr("Hold to hear before")
 		};
-		let hold = card_button(ui, label, held_now, true)
-			.on_hover_text("Plays the values from before the AI request while pressed");
+		let hold = card_button(ui, label, held_now, true).on_hover_text(tr(
+			"Plays the values from before the AI request while pressed",
+		));
 		let held = hold.is_pointer_button_down_on();
 		if held {
 			ui.ctx().request_repaint();
@@ -308,7 +383,7 @@ pub fn card(
 	}
 	if info.id == "eq" {
 		list.label(
-			egui::RichText::new("Dashed curve = before")
+			egui::RichText::new(tr("Dashed curve = before"))
 				.font(theme::medium(11.0))
 				.color(theme::TEXT_FAINT),
 		);

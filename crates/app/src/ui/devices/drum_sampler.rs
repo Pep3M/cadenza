@@ -16,6 +16,7 @@
 //! gesture is one `SetSampleZones` undo step; the pure logic lives in
 //! [`crate::state::drum_sampler_editor`] and [`crate::state::samples`].
 
+use crate::i18n::{mark, tr, trf};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -73,9 +74,11 @@ const SHADE: Color32 = Color32::from_rgba_premultiplied(0x08, 0x08, 0x0a, 0xb8);
 const END_FG: Color32 = Color32::from_rgb(0xff, 0x8a, 0x87);
 const END_BG: Color32 = Color32::from_rgb(0x3a, 0x1d, 0x1f);
 const ENVELOPE: Color32 = Color32::from_rgb(0xf4, 0xf5, 0xf7);
-const FOOTER: &str = "Pad tags: C1 choke group \u{b7} \u{2192}3 extra output \u{b7} L3 RR3 layers and \
+const FOOTER: &str = mark(
+	"Pad tags: C1 choke group \u{b7} \u{2192}3 extra output \u{b7} L3 RR3 layers and \
 	round-robin. Blue dashed pad = file being dragged over it. Keys 1\u{2013}8 (Shift: 9\u{2013}16) \
-	play the pads.";
+	play the pads.",
+);
 
 fn pad_color(note: u8) -> Color32 {
 	theme::BAND_COLORS[ds::pad_color(note)]
@@ -191,6 +194,26 @@ pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef, hits: 
 			state.view.instrument.layer = 0;
 		}
 	}
+	// ← → the pad (bottom-left first), ↑ ↓ the selected layer's gain.
+	let keys = crate::ui::device_editor::arrows(ctx);
+	if keys.h != 0 {
+		let at = PADS
+			.iter()
+			.position(|p| p.0 == state.view.instrument.pad)
+			.unwrap_or(0) as i32;
+		state.view.instrument.pad = PADS[(at + keys.h).clamp(0, PADS.len() as i32 - 1) as usize].0;
+		state.view.instrument.layer = 0;
+	}
+	if keys.v != 0 {
+		let step = if keys.shift { 0.1 } else { 0.5 } * keys.v as f32;
+		let (note, layer) = (state.view.instrument.pad, state.view.instrument.layer);
+		let cmd = ds::edit_layer(state.project(), r, note, layer, |z| {
+			z.gain_db = ((z.gain_db + step) * 10.0).round() / 10.0;
+			z.gain_db = z.gain_db.clamp(-60.0, 24.0);
+		})
+		.map(|c| ds::labeled(c, "Pad gain".to_owned()));
+		state.apply_sample_edit(cmd);
+	}
 }
 
 /// Pads still held by keys that went up (the key-up may arrive without the focus).
@@ -239,7 +262,7 @@ fn listen(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut SamplerView, now: f64)
 		let (values, n) = probe.readings();
 		v.flashes.update(&values[..n], now);
 	}
-	if v.flashes.any_lit(now) {
+	if v.flashes.any_lit(now) || !state.live_voices(cx.r.device).is_idle() {
 		ui.ctx().request_repaint();
 	}
 }
@@ -326,7 +349,7 @@ fn kit_column(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	ui.painter().text(
 		inner.left_top(),
 		Align2::LEFT_TOP,
-		"KIT \u{b7} ALL PADS",
+		tr("KIT \u{b7} ALL PADS"),
 		theme::semibold(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -341,10 +364,10 @@ fn kit_column(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 		cx,
 		knobs,
 		&[
-			KnobDef::new("gain", "Gain", KnobSize::S).step(0.5),
-			KnobDef::new("velocity_sensitivity", "Velocity", KnobSize::S),
-			KnobDef::new("polyphony", "Polyphony", KnobSize::S),
-			KnobDef::new("tune", "Kit tune", KnobSize::S),
+			KnobDef::new("gain", tr("Gain"), KnobSize::S).step(0.5),
+			KnobDef::new("velocity_sensitivity", tr("Velocity"), KnobSize::S),
+			KnobDef::new("polyphony", tr("Polyphony"), KnobSize::S),
+			KnobDef::new("tune", tr("Kit tune"), KnobSize::S),
 		],
 		2,
 	);
@@ -358,7 +381,7 @@ fn kit_column(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	);
 	if hint.height() > 12.0 {
 		let g = ui.painter().layout(
-			"Drop a folder here to map a whole kit onto pads by name.".to_owned(),
+			tr("Drop a folder here to map a whole kit onto pads by name.").to_owned(),
 			theme::medium(10.5),
 			theme::TEXT_FAINT,
 			hint.width(),
@@ -373,10 +396,10 @@ fn kit_column(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	}
 	if button.top() > knobs.bottom() {
 		let id = Id::new(("kit-folder", cx.salt, cx.r.device));
-		let resp = chip_button(ui, id, button, "Map folder\u{2026}", false).on_hover_text(
+		let resp = chip_button(ui, id, button, tr("Map folder\u{2026}"), false).on_hover_text(tr(
 			"Pick (or drop here) a folder of drum samples: each file goes to the pad its name \
 			 names (kick, snare, hat, tom...), one undo step",
-		);
+		));
 		if resp.clicked() {
 			state.pick_kit_folder(cx.r);
 		}
@@ -466,6 +489,7 @@ fn pads(
 	let h = (grid.height() - 3.0 * PAD_GAP) / 4.0;
 	let file = dragged_file(ui.ctx()).filter(|p| !p.is_dir());
 	let pointer = ui.ctx().pointer_latest_pos();
+	let live = state.live_voices(cx.r.device);
 	for (i, &(note, _)) in PADS.iter().enumerate() {
 		let (row, col) = ds::grid_cell(i);
 		let rect = Rect::from_min_size(
@@ -477,7 +501,7 @@ fn pads(
 		);
 		hits.pads.push((rect, note));
 		let drop = file.is_some() && pointer.is_some_and(|p| rect.contains(p));
-		let lit = flash(v, i, now);
+		let lit = flash(v, i, now).max(ds::live_glow(&live, note));
 		pad(ui, state, cx, v, d, note, rect, lit, drop, mini);
 	}
 	pad_drag(ui, state, cx, v, hits);
@@ -535,17 +559,9 @@ fn pad(
 	}
 	resp.context_menu(|ui| pad_menu(ui, state, cx.r, d, note));
 	let resp = resp.on_hover_text(if loaded {
-		format!(
-			"{name} \u{b7} {} ({note}): click to hear it (higher = harder), drag onto another \
-			 pad to swap (Alt: copy), right-click for choke group, output, reverse",
-			ds::note_label(note)
-		)
+		trf("{name} · {note_label} ({note}): click to hear it (higher = harder), drag onto another pad to swap (Alt: copy), right-click for choke group, output, reverse", &[("name", &name), ("note_label", &ds::note_label(note)), ("note", &note)])
 	} else {
-		format!(
-			"{name} \u{b7} {} ({note}): empty \u{2014} drop an audio file on it or double-click \
-			 to pick one",
-			ds::note_label(note)
-		)
+		trf("{name} · {note_label} ({note}): empty — drop an audio file on it or double-click to pick one", &[("name", &name), ("note_label", &ds::note_label(note)), ("note", &note)])
 	});
 	if !ui.is_rect_visible(rect) {
 		return;
@@ -617,7 +633,7 @@ fn pad(
 	let full = if loaded {
 		name.clone()
 	} else {
-		"Empty".to_owned()
+		tr("Empty").to_owned()
 	};
 	let short = if loaded {
 		ds::pad_short(note).to_owned()
@@ -662,14 +678,14 @@ fn pad(
 		let (text, color) = if drop {
 			(
 				if loaded {
-					"Drop to replace"
+					tr("Drop to replace")
 				} else {
-					"Drop sample"
+					tr("Drop sample")
 				},
 				DROP_TEXT,
 			)
 		} else {
-			("Drop sample", theme::TEXT_FAINT)
+			(tr("Drop sample"), theme::TEXT_FAINT)
 		};
 		if mid.height() >= 12.0 {
 			p.text(
@@ -691,6 +707,14 @@ fn pad(
 			),
 		);
 		mini_wave(ui, state, &d.zones[first], wave, c.gamma_multiply(0.6));
+		let live = state.live_voices(cx.r.device);
+		let heads: Vec<f32> = live
+			.playheads(first)
+			.into_iter()
+			.filter_map(|s| mini_wave_x(state, &d.zones[first], s))
+			.map(|x| wave.left() + x * wave.width())
+			.collect();
+		devices::playheads(ui.painter(), wave, &heads, true);
 	}
 	if !mini && loaded {
 		let mut x = inner.left();
@@ -723,12 +747,12 @@ fn pad_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, note: u
 	let first = layers.first().map(|&i| d.zones[i].clone());
 	ui.set_min_width(170.0);
 	if let Some(z) = &first {
-		ui.menu_button("Choke group", |ui| {
+		ui.menu_button(tr("Choke group"), |ui| {
 			for g in 0..=8u8 {
 				let label = if g == 0 {
-					"None".to_owned()
+					tr("None").to_owned()
 				} else {
-					format!("Group {g}")
+					trf("Group {g}", &[("g", &g)])
 				};
 				if ui.radio(z.choke == g, label).clicked() {
 					let cmd = sm::edit_pad(state.project(), r, note, |z| z.choke = g);
@@ -737,12 +761,12 @@ fn pad_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, note: u
 				}
 			}
 		});
-		ui.menu_button("Output", |ui| {
+		ui.menu_button(tr("Output"), |ui| {
 			for o in 0..=OUTPUTS {
 				let label = if o == 0 {
-					"Main".to_owned()
+					tr("Main").to_owned()
 				} else {
-					format!("Extra out {o}")
+					trf("Extra out {o}", &[("o", &o)])
 				};
 				if ui.radio(z.output == o, label).clicked() {
 					let cmd = sm::edit_pad(state.project(), r, note, |z| z.output = o);
@@ -752,7 +776,7 @@ fn pad_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, note: u
 			}
 		});
 		let mut reverse = z.reverse;
-		if ui.checkbox(&mut reverse, "Reverse").clicked() {
+		if crate::ui::widgets::checkbox(ui, &mut reverse, tr("Reverse")).clicked() {
 			let cmd = sm::edit_pad(state.project(), r, note, |z| z.reverse = reverse);
 			state.apply_sample_edit(cmd);
 			ui.close();
@@ -761,9 +785,9 @@ fn pad_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, note: u
 	}
 	if ui
 		.button(if first.is_some() {
-			"Replace sample\u{2026}"
+			tr("Replace sample\u{2026}")
 		} else {
-			"Load sample\u{2026}"
+			tr("Load sample\u{2026}")
 		})
 		.clicked()
 	{
@@ -771,18 +795,18 @@ fn pad_menu(ui: &mut Ui, state: &mut AppState, r: DeviceRef, d: &Device, note: u
 		ui.close();
 	}
 	if first.is_some() {
-		if ui.button("Add layer\u{2026}").clicked() {
+		if ui.button(tr("Add layer\u{2026}")).clicked() {
 			state.pick_pad_sample(r, note, true);
 			ui.close();
 		}
-		if ui.button("Clear").clicked() {
+		if ui.button(tr("Clear")).clicked() {
 			let cmd = sm::clear_pad(state.project(), r, note);
 			state.apply_sample_edit(cmd);
 			ui.close();
 		}
 	}
 	if let Some(z) = &first
-		&& ui.button("Locate file").clicked()
+		&& ui.button(tr("Locate file")).clicked()
 	{
 		state.locate_file(&z.sample.path);
 		ui.close();
@@ -815,11 +839,19 @@ fn pad_drag(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerView,
 	}
 	if let Some(pos) = pointer {
 		let text = match target.filter(|t| *t != from) {
-			Some(to) if copy => format!("Copy {} to {}", sm::pad_label(from), sm::pad_label(to)),
-			Some(to) => format!(
-				"Swap {} \u{2194} {}",
-				sm::pad_label(from),
-				sm::pad_label(to)
+			Some(to) if copy => trf(
+				"Copy {pad_label} to {to}",
+				&[
+					("pad_label", &sm::pad_label(from)),
+					("to", &sm::pad_label(to)),
+				],
+			),
+			Some(to) => trf(
+				"Swap {pad_label} ↔ {to}",
+				&[
+					("pad_label", &sm::pad_label(from)),
+					("to", &sm::pad_label(to)),
+				],
 			),
 			None => sm::pad_label(from),
 		};
@@ -863,14 +895,14 @@ fn drop_overlay(ui: &Ui, hits: &PadHits) {
 	p.text(
 		kit.center() - vec2(0.0, 52.0),
 		Align2::CENTER_CENTER,
-		format!("Map \u{201c}{name}\u{201d}"),
+		trf("Map “{name}”", &[("name", &name)]),
 		theme::semibold(13.0),
 		DROP_TEXT,
 	);
 	p.text(
 		kit.center() - vec2(0.0, 32.0),
 		Align2::CENTER_CENTER,
-		"onto the pads by file name",
+		tr("onto the pads by file name"),
 		theme::medium(11.5),
 		DROP_TEXT.gamma_multiply(0.8),
 	);
@@ -963,6 +995,53 @@ pub(crate) fn paint_wave(
 	}
 }
 
+/// The thumbnail's window (`from`, `to` on the drawn axis, seconds) and the file's
+/// length: the played region up to where it falls below -30 dB (reversed zones are drawn
+/// on the mirrored axis).
+fn mini_wave_window(state: &mut AppState, zone: &SampleZone) -> Option<(f64, f64, f64)> {
+	let Peaks::Ready(peaks) = state.peaks.get(&zone.sample.path) else {
+		return None;
+	};
+	let sr = f64::from(peaks.sample_rate.max(1));
+	let length = peaks.frames as f64 / sr;
+	let end = zone.end.unwrap_or(length).min(length);
+	let start = zone.start.min(end);
+	let src = WaveSource::Peaks(&peaks);
+	let coarse = (end - start) * sr / 64.0;
+	let buckets: Vec<f32> = (0..64)
+		.map(|k| {
+			let f0 = (start * sr + f64::from(k) * coarse) as u64;
+			src.peak(f0, f0 + coarse.max(1.0) as u64, coarse.max(1.0))
+				.unwrap_or(0.0)
+		})
+		.collect();
+	let top = buckets.iter().copied().fold(0.0_f32, f32::max);
+	if top <= 1e-6 {
+		return None;
+	}
+	let audible = buckets
+		.iter()
+		.rposition(|b| *b > top * 0.03)
+		.map_or(64, |k| k + 1);
+	let to = start + (end - start) * audible as f64 / 64.0;
+	Some(if zone.reverse {
+		(length - to, length - start, length)
+	} else {
+		(start, to, length)
+	})
+}
+
+/// A playhead (seconds of the file) as x in `0..=1` of the pad thumbnail.
+fn mini_wave_x(state: &mut AppState, zone: &SampleZone, seconds: f32) -> Option<f32> {
+	let (from, to, length) = mini_wave_window(state, zone)?;
+	let shown = if zone.reverse {
+		length as f32 - seconds
+	} else {
+		seconds
+	};
+	crate::state::live_voices::playhead_x(shown, (from, to))
+}
+
 /// A pad's thumbnail: the played region up to where it falls below -30 dB, scaled to
 /// its peak.
 fn mini_wave(ui: &Ui, state: &mut AppState, zone: &SampleZone, rect: Rect, color: Color32) {
@@ -1038,7 +1117,7 @@ fn selected_panel(
 	match layers.get(layer) {
 		Some(&i) => {
 			let zone = d.zones[i].clone();
-			wave_editor(ui, state, cx, v, hits, note, layer, &zone, wave, c);
+			wave_editor(ui, state, cx, v, hits, note, layer, i, &zone, wave, c);
 			pad_controls(ui, state, cx, note, &zone, side, c);
 		}
 		None => {
@@ -1095,10 +1174,10 @@ fn header(
 			ui,
 			Id::new(("ds-reverse", cx.salt, cx.r.device)),
 			rev,
-			"\u{21c6} Reverse",
+			tr("\u{21c6} Reverse"),
 			z.reverse,
 		)
-		.on_hover_text("Play the pad backwards");
+		.on_hover_text(tr("Play the pad backwards"));
 		if resp.clicked() {
 			let on = !z.reverse;
 			let cmd = sm::edit_pad(state.project(), cx.r, note, |z| z.reverse = on);
@@ -1110,7 +1189,7 @@ fn header(
 		let text = if rr {
 			format!("\u{d7}{}", layers.len())
 		} else {
-			"Off".to_owned()
+			tr("Off").to_owned()
 		};
 		let g = ui
 			.painter()
@@ -1127,11 +1206,11 @@ fn header(
 			rr,
 		)
 		.on_hover_text(if layers.len() < 2 {
-			"Round-robin: add a second layer (+) to alternate between samples"
+			tr("Round-robin: add a second layer (+) to alternate between samples")
 		} else if rr {
-			"The layers take turns on every hit; click to split them by velocity instead"
+			tr("The layers take turns on every hit; click to split them by velocity instead")
 		} else {
-			"The layers split the velocity range; click to make them take turns instead"
+			tr("The layers split the velocity range; click to make them take turns instead")
 		});
 		if resp.clicked() {
 			let cmd = ds::set_round_robin(state.project(), cx.r, note, !rr);
@@ -1140,7 +1219,7 @@ fn header(
 		let label = ui.painter().text(
 			pos2(chip.left() - 6.0, cy),
 			Align2::RIGHT_CENTER,
-			"Round-robin",
+			tr("Round-robin"),
 			theme::medium(12.0),
 			theme::TEXT_FAINT,
 		);
@@ -1154,8 +1233,12 @@ fn header(
 				Sense::click(),
 			)
 			.on_hover_cursor(CursorIcon::PointingHand)
-			.on_hover_text("Add a layer: another sample for this pad (velocity or round-robin)");
-		resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Add layer"));
+			.on_hover_text(tr(
+				"Add a layer: another sample for this pad (velocity or round-robin)",
+			));
+		resp.widget_info(|| {
+			egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr("Add layer"))
+		});
 		let p = ui.painter();
 		dashed_rect(
 			p,
@@ -1192,7 +1275,7 @@ fn header(
 				)
 				.on_hover_cursor(CursorIcon::PointingHand);
 			let z = &d.zones[layers[k]];
-			let label = format!("Layer {}", k + 1);
+			let label = trf("Layer {n}", &[("n", &(k + 1))]);
 			resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
 			let p = ui.painter();
 			p.rect(
@@ -1223,27 +1306,39 @@ fn header(
 			if resp.clicked() {
 				state.view.instrument.layer = k;
 			}
-			let resp = resp.on_hover_text(format!(
-				"{}: velocity {:.0}\u{2013}{:.0}",
-				z.sample.display_name(),
-				z.vel_low * 127.0,
-				z.vel_high * 127.0
+			let resp = resp.on_hover_text(trf(
+				"{display_name}: velocity {lo}–{hi}",
+				&[
+					("display_name", &z.sample.display_name()),
+					(
+						"lo",
+						&crate::i18n::decimal(format!("{:.0}", z.vel_low * 127.0)),
+					),
+					(
+						"hi",
+						&crate::i18n::decimal(format!("{:.0}", z.vel_high * 127.0)),
+					),
+				],
 			));
 			resp.context_menu(|ui| {
-				if ui.button("Remove layer").clicked() {
+				if ui.button(tr("Remove layer")).clicked() {
 					let cmd = ds::remove_layer(state.project(), cx.r, note, k);
 					if state.apply_sample_edit(cmd) {
 						state.view.instrument.layer = 0;
 					}
 					ui.close();
 				}
-				if ui.button("Locate file").clicked() {
+				if ui.button(tr("Locate file")).clicked() {
 					state.locate_file(&z.sample.path);
 					ui.close();
 				}
 			});
 		}
-		let text = if rr { "Layers" } else { "Velocity layers" };
+		let text = if rr {
+			tr("Layers")
+		} else {
+			tr("Velocity layers")
+		};
 		let lr = ui.painter().text(
 			pos2(x - 6.0, cy),
 			Align2::RIGHT_CENTER,
@@ -1256,7 +1351,7 @@ fn header(
 	// The file chip with its menu, between the note and the controls.
 	let file = zone
 		.as_ref()
-		.map_or_else(|| "No sample".to_owned(), |z| z.sample.display_name());
+		.map_or_else(|| tr("No sample").to_owned(), |z| z.sample.display_name());
 	let max_w = (right - note_r.right() - 12.0).min(280.0);
 	if max_w < 60.0 {
 		return;
@@ -1276,7 +1371,9 @@ fn header(
 			Sense::click(),
 		)
 		.on_hover_cursor(CursorIcon::PointingHand);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Pad sample"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, tr("Pad sample"))
+	});
 	let p = ui.painter();
 	p.rect(
 		chip,
@@ -1305,9 +1402,9 @@ fn header(
 		ui.set_min_width(180.0);
 		if ui
 			.button(if zone.is_some() {
-				"Replace sample\u{2026}"
+				tr("Replace sample\u{2026}")
 			} else {
-				"Load sample\u{2026}"
+				tr("Load sample\u{2026}")
 			})
 			.clicked()
 		{
@@ -1315,11 +1412,11 @@ fn header(
 			ui.close();
 		}
 		if let Some(z) = &zone {
-			if ui.button("Locate file").clicked() {
+			if ui.button(tr("Locate file")).clicked() {
 				state.locate_file(&z.sample.path);
 				ui.close();
 			}
-			if ui.button("Clear pad").clicked() {
+			if ui.button(tr("Clear pad")).clicked() {
 				let cmd = sm::clear_pad(state.project(), cx.r, note);
 				state.apply_sample_edit(cmd);
 				ui.close();
@@ -1339,9 +1436,9 @@ fn empty_wave(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, note: u8, rect: Re
 	p.text(
 		rect.center() - vec2(0.0, 18.0),
 		Align2::CENTER_CENTER,
-		format!(
-			"{} is empty \u{2014} drop an audio file on its pad",
-			sm::pad_label(note)
+		trf(
+			"{pad_label} is empty — drop an audio file on its pad",
+			&[("pad_label", &sm::pad_label(note))],
 		),
 		theme::medium(12.0),
 		theme::TEXT_FAINT,
@@ -1351,7 +1448,7 @@ fn empty_wave(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, note: u8, rect: Re
 		ui,
 		Id::new(("ds-load", cx.salt, cx.r.device)),
 		b,
-		"Load sample\u{2026}",
+		tr("Load sample\u{2026}"),
 		false,
 	)
 	.clicked()
@@ -1370,6 +1467,7 @@ fn wave_editor(
 	hits: &mut PadHits,
 	note: u8,
 	layer: usize,
+	index: usize,
 	zone: &SampleZone,
 	rect: Rect,
 	c: Color32,
@@ -1388,7 +1486,7 @@ fn wave_editor(
 			ui.painter().text(
 				rect.center(),
 				Align2::CENTER_CENTER,
-				"loading waveform\u{2026}",
+				tr("loading waveform\u{2026}"),
 				theme::small(),
 				theme::TEXT_FAINT,
 			);
@@ -1398,7 +1496,7 @@ fn wave_editor(
 			ui.painter().text(
 				rect.center(),
 				Align2::CENTER_CENTER,
-				format!("\u{26a0} {e} \u{2014} drop another file on the pad"),
+				trf("⚠ {e} — drop another file on the pad", &[("e", &e)]),
 				theme::small(),
 				theme::WARNING,
 			);
@@ -1487,6 +1585,14 @@ fn wave_editor(
 		0.0,
 		SHADE,
 	);
+	// Where this layer's hits are in the file now (the processor's voices).
+	let heads: Vec<f32> = state
+		.live_voices(cx.r.device)
+		.playheads(index)
+		.into_iter()
+		.map(|s| x_of(f64::from(s), &window))
+		.collect();
+	devices::playheads(&p, area, &heads, false);
 	// The envelope: from the start flag forwards (reversed: from the end flag back).
 	let kit_tune = devices::shown(state, cx.r, cx.info, "tune");
 	let rate = ds::playback_rate(shown.tune, kit_tune);
@@ -1540,7 +1646,7 @@ fn wave_editor(
 			)
 			.on_hover_cursor(CursorIcon::ResizeHorizontal);
 		let label = if m == Marker::Start {
-			"Start flag"
+			tr("Start flag")
 		} else {
 			"End flag"
 		};
@@ -1569,9 +1675,9 @@ fn wave_editor(
 			state.apply_sample_edit(cmd);
 		}
 		let _ = resp.on_hover_text(if m == Marker::Start {
-			"Start: drag where the pad starts playing, double-click resets to the sample start"
+			tr("Start: drag where the pad starts playing, double-click resets to the sample start")
 		} else {
-			"End: drag where the pad stops, double-click resets to the sample end"
+			tr("End: drag where the pad stops, double-click resets to the sample end")
 		});
 	}
 	// Readouts on the flags.
@@ -1589,11 +1695,11 @@ fn wave_editor(
 		&p,
 		sx,
 		false,
-		format!("Start {}", ms_label(start)),
+		trf("Start {ms_label}", &[("ms_label", &ms_label(start))]),
 		theme::PLAYING,
 		theme::PLAYING_SOFT,
 	);
-	let e_text = format!("End {}", ms_label(end));
+	let e_text = trf("End {ms_label}", &[("ms_label", &ms_label(end))]);
 	let e_w = p
 		.layout_no_wrap(e_text.clone(), theme::mono(10.5), END_FG)
 		.size()
@@ -1613,9 +1719,9 @@ fn wave_editor(
 			)
 			.on_hover_cursor(CursorIcon::ResizeHorizontal);
 		let label = if node == Node::Attack {
-			"Attack node"
+			tr("Attack node")
 		} else {
-			"Decay node"
+			tr("Decay node")
 		};
 		resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, label));
 		let active = resp.dragged() || resp.hovered();
@@ -1662,10 +1768,12 @@ fn wave_editor(
 			state.apply_sample_edit(cmd);
 		}
 		let _ = resp.on_hover_text(if node == Node::Attack {
-			"Attack: drag sideways (fade-in time), double-click resets to none"
+			tr("Attack: drag sideways (fade-in time), double-click resets to none")
 		} else {
-			"Decay: drag sideways (time to fade out); out to the end = the whole sample, \
-			 double-click resets"
+			tr(
+				"Decay: drag sideways (time to fade out); out to the end = the whole sample, \
+			 double-click resets",
+			)
 		});
 	}
 	let a_text = format!("A {}", ms_label(f64::from(shown.attack_ms) * 0.001));
@@ -1700,9 +1808,9 @@ fn wave_editor(
 			theme::TEXT_FAINT,
 		);
 	}
-	let _ = bg.on_hover_text_at_pointer(
+	let _ = bg.on_hover_text_at_pointer(tr(
 		"Wheel zooms, Shift+wheel scrolls; drag the green / red flags and the envelope nodes",
-	);
+	));
 }
 
 /// Tune / gain / pan / attack / decay knobs and the choke group / output pickers.
@@ -1733,9 +1841,9 @@ fn pad_controls(
 	let choke = Rect::from_min_size(picks.min, vec2(half, pick_h));
 	let out = Rect::from_min_size(pos2(choke.right() + 6.0, picks.top()), vec2(half, pick_h));
 	let choke_text = if zone.choke == 0 {
-		"None".to_owned()
+		tr("None").to_owned()
 	} else {
-		format!("Group {}", zone.choke)
+		trf("Group {choke}", &[("choke", &zone.choke)])
 	};
 	picker(
 		ui,
@@ -1743,14 +1851,14 @@ fn pad_controls(
 		cx,
 		note,
 		choke,
-		"Choke group",
+		tr("Choke group"),
 		&choke_text,
 		|ui, state| {
 			for g in 0..=8u8 {
 				let label = if g == 0 {
-					"None".to_owned()
+					tr("None").to_owned()
 				} else {
-					format!("Group {g}")
+					trf("Group {g}", &[("g", &g)])
 				};
 				if ui.radio(zone.choke == g, label).clicked() {
 					let cmd = sm::edit_pad(state.project(), cx.r, note, |z| z.choke = g);
@@ -1761,9 +1869,9 @@ fn pad_controls(
 		},
 	);
 	let out_text = if zone.output == 0 {
-		"Main".to_owned()
+		tr("Main").to_owned()
 	} else {
-		format!("Extra out {}", zone.output)
+		trf("Extra out {output}", &[("output", &zone.output)])
 	};
 	picker(
 		ui,
@@ -1771,14 +1879,14 @@ fn pad_controls(
 		cx,
 		note,
 		out,
-		"Output",
+		tr("Output"),
 		&out_text,
 		|ui, state| {
 			for o in 0..=OUTPUTS {
 				let label = if o == 0 {
-					"Main".to_owned()
+					tr("Main").to_owned()
 				} else {
-					format!("Extra out {o}")
+					trf("Extra out {o}", &[("o", &o)])
 				};
 				if ui.radio(zone.output == o, label).clicked() {
 					let cmd = sm::edit_pad(state.project(), cx.r, note, |z| z.output = o);
@@ -1873,7 +1981,7 @@ fn pad_knobs(
 	let decay_max = 4000.0;
 	let knobs = [
 		K {
-			name: "Tune",
+			name: mark("Tune"),
 			value: zone.tune,
 			spec: KnobSpec::new(-24.0, 24.0, 0.0),
 			unit: "semitones",
@@ -1881,7 +1989,7 @@ fn pad_knobs(
 			apply: |z, v| z.tune = (v * 100.0).round() / 100.0,
 		},
 		K {
-			name: "Gain",
+			name: mark("Gain"),
 			value: zone.gain_db,
 			spec: KnobSpec::new(-60.0, 24.0, 0.0),
 			unit: "dB",
@@ -1889,7 +1997,7 @@ fn pad_knobs(
 			apply: |z, v| z.gain_db = (v * 10.0).round() / 10.0,
 		},
 		K {
-			name: "Pan",
+			name: mark("Pan"),
 			value: zone.pan * 100.0,
 			spec: KnobSpec::new(-100.0, 100.0, 0.0),
 			unit: "pan%",
@@ -1897,7 +2005,7 @@ fn pad_knobs(
 			apply: |z, v| z.pan = (v.round() / 100.0).clamp(-1.0, 1.0),
 		},
 		K {
-			name: "Attack",
+			name: mark("Attack"),
 			value: zone.attack_ms,
 			spec: KnobSpec::new(0.0, 500.0, 0.0),
 			unit: "ms",
@@ -1905,7 +2013,7 @@ fn pad_knobs(
 			apply: |z, v| z.attack_ms = v.round(),
 		},
 		K {
-			name: "Decay",
+			name: mark("Decay"),
 			value: zone.decay_ms.unwrap_or(decay_max),
 			spec: KnobSpec::new(5.0, decay_max, decay_max).log(),
 			unit: "ms",
@@ -1935,7 +2043,7 @@ fn pad_knobs(
 		.unit(k.unit)
 		.color(k.color);
 		if k.name == "Decay" {
-			knob = knob.word_from(3999.0, "full");
+			knob = knob.word_from(3999.0, tr("full"));
 		}
 		if k.name == "Gain" {
 			knob = knob.wheel_step(Some(0.5));

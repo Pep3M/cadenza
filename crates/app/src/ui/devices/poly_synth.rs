@@ -8,6 +8,7 @@
 //! two rows, below 560 px they stack; both scroll. Compact (inspector): wave cards, the filter display, both envelopes small and
 //! S knobs. The pure logic lives in [`crate::state::poly_synth_editor`].
 
+use crate::i18n::{tr, trf};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -64,14 +65,17 @@ fn env_color(env: Env) -> Color32 {
 	}
 }
 
-fn wave(i: usize) -> Wave {
-	[Wave::Sine, Wave::Saw, Wave::Square, Wave::Triangle][i.min(3)]
+fn wave(i: usize) -> Option<Wave> {
+	[Wave::Sine, Wave::Saw, Wave::Square, Wave::Triangle]
+		.get(i)
+		.copied()
 }
 
 // --- View state (egui memory) --------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
 struct WheelEdit {
+	param: &'static str,
 	start: f32,
 	notches: f32,
 	value: f32,
@@ -88,6 +92,8 @@ struct SynthView {
 	node: Option<NodeStart>,
 	tune: Option<(&'static str, f32, f32)>,
 	wheel: Option<WheelEdit>,
+	/// A wavetable picture drag: (osc, start position, travel).
+	position: Option<(usize, f32, f32)>,
 }
 
 type Shared = Arc<Mutex<SynthView>>;
@@ -164,7 +170,7 @@ pub fn poly_synth_body(
 	finish_wheel(ui, state, cx, &mut v);
 	match keys {
 		None => {
-			let height = compact_height(cx.rect.width());
+			let height = compact_height(cx.rect.width(), wavetable_oscs(state, cx).len());
 			devices::compact_scroll(ui, cx, height, |ui, rect| {
 				compact(ui, state, cx, &mut v, rect);
 			});
@@ -190,7 +196,17 @@ fn dock(
 		rect.max,
 	);
 	let top = Rect::from_min_max(rect.min, pos2(rect.right(), kb.top() - 6.0));
-	let voices = keys.voices(now);
+	// The processor's voices when the editor's probe runs (playback, MIDI input,
+	// previews), else the keys the editor holds.
+	let live = state.live_voices(cx.r.device);
+	let voices = if live.voices.is_empty() {
+		keys.voices(now)
+	} else {
+		live.envelope_dots()
+	};
+	if !live.is_idle() {
+		ui.ctx().request_repaint();
+	}
 	if rect.width() < STACK_BELOW {
 		let mut inner = ui.new_child(
 			UiBuilder::new()
@@ -202,7 +218,9 @@ fn dock(
 			.auto_shrink([false, false])
 			.show(&mut inner, |ui| {
 				let w = ui.available_width();
-				let (area, _) = ui.allocate_exact_size(vec2(w, stacked_height()), Sense::hover());
+				let wavetable = !wavetable_oscs(state, cx).is_empty();
+				let (area, _) =
+					ui.allocate_exact_size(vec2(w, stacked_height(wavetable)), Sense::hover());
 				stacked(ui, state, cx, v, &voices, area, now);
 			});
 	} else if rect.width() < ROW_MIN {
@@ -216,7 +234,12 @@ fn dock(
 			.auto_shrink([false, false])
 			.show(&mut inner, |ui| {
 				let w = ui.available_width();
-				let row_h = top.height().max(WRAP_ROW_MIN);
+				let min = if wavetable_oscs(state, cx).is_empty() {
+					WRAP_ROW_MIN
+				} else {
+					WRAP_ROW_MIN + WT_H + GAP
+				};
+				let row_h = top.height().max(min);
 				let (area, _) = ui.allocate_exact_size(vec2(w, 2.0 * row_h + 18.0), Sense::hover());
 				wrapped(ui, state, cx, v, &voices, area, row_h, now);
 			});
@@ -243,7 +266,12 @@ fn row(
 ) {
 	let small = area.width() < SMALL_BELOW;
 	let arrow = if small { 18.0 } else { 28.0 };
-	let osc_w = (area.width() * 0.225).clamp(344.0, 430.0);
+	let osc_w = (area.width() * 0.225).clamp(344.0, 430.0)
+		+ if wavetable_oscs(state, cx).is_empty() {
+			0.0
+		} else {
+			wavetable_column_for(area.width()) + 14.0
+		};
 	let rest = area.width() - osc_w - 3.0 * arrow;
 	let filter_w = rest * 0.33;
 	let env_w = rest * 0.43;
@@ -269,7 +297,7 @@ fn row(
 			pos2(a.center().x, area.top() + TITLE_H + GAP + display_h * 0.5),
 		);
 	}
-	osc_section(ui, state, cx, v, osc, small);
+	osc_section(ui, state, cx, v, osc, small, true);
 	filter_section(ui, state, cx, v, filter, display_h, knob);
 	envelopes(ui, state, cx, env, display_h, voices);
 	let knob = output_knob(small, area.height(), display_h);
@@ -354,7 +382,7 @@ fn wrapped(
 			first.top() + TITLE_H + GAP + display_h * 0.5,
 		),
 	);
-	osc_section(ui, state, cx, v, osc, true);
+	osc_section(ui, state, cx, v, osc, true, false);
 	filter_section(ui, state, cx, v, filter, display_h, knob);
 	let env = second.with_max_x(second.left() + (area.width() - arrow) * 0.62);
 	let out = second.with_min_x(env.right() + arrow);
@@ -383,18 +411,18 @@ const STACK_FILTER_DISPLAY: f32 = 150.0;
 const STACK_ENV_DISPLAY: f32 = 110.0;
 const STACK_SCOPE: f32 = 96.0;
 
-fn stack_heights() -> [f32; 4] {
+fn stack_heights(wavetable: bool) -> [f32; 4] {
 	let knob = devices::knob_height(KnobSize::S);
 	[
-		STACK_OSC_H,
+		STACK_OSC_H + if wavetable { WT_H + GAP } else { 0.0 },
 		TITLE_H + GAP + STACK_FILTER_DISPLAY + GAP + knob,
 		TITLE_H + GAP + STACK_ENV_DISPLAY + GAP + ENV_READOUT_2X2_H,
 		TITLE_H + GAP + STACK_SCOPE + GAP + knob,
 	]
 }
 
-fn stacked_height() -> f32 {
-	stack_heights().iter().sum::<f32>() + 3.0 * 18.0 + 8.0
+fn stacked_height(wavetable: bool) -> f32 {
+	stack_heights(wavetable).iter().sum::<f32>() + 3.0 * 18.0 + 8.0
 }
 
 /// Narrow docks: OSC / FILTER / AMP + FILTER ENVELOPE / OUTPUT stacked (scrolls).
@@ -407,7 +435,8 @@ fn stacked(
 	area: Rect,
 	now: f64,
 ) {
-	let [osc_h, filter_h, env_h, out_h] = stack_heights();
+	let wavetable = !wavetable_oscs(state, cx).is_empty();
+	let [osc_h, filter_h, env_h, out_h] = stack_heights(wavetable);
 	let area = area.shrink2(vec2(2.0, 0.0));
 	let mut y = area.top();
 	let mut next = |h: f32| {
@@ -426,7 +455,7 @@ fn stacked(
 			Stroke::new(1.0, theme::BORDER_SUBTLE),
 		);
 	}
-	osc_section(ui, state, cx, v, osc, true);
+	osc_section(ui, state, cx, v, osc, true, false);
 	filter_section(ui, state, cx, v, filter, STACK_FILTER_DISPLAY, KnobSize::S);
 	envelopes(ui, state, cx, env, STACK_ENV_DISPLAY, voices);
 	output_section(ui, state, cx, v, out, STACK_SCOPE, KnobSize::S, now);
@@ -458,11 +487,33 @@ fn osc_section(
 	v: &mut SynthView,
 	rect: Rect,
 	small: bool,
+	side: bool,
 ) {
+	let tables = wavetable_oscs(state, cx);
+	// Short docks (one row) put the wavetable panels in a column right of the cards.
+	let rect = if side && !tables.is_empty() {
+		let column = rect.with_min_x(rect.right() - wavetable_column(rect.width()));
+		wavetable_column_panels(ui, state, cx, v, column, &tables);
+		rect.with_max_x(column.left() - 14.0)
+	} else {
+		rect
+	};
+	let side = side && !tables.is_empty();
 	title(ui, rect, "OSC 1 + OSC 2 + NOISE");
 	let knob_h = devices::knob_height(KnobSize::S);
 	let rows_top = rect.top() + TITLE_H + GAP;
-	let row_h = ((rect.height() - TITLE_H - 2.0 * GAP - knob_h - 6.0) * 0.5).clamp(34.0, 46.0);
+	let strip = if tables.is_empty() || side {
+		0.0
+	} else {
+		WT_H + GAP
+	};
+	let row_h =
+		((rect.height() - TITLE_H - 2.0 * GAP - knob_h - 6.0 - strip) * 0.5).clamp(34.0, 46.0);
+	if !tables.is_empty() && !side {
+		let top = rows_top + 2.0 * row_h + 6.0 + GAP;
+		let strip = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), WT_H));
+		wavetable_strip(ui, state, cx, v, strip, &tables);
+	}
 	let readouts_w = 2.0 * READOUT_W + 12.0;
 	for (osc, param) in WAVE_PARAMS.into_iter().enumerate() {
 		let row = Rect::from_min_size(
@@ -472,14 +523,14 @@ fn osc_section(
 		ui.painter().text(
 			pos2(row.left(), row.center().y),
 			Align2::LEFT_CENTER,
-			format!("Osc {}", osc + 1),
+			trf("Osc {n}", &[("n", &(osc + 1))]),
 			theme::semibold(12.0),
 			theme::TEXT,
 		);
 		let cards_w = row.width() - OSC_NAME_W - readouts_w - 6.0;
-		let card_w = (cards_w / 4.0 - 6.0).clamp(36.0, 52.0);
+		let card_w = (cards_w / WAVE_NAMES.len() as f32 - 6.0).clamp(26.0, 52.0);
 		let selected = ps::wave_index(value(state, cx, param));
-		for w in 0..4 {
+		for w in 0..WAVE_NAMES.len() {
 			let card = Rect::from_min_size(
 				pos2(
 					row.left() + OSC_NAME_W + w as f32 * (card_w + 6.0),
@@ -495,12 +546,12 @@ fn osc_section(
 				osc,
 				w,
 				w == selected,
-				!small || card_w >= 44.0,
+				(!small || card_w >= 44.0) && card_w >= 40.0,
 			);
 		}
 		if osc == 1 {
 			let right = row.right();
-			for (i, (id, label)) in [(OSC2_SEMI, "Semi"), (OSC2_CENTS, "Cents")]
+			for (i, (id, label)) in [(OSC2_SEMI, tr("Semi")), (OSC2_CENTS, tr("Cents"))]
 				.into_iter()
 				.enumerate()
 			{
@@ -530,7 +581,7 @@ fn osc_section(
 		state,
 		cx,
 		at(0),
-		&[KnobDef::new(OSC_MIX, "Osc mix", KnobSize::S)],
+		&[KnobDef::new(OSC_MIX, tr("Osc mix"), KnobSize::S)],
 	);
 	unison(ui, state, cx, at(1));
 	knob_cells(
@@ -538,14 +589,14 @@ fn osc_section(
 		state,
 		cx,
 		at(2),
-		&[KnobDef::new(UNISON_DETUNE, "Detune", KnobSize::S)],
+		&[KnobDef::new(UNISON_DETUNE, tr("Detune"), KnobSize::S)],
 	);
 	knob_cells(
 		ui,
 		state,
 		cx,
 		at(3),
-		&[KnobDef::new(NOISE, "Noise", KnobSize::S)],
+		&[KnobDef::new(NOISE, tr("Noise"), KnobSize::S)],
 	);
 }
 
@@ -560,8 +611,8 @@ fn wave_card(
 	selected: bool,
 	caption: bool,
 ) {
-	let name = WAVE_NAMES[w];
-	let label = format!("Osc {} {name}", osc + 1);
+	let name = crate::i18n::tr_str(WAVE_NAMES[w]);
+	let label = trf("Osc {n} {name}", &[("n", &(osc + 1)), ("name", &name)]);
 	let resp = ui
 		.interact(
 			rect,
@@ -577,13 +628,16 @@ fn wave_card(
 		state.commit_param(cx.r.track, cx.r.device, param, w as f32);
 	}
 	resp.context_menu(|ui| {
-		if ui.button("Copy to other osc").clicked() {
+		if ui.button(tr("Copy to other osc")).clicked() {
 			let (other, wave) = ps::copy_wave(osc, value(state, cx, param));
 			state.commit_param(cx.r.track, cx.r.device, other, wave);
 			ui.close();
 		}
 	});
-	let resp = resp.on_hover_text(format!("{name} (right-click: copy to the other osc)"));
+	let resp = resp.on_hover_text(trf(
+		"{name} (right-click: copy to the other osc)",
+		&[("name", &name)],
+	));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -621,13 +675,19 @@ fn wave_card(
 		pos2(rect.left() + 5.0, rect.top() + 5.0),
 		vec2(rect.width() - 10.0, pic_h),
 	);
-	device_kit::paint_wave(&p.with_clip_rect(rect), pic, wave(w), ink);
+	match wave(w) {
+		Some(shape) => device_kit::paint_wave(&p.with_clip_rect(rect), pic, shape, ink),
+		None => paint_wavetable_icon(&p.with_clip_rect(rect), pic, ink),
+	}
 	if caption {
+		// Long names ("Wavetable") shrink to fit the card.
+		let full = p.layout_no_wrap(name.to_owned(), theme::medium(10.0), theme::TEXT);
+		let size = (10.0 * (rect.width() - 4.0) / full.size().x.max(1.0)).clamp(7.5, 10.0);
 		p.text(
 			pos2(rect.center().x, rect.bottom() - 8.0),
 			Align2::CENTER_CENTER,
 			name,
-			theme::medium(10.0),
+			theme::medium(size),
 			if selected {
 				theme::TEXT
 			} else {
@@ -685,6 +745,7 @@ fn tune_readout(
 			max: info.max,
 			default: info.default,
 			fmt: ValueFmt::unit(info.unit),
+			tip: Some(info.description),
 		},
 	);
 	if let Some(m) = menu {
@@ -729,7 +790,7 @@ fn unison(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, cell: Rect) {
 	ui.painter().text(
 		pos2(cell.center().x, seg.bottom() + 12.0),
 		Align2::CENTER_CENTER,
-		"Unison voices",
+		tr("Unison voices"),
 		theme::medium(11.0),
 		theme::TEXT_DIM,
 	);
@@ -763,8 +824,9 @@ fn finish_wheel(ui: &Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView) {
 	let idle = ui.input(|i| i.time) - w.last;
 	if idle >= WHEEL_REST {
 		v.wheel = None;
-		devices::commit_changes(state, cx.r, cx.info, &[(ENV_AMOUNT, w.value)], |_| {
-			"Filter env amount".to_owned()
+		let name = cx.info.param(w.param).map_or(w.param, |p| p.name);
+		devices::commit_changes(state, cx.r, cx.info, &[(w.param, w.value)], |_| {
+			name.to_owned()
 		});
 	} else {
 		ui.ctx()
@@ -772,10 +834,23 @@ fn finish_wheel(ui: &Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView) {
 	}
 }
 
+fn finish_wheel_now(state: &mut AppState, cx: &BodyCx, v: &mut SynthView) {
+	if let Some(w) = v.wheel.take() {
+		let name = cx.info.param(w.param).map_or(w.param, |p| p.name);
+		devices::commit_changes(state, cx.r, cx.info, &[(w.param, w.value)], |_| {
+			name.to_owned()
+		});
+	}
+}
+
 fn wheel_env(ui: &Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, notches: f32) {
 	let now = ui.input(|i| i.time);
 	let start = value(state, cx, ENV_AMOUNT);
+	if v.wheel.is_some_and(|w| w.param != ENV_AMOUNT) {
+		finish_wheel_now(state, cx, v);
+	}
 	let w = v.wheel.get_or_insert(WheelEdit {
+		param: ENV_AMOUNT,
 		start,
 		notches: 0.0,
 		value: start,
@@ -838,6 +913,7 @@ fn filter_display(
 		dormant: false,
 		x_only: false,
 		ai,
+		dynamic: None,
 	}];
 	let range = DbRange::FILTER;
 	let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
@@ -893,10 +969,10 @@ fn filter_display(
 	if out.dragging.is_none() && !ui.input(|i| i.pointer.any_down()) {
 		v.node = None;
 	}
-	out.response.on_hover_text_at_pointer(
+	out.response.on_hover_text_at_pointer(tr(
 		"Drag the node: \u{21d4} cutoff, \u{21d5} resonance (Shift fine) \u{b7} wheel over it: \
 		 env amount \u{b7} double-click resets",
-	);
+	));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -951,12 +1027,12 @@ fn filter_display(
 	);
 	if caption {
 		let text = if env.abs() >= 0.5 {
-			format!(
-				"\u{21d4} cutoff \u{b7} \u{21d5} resonance \u{b7} dashed = env peak {}",
-				ps::env_label(env)
+			trf(
+				"⇔ cutoff · ⇕ resonance · dashed = env peak {env_label}",
+				&[("env_label", &ps::env_label(env))],
 			)
 		} else {
-			"\u{21d4} cutoff \u{b7} \u{21d5} resonance \u{b7} wheel = env amount".to_owned()
+			tr("\u{21d4} cutoff \u{b7} \u{21d5} resonance \u{b7} wheel = env amount").to_owned()
 		};
 		let g = p.layout_no_wrap(text, theme::medium(10.5), theme::TEXT_FAINT);
 		if g.size().x < plot.width() * 0.62 {
@@ -982,9 +1058,9 @@ fn filter_section(
 		ui,
 		rect,
 		if rect.width() >= 330.0 {
-			"FILTER \u{b7} LOW-PASS"
+			tr("FILTER \u{b7} LOW-PASS")
 		} else {
-			"FILTER"
+			tr("FILTER")
 		},
 	);
 	slope_selector(
@@ -1000,15 +1076,18 @@ fn filter_section(
 	filter_display(ui, state, cx, v, display, true);
 	let knobs = Rect::from_min_max(pos2(rect.left(), display.bottom() + GAP), rect.max);
 	let mut defs = vec![
-		KnobDef::new(ENV_AMOUNT, "Env amount", knob).color(VIOLET_LIGHT),
-		KnobDef::new(KEY_TRACK, "Key track", knob).color(VIOLET_LIGHT),
+		KnobDef::new(ENV_AMOUNT, tr("Env amount"), knob).color(VIOLET_LIGHT),
+		KnobDef::new(KEY_TRACK, tr("Key track"), knob).color(VIOLET_LIGHT),
 	];
 	if rect.width() >= 250.0 {
 		defs.insert(
 			0,
-			KnobDef::new(RESONANCE, "Resonance", knob).color(VIOLET_LIGHT),
+			KnobDef::new(RESONANCE, tr("Resonance"), knob).color(VIOLET_LIGHT),
 		);
-		defs.insert(0, KnobDef::new(CUTOFF, "Cutoff", knob).color(VIOLET_LIGHT));
+		defs.insert(
+			0,
+			KnobDef::new(CUTOFF, tr("Cutoff"), knob).color(VIOLET_LIGHT),
+		);
 	}
 	knob_cells(ui, state, cx, knobs, &defs);
 }
@@ -1037,8 +1116,8 @@ fn env_section(
 	);
 	let shown = envelope(ui, state, cx, env, display, voices);
 	let hint = match env {
-		Env::Amp => "drag nodes \u{b7} double-click resets",
-		Env::Filter => "drives cutoff by env amount",
+		Env::Amp => tr("drag nodes \u{b7} double-click resets"),
+		Env::Filter => tr("drives cutoff by env amount"),
 	};
 	let g = ui
 		.painter()
@@ -1187,7 +1266,7 @@ fn output_section(
 	knob: KnobSize,
 	now: f64,
 ) {
-	title(ui, rect, "OUTPUT");
+	title(ui, rect, tr("OUTPUT"));
 	let scope_rect = Rect::from_min_size(
 		pos2(rect.left(), rect.top() + TITLE_H + GAP),
 		vec2(rect.width(), scope_h),
@@ -1211,9 +1290,9 @@ fn output_section(
 		cx,
 		knobs.with_max_y(knobs.top() + devices::knob_height(knob) + 4.0),
 		&[
-			KnobDef::new(VEL_SENS, "Velocity", knob),
-			KnobDef::new(GLIDE, "Glide", knob),
-			KnobDef::new(GAIN, "Gain", knob).step(0.5),
+			KnobDef::new(VEL_SENS, tr("Velocity"), knob),
+			KnobDef::new(GLIDE, tr("Glide"), knob),
+			KnobDef::new(GAIN, tr("Gain"), knob).step(0.5),
 		],
 	);
 }
@@ -1281,22 +1360,24 @@ fn compact_filter_h(width: f32) -> f32 {
 fn compact_knobs() -> [KnobDef; 10] {
 	let s = KnobSize::S;
 	[
-		KnobDef::new(OSC2_SEMI, "Semi", s),
-		KnobDef::new(OSC2_CENTS, "Cents", s),
-		KnobDef::new(OSC_MIX, "Osc mix", s),
-		KnobDef::new(UNISON_DETUNE, "Detune", s),
-		KnobDef::new(NOISE, "Noise", s),
-		KnobDef::new(ENV_AMOUNT, "Env amt", s).color(VIOLET_LIGHT),
-		KnobDef::new(KEY_TRACK, "Key track", s).color(VIOLET_LIGHT),
-		KnobDef::new(VEL_SENS, "Velocity", s),
-		KnobDef::new(GLIDE, "Glide", s),
-		KnobDef::new(GAIN, "Gain", s).step(0.5),
+		KnobDef::new(OSC2_SEMI, tr("Semi"), s),
+		KnobDef::new(OSC2_CENTS, tr("Cents"), s),
+		KnobDef::new(OSC_MIX, tr("Osc mix"), s),
+		KnobDef::new(UNISON_DETUNE, tr("Detune"), s),
+		KnobDef::new(NOISE, tr("Noise"), s),
+		KnobDef::new(ENV_AMOUNT, tr("Env amt"), s).color(VIOLET_LIGHT),
+		KnobDef::new(KEY_TRACK, tr("Key track"), s).color(VIOLET_LIGHT),
+		KnobDef::new(VEL_SENS, tr("Velocity"), s),
+		KnobDef::new(GLIDE, tr("Glide"), s),
+		KnobDef::new(GAIN, tr("Gain"), s).step(0.5),
 	]
 }
 
-/// How tall the compact form is at `width`.
-pub fn compact_height(width: f32) -> f32 {
+/// How tall the compact form is at `width` with `wavetables` oscillators playing a
+/// wavetable ([`wavetable_count`]).
+pub fn compact_height(width: f32, wavetables: usize) -> f32 {
 	2.0 * COMPACT_ROW_H
+		+ wavetables as f32 * (COMPACT_WT_H + 6.0)
 		+ COMPACT_UNISON_H
 		+ 6.0 + TITLE_H
 		+ compact_filter_h(width)
@@ -1312,14 +1393,14 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 		ui.painter().text(
 			pos2(row.left(), row.center().y),
 			Align2::LEFT_CENTER,
-			format!("Osc {}", osc + 1),
+			trf("Osc {n}", &[("n", &(osc + 1))]),
 			theme::semibold(11.5),
 			theme::TEXT,
 		);
 		let name_w = 42.0;
-		let card_w = (row.width() - name_w) / 4.0 - 4.0;
+		let card_w = (row.width() - name_w) / WAVE_NAMES.len() as f32 - 4.0;
 		let selected = ps::wave_index(value(state, cx, param));
-		for w in 0..4 {
+		for w in 0..WAVE_NAMES.len() {
 			let card = Rect::from_min_size(
 				pos2(
 					row.left() + name_w + w as f32 * (card_w + 4.0),
@@ -1331,11 +1412,17 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 		}
 		y = row.bottom();
 	}
+	let tables = wavetable_oscs(state, cx);
+	for &osc in &tables {
+		let r = Rect::from_min_size(pos2(rect.left(), y + 4.0), vec2(rect.width(), COMPACT_WT_H));
+		wavetable_panel(ui, state, cx, v, r, osc, true);
+		y = r.bottom() + 2.0;
+	}
 	let uni = Rect::from_min_size(pos2(rect.left(), y), vec2(rect.width(), COMPACT_UNISON_H));
 	ui.painter().text(
 		pos2(uni.left(), uni.center().y),
 		Align2::LEFT_CENTER,
-		"Unison",
+		tr("Unison"),
 		theme::medium(11.0),
 		theme::TEXT_DIM,
 	);
@@ -1350,7 +1437,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 	);
 	y = uni.bottom() + 6.0;
 	let head = Rect::from_min_size(pos2(rect.left(), y), vec2(rect.width(), TITLE_H));
-	title(ui, head, "FILTER");
+	title(ui, head, tr("FILTER"));
 	slope_selector(ui, state, cx, pos2(head.right(), head.center().y));
 	let display = Rect::from_min_size(
 		pos2(rect.left(), head.bottom()),
@@ -1366,8 +1453,8 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 			ui,
 			head,
 			match env {
-				Env::Amp => "AMP ENV",
-				Env::Filter => "FILTER ENV",
+				Env::Amp => tr("AMP ENV"),
+				Env::Filter => tr("FILTER ENV"),
 			},
 		);
 		let r = Rect::from_min_size(pos2(x, head.bottom()), vec2(col, COMPACT_ENV_H));
@@ -1378,4 +1465,409 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 	let cols = devices::small_columns(rect.width(), knobs.len());
 	let k = Rect::from_min_max(pos2(rect.left(), y), rect.max);
 	devices::knob_grid(ui, state, cx, k, &knobs, cols);
+}
+
+// --- Wavetable ------------------------------------------------------------------------
+
+/// The wavetable strip in the OSC section (header + picture beside the position knob).
+const WT_H: f32 = 106.0;
+const WT_HEADER: f32 = 20.0;
+const COMPACT_WT_H: f32 = 92.0;
+const WT_POINTS: usize = 96;
+const WT_KNOB_W: f32 = 66.0;
+
+fn wavetable_oscs(state: &AppState, cx: &BodyCx) -> Vec<usize> {
+	ps::wavetable_oscs(WAVE_PARAMS.map(|p| value(state, cx, p)))
+}
+
+/// How many of `r`'s oscillators play a wavetable (for [`compact_height`]).
+pub fn wavetable_count(state: &AppState, r: DeviceRef) -> usize {
+	let info = ps::info();
+	ps::wavetable_oscs(WAVE_PARAMS.map(|p| devices::shown(state, r, info, p))).len()
+}
+
+/// Width of the side column of wavetable panels for a row `width` wide (the dock).
+fn wavetable_column_for(width: f32) -> f32 {
+	(width * 0.15).clamp(240.0, 320.0)
+}
+
+/// The side column's width inside an OSC section `width` wide that holds it.
+fn wavetable_column(width: f32) -> f32 {
+	(width - 344.0 - 14.0).clamp(200.0, 320.0)
+}
+
+/// The wavetable panels stacked in a column (one per wavetable oscillator).
+fn wavetable_column_panels(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	v: &mut SynthView,
+	rect: Rect,
+	tables: &[usize],
+) {
+	let n = tables.len().max(1) as f32;
+	let h = ((rect.height() - (n - 1.0) * 8.0) / n).min(150.0);
+	for (i, &osc) in tables.iter().enumerate() {
+		let r = Rect::from_min_size(
+			pos2(rect.left(), rect.top() + i as f32 * (h + 8.0)),
+			vec2(rect.width(), h),
+		);
+		wavetable_panel(ui, state, cx, v, r, osc, false);
+	}
+}
+
+/// One panel per wavetable oscillator, side by side.
+fn wavetable_strip(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	v: &mut SynthView,
+	rect: Rect,
+	tables: &[usize],
+) {
+	let n = tables.len().max(1) as f32;
+	let w = (rect.width() - (n - 1.0) * 10.0) / n;
+	for (i, &osc) in tables.iter().enumerate() {
+		let r = Rect::from_min_size(
+			pos2(rect.left() + i as f32 * (w + 10.0), rect.top()),
+			vec2(w, rect.height()),
+		);
+		wavetable_panel(ui, state, cx, v, r, osc, false);
+	}
+}
+
+/// An oscillator's table picker over the waterfall picture (drag ⇕ / wheel = position,
+/// double-click resets) and its position knob (automation, modulation ring).
+fn wavetable_panel(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	v: &mut SynthView,
+	rect: Rect,
+	osc: usize,
+	compact: bool,
+) {
+	let table = ps::table_index(value(state, cx, ps::TABLE_PARAMS[osc]));
+	let head = Rect::from_min_size(rect.min, vec2(rect.width() - WT_KNOB_W - 6.0, WT_HEADER));
+	ui.painter().text(
+		pos2(head.left(), head.center().y),
+		Align2::LEFT_CENTER,
+		trf("OSC {n} TABLE", &[("n", &(osc + 1))]),
+		theme::semibold(10.0),
+		theme::TEXT_FAINT,
+	);
+	let picker = Rect::from_min_max(
+		pos2(
+			(head.right() - 104.0).max(head.left() + 72.0),
+			head.top() + 1.0,
+		),
+		pos2(head.right(), head.bottom() - 1.0),
+	);
+	table_picker(ui, state, cx, picker, osc, table);
+	let pic = Rect::from_min_max(
+		pos2(rect.left(), head.bottom() + 3.0),
+		pos2(head.right(), rect.bottom()),
+	);
+	waterfall(ui, state, cx, v, pic, osc, table);
+	let knob_h = devices::knob_height(KnobSize::S);
+	let top = if compact {
+		rect.top()
+	} else {
+		rect.top() + ((rect.height() - knob_h) * 0.5).max(0.0)
+	};
+	let cell = Rect::from_min_size(pos2(rect.right() - WT_KNOB_W, top), vec2(WT_KNOB_W, knob_h));
+	knob_cells(
+		ui,
+		state,
+		cx,
+		cell,
+		&[KnobDef::new(ps::POSITION_PARAMS[osc], tr("Position"), KnobSize::S).color(VIOLET_LIGHT)],
+	);
+}
+
+fn table_picker(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	rect: Rect,
+	osc: usize,
+	table: usize,
+) {
+	let param = ps::TABLE_PARAMS[osc];
+	let name = crate::i18n::tr_str(ps::TABLE_NAMES[table]);
+	let resp = ui
+		.interact(
+			rect,
+			Id::new(("poly-synth-table", cx.salt, cx.r.device, osc)),
+			Sense::click(),
+		)
+		.on_hover_cursor(CursorIcon::PointingHand);
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::ComboBox,
+			true,
+			trf("Osc {n} table", &[("n", &(osc + 1))]),
+		)
+	});
+	let p = ui.painter();
+	p.rect(
+		rect,
+		CornerRadius::same(4),
+		if resp.hovered() {
+			theme::BG_WIDGET
+		} else {
+			theme::BG_RAISED
+		},
+		Stroke::new(1.0, theme::BORDER),
+		StrokeKind::Inside,
+	);
+	p.text(
+		pos2(rect.left() + 7.0, rect.center().y),
+		Align2::LEFT_CENTER,
+		name,
+		theme::medium(10.5),
+		theme::TEXT,
+	);
+	p.text(
+		pos2(rect.right() - 7.0, rect.center().y),
+		Align2::RIGHT_CENTER,
+		"\u{25be}",
+		theme::medium(10.0),
+		theme::TEXT_FAINT,
+	);
+	egui::Popup::menu(&resp).show(|ui| {
+		ui.set_min_width(140.0);
+		for (i, t) in ps::TABLE_NAMES.iter().enumerate() {
+			if ui
+				.selectable_label(i == table, crate::i18n::tr_str(t))
+				.clicked()
+			{
+				if i != table {
+					state.commit_param(cx.r.track, cx.r.device, param, i as f32);
+				}
+				ui.close();
+			}
+		}
+	});
+}
+
+/// Where a frame at `pos` (0 front .. 1 back) sits in the waterfall: its left edge,
+/// width, centre line and half height.
+fn frame_geometry(rect: Rect, pos: f32) -> (f32, f32, f32, f32) {
+	let dx = rect.width() * 0.24;
+	let dy = rect.height() * 0.34;
+	let amp = rect.height() * 0.24;
+	let width = rect.width() - dx - 10.0;
+	let x = rect.left() + 6.0 + pos * dx;
+	let y = rect.bottom() - amp - 8.0 - pos * dy;
+	(x, width, y, amp)
+}
+
+fn frame_line(rect: Rect, pos: f32, samples: &[f32], stroke: Stroke) -> Shape {
+	let (x, w, y, amp) = frame_geometry(rect, pos);
+	let n = samples.len().max(2) - 1;
+	let pts: Vec<Pos2> = samples
+		.iter()
+		.enumerate()
+		.map(|(i, s)| pos2(x + w * i as f32 / n as f32, y - s.clamp(-1.2, 1.2) * amp))
+		.collect();
+	Shape::line(pts, stroke)
+}
+
+fn waterfall(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	v: &mut SynthView,
+	rect: Rect,
+	osc: usize,
+	table: usize,
+) {
+	let param = ps::POSITION_PARAMS[osc];
+	let Some(info) = cx.info.param(param) else {
+		return;
+	};
+	let r = cx.r;
+	let current = value(state, cx, param);
+	let resp = ui
+		.interact(
+			rect,
+			Id::new(("poly-synth-waterfall", cx.salt, r.device, osc)),
+			Sense::click_and_drag(),
+		)
+		.on_hover_cursor(CursorIcon::ResizeVertical);
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Slider,
+			true,
+			trf("Osc {n} wavetable position", &[("n", &(osc + 1))]),
+		)
+	});
+	let fine = ui.input(|i| i.modifiers.shift);
+	if resp.drag_started() {
+		v.position = Some((osc, current, 0.0));
+	}
+	if resp.dragged()
+		&& let Some((_, start, dy)) = v.position.as_mut().filter(|p| p.0 == osc)
+	{
+		*dy += resp.drag_delta().y;
+		let to = ps::drag_position(*start, *dy, fine);
+		state.preview_param(r.device, param, to);
+		device_kit::floating_value(ui.ctx(), resp.id, rect, &ps::position_tag(table, to));
+	}
+	if resp.drag_stopped()
+		&& let Some((_, start, dy)) = v.position.take().filter(|p| p.0 == osc)
+	{
+		let name = info.name;
+		devices::commit_changes(
+			state,
+			r,
+			cx.info,
+			&[(param, ps::drag_position(start, dy, fine))],
+			|_| name.to_owned(),
+		);
+	}
+	if resp.double_clicked() {
+		state.commit_param(r.track, r.device, param, info.default);
+	}
+	if resp.hovered() {
+		let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+		if scroll != 0.0 {
+			ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+			let now = ui.input(|i| i.time);
+			if v.wheel.is_some_and(|w| w.param != param) {
+				finish_wheel_now(state, cx, v);
+			}
+			let w = v.wheel.get_or_insert(WheelEdit {
+				param,
+				start: current,
+				notches: 0.0,
+				value: current,
+				last: now,
+			});
+			w.notches += scroll / device_kit::NOTCH;
+			w.last = now;
+			w.value = ps::wheel_position(w.start, w.notches);
+			state.preview_param(r.device, param, w.value);
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_REST));
+		}
+	}
+	let menu = device_kit::control_menu(
+		&resp,
+		state,
+		cadenza_core::ParamAddress::device(r.track, r.device, param),
+		ControlInfo {
+			value: current,
+			min: info.min,
+			max: info.max,
+			default: info.default,
+			fmt: ValueFmt::unit(info.unit),
+			tip: None,
+		},
+	);
+	if let Some(m) = menu {
+		state.commit_param(r.track, r.device, param, m);
+	}
+	let resp = resp.on_hover_text(tr(
+		"Drag ⇕ or wheel: position · Shift: fine · double-click: reset",
+	));
+	// A modulator handle dropped on the picture targets the position too.
+	crate::ui::devices::modulation::knob_gestures(state, r, param, &resp, None);
+	if !ui.is_rect_visible(rect) {
+		return;
+	}
+	let ring = crate::ui::devices::modulation::knob_ring(ui.ctx(), state, r, info, current, None);
+	let p = ui.painter().with_clip_rect(rect.expand(2.0));
+	p.rect(
+		rect,
+		CornerRadius::same(5),
+		theme::DISPLAY_BG,
+		Stroke::new(1.0, theme::BORDER_SUBTLE),
+		StrokeKind::Inside,
+	);
+	// The depth axis along the left: frames run from the front (0) to the back (1).
+	let (x0, _, y0, _) = frame_geometry(rect, 0.0);
+	let (x1, _, y1, _) = frame_geometry(rect, 1.0);
+	let axis = |t: f32| pos2(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+	p.line_segment([axis(0.0), axis(1.0)], Stroke::new(1.0, theme::BORDER));
+	for (pos, samples) in ps::waterfall(table, WT_POINTS) {
+		let near = (1.0 - (pos - current).abs()).max(0.0);
+		let alpha = (36.0 + 84.0 * near.powi(3)) as u8;
+		p.add(frame_line(
+			rect,
+			pos,
+			&samples,
+			Stroke::new(
+				1.0,
+				Color32::from_rgba_unmultiplied(0x9a, 0x8c, 0xff, alpha),
+			),
+		));
+	}
+	if let Some(ring) = ring {
+		p.line_segment(
+			[axis(ring.lo), axis(ring.hi)],
+			Stroke::new(3.0, theme::MOD.gamma_multiply(0.8)),
+		);
+		for edge in [ring.lo, ring.hi] {
+			p.add(frame_line(
+				rect,
+				edge,
+				&ps::frame(table, edge, WT_POINTS),
+				Stroke::new(1.0, theme::MOD.gamma_multiply(0.55)),
+			));
+		}
+		if let Some(now) = ring.now {
+			p.add(frame_line(
+				rect,
+				now,
+				&ps::frame(table, now, WT_POINTS),
+				Stroke::new(1.5, theme::MOD),
+			));
+			p.circle_filled(axis(now), 3.0, theme::MOD);
+		}
+	}
+	let ai = state.ai_change(r.device, param).is_some();
+	let ink = if ai { theme::ACCENT } else { VIOLET_LIGHT };
+	p.add(frame_line(
+		rect,
+		current,
+		&ps::frame(table, current, WT_POINTS),
+		Stroke::new(2.0, ink),
+	));
+	p.circle_filled(axis(current), 3.5, ink);
+	p.text(
+		pos2(rect.right() - 6.0, rect.bottom() - 4.0),
+		Align2::RIGHT_BOTTOM,
+		ps::position_tag(table, current),
+		theme::mono(10.0),
+		theme::TEXT_DIM,
+	);
+}
+
+/// The wave card picture of the wavetable choice: three stacked frames.
+fn paint_wavetable_icon(p: &egui::Painter, rect: Rect, color: Color32) {
+	for (i, pos) in [1.0f32, 0.55, 0.0].into_iter().enumerate() {
+		let samples = ps::frame(0, pos, 32);
+		let dx = rect.width() * 0.22 * pos;
+		let dy = rect.height() * 0.3 * pos;
+		let w = rect.width() * 0.78;
+		let amp = rect.height() * 0.3;
+		let base = rect.bottom() - amp - dy;
+		let pts: Vec<Pos2> = samples
+			.iter()
+			.enumerate()
+			.map(|(k, s)| pos2(rect.left() + dx + w * k as f32 / 31.0, base - s * amp))
+			.collect();
+		let front = i == 2;
+		let c = if front {
+			color
+		} else {
+			color.gamma_multiply(0.45)
+		};
+		p.add(Shape::line(
+			pts,
+			Stroke::new(if front { 1.5 } else { 1.0 }, c),
+		));
+	}
 }

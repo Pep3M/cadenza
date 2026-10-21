@@ -4,6 +4,7 @@
 //! picture at full width, then one row of S knobs. The gesture -> parameter mapping
 //! lives in [`crate::state::reverb_editor`].
 
+use crate::i18n::{mark, tr, trf};
 use std::sync::{Arc, Mutex};
 
 use egui::{
@@ -72,6 +73,8 @@ struct ReverbView {
 	drag: Option<NodeDrag>,
 	wheel: Option<WheelEdit>,
 	output_db: [f32; 2],
+	/// How far ducking turns the wet signal down now (positive dB, probe reading).
+	duck_db: f32,
 	synthetic: bool,
 }
 
@@ -81,6 +84,7 @@ impl Default for ReverbView {
 			drag: None,
 			wheel: None,
 			output_db: [FLOOR_DB; 2],
+			duck_db: 0.0,
 			synthetic: false,
 		}
 	}
@@ -105,9 +109,21 @@ fn lock(view: &Shared) -> std::sync::MutexGuard<'_, ReverbView> {
 
 /// Shows the wet output meter in an editor as if the probe had measured it (screenshots).
 pub fn set_display(ctx: &egui::Context, salt: &str, r: DeviceRef, output_db: [f32; 2]) {
+	set_display_ducked(ctx, salt, r, output_db, 0.0);
+}
+
+/// [`set_display`] with the wet signal ducked by `duck_db` (screenshots).
+pub fn set_display_ducked(
+	ctx: &egui::Context,
+	salt: &str,
+	r: DeviceRef,
+	output_db: [f32; 2],
+	duck_db: f32,
+) {
 	let v = view(ctx, view_id(salt, r));
 	let mut v = lock(&v);
 	v.output_db = output_db;
+	v.duck_db = duck_db;
 	v.synthetic = true;
 }
 
@@ -169,6 +185,12 @@ fn update_meter(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut ReverbView) {
 	}
 	let dt = ui.input(|i| i.stable_dt).min(0.25);
 	let ours = state.probe_target() == Some(cx.r.device);
+	v.duck_db = state
+		.probe()
+		.filter(|_| ours)
+		.and_then(|p| p.reading(cadenza_dsp::readings::GAIN_REDUCTION_DB))
+		.unwrap_or(0.0)
+		.abs();
 	let fall = FALL_DB_PER_S * dt;
 	let mut peak = [0.0f32; 2];
 	if ours && !cx.frames.is_empty() {
@@ -210,11 +232,11 @@ fn apply_grab(grab: Grab, start: f32, amount: f32) -> f32 {
 
 fn label_of(grab: Grab) -> &'static str {
 	match grab {
-		Grab::PreDelay => "Reverb pre-delay",
-		Grab::Decay => "Reverb decay",
-		Grab::Damping => "Reverb damping",
-		Grab::Size => "Reverb size",
-		Grab::Width => "Reverb width",
+		Grab::PreDelay => tr("Reverb pre-delay"),
+		Grab::Decay => tr("Reverb decay"),
+		Grab::Damping => tr("Reverb damping"),
+		Grab::Size => tr("Reverb size"),
+		Grab::Width => tr("Reverb width"),
 	}
 }
 
@@ -310,7 +332,12 @@ fn reset_on_double_click(state: &mut AppState, r: DeviceRef, resp: &egui::Respon
 			Grab::Size => rv::reset_size(),
 			Grab::Width => rv::reset_width(),
 		};
-		commit(state, r, &[change], &format!("Reset {}", label_of(grab)));
+		commit(
+			state,
+			r,
+			&[change],
+			&trf("Reset {label_of}", &[("label_of", &label_of(grab))]),
+		);
 	}
 }
 
@@ -397,9 +424,9 @@ fn node_positions(values: &ReverbValues, m: &TailMap) -> [(Grab, Pos2); 3] {
 /// The swatch legend, right-aligned so the top-left stays free for the pre-delay tag.
 fn legend(p: &egui::Painter, right_center: Pos2, font: f32) {
 	let items = [
-		("Early reflections", theme::TEXT, 2.0),
-		("Tail, lows", VIOLET, 6.0),
-		("Tail, highs (damped)", TEAL, 6.0),
+		(tr("Early reflections"), theme::TEXT, 2.0),
+		(tr("Tail, lows"), VIOLET, 6.0),
+		(tr("Tail, highs (damped)"), TEAL, 6.0),
 	];
 	let mut x = right_center.x;
 	for (label, color, h) in items.into_iter().rev() {
@@ -438,11 +465,44 @@ fn tail(
 		Id::new(("reverb-tail", cx.salt, r.device)),
 		Sense::click_and_drag(),
 	);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Reverb tail"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Reverb tail"))
+	});
 	if ui.is_rect_visible(rect) {
 		let p = ui.painter().with_clip_rect(rect);
 		device_kit::paint_display(&p, rect);
 		let label_font = theme::mono(if compact { 9.0 } else { 10.0 });
+		let frozen = state
+			.param_value(r.track, r.device, rv::FREEZE)
+			.unwrap_or(0.0)
+			>= 0.5;
+		if frozen {
+			// Held tail: a cool wash over the picture and a badge in the corner.
+			p.rect_filled(plot, 0.0, theme::FROZEN.gamma_multiply(0.06));
+			let text = tr("Frozen · tail held");
+			let g = p.layout_no_wrap(text.to_owned(), theme::medium(11.0), theme::FROZEN);
+			let badge = Rect::from_min_size(
+				pos2(plot.right() - g.size().x - 34.0, plot.top() + 6.0),
+				vec2(g.size().x + 28.0, 20.0),
+			);
+			p.rect_filled(
+				badge,
+				CornerRadius::same(theme::RADIUS_MD),
+				theme::FROZEN_SOFT,
+			);
+			device_kit::paint_glyph(
+				&p,
+				device_kit::Glyph::Snowflake,
+				pos2(badge.left() + 11.0, badge.center().y),
+				11.0,
+				theme::FROZEN,
+			);
+			p.galley(
+				pos2(badge.left() + 20.0, badge.center().y - g.size().y * 0.5),
+				g,
+				theme::FROZEN,
+			);
+		}
 
 		// dB axis: a line every 12 dB, labelled in the left gutter.
 		let mut db = 0.0;
@@ -621,9 +681,9 @@ fn tail(
 		let id = Id::new(("reverb-node", cx.salt, r.device, grab as u8));
 		let node_rect = Rect::from_center_size(at, egui::Vec2::splat(20.0));
 		let (label, cursor) = match grab {
-			Grab::PreDelay => ("Pre-delay node", CursorIcon::ResizeHorizontal),
-			Grab::Decay => ("Decay node", CursorIcon::ResizeHorizontal),
-			_ => ("Damping node", CursorIcon::ResizeVertical),
+			Grab::PreDelay => (tr("Pre-delay node"), CursorIcon::ResizeHorizontal),
+			Grab::Decay => (tr("Decay node"), CursorIcon::ResizeHorizontal),
+			_ => (tr("Damping node"), CursorIcon::ResizeVertical),
 		};
 		let node_resp = ui
 			.interact(node_rect, id, Sense::click_and_drag())
@@ -643,13 +703,13 @@ fn tail(
 		reset_on_double_click(state, r, &node_resp, grab);
 		let hint = match grab {
 			Grab::PreDelay => rv::pre_delay_label(values.pre_delay),
-			Grab::Decay => format!(
-				"{} (RT60: the lows fall 60 dB)",
-				rv::decay_label(values.decay)
+			Grab::Decay => trf(
+				"{decay_label} (RT60: the lows fall 60 dB)",
+				&[("decay_label", &rv::decay_label(values.decay))],
 			),
-			_ => format!(
-				"{} · drag down for a darker tail",
-				rv::damping_label(values.damping)
+			_ => trf(
+				"{damping_label} · drag down for a darker tail",
+				&[("damping_label", &rv::damping_label(values.damping))],
 			),
 		};
 		node_resp.on_hover_text(hint);
@@ -697,8 +757,10 @@ fn space_box(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ReverbView,
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::ResizeNwSe)
-		.on_hover_text("Room size: drag the corner, double-click resets");
-	corner.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Size corner"));
+		.on_hover_text(tr("Room size: drag the corner, double-click resets"));
+	corner.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Size corner"))
+	});
 	let edge_id = Id::new(("reverb-width", cx.salt, r.device));
 	let edge = ui
 		.interact(
@@ -707,8 +769,8 @@ fn space_box(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ReverbView,
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::ResizeHorizontal)
-		.on_hover_text("Stereo width: drag the side, double-click resets");
-	edge.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Width edge"));
+		.on_hover_text(tr("Stereo width: drag the side, double-click resets"));
+	edge.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Width edge")));
 
 	if ui.is_rect_visible(rect) {
 		let p = ui.painter().with_clip_rect(rect);
@@ -865,8 +927,8 @@ fn low_cut_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	caption(
 		ui,
 		cap,
-		"Low cut on the wet signal",
-		&crate::state::device::format_value(values.low_cut, "Hz"),
+		tr("Low cut on the wet signal"),
+		&crate::state::device::format_value(values.low_cut, tr("Hz")),
 	);
 	let display_rect = Rect::from_min_size(
 		pos2(rect.left(), cap.bottom() + 2.0),
@@ -881,6 +943,7 @@ fn low_cut_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 		dormant: false,
 		x_only: true,
 		ai: state.ai_change(r.device, LOW_CUT).is_some(),
+		dynamic: None,
 	};
 	let nodes = [node];
 	let low_cut = values.low_cut;
@@ -900,7 +963,7 @@ fn low_cut_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 			FreqEvent::Move {
 				freq, commit: true, ..
 			} => {
-				commit(state, r, &[(LOW_CUT, freq)], "Reverb low cut");
+				commit(state, r, &[(LOW_CUT, freq)], tr("Reverb low cut"));
 			}
 			FreqEvent::Move {
 				freq,
@@ -914,14 +977,15 @@ fn low_cut_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 					state,
 					r,
 					&[(LOW_CUT, rv::info().param(LOW_CUT).unwrap().default)],
-					"Reset reverb low cut",
+					tr("Reset reverb low cut"),
 				);
 			}
 			_ => {}
 		}
 	}
-	out.response
-		.on_hover_text("Low cut on the wet signal: drag the node, double-click resets");
+	out.response.on_hover_text(tr(
+		"Low cut on the wet signal: drag the node, double-click resets",
+	));
 }
 
 /// The wet output as a vertical L/R pair with peak hold (the kit's level meter).
@@ -930,11 +994,21 @@ fn wet_meter(ui: &mut Ui, cx: &BodyCx, v: &ReverbView, rect: Rect) {
 	p.text(
 		pos2(rect.center().x, rect.top()),
 		Align2::CENTER_TOP,
-		"WET",
+		tr("WET"),
 		theme::medium(10.0),
 		theme::TEXT_FAINT,
 	);
 	let peak = v.output_db[0].max(v.output_db[1]);
+	let ducking = rv::duck_label(v.duck_db);
+	if !ducking.is_empty() {
+		p.text(
+			pos2(rect.center().x, rect.bottom() - 13.0),
+			Align2::CENTER_BOTTOM,
+			ducking,
+			theme::mono(9.5),
+			theme::GAIN_REDUCTION,
+		);
+	}
 	let value = if peak <= FLOOR_DB {
 		"\u{2212}\u{221e}".to_owned()
 	} else {
@@ -949,8 +1023,25 @@ fn wet_meter(ui: &mut Ui, cx: &BodyCx, v: &ReverbView, rect: Rect) {
 	);
 	let bar = Rect::from_min_max(
 		pos2(rect.center().x - 10.0, rect.top() + 18.0),
-		pos2(rect.center().x + 10.0, rect.bottom() - 18.0),
+		pos2(rect.center().x + 6.0, rect.bottom() - 30.0),
 	);
+	// The duck: a thin coral bar hanging from the top beside the meter.
+	let duck = Rect::from_min_max(
+		pos2(bar.right() + 2.0, bar.top()),
+		pos2(bar.right() + 6.0, bar.bottom()),
+	);
+	let held = -device_kit::peak_hold(
+		ui.ctx(),
+		Id::new(("reverb-duck", cx.salt, cx.r.device)),
+		-v.duck_db,
+	);
+	device_kit::paint_gr_meter(p, duck, v.duck_db, held, rv::DUCK_RANGE_DB);
+	ui.interact(
+		duck,
+		Id::new(("reverb-duck-bar", cx.salt, cx.r.device)),
+		Sense::hover(),
+	)
+	.on_hover_text(tr("Ducking: how far the wet signal is turned down now"));
 	let mut child = ui.new_child(UiBuilder::new().max_rect(bar));
 	device_kit::level_meter(
 		&mut child,
@@ -958,7 +1049,9 @@ fn wet_meter(ui: &mut Ui, cx: &BodyCx, v: &ReverbView, rect: Rect) {
 		&v.output_db,
 		bar.size(),
 	)
-	.on_hover_text("The reverb's output (L / R) · the white tick holds the peak for 1.5 s");
+	.on_hover_text(tr(
+		"The reverb's output (L / R) · the white tick holds the peak for 1.5 s",
+	));
 }
 
 fn row(ui: &mut Ui, rect: Rect) -> Ui {
@@ -969,26 +1062,29 @@ fn row(ui: &mut Ui, rect: Rect) -> Ui {
 	)
 }
 
-const KNOBS: [(&str, &str); 6] = [
-	(SIZE, "Size"),
-	(rv::DECAY, "Decay"),
-	(DAMPING, "Damping"),
-	(PRE_DELAY, "Pre-delay"),
-	(WIDTH, "Width"),
-	(LOW_CUT, "Low cut"),
+const KNOBS: [(&str, &str); 8] = [
+	(SIZE, mark("Size")),
+	(rv::DECAY, mark("Decay")),
+	(DAMPING, mark("Damping")),
+	(rv::DUCK, mark("Duck")),
+	(PRE_DELAY, mark("Pre-delay")),
+	(WIDTH, mark("Width")),
+	(LOW_CUT, mark("Low cut")),
+	(rv::DUCK_RELEASE, mark("Duck rel.")),
 ];
 
 fn knob_color(id: &str) -> Color32 {
 	match id {
 		SIZE | rv::DECAY => VIOLET,
 		DAMPING => TEAL,
+		rv::DUCK | rv::DUCK_RELEASE => theme::GAIN_REDUCTION,
 		_ => theme::TEXT,
 	}
 }
 
-/// The six knobs, three per row, centred in their cells.
+/// The eight knobs, four per row (ducking last in each), centred in their cells.
 fn knob_grid(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
-	let cols = 3;
+	let cols = 4;
 	let rows = KNOBS.len().div_ceil(cols);
 	let cell = vec2(rect.width() / cols as f32, rect.height() / rows as f32);
 	for (i, (id, label)) in KNOBS.into_iter().enumerate() {
@@ -1048,17 +1144,42 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ReverbView) {
 		Stroke::new(1.0, theme::BORDER_SUBTLE),
 	);
 	let mut bar = row(ui, foot.shrink2(vec2(10.0, 0.0)));
+	bar.spacing_mut().item_spacing.x = 12.0;
+	freeze_toggle(&mut bar, state, cx.r);
+	crate::ui::devices::compressor::key_picker_with(
+		&mut bar,
+		state,
+		cx.r,
+		None,
+		tr("Duck key: the track whose level ducks the wet signal (own input when none)"),
+	);
 	bar.add(
 		egui::Label::new(
-			egui::RichText::new(
+			egui::RichText::new(tr(
 				"Drag the violet node for decay, the teal node for damping, the white node for \
 				 pre-delay; the room's corner for size, its side for width.",
-			)
+			))
 			.font(theme::medium(12.0))
 			.color(theme::TEXT_DIM),
 		)
 		.truncate(),
 	);
+}
+
+/// "❄ Freeze": holds the tail forever (a real, automatable param).
+fn freeze_toggle(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
+	device_kit::param_glyph_toggle(
+		ui,
+		state,
+		r,
+		rv::FREEZE,
+		device_kit::Glyph::Snowflake,
+		tr("Freeze"),
+		theme::FROZEN,
+	)
+	.on_hover_text(tr(
+		"Hold the current tail forever: new input is muted and nothing decays. Automatable",
+	));
 }
 
 // --- Compact --------------------------------------------------------------------------
@@ -1067,8 +1188,10 @@ const COMPACT_KNOB_ROW_H: f32 = 78.0;
 
 /// How tall the compact form is at `width`.
 pub fn compact_height(width: f32) -> f32 {
-	compact_tail_h(width) + 8.0 + COMPACT_KNOB_ROW_H * 2.0
+	compact_tail_h(width) + 8.0 + COMPACT_KNOB_ROW_H * 2.0 + COMPACT_FREEZE_H
 }
+
+const COMPACT_FREEZE_H: f32 = 30.0;
 
 fn compact_tail_h(width: f32) -> f32 {
 	(width * 0.5).clamp(130.0, 200.0)
@@ -1093,5 +1216,8 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ReverbView) {
 			let (k, _) =
 				ui.allocate_exact_size(vec2(width, COMPACT_KNOB_ROW_H * 2.0), Sense::hover());
 			knob_grid(ui, state, cx, k);
+			let (f, _) = ui.allocate_exact_size(vec2(width, COMPACT_FREEZE_H), Sense::hover());
+			let mut bar = row(ui, f);
+			freeze_toggle(&mut bar, state, cx.r);
 		});
 }

@@ -2,6 +2,7 @@
 //! per-request cost, Stop, quick actions and the input box; plus the AI settings dialog.
 //! All logic lives in [`crate::state::ai`]; this only draws and forwards clicks.
 
+use crate::i18n::{tr, trf};
 use egui::text::LayoutJob;
 use egui::{
 	Align, Color32, FontFamily, FontId, Frame, Id, Key, Layout, Margin, Modifiers, RichText,
@@ -12,7 +13,7 @@ use crate::state::AppState;
 use crate::state::ai::ChatItem;
 use crate::state::ai::markdown::{self, Block, Span};
 use crate::state::ai::secrets::mask;
-use crate::state::ai::settings::{Effort, ProviderKind};
+use crate::state::ai::settings::{Effort, ProviderKind, ReplyLanguage};
 use crate::theme;
 
 /// Id of the input box (tests focus it).
@@ -49,11 +50,22 @@ impl ChatUi {
 				input(ui, state);
 				ui.horizontal(|ui| {
 					ui.label(
-						RichText::new(format!(
-							"{} · ${:.2}/request · session ${:.4}",
-							state.ai.settings.current_model(),
-							state.ai.settings.max_cost_usd,
-							state.ai.total_usd
+						RichText::new(trf(
+							"{current_model} · ${max_cost_usd}/request · session ${total_usd}",
+							&[
+								("current_model", &state.ai.settings.current_model()),
+								(
+									"max_cost_usd",
+									&crate::i18n::decimal(format!(
+										"{:.2}",
+										state.ai.settings.max_cost_usd
+									)),
+								),
+								(
+									"total_usd",
+									&crate::i18n::decimal(format!("{:.4}", state.ai.total_usd)),
+								),
+							],
 						))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
@@ -107,9 +119,9 @@ impl ChatUi {
 			.show(ctx, |ui| {
 				ui.set_width(460.0);
 				ui.horizontal(|ui| {
-					ui.heading("AI settings");
+					ui.heading(tr("AI settings"));
 					ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-						if ui.button("Close").clicked() {
+						if ui.button(tr("Close")).clicked() {
 							state.ai.settings_open = false;
 						}
 					});
@@ -120,7 +132,7 @@ impl ChatUi {
 					.num_columns(2)
 					.spacing(vec2(12.0, 8.0))
 					.show(ui, |ui| {
-						ui.label("Provider");
+						ui.label(tr("Provider"));
 						egui::ComboBox::from_id_salt("ai-provider")
 							.selected_text(s.provider.name())
 							.width(220.0)
@@ -131,7 +143,7 @@ impl ChatUi {
 							});
 						ui.end_row();
 						if s.provider == ProviderKind::OpenAiCompatible {
-							ui.label("Base URL");
+							ui.label(tr("Base URL"));
 							ui.add(
 								egui::TextEdit::singleline(&mut s.base_url)
 									.desired_width(280.0)
@@ -139,7 +151,7 @@ impl ChatUi {
 							);
 							ui.end_row();
 						}
-						ui.label("Model");
+						ui.label(tr("Model"));
 						ui.vertical(|ui| {
 							let presets = s.presets();
 							let model = match s.provider {
@@ -149,7 +161,7 @@ impl ChatUi {
 							ui.add(egui::TextEdit::singleline(model).desired_width(280.0));
 							if !presets.is_empty() {
 								egui::ComboBox::from_id_salt("ai-presets")
-									.selected_text("Presets…")
+									.selected_text(tr("Presets…"))
 									.width(280.0)
 									.show_ui(ui, |ui| {
 										for (id, note) in presets {
@@ -165,7 +177,7 @@ impl ChatUi {
 							}
 						});
 						ui.end_row();
-						ui.label("Reasoning");
+						ui.label(tr("Reasoning"));
 						egui::ComboBox::from_id_salt("ai-effort")
 							.selected_text(s.reasoning.name())
 							.show_ui(ui, |ui| {
@@ -174,7 +186,7 @@ impl ChatUi {
 								}
 							});
 						ui.end_row();
-						ui.label("Budget per request");
+						ui.label(tr("Budget per request"));
 						ui.add(
 							egui::DragValue::new(&mut s.max_cost_usd)
 								.range(0.01..=20.0)
@@ -184,10 +196,11 @@ impl ChatUi {
 						);
 						ui.end_row();
 						if s.provider == ProviderKind::OpenAiCompatible {
-							ui.label("Price estimate");
+							ui.label(tr("Price estimate"));
 							ui.horizontal(|ui| {
 								let mut custom = s.custom_price.is_some();
-								if ui.checkbox(&mut custom, "custom").changed() {
+								if crate::ui::widgets::checkbox(ui, &mut custom, "custom").changed()
+								{
 									s.custom_price = custom.then_some((0.0, 0.0));
 								}
 								if let Some((input, output)) = &mut s.custom_price {
@@ -212,8 +225,53 @@ impl ChatUi {
 							});
 							ui.end_row();
 						}
-						ui.label("Plugins");
-						ui.checkbox(&mut s.allow_plugins, "let the AI use installed CLAP/VST3");
+						ui.label(tr("Plugins"));
+						crate::ui::widgets::checkbox(
+							ui,
+							&mut s.allow_plugins,
+							tr("let the AI use installed CLAP/VST3"),
+						);
+						ui.end_row();
+						ui.label(tr("Reply language"));
+						ui.vertical(|ui| {
+							egui::ComboBox::from_id_salt("ai-reply-language")
+								.selected_text(s.reply_language.label())
+								.width(220.0)
+								.show_ui(ui, |ui| {
+									if ui
+										.selectable_label(
+											matches!(s.reply_language, ReplyLanguage::UiLanguage),
+											tr("UI language"),
+										)
+										.clicked()
+									{
+										s.reply_language = ReplyLanguage::UiLanguage;
+									}
+									if ui
+										.selectable_label(
+											matches!(s.reply_language, ReplyLanguage::English),
+											tr("English"),
+										)
+										.clicked()
+									{
+										s.reply_language = ReplyLanguage::English;
+									}
+									let is_other =
+										matches!(s.reply_language, ReplyLanguage::Other(_));
+									if ui.selectable_label(is_other, tr("Other…")).clicked()
+										&& !is_other
+									{
+										s.reply_language = ReplyLanguage::Other(String::new());
+									}
+								});
+							if let ReplyLanguage::Other(name) = &mut s.reply_language {
+								ui.add(
+									egui::TextEdit::singleline(name)
+										.desired_width(220.0)
+										.hint_text(tr("e.g. Italiano")),
+								);
+							}
+						});
 						ui.end_row();
 					});
 				ui.add_space(8.0);
@@ -229,7 +287,7 @@ impl ChatUi {
 fn key_section(ui: &mut Ui, state: &mut AppState) {
 	let provider = state.ai.settings.provider;
 	ui.label(
-		RichText::new("API KEY")
+		RichText::new(tr("API KEY"))
 			.font(theme::small())
 			.color(theme::ACCENT),
 	);
@@ -238,7 +296,7 @@ fn key_section(ui: &mut Ui, state: &mut AppState) {
 		.key_source
 		.as_ref()
 		.map(|s| s.describe())
-		.unwrap_or_else(|| "checking…".into());
+		.unwrap_or_else(|| tr("checking…").into());
 	ui.label(
 		RichText::new(format!("{} key: {status}", provider.name()))
 			.font(theme::small())
@@ -249,26 +307,29 @@ fn key_section(ui: &mut Ui, state: &mut AppState) {
 			egui::TextEdit::singleline(&mut state.ai.key_input)
 				.password(true)
 				.desired_width(260.0)
-				.hint_text("paste a key to store it"),
+				.hint_text(tr("paste a key to store it")),
 		);
 		let has_input = !state.ai.key_input.trim().is_empty();
 		let session = state.session.clone();
 		if ui
-			.add_enabled(has_input, egui::Button::new("Save"))
+			.add_enabled(has_input, egui::Button::new(tr("Save")))
 			.clicked()
 		{
 			let key = std::mem::take(&mut state.ai.key_input);
 			state.ai.store_key(Some(key), &session);
 		}
-		if ui.button("Remove stored").clicked() {
+		if ui.button(tr("Remove stored")).clicked() {
 			state.ai.store_key(None, &session);
 		}
 	});
 	if !state.ai.key_input.is_empty() {
 		ui.label(
-			RichText::new(format!("new key {}", mask(&state.ai.key_input)))
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
+			RichText::new(trf(
+				"new key {mask}",
+				&[("mask", &mask(&state.ai.key_input))],
+			))
+			.font(theme::small())
+			.color(theme::TEXT_FAINT),
 		);
 	}
 	if let Some(message) = &state.ai.key_message {
@@ -279,16 +340,11 @@ fn key_section(ui: &mut Ui, state: &mut AppState) {
 		ui.label(RichText::new(text).font(theme::small()).color(color));
 	}
 	ui.label(
-		RichText::new(format!(
-			"Order: {} in the environment, then a .env file, then the stored key (system \
-			 keyring; a 0600 file when no keyring runs).{}",
-			provider.key_env(),
-			if provider.needs_key() {
+		RichText::new(trf("Order: {key_env} in the environment, then a .env file, then the stored key (system keyring; a 0600 file when no keyring runs).{local}", &[("key_env", &provider.key_env()), ("local", &if provider.needs_key() {
 				""
 			} else {
-				" Local servers usually need no key."
-			}
-		))
+				tr(" Local servers usually need no key.")
+			})]))
 		.font(theme::small())
 		.color(theme::TEXT_FAINT),
 	);
@@ -296,13 +352,57 @@ fn key_section(ui: &mut Ui, state: &mut AppState) {
 
 fn header(ui: &mut Ui, state: &mut AppState) {
 	ui.horizontal(|ui| {
+		// PRODUCER | MIX as one segmented group (designs 05 and 06).
+		Frame::new()
+			.fill(theme::BG_DEEP)
+			.corner_radius(theme::RADIUS_MD)
+			.inner_margin(Margin::same(2))
+			.show(ui, |ui| tabs(ui, state));
+		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+			header_menu(ui, state);
+			pin_button(ui, state);
+		});
+	});
+}
+
+/// Windows narrower than `CHAT_DOCK_MIN`: the panel is an overlay drawer, "Pin" docks it
+/// (the arrange shrinks), "Unpin" makes it a drawer again.
+fn pin_button(ui: &mut Ui, state: &mut AppState) {
+	use crate::state::layout::CHAT_DOCK_MIN;
+	if state.view.responsive.width >= CHAT_DOCK_MIN {
+		return;
+	}
+	let pinned = state.view.panels.chat_pinned;
+	let (label, hint) = if pinned {
+		(tr("Unpin"), tr("Make the AI panel an overlay drawer again"))
+	} else {
+		(tr("Pin"), tr("Dock the AI panel (the arrange makes room)"))
+	};
+	if ui
+		.add(egui::Button::new(RichText::new(label).font(theme::small())).min_size(vec2(0.0, 20.0)))
+		.on_hover_text(hint)
+		.clicked()
+	{
+		state.view.panels.chat_pinned = !pinned;
+	}
+	if !pinned {
+		ui.label(
+			RichText::new("Esc")
+				.font(theme::mono(10.0))
+				.color(theme::TEXT_FAINT),
+		);
+	}
+}
+
+fn tabs(ui: &mut Ui, state: &mut AppState) {
+	ui.horizontal(|ui| {
 		ui.spacing_mut().item_spacing.x = 2.0;
 		for (mix, label, hint) in [
-			(false, "Producer", "Chat with the AI producer"),
+			(false, tr("Producer"), tr("Chat with the AI producer")),
 			(
 				true,
-				"Mix",
-				"Mix assistant: analysis, fixes and the AI mix pass",
+				tr("Mix"),
+				tr("Mix assistant: analysis, fixes and the AI mix pass"),
 			),
 		] {
 			let on = state.mix.open == mix;
@@ -317,71 +417,84 @@ fn header(ui: &mut Ui, state: &mut AppState) {
 				} else {
 					egui::Color32::TRANSPARENT
 				})
-				.min_size(vec2(0.0, 24.0));
+				.stroke(Stroke::NONE)
+				.corner_radius(theme::RADIUS)
+				.min_size(vec2(54.0, 22.0));
 			let resp = ui.add(button).on_hover_text(hint);
 			resp.widget_info(|| {
 				egui::WidgetInfo::selected(
 					egui::WidgetType::SelectableLabel,
 					true,
 					on,
-					if mix { "MIX" } else { "AI PRODUCER" },
+					if mix { tr("MIX") } else { tr("AI PRODUCER") },
 				)
 			});
 			if resp.clicked() {
 				state.mix.open = mix;
 			}
 		}
-		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+	});
+}
+
+fn header_menu(ui: &mut Ui, state: &mut AppState) {
+	{
+		{
 			ui.menu_button("☰", |ui| {
 				ui.set_min_width(260.0);
 				if ui
-					.add_enabled(!state.ai.busy(), egui::Button::new("New conversation"))
+					.add_enabled(!state.ai.busy(), egui::Button::new(tr("New conversation")))
 					.clicked()
 				{
 					state.ai.clear();
 					ui.close();
 				}
-				if ui.button("AI settings…").clicked() {
+				if ui.button(tr("AI settings…")).clicked() {
 					state.ai.settings_open = true;
 					ui.close();
 				}
 				ui.separator();
 				let path = state.ai.transcript_path();
 				ui.label(
-					RichText::new("Transcript (JSONL, no secrets)")
+					RichText::new(tr("Transcript (JSONL, no secrets)"))
 						.font(theme::small())
 						.color(theme::TEXT_DIM),
 				);
 				if ui
 					.button(RichText::new(path.display().to_string()).font(theme::mono(10.0)))
-					.on_hover_text("Copy the path")
+					.on_hover_text(tr("Copy the path"))
 					.clicked()
 				{
 					ui.ctx().copy_text(path.display().to_string());
 					ui.close();
 				}
 			});
-			if ui.button("⚙").on_hover_text("AI settings").clicked() {
+			if ui.button("⚙").on_hover_text(tr("AI settings")).clicked() {
 				state.ai.settings_open = true;
 			}
 			ui.label(
-				RichText::new(format!("session ${:.4}", state.ai.total_usd))
-					.font(theme::mono(10.5))
-					.color(theme::TEXT_FAINT),
+				RichText::new(trf(
+					"session ${total_usd}",
+					&[(
+						"total_usd",
+						&crate::i18n::decimal(format!("{:.3}", state.ai.total_usd)),
+					)],
+				))
+				.font(theme::mono(10.5))
+				.color(theme::TEXT_FAINT),
 			)
-			.on_hover_text("What this conversation has cost so far");
-		});
-	});
+			.on_hover_text(tr("What this conversation has cost so far"));
+		}
+	}
 }
 
 fn empty(ui: &mut Ui) {
 	ui.add_space(12.0);
 	ui.label(
-		RichText::new(
+		RichText::new(tr(
 			"Ask for changes to the open project: \"add a bridge after the second chorus\", \
 			 \"make the drums punchier\", \"write a bassline for the selected clip\", \"mix \
 			 this\". Each request becomes one undo step.",
-		)
+		))
 		.color(theme::TEXT_DIM),
 	);
 }
@@ -399,13 +512,27 @@ fn running_bar(ui: &mut Ui, state: &mut AppState) {
 			ui.horizontal(|ui| {
 				ui.spinner();
 				let text = if running.stopping {
-					"Stopping…".to_owned()
+					tr("Stopping…").to_owned()
 				} else {
-					format!(
-						"Producer working · {:.0} s · ${:.4}{} so far",
-						running.started.elapsed().as_secs_f32(),
-						running.cost_usd,
-						if running.estimated { " est." } else { "" }
+					trf(
+						"Producer working · {elapsed} s · ${cost_usd}{estimate} so far",
+						&[
+							(
+								"elapsed",
+								&crate::i18n::decimal(format!(
+									"{:.0}",
+									running.started.elapsed().as_secs_f32()
+								)),
+							),
+							(
+								"cost_usd",
+								&crate::i18n::decimal(format!("{:.4}", running.cost_usd)),
+							),
+							(
+								"estimate",
+								&if running.estimated { tr(" est.") } else { "" },
+							),
+						],
 					)
 				};
 				ui.label(
@@ -414,12 +541,14 @@ fn running_bar(ui: &mut Ui, state: &mut AppState) {
 						.color(theme::ACCENT_TEXT),
 				);
 				ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-					let stop = egui::Button::new(RichText::new("■ Stop").color(theme::ERROR))
+					let stop = egui::Button::new(RichText::new(tr("■ Stop")).color(theme::ERROR))
 						.fill(theme::ERROR_SOFT)
 						.stroke(Stroke::new(1.0, theme::ERROR.gamma_multiply(0.6)));
 					if ui
 						.add_enabled(!running.stopping, stop)
-						.on_hover_text("Stop at the next step; edits so far stay as one undo step")
+						.on_hover_text(tr(
+							"Stop at the next step; edits so far stay as one undo step",
+						))
 						.clicked()
 					{
 						state.ai.stop();
@@ -464,16 +593,16 @@ fn input(ui: &mut Ui, state: &mut AppState) {
 			.desired_rows(3)
 			.desired_width(ui.available_width() - 54.0)
 			.hint_text(if busy {
-				"The AI is working… (Stop to take over)"
+				tr("The AI is working… (Stop to take over)")
 			} else {
-				"Ask the producer…  Enter sends, Shift+Enter new line"
+				tr("Ask the producer…  Enter sends, Shift+Enter new line")
 			});
 		ui.add(edit);
 		let can_send = !busy && !state.ai.input.trim().is_empty();
 		let clicked = ui
 			.add_enabled(
 				can_send,
-				egui::Button::new(RichText::new("Send").font(theme::medium(12.0)).color(
+				egui::Button::new(RichText::new(tr("Send")).font(theme::medium(12.0)).color(
 					if can_send {
 						theme::TEXT_ON_ACCENT
 					} else {
@@ -487,7 +616,7 @@ fn input(ui: &mut Ui, state: &mut AppState) {
 				})
 				.min_size(vec2(44.0, 36.0)),
 			)
-			.on_hover_text("Send (Enter)")
+			.on_hover_text(tr("Send (Enter)"))
 			.clicked();
 		if (send || clicked) && can_send {
 			let text = std::mem::take(&mut state.ai.input);
@@ -511,7 +640,7 @@ fn producer_header(ui: &mut Ui) {
 			theme::TEXT_ON_ACCENT,
 		);
 		ui.label(
-			RichText::new("Producer")
+			RichText::new(tr("Producer"))
 				.font(theme::semibold(12.0))
 				.color(theme::TEXT),
 		);
@@ -550,7 +679,7 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem, after_user: bool) -> bool
 			}
 			egui::CollapsingHeader::new(
 				RichText::new(if *streaming {
-					"thinking…"
+					tr("thinking…")
 				} else {
 					"thinking"
 				})
@@ -627,7 +756,7 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem, after_user: bool) -> bool
 				.inner_margin(Margin::symmetric(10, 7))
 				.show(ui, |ui| {
 					ui.add(egui::Label::new(RichText::new(text).color(theme::TEXT)).wrap());
-					if *settings && ui.button("AI settings…").clicked() {
+					if *settings && ui.button(tr("AI settings…")).clicked() {
 						open_settings = true;
 					}
 				});
@@ -669,9 +798,19 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem, after_user: bool) -> bool
 								.color(theme::TEXT),
 						);
 						ui.label(
-							RichText::new(format!(
-								"${cost_usd:.4}{} · session ${total_usd:.4}",
-								if *estimated { " est." } else { "" }
+							RichText::new(trf(
+								"${cost_usd}{estimate} · session ${total_usd}",
+								&[
+									(
+										"cost_usd",
+										&crate::i18n::decimal(format!("{:.4}", cost_usd)),
+									),
+									("estimate", &if *estimated { tr(" est.") } else { "" }),
+									(
+										"total_usd",
+										&crate::i18n::decimal(format!("{:.4}", total_usd)),
+									),
+								],
 							))
 							.font(theme::mono(10.5))
 							.color(theme::TEXT_FAINT),
@@ -691,7 +830,12 @@ fn item_ui(ui: &mut Ui, index: usize, item: &ChatItem, after_user: bool) -> bool
 								},
 							);
 						};
-						part(&mut job, "Undo step: ", theme::small(), theme::TEXT_FAINT);
+						part(
+							&mut job,
+							tr("Undo step: "),
+							theme::small(),
+							theme::TEXT_FAINT,
+						);
 						part(&mut job, label, theme::small(), theme::ACCENT_TEXT);
 						part(&mut job, "  Ctrl+Z", theme::mono(10.0), theme::TEXT_FAINT);
 						ui.add(egui::Label::new(job).wrap());
@@ -719,7 +863,7 @@ fn tool_headline(name: &str, args: &str, ok: Option<bool>, summary: &str) -> Str
 				.or_else(|| {
 					v.get("notes")
 						.and_then(|n| n.as_array())
-						.map(|n| format!("{} notes", n.len()))
+						.map(|n| trf("{n} notes", &[("n", &n.len())]))
 				})
 		})
 		.unwrap_or_default();

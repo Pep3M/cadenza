@@ -3,6 +3,7 @@
 //! morph between modes, the drive drag, the test-sine scope and the harmonics a test
 //! sine gets from the curve (a DFT of one period), so they show while stopped too.
 
+use crate::i18n::{tr, trf};
 use cadenza_dsp::response::{SaturatorMode as Mode, saturator_shape};
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 
@@ -71,17 +72,17 @@ pub fn mode_index(mode: Mode) -> usize {
 
 pub fn mode_name(mode: Mode) -> &'static str {
 	match mode {
-		Mode::Tape => "Tape",
-		Mode::Tube => "Tube",
-		Mode::Hard => "Hard clip",
+		Mode::Tape => tr("Tape"),
+		Mode::Tube => tr("Tube"),
+		Mode::Hard => tr("Hard clip"),
 	}
 }
 
 pub fn mode_description(mode: Mode) -> &'static str {
 	match mode {
-		Mode::Tape => "Soft, smooth top",
-		Mode::Tube => "Warm, uneven, 2nd harmonic",
-		Mode::Hard => "Flat top, odd harmonics",
+		Mode::Tape => tr("Soft, smooth top"),
+		Mode::Tube => tr("Warm, uneven, 2nd harmonic"),
+		Mode::Hard => tr("Flat top, odd harmonics"),
 	}
 }
 
@@ -154,7 +155,7 @@ pub fn reset_drive() -> Change {
 
 /// "Drive +12.0 dB".
 pub fn drive_label(drive: f32) -> String {
-	format!("Drive {} dB", signed_db(drive))
+	trf("Drive {signed_db} dB", &[("signed_db", &signed_db(drive))])
 }
 
 /// `n + 1` points of the test sine (`cycles` periods) before and after the curve,

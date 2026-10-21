@@ -4,6 +4,7 @@
 //! the strips scroll). Inserts can be reordered by dragging, dragged to another strip
 //! (Ctrl: copy), and effects from the browser dropped into a slot.
 
+use crate::i18n::{tr, trf};
 use cadenza_core::TrackId;
 use cadenza_dsp::DeviceRole;
 use cadenza_model::{Channel, ChannelPatch, Command, Output, Send, Track, TrackKind};
@@ -14,7 +15,7 @@ use egui::{
 
 use crate::state::AppState;
 use crate::state::dnd::{DropTarget, Payload};
-use crate::state::mixer::MixerView;
+use crate::state::mixer::{MeterMode, MixerView};
 use crate::state::selection::DeviceRef;
 use crate::theme;
 use crate::ui::dnd;
@@ -31,7 +32,7 @@ const DIVIDER: f32 = 18.0;
 const STRIP_GAP: f32 = 4.0;
 
 fn strip_width(view: &MixerView) -> f32 {
-	if view.narrow {
+	if view.narrow_now() {
 		theme::STRIP_NARROW
 	} else {
 		theme::STRIP_WIDTH
@@ -44,6 +45,21 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 	let bar = Rect::from_min_size(full.min, vec2(full.width(), TOOLBAR));
 	toolbar(ui, state, bar);
 	let body = Rect::from_min_max(pos2(full.left(), bar.bottom() + 2.0), full.max);
+	let strip_count = state
+		.project()
+		.tracks
+		.iter()
+		.filter(|t| !crate::state::folders::is_hidden(state.project(), &state.view.collapsed, t.id))
+		.count()
+		.max(1);
+	state.view.mixer.auto_narrow = !state.view.mixer.narrow
+		&& crate::state::layout::mixer_auto_narrow(
+			strip_count,
+			body.width(),
+			theme::STRIP_WIDTH,
+			STRIP_GAP,
+			GUTTER + DIVIDER + theme::STRIP_WIDTH + 44.0,
+		);
 	let view = state.view.mixer;
 	let width = strip_width(&view);
 
@@ -69,7 +85,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 		.collect();
 	let gutter = Rect::from_min_size(body.min, vec2(GUTTER, body.height()));
 	// The master follows the last strip; once the strips overflow it pins to the right.
-	let master_w = width + if view.narrow { 12.0 } else { 24.0 };
+	let master_w = width + if view.narrow_now() { 12.0 } else { 24.0 };
 	let n = (tracks.len() + buses.len().max(1)) as f32;
 	let strips_w = n * (width + STRIP_GAP) + DIVIDER + 12.0;
 	let left = gutter.right();
@@ -122,6 +138,53 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Title, Normal | Narrow, the section toggles and "+ Bus".
+/// How much of the mixer toolbar fits: everything inline, the row toggles in a "Rows"
+/// menu, or the layout and meter choices in that menu too (measured from the labels'
+/// widths, so translated labels fold instead of overlapping).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixerFold {
+	Full,
+	RowsMenu,
+	AllMenu,
+}
+
+/// Widths (points, spacing included) of the mixer toolbar's groups.
+#[derive(Debug, Clone, Copy)]
+pub struct MixerWidths {
+	pub layout: f32,
+	pub rows: f32,
+	pub meter: f32,
+	pub menu: f32,
+	pub bus: f32,
+}
+
+/// The widest fold that fits `available` points after the title.
+pub fn mixer_fold(available: f32, w: MixerWidths) -> MixerFold {
+	if w.layout + w.rows + w.meter + w.bus <= available {
+		MixerFold::Full
+	} else if w.layout + w.menu + w.meter + w.bus <= available {
+		MixerFold::RowsMenu
+	} else {
+		MixerFold::AllMenu
+	}
+}
+
+fn label_width(ui: &Ui, text: &str, font: FontId) -> f32 {
+	ui.painter()
+		.layout_no_wrap(text.to_owned(), font, theme::TEXT)
+		.size()
+		.x
+}
+
+/// A segmented control as wide as its longest label needs (at least `min`).
+fn segmented_width(ui: &Ui, labels: &[&str], min: f32) -> f32 {
+	let widest = labels
+		.iter()
+		.map(|l| label_width(ui, l, theme::medium(12.0)))
+		.fold(0.0, f32::max);
+	((widest + 18.0) * labels.len() as f32).max(min)
+}
+
 fn toolbar(ui: &mut Ui, state: &mut AppState, bar: Rect) {
 	let mut ui = ui.new_child(
 		egui::UiBuilder::new()
@@ -129,33 +192,105 @@ fn toolbar(ui: &mut Ui, state: &mut AppState, bar: Rect) {
 			.layout(Layout::left_to_right(Align::Center)),
 	);
 	let ui = &mut ui;
-	widgets::panel_title(ui, "Mixer", Some("F9"));
+	widgets::panel_title(ui, tr("Mixer"), Some("F9"));
 	ui.add_space(8.0);
+	let gap = ui.spacing().item_spacing.x;
+	let layout_labels = [tr("Normal"), tr("Narrow")];
+	let meter_labels = [MeterMode::Peak.label(), MeterMode::PeakRms.label()];
+	let layout_w = segmented_width(ui, &layout_labels, 130.0);
+	let meter_w = segmented_width(ui, &meter_labels, 140.0);
+	let row_labels = [tr("Input"), tr("Inserts"), tr("Sends"), tr("Routing")];
+	let toggle_ws = row_labels.map(|label| {
+		(label_width(ui, &format!("✔ {label}"), theme::semibold(10.5)) + 14.0).max(70.0)
+	});
+	let rows_w: f32 = toggle_ws.iter().map(|w| w + gap).sum();
+	let menu_label = tr("Rows ▾");
+	let menu_w = label_width(ui, menu_label, theme::medium(12.0)) + 18.0 + gap;
+	let bus_w = label_width(ui, tr("+ Bus"), theme::medium(12.0)) + 18.0 + gap;
+	let fold = mixer_fold(
+		ui.available_width(),
+		MixerWidths {
+			layout: layout_w + 8.0 + gap,
+			rows: rows_w + 8.0,
+			meter: meter_w + gap,
+			menu: menu_w + 8.0,
+			bus: bus_w,
+		},
+	);
 	let v = &mut state.view.mixer;
-	if let Some(i) =
-		widgets::segmented_sized(ui, &["Normal", "Narrow"], usize::from(v.narrow), 130.0)
-	{
-		v.narrow = i == 1;
+	let layout_choice = |ui: &mut Ui, v: &mut crate::state::mixer::MixerView| {
+		if let Some(i) =
+			widgets::segmented_sized(ui, &layout_labels, usize::from(v.narrow), layout_w)
+		{
+			v.narrow = i == 1;
+		}
+	};
+	let meter_choice = |ui: &mut Ui, v: &mut crate::state::mixer::MixerView| {
+		let mode = v.meter;
+		if let Some(i) = widgets::segmented_sized(
+			ui,
+			&meter_labels,
+			usize::from(mode == MeterMode::PeakRms),
+			meter_w,
+		) {
+			v.meter = if i == 1 {
+				MeterMode::PeakRms
+			} else {
+				MeterMode::Peak
+			};
+		}
+	};
+	if fold != MixerFold::AllMenu {
+		layout_choice(ui, v);
+		ui.add_space(8.0);
+	}
+	if fold == MixerFold::Full {
+		for ((label, width), on) in row_labels.into_iter().zip(toggle_ws).zip([
+			&mut v.input,
+			&mut v.inserts,
+			&mut v.sends,
+			&mut v.routing,
+		]) {
+			let text = format!("{} {label}", if *on { "✔" } else { "  " });
+			if widgets::toggle(ui, *on, &text, theme::ACCENT, vec2(width, 22.0))
+				.on_hover_text(trf(
+					"Show / hide the {row} row",
+					&[("row", &label.to_lowercase())],
+				))
+				.clicked()
+			{
+				*on = !*on;
+			}
+		}
+	} else {
+		let menu = ui
+			.button(RichText::new(menu_label).font(theme::medium(12.0)))
+			.on_hover_text(tr("Rows shown in the strips"));
+		egui::Popup::menu(&menu)
+			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+			.show(|ui| {
+				if fold == MixerFold::AllMenu {
+					layout_choice(ui, v);
+					ui.add_space(4.0);
+					meter_choice(ui, v);
+					ui.separator();
+				}
+				widgets::checkbox(ui, &mut v.input, row_labels[0]);
+				widgets::checkbox(ui, &mut v.inserts, row_labels[1]);
+				widgets::checkbox(ui, &mut v.sends, row_labels[2]);
+				widgets::checkbox(ui, &mut v.routing, row_labels[3]);
+			});
 	}
 	ui.add_space(8.0);
-	for (label, on) in [
-		("Input", &mut v.input),
-		("Inserts", &mut v.inserts),
-		("Sends", &mut v.sends),
-		("Routing", &mut v.routing),
-	] {
-		let text = format!("{} {label}", if *on { "✔" } else { "  " });
-		if widgets::toggle(ui, *on, &text, theme::ACCENT, vec2(70.0, 22.0))
-			.on_hover_text(format!("Show / hide the {} row", label.to_lowercase()))
-			.clicked()
-		{
-			*on = !*on;
-		}
+	if fold != MixerFold::AllMenu {
+		meter_choice(ui, v);
 	}
 	ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 		if ui
-			.button(RichText::new("+ Bus").font(theme::medium(12.0)))
-			.on_hover_text("A new bus (route tracks to it with their output or a send)")
+			.button(RichText::new(tr("+ Bus")).font(theme::medium(12.0)))
+			.on_hover_text(tr(
+				"A new bus (route tracks to it with their output or a send)",
+			))
 			.clicked()
 		{
 			super::arrange::add_track(state, TrackKind::Bus);
@@ -183,11 +318,11 @@ fn paint_gutter(ui: &Ui, gutter: Rect, layout: &StripLayout) {
 			);
 		}
 	};
-	label(layout.input, "Input");
-	label(layout.inserts, "Inserts");
-	label(layout.sends, "Sends");
-	label(layout.output, "Output");
-	label(Some(layout.pan), "Pan");
+	label(layout.input, tr("Input"));
+	label(layout.inserts, tr("Inserts"));
+	label(layout.sends, tr("Sends"));
+	label(layout.output, tr("Output"));
+	label(Some(layout.pan), tr("Pan"));
 	let travel = layout.fader.height() - 18.0;
 	let bottom = layout.fader.center().y + travel / 2.0;
 	// Marks crowd at the top of the travel on a short fader: skip those that would touch.
@@ -232,7 +367,11 @@ fn buses_divider(ui: &mut Ui, height: f32) {
 		rect.top() + 70.0..=rect.bottom() - 4.0,
 		Stroke::new(1.0, theme::BORDER),
 	);
-	let galley = p.layout_no_wrap("BUSES".to_owned(), theme::semibold(9.5), theme::TEXT_FAINT);
+	let galley = p.layout_no_wrap(
+		tr("BUSES").to_owned(),
+		theme::semibold(9.5),
+		theme::TEXT_FAINT,
+	);
 	let size = galley.size();
 	let pos = pos2(rect.center().x - size.y / 2.0, rect.top() + 8.0 + size.x);
 	p.add(
@@ -244,7 +383,7 @@ fn buses_divider(ui: &mut Ui, height: f32) {
 /// No buses yet: a dashed strip that adds one.
 fn ghost_bus(ui: &mut Ui, state: &mut AppState, height: f32, width: f32) {
 	let (rect, resp) = ui.allocate_exact_size(vec2(width, height - 8.0), Sense::click());
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "+ Bus"));
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr("+ Bus")));
 	let p = ui.painter();
 	let color = if resp.hovered() {
 		theme::ACCENT
@@ -265,7 +404,7 @@ fn ghost_bus(ui: &mut Ui, state: &mut AppState, height: f32, width: f32) {
 	p.text(
 		pos2(rect.center().x, rect.top() + 40.0),
 		Align2::CENTER_CENTER,
-		"+ Bus",
+		tr("+ Bus"),
 		theme::medium(12.0),
 		if resp.hovered() {
 			theme::ACCENT_TEXT
@@ -281,7 +420,9 @@ fn ghost_bus(ui: &mut Ui, state: &mut AppState, height: f32, width: f32) {
 		theme::TEXT_FAINT,
 	);
 	if resp
-		.on_hover_text("Add a bus: route tracks to it with their output or a send")
+		.on_hover_text(tr(
+			"Add a bus: route tracks to it with their output or a send",
+		))
 		.clicked()
 	{
 		super::arrange::add_track(state, TrackKind::Bus);
@@ -295,7 +436,7 @@ fn input_text(state: &AppState, track: Option<&Track>) -> String {
 	};
 	match t.kind {
 		TrackKind::Instrument => "MIDI · All".into(),
-		TrackKind::Audio => t.input.map_or("No input".into(), |i| i.label()),
+		TrackKind::Audio => t.input.map_or(tr("No input").into(), |i| i.label()),
 		TrackKind::Bus => {
 			let n = state
 				.project()
@@ -306,7 +447,7 @@ fn input_text(state: &AppState, track: Option<&Track>) -> String {
 						|| o.channel.sends.iter().any(|s| s.target == t.id)
 				})
 				.count();
-			format!("Bus · {n} in")
+			trf("Bus · {n} in", &[("n", &n)])
 		}
 		// The device row already counts the tracks inside.
 		TrackKind::Folder => String::new(),
@@ -373,6 +514,10 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 			None => state.selection.select_master(),
 		}
 	}
+	// Double-click the strip: its properties window (FL's channel settings).
+	if bg.double_clicked() {
+		state.open_track_window(id);
+	}
 
 	let inner = strip_inner(rect);
 	let w = inner.width();
@@ -402,16 +547,16 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 	}
 
 	let p = ui.painter().clone();
-	let name = track.map_or("Master".to_owned(), |t| t.name.clone());
+	let name = track.map_or(tr("Master").to_owned(), |t| t.name.clone());
 	let tag = match kind {
-		Some(TrackKind::Instrument) => "Inst",
-		Some(TrackKind::Audio) => "Audio",
-		Some(TrackKind::Bus) => "Bus",
-		Some(TrackKind::Folder) => "VCA",
-		None => "Out",
+		Some(TrackKind::Instrument) => tr("Inst"),
+		Some(TrackKind::Audio) => tr("Audio"),
+		Some(TrackKind::Bus) => tr("Bus"),
+		Some(TrackKind::Folder) => tr("VCA"),
+		None => tr("Out"),
 	};
 	// Narrow strips keep the room for the name (the color bar and rows tell the type).
-	let tag_w = if state.view.mixer.narrow {
+	let tag_w = if state.view.mixer.narrow_now() {
 		0.0
 	} else {
 		let tag_g = p.layout_no_wrap(tag.to_owned(), theme::small(), theme::TEXT_FAINT);
@@ -443,14 +588,14 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 	let what = match track.map(|t| t.kind) {
 		Some(TrackKind::Instrument) => track
 			.and_then(|t| t.instrument.as_ref())
-			.map_or("No instrument".to_owned(), |d| d.name.clone()),
-		Some(TrackKind::Audio) => "Audio".into(),
-		Some(TrackKind::Bus) => "Bus".into(),
+			.map_or(tr("No instrument").to_owned(), |d| d.name.clone()),
+		Some(TrackKind::Audio) => tr("Audio").into(),
+		Some(TrackKind::Bus) => tr("Bus").into(),
 		Some(TrackKind::Folder) => {
 			let n = track.map_or(0, |t| state.project().folder_contents(t.id).len());
-			format!("   Folder ({n})")
+			trf("   Folder ({n})", &[("n", &n)])
 		}
-		None => "Main out".into(),
+		None => tr("Main out").into(),
 	};
 	let folder = track.filter(|t| t.kind == TrackKind::Folder).map(|t| t.id);
 	if let Some(what_r) = what_r {
@@ -492,7 +637,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 		if let Some(f) = folder
 			&& wr
 				.clone()
-				.on_hover_text("Fold / unfold the tracks inside")
+				.on_hover_text(tr("Fold / unfold the tracks inside"))
 				.clicked()
 		{
 			state.toggle_folder(f);
@@ -515,7 +660,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 					theme::ACCENT,
 				);
 			}
-			let wr = wr.on_hover_text("Double-click: plugin editor");
+			let wr = wr.on_hover_text(tr("Double-click: plugin editor"));
 			if wr.double_clicked() {
 				state.toggle_plugin_editor(d.id);
 			}
@@ -525,7 +670,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 				device: d.id,
 			};
 			if state.has_device_editor(r) {
-				let wr = wr.on_hover_text("Double-click: device editor");
+				let wr = wr.on_hover_text(tr("Double-click: device editor"));
 				if wr.double_clicked() {
 					state.toggle_device_editor(r);
 				}
@@ -561,6 +706,16 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 	}
 	drop_zone(ui, state, id, rect, inserts_r, &row_rects);
 
+	// The master has no sends or output: its live loudness takes those rows.
+	if track.is_none() {
+		let area = match (sends_area, output_r) {
+			(Some(a), Some(b)) => Some(a.union(b)),
+			(a, b) => a.or(b),
+		};
+		if let Some(r) = area {
+			master_loudness(ui, state, r);
+		}
+	}
 	if let Some(t) = track
 		&& let Some(sends_r) = sends_area
 	{
@@ -589,7 +744,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 					.collect();
 				if !buses.is_empty() {
 					ui.menu_button(
-						RichText::new("+ Send")
+						RichText::new(tr("+ Send"))
 							.font(theme::small())
 							.color(theme::TEXT_DIM),
 						|ui| {
@@ -632,6 +787,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 		if state.is_automated(&pan_addr) {
 			super::automation::automated_badge(ui, pan_r);
 		}
+		super::midi_learn::decorate(&pan_resp, state, &pan_addr);
 		pan_resp.context_menu(|ui| super::automation::automate_item(ui, state, pan_addr));
 	}
 
@@ -657,6 +813,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 	if state.is_automated(&vol_addr) {
 		super::automation::automated_badge(ui, fader_rect);
 	}
+	super::midi_learn::decorate(&fader_resp, state, &vol_addr);
 	fader_resp.context_menu(|ui| super::automation::automate_item(ui, state, vol_addr));
 	let mut m_ui = ui.new_child(egui::UiBuilder::new().max_rect(meter_rect));
 	if widgets::meter(
@@ -664,6 +821,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 		Id::new(("clip-lamp", id)),
 		levels,
 		meter_rect.size(),
+		state.view.mixer.meter,
 	) {
 		state.meters.reset_clip(id);
 	}
@@ -702,6 +860,9 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 		p.text(pos, align, text, theme::mono(10.5), c);
 	}
 
+	if track.is_none() {
+		monitor_switches(ui, state, ms_r);
+	}
 	if let Some(t) = track {
 		let mut ms = ui.new_child(
 			egui::UiBuilder::new()
@@ -716,7 +877,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 			half
 		};
 		if widgets::toggle(&mut ms, channel.mute, "M", theme::MUTE, vec2(half, 18.0))
-			.on_hover_text("Mute")
+			.on_hover_text(tr("Mute"))
 			.clicked()
 		{
 			set_channel(
@@ -729,7 +890,7 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 			);
 		}
 		if widgets::toggle(&mut ms, channel.solo, "S", theme::SOLO, vec2(half, 18.0))
-			.on_hover_text("Solo")
+			.on_hover_text(tr("Solo"))
 			.clicked()
 		{
 			set_channel(
@@ -744,6 +905,142 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 		if arm {
 			super::record::mixer_arm(&mut ms, state, t.id, half);
 		}
+	}
+}
+
+/// The master's LOUDNESS block: short-term and integrated LUFS and the true peak since
+/// the last reset (click resets), from the player's master tap.
+fn master_loudness(ui: &mut Ui, state: &mut AppState, r: Rect) {
+	use crate::state::mixer::format_lufs;
+	let resp = ui
+		.interact(r, Id::new("master-loudness"), Sense::click())
+		.on_hover_text(tr(
+			"Live loudness of the master (BS.1770): S = short-term (3 s), I = integrated and \
+			 TP = true peak since the last reset. Click to reset.",
+		));
+	if resp.clicked() {
+		state.master_loudness.reset();
+	}
+	let p = ui.painter_at(r);
+	let box_r = r.shrink2(vec2(0.0, 1.0));
+	p.rect(
+		box_r,
+		CornerRadius::same(theme::RADIUS),
+		if resp.hovered() {
+			theme::BG_WIDGET
+		} else {
+			theme::DISPLAY_BG
+		},
+		Stroke::new(1.0, theme::BORDER),
+		StrokeKind::Inside,
+	);
+	let m = &state.master_loudness.meter;
+	let (short, integrated, tp) = (m.short_term(), m.integrated(), m.true_peak_db());
+	let tp_color = if tp >= -1.0 {
+		theme::WARNING
+	} else {
+		theme::TEXT
+	};
+	let inner = box_r.shrink2(vec2(5.0, 3.0));
+	let line = 14.0;
+	if inner.height() >= 4.0 * line {
+		let rows = [
+			(tr("LUFS"), String::new(), theme::TEXT_FAINT),
+			("S", format_lufs(short), theme::TEXT),
+			("I", format_lufs(integrated), theme::ACCENT),
+			("TP", format_lufs(tp), tp_color),
+		];
+		let top = inner.top() + ((inner.height() - 4.0 * line) / 2.0).min(4.0);
+		for (i, (label, value, c)) in rows.into_iter().enumerate() {
+			let y = top + line * (i as f32 + 0.5);
+			p.text(
+				pos2(inner.left(), y),
+				Align2::LEFT_CENTER,
+				label,
+				theme::small(),
+				theme::TEXT_FAINT,
+			);
+			p.text(
+				pos2(inner.right(), y),
+				Align2::RIGHT_CENTER,
+				value,
+				theme::mono(11.0),
+				c,
+			);
+		}
+		if resp.hovered() {
+			p.text(
+				pos2(inner.right(), top + line * 0.5),
+				Align2::RIGHT_CENTER,
+				tr("⟲ reset"),
+				theme::small(),
+				theme::TEXT_DIM,
+			);
+		}
+	} else {
+		p.text(
+			pos2(inner.left(), inner.center().y),
+			Align2::LEFT_CENTER,
+			"I",
+			theme::small(),
+			theme::TEXT_FAINT,
+		);
+		p.text(
+			pos2(inner.right(), inner.center().y),
+			Align2::RIGHT_CENTER,
+			format!("{} LUFS", format_lufs(integrated)),
+			theme::mono(10.5),
+			theme::ACCENT,
+		);
+	}
+}
+
+/// Mono / Dim on the master strip: monitoring only (the meters and renders keep the
+/// real mix).
+fn monitor_switches(ui: &mut Ui, state: &mut AppState, r: Rect) {
+	let mut ms = ui.new_child(
+		egui::UiBuilder::new()
+			.max_rect(r)
+			.layout(Layout::left_to_right(Align::Center)),
+	);
+	ms.spacing_mut().item_spacing.x = 3.0;
+	let half = (r.width() - 3.0) / 2.0;
+	let mut fx = state.monitor_fx();
+	let narrow = state.view.mixer.narrow_now();
+	// "Mono" is universal audio jargon (kept untranslated like Bus/Send/Insert); narrow
+	// strips use the fixed-width "M" instead of chopping a translated word down to a
+	// length that may not fit (or make sense) in every language.
+	let (mono, dim) = if narrow {
+		("M", tr("Dim"))
+	} else {
+		("Mono", tr("Dim"))
+	};
+	if widgets::toggle(&mut ms, fx.mono, mono, theme::ACCENT, vec2(half, 18.0))
+		.on_hover_text(tr(
+			"Mono: hear the mix summed to mono (monitoring only, not rendered)",
+		))
+		.clicked()
+	{
+		fx.mono = !fx.mono;
+	}
+	let dim_label = format!("{dim} {}", if narrow { "" } else { "−20" });
+	if widgets::toggle(
+		&mut ms,
+		fx.dim,
+		dim_label.trim_end(),
+		theme::WARNING,
+		vec2(half, 18.0),
+	)
+	.on_hover_text(trf(
+		"Dim: turn the monitoring down {dim_db} dB (not rendered)",
+		&[("dim_db", &-cadenza_engine::DIM_DB)],
+	))
+	.clicked()
+	{
+		fx.dim = !fx.dim;
+	}
+	if fx != state.monitor_fx() {
+		state.set_monitor_fx(fx);
 	}
 }
 
@@ -997,7 +1294,7 @@ fn insert_row(
 	);
 	let pr = ui
 		.interact(power, Id::new(("bypass", d.id)), Sense::click())
-		.on_hover_text(if d.bypass { "Enable" } else { "Bypass" });
+		.on_hover_text(if d.bypass { tr("Enable") } else { tr("Bypass") });
 	p.circle_filled(
 		power.center(),
 		3.5,
@@ -1016,7 +1313,11 @@ fn insert_row(
 	}
 	let nr = ui.interact(name, Id::new(("insert", d.id)), Sense::click_and_drag());
 	nr.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Insert {}", d.name))
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Button,
+			true,
+			trf("Insert {name}", &[("name", &d.name)]),
+		)
 	});
 	let font = FontId::proportional(11.0);
 	let shown = elide(ui, &d.name, &font, name.width() - 4.0);
@@ -1026,21 +1327,19 @@ fn insert_row(
 		device: d.id,
 	};
 	let hint = if plugin {
-		"Double-click: plugin editor. Drag to reorder or onto another strip (Ctrl: copy)"
+		tr("Double-click: plugin editor. Drag to reorder or onto another strip (Ctrl: copy)")
 	} else {
-		"Double-click: device editor. Drag to reorder or onto another strip (Ctrl: copy)"
+		tr("Click: device window. Drag to reorder or onto another strip (Ctrl: copy)")
 	};
 	let nr = if shown != d.name {
 		nr.on_hover_text(format!("{}\n\n{hint}", d.name))
 	} else {
 		nr.on_hover_text(hint)
 	};
-	if nr.double_clicked() {
-		if plugin {
-			state.toggle_plugin_editor(d.id);
-		} else if state.has_device_editor(r) {
-			state.toggle_device_editor(r);
-		}
+	// FL Studio-like: a click opens (or brings to the front) the built-in's window;
+	// plugins open their own editor on a double-click.
+	if nr.double_clicked() && plugin {
+		state.toggle_plugin_editor(d.id);
 	}
 	if nr.drag_started_by(egui::PointerButton::Primary) {
 		egui::DragAndDrop::set_payload(
@@ -1052,7 +1351,7 @@ fn insert_row(
 		);
 	}
 	let p = ui.painter();
-	let editing = state.device_editor_target() == Some(r);
+	let editing = state.device_editor_shown(r);
 	if dragging_me || editing || state.plugin_editor_open(d.id) {
 		p.rect_stroke(
 			rect,
@@ -1080,10 +1379,13 @@ fn insert_row(
 	}
 	if nr.clicked() {
 		state.selection.select_device(r);
+		if !plugin && state.has_device_editor(r) {
+			state.open_device_editor(r);
+		}
 	}
 	let cr = ui
 		.interact(close, Id::new(("remove", d.id)), Sense::click())
-		.on_hover_text("Remove");
+		.on_hover_text(tr("Remove"));
 	if hovered {
 		p.text(
 			close.center(),
@@ -1106,7 +1408,7 @@ fn insert_row(
 /// "+" button listing insertable effects.
 pub(crate) fn insert_menu(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>, w: f32) {
 	let button = egui::Button::new(
-		RichText::new("+ Insert")
+		RichText::new(tr("+ Insert"))
 			.font(theme::small())
 			.color(theme::TEXT_FAINT),
 	)
@@ -1180,7 +1482,7 @@ pub(crate) fn send_row(
 		ui.painter().text(
 			pos2(name_r.right() - 34.0, name_r.center().y),
 			Align2::RIGHT_CENTER,
-			"PRE",
+			tr("PRE"),
 			theme::semibold(9.0),
 			theme::WARNING,
 		);
@@ -1189,12 +1491,13 @@ pub(crate) fn send_row(
 	if state.is_automated(&address) {
 		super::automation::automated_badge(ui, resp.rect);
 	}
-	resp.on_hover_text(format!(
-		"Send to {target}: drag (Shift: fine), double-click: 0 dB"
+	resp.on_hover_text(trf(
+		"Send to {target}: drag (Shift: fine), double-click: 0 dB",
+		&[("target", &target)],
 	))
 	.context_menu(|ui| {
 		super::automation::automate_item(ui, state, address);
-		if ui.button("Remove send").clicked() {
+		if ui.button(tr("Remove send")).clicked() {
 			state.apply(Command::RemoveSend { track, send: s.id });
 			ui.close();
 		}
@@ -1214,7 +1517,7 @@ pub(crate) fn output_selector(
 	w: f32,
 ) {
 	let name_of = |o: Output, state: &AppState| match o {
-		Output::Master => "Master".to_owned(),
+		Output::Master => tr("Master").to_owned(),
 		Output::Bus(b) => state
 			.project()
 			.track(b)
@@ -1223,12 +1526,14 @@ pub(crate) fn output_selector(
 	let current = name_of(channel.output, state);
 	let mut choice = None;
 	let mut new_bus = false;
+	let mut key = None;
 	egui::ComboBox::from_id_salt(("output", track.id))
 		.width(w - 4.0)
+		.height(480.0)
 		.selected_text(RichText::new(format!("→ {current}")).font(theme::small()))
 		.show_ui(ui, |ui| {
 			ui.label(
-				RichText::new("Output")
+				RichText::new(tr("Output"))
 					.font(theme::small())
 					.color(theme::TEXT_FAINT),
 			);
@@ -1249,17 +1554,48 @@ pub(crate) fn output_selector(
 					choice = Some(o);
 				}
 			}
+			// Sidechain targets: devices elsewhere that take a key (checked = keyed by
+			// this track; choosing it again removes the key).
+			let targets = state.sidechain_targets(track.id);
+			if !targets.is_empty() {
+				ui.separator();
+				ui.label(
+					RichText::new(tr("Sidechain"))
+						.font(theme::small())
+						.color(theme::TEXT_FAINT),
+				);
+				for t in targets {
+					let text = format!("{} {}", if t.keyed { "✔" } else { "  " }, t.label);
+					let hint = if t.keyed {
+						tr("Keyed by this track: click to remove the key")
+					} else {
+						tr("Key this device with this track (post-fader)")
+					};
+					if ui
+						.selectable_label(t.keyed, RichText::new(text).font(theme::small()))
+						.on_hover_text(hint)
+						.clicked()
+					{
+						key = Some(t);
+					}
+				}
+			}
 			if track.kind != TrackKind::Bus {
 				ui.separator();
 				if ui
-					.selectable_label(false, "+ New bus from this track")
-					.on_hover_text("A bus below this track, fed by its output (one undo step)")
+					.selectable_label(false, tr("+ New bus from this track"))
+					.on_hover_text(tr(
+						"A bus below this track, fed by its output (one undo step)",
+					))
 					.clicked()
 				{
 					new_bus = true;
 				}
 			}
 		});
+	if let Some(t) = key {
+		state.apply(crate::state::mixer::toggle_sidechain(&t, track.id));
+	}
 	if new_bus
 		&& let Some((cmd, bus)) = crate::state::mixer::new_bus_from(state.project(), track.id)
 		&& state.apply(cmd)
@@ -1282,6 +1618,20 @@ pub(crate) fn output_selector(
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn the_toolbar_folds_rows_then_everything_into_the_menu() {
+		let w = super::MixerWidths {
+			layout: 140.0,
+			rows: 330.0,
+			meter: 150.0,
+			menu: 70.0,
+			bus: 60.0,
+		};
+		assert_eq!(super::mixer_fold(700.0, w), super::MixerFold::Full);
+		assert_eq!(super::mixer_fold(500.0, w), super::MixerFold::RowsMenu);
+		assert_eq!(super::mixer_fold(300.0, w), super::MixerFold::AllMenu);
+	}
+
 	use super::*;
 
 	fn layout(height: f32) -> StripLayout {

@@ -7,6 +7,7 @@
 //! [`param_knob`] / [`ParamKnob`] and [`param_toggle`] bind them to a built-in device
 //! parameter through `AppState::{param_value, preview_param, commit_param}`.
 
+use crate::i18n::{tr, tr_str, trf};
 use cadenza_core::ParamAddress;
 use cadenza_dsp::ParamInfo;
 use egui::{
@@ -321,6 +322,21 @@ pub fn readout(
 			}
 		}
 		None => {
+			// Values changed from outside (preset, A/B, undo, AI) ease; never while the
+			// user drags, types or the value follows automation.
+			let instant = matches!(shown, ReadoutState::Active | ReadoutState::Automated)
+				|| fmt.choices.is_some()
+				|| fmt.from.is_some();
+			let eased = ctx.animate_value_with_time(
+				id.with("ease"),
+				value,
+				if instant { 0.0 } else { EASE },
+			);
+			let text_shown = if (eased - value).abs() > f32::EPSILON {
+				fmt.format(eased, min)
+			} else {
+				text_shown
+			};
 			if ui.is_rect_visible(rect) {
 				let state = if flashing.is_some() {
 					ReadoutState::Error
@@ -421,6 +437,20 @@ pub struct Knob<'a> {
 	readout: bool,
 	color: Color32,
 	wheel_step: Option<f32>,
+	description: &'a str,
+	modulation: Option<ModRingPaint>,
+}
+
+/// A modulated knob's ring, in plain values: the range the modulators sweep and where
+/// the value is now.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModRingPaint {
+	pub lo: f32,
+	pub hi: f32,
+	/// The live modulated value (the moving dot), while the device plays.
+	pub now: Option<f32>,
+	/// A modulator is dragged over the knob, or the ring is being dragged.
+	pub hot: bool,
 }
 
 impl<'a> Knob<'a> {
@@ -439,7 +469,15 @@ impl<'a> Knob<'a> {
 			readout: true,
 			color: theme::TEXT,
 			wheel_step: None,
+			description: "",
+			modulation: None,
 		}
+	}
+
+	/// Draws the modulation ring (teal) and makes it draggable: see [`Knob::show_ring`].
+	pub fn modulation(mut self, ring: Option<ModRingPaint>) -> Self {
+		self.modulation = ring;
+		self
 	}
 
 	pub fn size(mut self, size: KnobSize) -> Self {
@@ -448,7 +486,13 @@ impl<'a> Knob<'a> {
 	}
 
 	pub fn label(mut self, label: &'a str) -> Self {
-		self.label = label;
+		self.label = tr_str(label);
+		self
+	}
+
+	/// What the control does, under the value in the hover readout.
+	pub fn description(mut self, description: &'a str) -> Self {
+		self.description = description;
 		self
 	}
 
@@ -513,6 +557,13 @@ impl<'a> Knob<'a> {
 
 	/// Returns the gesture and the dial's response (attach the context menu to it).
 	pub fn show(self, ui: &mut Ui) -> (Gesture, Response) {
+		let (g, r, _) = self.show_ring(ui);
+		(g, r)
+	}
+
+	/// [`Knob::show`] plus, for a knob with [`Knob::modulation`], the response of the
+	/// ring around the dial (drag = depth, Alt+click = remove; the caller acts on it).
+	pub fn show_ring(self, ui: &mut Ui) -> (Gesture, Response, Option<Response>) {
 		let Knob {
 			id,
 			value,
@@ -527,6 +578,8 @@ impl<'a> Knob<'a> {
 			readout: with_readout,
 			color,
 			wheel_step,
+			description,
+			modulation,
 		} = self;
 		let d = size.diameter();
 		let big = size.big();
@@ -552,6 +605,16 @@ impl<'a> Knob<'a> {
 		} else {
 			Sense::hover()
 		};
+		// The ring band around the dial: registered first, so the dial (on top) keeps
+		// the pointer over its own square.
+		let ring_response = modulation.filter(|_| enabled).map(|_| {
+			ui.interact(
+				dial.expand(7.0),
+				id.with("mod-ring"),
+				Sense::click_and_drag(),
+			)
+			.on_hover_cursor(CursorIcon::ResizeVertical)
+		});
 		let response = ui.interact(dial, id, sense);
 		response.widget_info(|| egui::WidgetInfo::slider(enabled, f64::from(value), label));
 		let response = if enabled {
@@ -668,20 +731,7 @@ impl<'a> Knob<'a> {
 		}
 
 		// Floating value: after a hover delay, and always while the value moves.
-		let hover_id = id.with("hover");
-		let tip = if active {
-			true
-		} else if response.hovered() {
-			let since = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(hover_id, || now));
-			let waited = now - since;
-			if waited < HOVER_DELAY {
-				ctx.request_repaint_after(std::time::Duration::from_secs_f64(HOVER_DELAY - waited));
-			}
-			waited >= HOVER_DELAY
-		} else {
-			ctx.data_mut(|d| d.remove_temp::<f64>(hover_id));
-			false
-		};
+		let tip = active || hover_waited(&ctx, id.with("hover"), response.hovered());
 
 		if ui.is_rect_visible(rect) {
 			// External changes ease; the user's own gestures and automation never lag.
@@ -717,6 +767,15 @@ impl<'a> Knob<'a> {
 					automation: automation.map(|v| spec.to_pos(v)),
 					ai,
 					look,
+					modulation: modulation.map(|m| ModArc {
+						lo: spec.to_pos(m.lo),
+						hi: spec.to_pos(m.hi),
+						now: m.now.map(|v| spec.to_pos(v)),
+						hot: m.hot
+							|| ring_response
+								.as_ref()
+								.is_some_and(|r| r.hovered() || r.dragged()),
+					}),
 				},
 			);
 			if !label.is_empty() {
@@ -729,11 +788,21 @@ impl<'a> Knob<'a> {
 				);
 			}
 			if tip && enabled {
-				floating_value(&ctx, id, dial, &fmt.format(target, spec.min));
+				let about = if active { "" } else { description };
+				floating_tip(&ctx, id, dial, &fmt.format(target, spec.min), about);
 			}
 		}
-		(gesture, response)
+		(gesture, response, ring_response)
 	}
+}
+
+/// The modulation ring of [`DialPaint`], as travel positions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModArc {
+	pub lo: f32,
+	pub hi: f32,
+	pub now: Option<f32>,
+	pub hot: bool,
 }
 
 /// How the dial body is lit.
@@ -756,6 +825,8 @@ pub struct DialPaint {
 	/// AI-changed ring.
 	pub ai: bool,
 	pub look: DialLook,
+	/// Modulation ring (outermost).
+	pub modulation: Option<ModArc>,
 }
 
 /// Point at travel position `pos` (0..1 over the 270° sweep, 0 = 7:30, 1 = 4:30).
@@ -797,6 +868,26 @@ pub fn paint_dial(p: &Painter, rect: Rect, size: KnobSize, d: DialPaint) {
 		};
 		p.circle_stroke(c, r, Stroke::new(2.0, theme::ACCENT));
 	}
+	if let Some(m) = d.modulation {
+		let r =
+			ring + 2.5 * (f32::from(u8::from(d.automation.is_some())) + f32::from(u8::from(d.ai)));
+		let width = if m.hot { 3.0 } else { 2.0 };
+		arc(p, c, r, 0.0, 1.0, Stroke::new(1.0, theme::MOD_SOFT));
+		let (lo, hi) = (m.lo.clamp(0.0, 1.0), m.hi.clamp(0.0, 1.0));
+		if hi - lo > 1e-3 {
+			arc(p, c, r, lo, hi, Stroke::new(width, theme::MOD));
+		} else {
+			p.circle_filled(dial_point(c, r, lo), width, theme::MOD);
+		}
+		if let Some(now) = m.now {
+			p.circle(
+				dial_point(c, r, now.clamp(0.0, 1.0)),
+				3.0,
+				theme::MOD_TEXT,
+				Stroke::new(1.5, theme::DISPLAY_BG),
+			);
+		}
+	}
 	arc(p, c, rr, 0.0, 1.0, Stroke::new(sw, KNOB_TRACK));
 	let pos = d.pos.clamp(0.0, 1.0);
 	arc(
@@ -830,11 +921,48 @@ pub fn paint_dial(p: &Painter, rect: Rect, size: KnobSize, d: DialPaint) {
 	}
 }
 
+/// Whether the pointer has rested on a control for [`HOVER_DELAY`] (asks for the repaint
+/// that shows it); leaving resets the wait.
+pub fn hover_waited(ctx: &egui::Context, id: Id, hovered: bool) -> bool {
+	let now = ctx.input(|i| i.time);
+	if !hovered || ctx.input(|i| i.pointer.any_down()) || egui::Popup::is_any_open(ctx) {
+		ctx.data_mut(|d| d.remove_temp::<f64>(id));
+		return false;
+	}
+	let since = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(id, || now));
+	let waited = now - since;
+	if waited < HOVER_DELAY {
+		ctx.request_repaint_after(std::time::Duration::from_secs_f64(HOVER_DELAY - waited));
+	}
+	waited >= HOVER_DELAY
+}
+
 /// The value floating 2 px above `anchor`, never under the pointer.
 pub fn floating_value(ctx: &egui::Context, id: Id, anchor: Rect, text: &str) {
+	floating_tip(ctx, id, anchor, text, "");
+}
+
+/// Width the hover readout wraps a parameter description at.
+const TIP_WRAP: f32 = 240.0;
+
+/// [`floating_value`] with what the control does under the value (the hover readout:
+/// value + unit, then the parameter's description).
+pub fn floating_tip(ctx: &egui::Context, id: Id, anchor: Rect, text: &str, description: &str) {
 	let p = ctx.layer_painter(LayerId::new(Order::Tooltip, id.with("floating-value")));
 	let galley = p.layout_no_wrap(text.to_owned(), theme::mono(11.5), theme::TEXT);
-	let size = galley.size() + vec2(14.0, 6.0);
+	let about = (!description.is_empty()).then(|| {
+		p.layout(
+			description.to_owned(),
+			theme::small(),
+			theme::TEXT_DIM,
+			TIP_WRAP,
+		)
+	});
+	let about_h = about.as_ref().map_or(0.0, |g| g.size().y + 3.0);
+	let inner_w = about
+		.as_ref()
+		.map_or(galley.size().x, |g| g.size().x.max(galley.size().x));
+	let size = vec2(inner_w, galley.size().y + about_h) + vec2(14.0, 6.0);
 	let mut r = Rect::from_center_size(
 		pos2(anchor.center().x, anchor.top() - 2.0 - size.y * 0.5),
 		size,
@@ -856,7 +984,22 @@ pub fn floating_value(ctx: &egui::Context, id: Id, anchor: Rect, text: &str) {
 		Stroke::new(1.0, theme::BORDER_STRONG),
 		StrokeKind::Inside,
 	);
-	p.galley(r.center() - galley.size() * 0.5, galley, theme::TEXT);
+	match about {
+		Some(about) => {
+			let top = r.top() + 3.0;
+			p.galley(
+				pos2(r.center().x - galley.size().x * 0.5, top),
+				galley.clone(),
+				theme::TEXT,
+			);
+			p.galley(
+				pos2(r.left() + 7.0, top + galley.size().y + 3.0),
+				about,
+				theme::TEXT_DIM,
+			);
+		}
+		None => p.galley(r.center() - galley.size() * 0.5, galley, theme::TEXT),
+	}
 }
 
 // --- Context menu ---------------------------------------------------------------------
@@ -873,11 +1016,37 @@ pub struct ControlInfo<'a> {
 	pub max: f32,
 	pub default: f32,
 	pub fmt: ValueFmt<'a>,
+	/// Show the hover readout (value + this description) after [`HOVER_DELAY`]; `None`
+	/// when the control draws its own (knobs).
+	pub tip: Option<&'a str>,
+}
+
+/// The pointer is over `response` and no other layer covers it there (overlapping
+/// widgets of the same layer, like a readout's drag area, do not count).
+fn pointer_on(response: &Response) -> bool {
+	response.contains_pointer()
+		&& response
+			.ctx
+			.pointer_latest_pos()
+			.is_some_and(|p| response.ctx.layer_id_at(p) == Some(response.layer_id))
+}
+
+/// The kit control of `device` the user touched last (the ↑ ↓ keys nudge it).
+fn touched_id(device: cadenza_core::DeviceId) -> Id {
+	Id::new(("device-kit-touched", device))
+}
+
+/// The param of `device` touched last through a kit control.
+pub fn touched(ctx: &egui::Context, device: cadenza_core::DeviceId) -> Option<String> {
+	ctx.data(|d| d.get_temp::<String>(touched_id(device)))
 }
 
 /// Right-click menu of a control: Automate (creates and shows the lane), Reset, Copy
-/// value, Paste value (an app-wide one-value clipboard). Returns the value to commit
-/// (reset / paste).
+/// value, Paste value (an app-wide one-value clipboard) and, on a device param, "Ask AI
+/// about this" (the editor's Ask AI popover, prefilled with the param and its value).
+/// Also shows the hover readout ([`ControlInfo::tip`]) and remembers the device param
+/// the user touches for the editor's ↑ ↓ keys. Returns the value to commit (reset /
+/// paste).
 pub fn control_menu(
 	response: &Response,
 	state: &mut AppState,
@@ -885,15 +1054,74 @@ pub fn control_menu(
 	info: ControlInfo,
 ) -> Option<f32> {
 	let mut out = None;
+	let ctx = response.ctx.clone();
+	let device_param = match &address.target {
+		cadenza_core::ParamTarget::Device { device, param } => Some((
+			DeviceRef {
+				track: address.track,
+				device: *device,
+			},
+			param.clone(),
+		)),
+		_ => None,
+	};
+	if let Some((r, param)) = &device_param {
+		// Readouts may sit under a drag area of their own: the pointer, not the hover.
+		let touched = pointer_on(response)
+			&& ctx.input(|i| i.pointer.any_pressed() || i.smooth_scroll_delta != Vec2::ZERO);
+		if touched {
+			ctx.data_mut(|d| d.insert_temp(touched_id(r.device), param.clone()));
+		}
+	}
+	if let Some(about) = info.tip
+		&& hover_waited(&ctx, response.id.with("tip"), pointer_on(response))
+	{
+		let text = info.fmt.format(info.value, info.min);
+		floating_tip(&ctx, response.id, response.rect, &text, about);
+	}
+	crate::ui::midi_learn::decorate(response, state, &address);
 	response.context_menu(|ui| {
-		crate::ui::automation::automate_item(ui, state, address);
-		if ui.button("Reset").clicked() {
+		crate::ui::automation::automate_item(ui, state, address.clone());
+		if let Some((r, param)) = &device_param
+			&& state.device(*r).is_some_and(|d| d.builtin_id().is_some())
+			&& ui.button(tr("Ask AI about this")).clicked()
+		{
+			let name = param_info(state, *r, param).map_or(param.as_str(), |p| p.name);
+			let value = info.fmt.format(info.value, info.min);
+			let text = trf(
+				"{param} (now {value}): ",
+				&[("param", &crate::i18n::tr_str(name)), ("value", &value)],
+			);
+			crate::ui::device_ai::ask_about(ui.ctx(), state, *r, text);
+			ui.close();
+		}
+		if let Some((r, param)) = &device_param
+			&& param_info(state, *r, param).is_some()
+		{
+			crate::ui::devices::modulation::modulate_menu(ui, state, *r, param);
+		}
+		if let Some((r, _)) = &device_param
+			&& state.device(*r).is_some_and(|d| d.builtin_id().is_some())
+			&& ui
+				.add_enabled(
+					!state.ai.busy(),
+					egui::Button::new(tr("Explain this device")),
+				)
+				.clicked()
+		{
+			state.explain_device(*r);
+			ui.close();
+		}
+		if ui.button(tr("Reset")).clicked() {
 			out = Some(info.default);
 			ui.close();
 		}
 		ui.separator();
 		let text = info.fmt.format(info.value, info.min);
-		if ui.button(format!("Copy value  {text}")).clicked() {
+		if ui
+			.button(trf("Copy value  {text}", &[("text", &text)]))
+			.clicked()
+		{
 			ui.ctx()
 				.data_mut(|d| d.insert_temp(clipboard_id(), info.value));
 			ui.ctx().copy_text(text);
@@ -901,11 +1129,14 @@ pub fn control_menu(
 		}
 		let clip = ui.ctx().data(|d| d.get_temp::<f32>(clipboard_id()));
 		let paste = match clip {
-			Some(v) => format!(
-				"Paste value  {}",
-				info.fmt.format(v.clamp(info.min, info.max), info.min)
+			Some(v) => trf(
+				"Paste value  {format}",
+				&[(
+					"format",
+					&info.fmt.format(v.clamp(info.min, info.max), info.min),
+				)],
 			),
-			None => "Paste value".to_owned(),
+			None => tr("Paste value").to_owned(),
 		};
 		if ui
 			.add_enabled(clip.is_some(), egui::Button::new(paste))
@@ -1023,7 +1254,17 @@ impl<'a> ParamKnob<'a> {
 		let id = self.salt.map_or(id, |s| id.with(s));
 		let change = state.ai_change(r.device, info.id).cloned();
 		let ai = self.ai.unwrap_or(change.is_some());
-		let (gesture, response) = Knob::new(id, value, spec)
+		let rect_id = id.with("last-rect");
+		let last_rect = ui.ctx().data(|d| d.get_temp::<Rect>(rect_id));
+		let ring = crate::ui::devices::modulation::knob_ring(
+			ui.ctx(),
+			state,
+			r,
+			info,
+			playing.unwrap_or(value),
+			last_rect,
+		);
+		let (gesture, response, ring_response) = Knob::new(id, value, spec)
 			.size(self.size)
 			.label(self.label.unwrap_or(info.name))
 			.unit(unit)
@@ -1032,7 +1273,18 @@ impl<'a> ParamKnob<'a> {
 			.ai(ai)
 			.color(self.color)
 			.wheel_step(self.wheel_step)
-			.show(ui);
+			.description(info.description)
+			.modulation(ring)
+			.show_ring(ui);
+		ui.ctx()
+			.data_mut(|d| d.insert_temp(rect_id, response.rect.expand(7.0)));
+		crate::ui::devices::modulation::knob_gestures(
+			state,
+			r,
+			info.id,
+			&response,
+			ring_response.as_ref(),
+		);
 		if ai && let Some(c) = &change {
 			let text = match self.choices {
 				Some(choices) => format!("→ {}", device::format_choice(c.after, info.min, choices)),
@@ -1050,6 +1302,7 @@ impl<'a> ParamKnob<'a> {
 				max: info.max,
 				default: info.default,
 				fmt,
+				tip: None,
 			},
 		);
 		match (menu, gesture) {
@@ -1105,6 +1358,31 @@ pub fn param_toggle(
 	label: &str,
 	color: Color32,
 ) -> Response {
+	param_toggle_with(ui, state, r, param, label, color, None)
+}
+
+/// [`param_toggle`] with a [`Glyph`] before the label (e.g. the reverb's Freeze).
+pub fn param_glyph_toggle(
+	ui: &mut Ui,
+	state: &mut AppState,
+	r: DeviceRef,
+	param: &str,
+	glyph: Glyph,
+	label: &str,
+	color: Color32,
+) -> Response {
+	param_toggle_with(ui, state, r, param, label, color, Some(glyph))
+}
+
+fn param_toggle_with(
+	ui: &mut Ui,
+	state: &mut AppState,
+	r: DeviceRef,
+	param: &str,
+	label: &str,
+	color: Color32,
+	glyph: Option<Glyph>,
+) -> Response {
 	let Some(info) = param_info(state, r, param) else {
 		return ui.allocate_response(Vec2::ZERO, Sense::hover());
 	};
@@ -1112,7 +1390,10 @@ pub fn param_toggle(
 		.param_value(r.track, r.device, info.id)
 		.unwrap_or(info.default);
 	let on = value >= 0.5;
-	let response = toggle(ui, on, label, color);
+	let response = match glyph {
+		Some(g) => glyph_toggle(ui, on, g, label, color),
+		None => toggle(ui, on, label, color),
+	};
 	if state.ai_change(r.device, info.id).is_some() {
 		ui.painter().rect_stroke(
 			response.rect.expand(2.5),
@@ -1132,6 +1413,7 @@ pub fn param_toggle(
 			max: info.max,
 			default: info.default,
 			fmt: ValueFmt::unit(info.unit),
+			tip: Some(info.description),
 		},
 	);
 	if let Some(v) = menu {
@@ -1185,22 +1467,131 @@ pub fn toggle(ui: &mut Ui, on: bool, label: &str, color: Color32) -> Response {
 	response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-fn selector_cell(ui: &mut Ui, id: Id, rect: Rect, label: &str, on: bool) -> bool {
-	let response = ui.interact(rect, id, Sense::click());
+/// Small line icons drawn with the painter (the app fonts have no such symbols).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+	/// Listen / solo.
+	Headphones,
+	/// Freeze.
+	Snowflake,
+}
+
+/// Paints `glyph` centred on `c`, `size` px tall.
+pub fn paint_glyph(p: &egui::Painter, glyph: Glyph, c: Pos2, size: f32, color: Color32) {
+	let stroke = Stroke::new((size * 0.11).max(1.2), color);
+	match glyph {
+		Glyph::Headphones => {
+			let r = size * 0.42;
+			let center = pos2(c.x, c.y + size * 0.05);
+			let band: Vec<Pos2> = (0..=16)
+				.map(|i| {
+					let a = std::f32::consts::PI * (1.0 + i as f32 / 16.0);
+					pos2(center.x + r * a.cos(), center.y + r * a.sin())
+				})
+				.collect();
+			p.add(egui::Shape::line(band, stroke));
+			let cup = vec2(size * 0.22, size * 0.38);
+			for side in [-1.0, 1.0] {
+				let x = center.x + side * (r - cup.x * 0.5 + stroke.width * 0.5);
+				p.rect_filled(
+					Rect::from_center_size(pos2(x, center.y + cup.y * 0.35), cup),
+					CornerRadius::same(2),
+					color,
+				);
+			}
+		}
+		Glyph::Snowflake => {
+			let r = size * 0.48;
+			for k in 0..3 {
+				let a = std::f32::consts::PI * (0.5 + k as f32 / 3.0);
+				let d = vec2(a.cos(), a.sin());
+				p.line_segment([c - d * r, c + d * r], stroke);
+				for end in [-1.0, 1.0] {
+					let tip = c + d * r * end * 0.62;
+					for turn in [-0.6f32, 0.6] {
+						let b = a + turn + if end < 0.0 { std::f32::consts::PI } else { 0.0 };
+						let arm = vec2(b.cos(), b.sin()) * r * 0.32;
+						p.line_segment([tip, tip + arm], stroke);
+					}
+				}
+			}
+		}
+	}
+}
+
+/// A [`toggle`] with a [`Glyph`] before its label (Listen, Freeze).
+pub fn glyph_toggle(ui: &mut Ui, on: bool, glyph: Glyph, label: &str, color: Color32) -> Response {
+	let font = theme::medium(12.0);
+	let galley = ui
+		.painter()
+		.layout_no_wrap(label.to_owned(), font, theme::TEXT);
+	let icon = 13.0;
+	let size = vec2(galley.size().x + icon + 24.0, 24.0);
+	let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::SelectableLabel,
-			ui.is_enabled(),
-			on,
-			label,
-		)
+		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label)
+	});
+	if ui.is_rect_visible(rect) {
+		let p = ui.painter();
+		let r = CornerRadius::same(theme::RADIUS_MD);
+		let (fill, fg) = if on {
+			(theme::mix(theme::BG_PANEL, color, 0.2), color)
+		} else if response.hovered() {
+			(theme::BG_HOVER, theme::TEXT)
+		} else {
+			(theme::BG_WIDGET, theme::TEXT_DIM)
+		};
+		p.rect_filled(rect, r, fill);
+		if on {
+			p.rect_stroke(
+				rect,
+				r,
+				Stroke::new(1.0, color.gamma_multiply(0.8)),
+				StrokeKind::Inside,
+			);
+		}
+		let x = rect.left() + 9.0;
+		paint_glyph(p, glyph, pos2(x + icon * 0.5, rect.center().y), icon, fg);
+		p.galley(
+			pos2(x + icon + 6.0, rect.center().y - galley.size().y * 0.5),
+			galley,
+			fg,
+		);
+	}
+	response.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+fn selector_cell(ui: &mut Ui, id: Id, rect: Rect, label: &str, on: bool) -> bool {
+	selector_cell_with(ui, id, rect, label, on, true, &theme::mono(11.5))
+}
+
+fn selector_cell_with(
+	ui: &mut Ui,
+	id: Id,
+	rect: Rect,
+	label: &str,
+	on: bool,
+	enabled: bool,
+	font: &egui::FontId,
+) -> bool {
+	let enabled = enabled && ui.is_enabled();
+	let sense = if enabled {
+		Sense::click()
+	} else {
+		Sense::hover()
+	};
+	let response = ui.interact(rect, id, sense);
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, label)
 	});
 	let (bg, fg) = if on {
 		(theme::BG_PRESSED, theme::TEXT)
-	} else if response.hovered() {
+	} else if enabled && response.hovered() {
 		(theme::BG_WIDGET, theme::TEXT)
-	} else {
+	} else if enabled {
 		(Color32::TRANSPARENT, theme::TEXT_FAINT)
+	} else {
+		(Color32::TRANSPARENT, theme::TEXT_FAINT.gamma_multiply(0.45))
 	};
 	let p = ui.painter();
 	p.rect_filled(rect, CornerRadius::same(theme::RADIUS), bg);
@@ -1208,21 +1599,33 @@ fn selector_cell(ui: &mut Ui, id: Id, rect: Rect, label: &str, on: bool) -> bool
 		rect.center(),
 		Align2::CENTER_CENTER,
 		label,
-		theme::mono(11.5),
+		font.clone(),
 		fg,
 	);
-	response.clicked()
+	enabled && response.clicked()
 }
 
 /// Segmented selector for 5 choices or fewer (above that, [`grid_selector`]); returns
 /// the clicked segment.
 pub fn segmented(ui: &mut Ui, id: Id, labels: &[&str], selected: usize) -> Option<usize> {
-	let font = theme::mono(11.5);
+	segmented_with(ui, id, labels, selected, &[], &theme::mono(11.5))
+}
+
+/// [`segmented`] in `font`, with segments `enabled[i] == false` drawn dim and not
+/// clickable (missing entries are enabled): the dialogs' choices (export range).
+pub fn segmented_with(
+	ui: &mut Ui,
+	id: Id,
+	labels: &[&str],
+	selected: usize,
+	enabled: &[bool],
+	font: &egui::FontId,
+) -> Option<usize> {
 	let widths: Vec<f32> = labels
 		.iter()
 		.map(|l| {
 			(ui.painter()
-				.layout_no_wrap((*l).to_owned(), font.clone(), theme::TEXT)
+				.layout_no_wrap(tr_str(l).to_owned(), font.clone(), theme::TEXT)
 				.size()
 				.x + 16.0)
 				.max(30.0)
@@ -1241,7 +1644,8 @@ pub fn segmented(ui: &mut Ui, id: Id, labels: &[&str], selected: usize) -> Optio
 	let mut clicked = None;
 	for (i, (label, w)) in labels.iter().zip(widths).enumerate() {
 		let cell = Rect::from_min_size(pos2(x, rect.top() + 2.0), vec2(w, rect.height() - 4.0));
-		if selector_cell(ui, id.with(i), cell, label, i == selected) {
+		let on = enabled.get(i).copied().unwrap_or(true);
+		if selector_cell_with(ui, id.with(i), cell, tr_str(label), i == selected, on, font) {
 			clicked = Some(i);
 		}
 		x += w;
@@ -1277,7 +1681,7 @@ pub fn grid_selector(
 			cell,
 		)
 		.shrink(1.0);
-		if selector_cell(ui, id.with(i), r, label, i == selected) {
+		if selector_cell(ui, id.with(i), r, tr_str(label), i == selected) {
 			clicked = Some(i);
 		}
 	}
@@ -1304,6 +1708,7 @@ pub fn mode_card(
 	shape: CardShape,
 	picture: impl FnOnce(&Painter, Rect, Color32),
 ) -> Response {
+	let label = tr_str(label);
 	let size = match shape {
 		CardShape::Tall => vec2(64.0, 54.0),
 		CardShape::Wide => vec2(140.0, 44.0),
@@ -1590,10 +1995,12 @@ pub fn io_meters(ui: &mut Ui, input: [f32; 2], output: [f32; 2], compact: bool) 
 			paint_bar_pair(p, bar(rect.left()), input);
 			paint_bar_pair(p, bar(rect.left() + w + 2.0), output);
 		}
-		return response.on_hover_text(format!(
-			"In {} · Out {}",
-			level_text(input),
-			level_text(output)
+		return response.on_hover_text(trf(
+			"In {level_text} · Out {out}",
+			&[
+				("level_text", &level_text(input)),
+				("out", &level_text(output)),
+			],
 		));
 	}
 	let label_w = 24.0;
@@ -1603,7 +2010,10 @@ pub fn io_meters(ui: &mut Ui, input: [f32; 2], output: [f32; 2], compact: bool) 
 	let (rect, response) = ui.allocate_exact_size(vec2(one * 2.0 + 8.0, 18.0), Sense::hover());
 	if ui.is_rect_visible(rect) {
 		let p = ui.painter();
-		for (i, (name, levels)) in [("IN", input), ("OUT", output)].into_iter().enumerate() {
+		for (i, (name, levels)) in [(tr("IN"), input), (tr("OUT"), output)]
+			.into_iter()
+			.enumerate()
+		{
 			let x0 = rect.left() + i as f32 * (one + 8.0);
 			p.text(
 				pos2(x0, rect.center().y),
@@ -1785,10 +2195,10 @@ pub fn adsr(
 			Sense::click_and_drag(),
 		);
 		let name = match stage {
-			AdsrStage::Attack => "Envelope attack",
-			AdsrStage::Decay => "Envelope decay",
-			AdsrStage::Sustain => "Envelope sustain",
-			AdsrStage::Release => "Envelope release",
+			AdsrStage::Attack => tr("Envelope attack"),
+			AdsrStage::Decay => tr("Envelope decay"),
+			AdsrStage::Sustain => tr("Envelope sustain"),
+			AdsrStage::Release => tr("Envelope release"),
 		};
 		r.widget_info(|| {
 			egui::WidgetInfo::slider(ui.is_enabled(), f64::from(shown.get(stage)), name)
@@ -1854,10 +2264,6 @@ pub fn adsr(
 			.collect();
 		p.add(fill_to(&curve, plot.bottom(), color.gamma_multiply(0.12)));
 		theme::glow_line(&p, curve, color);
-		for &v in voices.iter().take(4) {
-			let at = to_screen(device_display::voice_point(&shown, ranges, v));
-			p.circle_filled(at, 3.0, theme::TEXT);
-		}
 		for stage in AdsrStage::ALL {
 			let at = to_screen(points.node(stage));
 			if active == Some(stage) {
@@ -1867,6 +2273,12 @@ pub fn adsr(
 			} else {
 				p.circle(at, 4.5, theme::DISPLAY_BG, Stroke::new(1.5, color));
 			}
+		}
+		// Voice dots above the nodes (a held voice sits on the sustain node), ringed in
+		// the display colour so they read on a node too.
+		for &v in voices.iter().take(4) {
+			let at = to_screen(device_display::voice_point(&shown, ranges, v));
+			p.circle(at, 3.2, theme::TEXT, Stroke::new(1.5, theme::DISPLAY_BG));
 		}
 		if let Some(stage) = active.or(hovered) {
 			let at = to_screen(points.node(stage));
@@ -1937,6 +2349,10 @@ pub struct FreqNode<'a> {
 	pub x_only: bool,
 	/// The last AI request moved this band (blue ring).
 	pub ai: bool,
+	/// A dynamic band: (the dB it plays now, activity 0..=1 of its depth). The node
+	/// stays at its static gain; a dashed bar spans 0 dB → gain (how far it can move),
+	/// a marker sits at the live gain and a halo grows with the activity.
+	pub dynamic: Option<(f32, f32)>,
 }
 
 /// What the user did on a [`FreqDisplay`]; callers map it to parameters.
@@ -1978,6 +2394,22 @@ pub struct FreqResponse {
 	pub response: Response,
 	/// Each node's own response (context menus).
 	pub node_responses: Vec<Response>,
+	/// The plot area (above the piano strip).
+	pub plot: Rect,
+}
+
+/// Height of the collision heat strip along the bottom of the plot.
+pub const HEAT_STRIP_H: f32 = 14.0;
+
+/// A frequency range where this track collides with others (collision view): a red
+/// column over the plot and a cell of the heat strip, stronger with `heat` (0..1).
+#[derive(Debug, Clone, Copy)]
+pub struct HeatBand {
+	pub low: f32,
+	pub high: f32,
+	pub heat: f32,
+	/// Hovered or selected: drawn brighter and outlined.
+	pub hot: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2015,7 +2447,22 @@ pub struct FreqDisplay<'a> {
 	bracket: Option<Bracket>,
 	node_radius: f32,
 	before: Option<&'a dyn Fn(f32) -> f32>,
+	ghost: Option<&'a dyn Fn(f32) -> f32>,
 	sum_fill: f32,
+	/// A second glowing curve (an EQ's side response next to the mid one).
+	sum2: Option<(&'a dyn Fn(f32) -> f32, Color32)>,
+	/// Tags written at the right end of the sum and the second curve ("M", "S").
+	sum_tags: Option<[&'a str; 2]>,
+	/// Small letter badges on the nodes ("M" / "S"), by node index.
+	badges: &'a [Option<&'a str>],
+	/// A proposed response (match EQ preview), drawn dashed in the accent.
+	proposal: Option<&'a dyn Fn(f32) -> f32>,
+	/// A reference spectrum (dB per analyzer bin, levelled to the curve): a thin line.
+	reference: Option<&'a [f32]>,
+	/// Other tracks' spectra (analyzer bins) as thin lines in their colours.
+	spectra: &'a [(&'a [f32], Color32)],
+	/// Collision heat: red columns + the strip along the bottom.
+	heat: &'a [HeatBand],
 }
 
 impl<'a> FreqDisplay<'a> {
@@ -2035,8 +2482,67 @@ impl<'a> FreqDisplay<'a> {
 			bracket: None,
 			node_radius: NODE_RADIUS,
 			before: None,
+			ghost: None,
 			sum_fill: 0.0,
+			sum2: None,
+			sum_tags: None,
+			badges: &[],
+			proposal: None,
+			reference: None,
+			spectra: &[],
+			heat: &[],
 		}
+	}
+
+	/// Other tracks' spectra as thin lines (analyzer bins at
+	/// [`device_display::analyzer_freq`], each in its colour).
+	pub fn spectra(mut self, spectra: &'a [(&'a [f32], Color32)]) -> Self {
+		self.spectra = spectra;
+		self
+	}
+
+	/// Collision heat bands (columns + a strip of [`HEAT_STRIP_H`] along the bottom).
+	pub fn heat(mut self, bands: &'a [HeatBand]) -> Self {
+		self.heat = bands;
+		self
+	}
+
+	/// A second sum curve in `color` (the side next to the mid).
+	pub fn sum2(mut self, response: Option<&'a dyn Fn(f32) -> f32>, color: Color32) -> Self {
+		self.sum2 = response.map(|f| (f, color));
+		self
+	}
+
+	/// Tags at the right end of the sum and the second sum.
+	pub fn sum_tags(mut self, tags: Option<[&'a str; 2]>) -> Self {
+		self.sum_tags = tags;
+		self
+	}
+
+	/// Letter badges on the nodes, by index.
+	pub fn badges(mut self, badges: &'a [Option<&'a str>]) -> Self {
+		self.badges = badges;
+		self
+	}
+
+	/// A proposed response, dashed in the accent (match EQ before Apply).
+	pub fn proposal(mut self, response: Option<&'a dyn Fn(f32) -> f32>) -> Self {
+		self.proposal = response;
+		self
+	}
+
+	/// A reference spectrum shown as a thin line (dB per analyzer bin at
+	/// [`device_display::analyzer_freq`]).
+	pub fn reference(mut self, bins: Option<&'a [f32]>) -> Self {
+		self.reference = bins;
+		self
+	}
+
+	/// A thin dim solid curve under the sum (a dynamic EQ's static curve while the sum
+	/// shows the live one).
+	pub fn ghost(mut self, response: Option<&'a dyn Fn(f32) -> f32>) -> Self {
+		self.ghost = response;
+		self
 	}
 
 	/// The response before the last AI request, drawn dashed and dim.
@@ -2149,7 +2655,7 @@ impl<'a> FreqDisplay<'a> {
 
 		let response = ui.interact(rect, self.id, Sense::click_and_drag());
 		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Frequency display")
+			egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Frequency display"))
 		});
 		let ctx = ui.ctx().clone();
 		let (shift, alt, command, scroll) = ui.input(|i| {
@@ -2219,7 +2725,7 @@ impl<'a> FreqDisplay<'a> {
 				egui::WidgetInfo::labeled(
 					egui::WidgetType::Other,
 					true,
-					format!("Band {}", node.label),
+					trf("Band {label}", &[("label", &node.label)]),
 				)
 			});
 			let r = r.on_hover_cursor(if node.x_only {
@@ -2335,6 +2841,12 @@ impl<'a> FreqDisplay<'a> {
 			if let Some(bins) = self.pre {
 				p.add(fill_to(&analyzer(bins), plot.bottom(), ANALYZER_PRE));
 			}
+			if let Some(bins) = self.reference {
+				p.add(Shape::line(
+					analyzer(bins),
+					Stroke::new(1.5, theme::SOLO.gamma_multiply(0.75)),
+				));
+			}
 			if let Some(bins) = self.post {
 				let pts = analyzer(bins);
 				p.add(fill_to(
@@ -2346,6 +2858,46 @@ impl<'a> FreqDisplay<'a> {
 					pts,
 					Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.6)),
 				));
+			}
+			for (bins, color) in self.spectra {
+				p.add(Shape::line(
+					analyzer(bins),
+					Stroke::new(1.25, color.gamma_multiply(0.9)),
+				));
+			}
+			for band in self.heat {
+				let (x0, x1) = (
+					x_of(band.low).max(plot.left()),
+					x_of(band.high).min(plot.right()),
+				);
+				if x1 <= x0 {
+					continue;
+				}
+				let heat = band.heat.clamp(0.0, 1.0);
+				let column = Rect::from_x_y_ranges(x0..=x1, plot.y_range());
+				let boost = if band.hot { 1.6 } else { 1.0 };
+				p.rect_filled(
+					column,
+					0.0,
+					theme::ERROR.gamma_multiply((0.02 + 0.12 * heat * heat) * boost),
+				);
+				let cell = Rect::from_x_y_ranges(
+					x0 + 1.0..=x1 - 1.0,
+					plot.bottom() - HEAT_STRIP_H..=plot.bottom() - 1.0,
+				);
+				p.rect_filled(
+					cell,
+					CornerRadius::same(2),
+					theme::ERROR.gamma_multiply((0.15 + 0.75 * heat * heat).min(1.0)),
+				);
+				if band.hot {
+					p.rect_stroke(
+						column,
+						0.0,
+						Stroke::new(1.0, theme::ERROR.gamma_multiply(0.7)),
+						StrokeKind::Inside,
+					);
+				}
 			}
 
 			let zero = y_of(0.0);
@@ -2390,6 +2942,12 @@ impl<'a> FreqDisplay<'a> {
 					4.0,
 				));
 			}
+			if let Some(f) = self.ghost {
+				p.add(Shape::line(
+					curve(f, 240),
+					Stroke::new(1.0, theme::TEXT_DIM.gamma_multiply(0.55)),
+				));
+			}
 			if let Some((f, color)) = self.sum {
 				let pts = curve(f, 240);
 				if self.sum_fill > 0.0 {
@@ -2399,7 +2957,42 @@ impl<'a> FreqDisplay<'a> {
 						color.gamma_multiply(self.sum_fill),
 					));
 				}
+				let tag_at = pts.last().copied();
 				glow_line_wide(&p, pts, color);
+				let tag = |at: Option<Pos2>, text: &str, color: Color32| {
+					if let Some(at) = at {
+						p.text(
+							pos2(
+								plot.right() - 6.0,
+								at.y.clamp(plot.top() + 8.0, plot.bottom() - 8.0) - 3.0,
+							),
+							Align2::RIGHT_BOTTOM,
+							text,
+							theme::semibold(10.0),
+							color,
+						);
+					}
+				};
+				if let Some((f2, color2)) = self.sum2 {
+					let pts2 = curve(f2, 240);
+					let tag2 = pts2.last().copied();
+					glow_line_wide(&p, pts2, color2);
+					if let Some([a, b]) = self.sum_tags {
+						tag(tag_at, a, color);
+						tag(tag2.map(|t| t + vec2(0.0, 12.0)), b, color2);
+					}
+				} else if let Some([a, _]) = self.sum_tags {
+					tag(tag_at, a, color);
+				}
+			}
+			if let Some(f) = self.proposal {
+				let pts = curve(f, 240);
+				p.extend(Shape::dashed_line(
+					&pts,
+					Stroke::new(1.75, theme::ACCENT),
+					6.0,
+					4.0,
+				));
 			}
 
 			let label_font = theme::mono(9.5);
@@ -2443,6 +3036,35 @@ impl<'a> FreqDisplay<'a> {
 			// Nodes: filled with a dark label, hollow when dormant; ring when selected.
 			// The label font scales down with the node so it still fits inside it.
 			let node_font = theme::semibold(11.0 * node_radius / NODE_RADIUS);
+			for node in self.nodes {
+				let Some((live, activity)) = node.dynamic else {
+					continue;
+				};
+				let at = node_at(node);
+				let clamp_y = |db: f32| y_of(db.clamp(range.min, range.max));
+				p.extend(Shape::dashed_line(
+					&[pos2(at.x, zero), pos2(at.x, clamp_y(node.db))],
+					Stroke::new(1.5, node.color.gamma_multiply(0.55)),
+					3.0,
+					3.0,
+				));
+				let live_y = clamp_y(live);
+				p.line_segment(
+					[pos2(at.x, zero), pos2(at.x, live_y)],
+					Stroke::new(3.0, node.color.gamma_multiply(0.9)),
+				);
+				p.line_segment(
+					[pos2(at.x - 7.0, live_y), pos2(at.x + 7.0, live_y)],
+					Stroke::new(2.0, theme::mix(node.color, Color32::WHITE, 0.4)),
+				);
+				if activity > 0.01 {
+					p.circle_filled(
+						at,
+						node_radius + 4.0 + 8.0 * activity,
+						theme::GAIN_REDUCTION.gamma_multiply(0.10 + 0.22 * activity),
+					);
+				}
+			}
 			for (i, node) in self.nodes.iter().enumerate() {
 				let at = node_at(node);
 				let active = dragging == Some(i);
@@ -2482,8 +3104,37 @@ impl<'a> FreqDisplay<'a> {
 				if active || self.selected == Some(i) {
 					p.circle_stroke(at, node_radius + 2.5, Stroke::new(1.5, Color32::WHITE));
 				}
+				if let Some((_, activity)) = node.dynamic {
+					// Dashed ring: a dynamic band; it lights up with its activity.
+					let ring = node_radius + 5.0;
+					let color = theme::mix(node.color, theme::GAIN_REDUCTION, activity)
+						.gamma_multiply(0.45 + 0.55 * activity);
+					for k in 0..12 {
+						let a0 = k as f32 / 12.0 * std::f32::consts::TAU;
+						let a1 = a0 + std::f32::consts::TAU / 24.0;
+						let pts: Vec<Pos2> = (0..=4)
+							.map(|j| {
+								let a = a0 + (a1 - a0) * j as f32 / 4.0;
+								at + vec2(a.cos(), a.sin()) * ring
+							})
+							.collect();
+						p.add(Shape::line(pts, Stroke::new(1.75, color)));
+					}
+				}
 				if node.ai {
 					p.circle_stroke(at, node_radius + 5.0, Stroke::new(2.0, theme::ACCENT));
+				}
+				if let Some(Some(badge)) = self.badges.get(i) {
+					let r = (node_radius * 0.32).max(5.5);
+					let c = at + vec2(node_radius * 0.78, -node_radius * 0.78);
+					p.circle(c, r, theme::DISPLAY_BG, Stroke::new(1.25, node.color));
+					p.text(
+						c,
+						Align2::CENTER_CENTER,
+						*badge,
+						theme::semibold(r * 1.45),
+						node.color,
+					);
 				}
 			}
 
@@ -2521,7 +3172,7 @@ impl<'a> FreqDisplay<'a> {
 				self.id.with("node-value"),
 				Rect::from_center_size(at, Vec2::splat(node_radius * 2.0)),
 				&if node.x_only {
-					device::format_value(d.last.0, "Hz")
+					device::format_value(d.last.0, tr("Hz"))
 				} else {
 					format!(
 						"{} · {}",
@@ -2538,6 +3189,7 @@ impl<'a> FreqDisplay<'a> {
 			dragging,
 			response,
 			node_responses,
+			plot,
 		}
 	}
 }
@@ -2681,7 +3333,7 @@ impl<'a> LevelHistoryView<'a> {
 			labels: true,
 			time_label: None,
 			wave_max_db: None,
-			input_label: "Input",
+			input_label: tr("Input"),
 			body_drag: false,
 			wheel: false,
 		}
@@ -3142,11 +3794,11 @@ fn legend(
 	let font = theme::medium(10.5);
 	let mut x = plot.left() + 44.0;
 	let y = plot.top() + 14.0;
-	let key_text = key.map(|k| format!("Key · {}", k.name));
+	let key_text = key.map(|k| trf("Key · {name}", &[("name", &k.name)]));
 	let items = [
 		(input, input_label, HISTORY_INPUT_SWATCH, 6.0),
-		(output, "Output", theme::LEVEL_OUTPUT, 2.0),
-		(gr, "Gain reduction", theme::GAIN_REDUCTION, 2.0),
+		(output, tr("Output"), theme::LEVEL_OUTPUT, 2.0),
+		(gr, tr("Gain reduction"), theme::GAIN_REDUCTION, 2.0),
 	];
 	let mut entries: Vec<(&str, Color32, f32)> = items
 		.iter()
@@ -3344,6 +3996,7 @@ fn eq_demo(ui: &mut Ui, size: Vec2) {
 				dormant: dormant(b),
 				x_only: g.is_none(),
 				ai: false,
+				dynamic: None,
 			}
 		})
 		.collect();
@@ -3415,6 +4068,7 @@ fn filter_demo(ui: &mut Ui, size: Vec2) {
 		dormant: false,
 		x_only: false,
 		ai: false,
+		dynamic: None,
 	}];
 	let out = FreqDisplay::new(id.with("display"), size)
 		.range(DbRange::FILTER)
@@ -3523,7 +4177,7 @@ fn history_demo(ui: &mut Ui, width: f32) {
 			.line(Some(HistoryLine {
 				db: threshold,
 				default: -24.0,
-				label: "Threshold",
+				label: tr("Threshold"),
 				color: theme::BAND_COLORS[2],
 			}))
 			.show(ui, &history);
@@ -3534,7 +4188,7 @@ fn history_demo(ui: &mut Ui, width: f32) {
 			let _ = LevelHistoryView::new(id.with("stopped"), vec2(width * 0.38 - 16.0, 116.0))
 				.stopped(true)
 				.show(ui, &history);
-			caption(ui, "Stopped: frozen, dimmed to 50 %");
+			caption(ui, tr("Stopped: frozen, dimmed to 50 %"));
 		});
 	});
 }
@@ -3546,7 +4200,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 	let pct = KnobSpec::new(0.0, 100.0, 50.0);
 	ui.spacing_mut().item_spacing = vec2(16.0, 12.0);
 	ui.horizontal_top(|ui| {
-		section(ui, "Knob · sizes", col, |ui| {
+		section(ui, tr("Knob · sizes"), col, |ui| {
 			ui.horizontal_top(|ui| {
 				ui.spacing_mut().item_spacing.x = 10.0;
 				for (key, size, label) in [
@@ -3564,67 +4218,67 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				}
 			});
 		});
-		section(ui, "Knob · polarity, automation, AI", col, |ui| {
+		section(ui, tr("Knob · polarity, automation, AI"), col, |ui| {
 			ui.horizontal_top(|ui| {
 				ui.spacing_mut().item_spacing.x = 10.0;
 				demo_knob(ui, "uni", 25.0, |id, v| {
-					Knob::new(id, v, pct).label("Unipolar").unit("%")
+					Knob::new(id, v, pct).label(tr("Unipolar")).unit("%")
 				});
 				demo_knob(ui, "bi", -9.6, |id, v| {
 					Knob::new(id, v, KnobSpec::new(-24.0, 24.0, 0.0))
-						.label("Bipolar")
+						.label(tr("Bipolar"))
 						.unit("dB")
 				});
 				demo_knob(ui, "auto", 58.0, |id, v| {
 					Knob::new(id, v, pct)
-						.label("Automated")
+						.label(tr("Automated"))
 						.unit("%")
 						.automation(Some(40.0))
 				});
 				demo_knob(ui, "ai", 2800.0, |id, v| {
-					Knob::new(id, v, KnobSpec::for_param(20.0, 20_000.0, 1000.0, "Hz"))
-						.label("AI changed")
-						.unit("Hz")
+					Knob::new(id, v, KnobSpec::for_param(20.0, 20_000.0, 1000.0, tr("Hz")))
+						.label(tr("AI changed"))
+						.unit(tr("Hz"))
 						.ai(true)
 				});
 				demo_knob(ui, "off", 30.0, |id, v| {
 					Knob::new(id, v, pct)
-						.label("Disabled")
+						.label(tr("Disabled"))
 						.unit("%")
 						.enabled(false)
 				});
 			});
 		});
-		section(ui, "Knob · states and floating value", col, |ui| {
+		section(ui, tr("Knob · states and floating value"), col, |ui| {
 			ui.horizontal_top(|ui| {
 				ui.spacing_mut().item_spacing.x = 10.0;
 				let ms = KnobSpec::for_param(0.1, 2000.0, 10.0, "ms");
 				demo_knob(ui, "rest", 120.0, |id, v| {
-					Knob::new(id, v, ms).label("Rest").unit("ms")
+					Knob::new(id, v, ms).label(tr("Rest")).unit("ms")
 				});
 				demo_knob(ui, "hover", 184.0, |id, v| {
-					Knob::new(id, v, ms).label("Hover").unit("ms")
+					Knob::new(id, v, ms).label(tr("Hover")).unit("ms")
 				});
 				demo_knob(ui, "accent", 120.0, |id, v| {
 					Knob::new(id, v, ms)
-						.label("Accent")
+						.label(tr("Accent"))
 						.unit("ms")
 						.color(theme::BAND_COLORS[6])
 				});
 				demo_knob(ui, "plain", 4.0, |id, v| {
 					Knob::new(id, v, KnobSpec::for_param(1.0, 4.0, 1.0, "voices"))
-						.label("Whole")
+						.label(tr("Whole"))
 						.unit("voices")
 				});
 			});
 			caption(
 				ui,
-				"Drag: 200 px = range, Shift ×0.1 · wheel 1/100 · double-click resets",
+				tr("Drag: 200 px = range, Shift ×0.1 · wheel 1/100 · double-click resets"),
 			);
 		});
 	});
 	ui.horizontal_top(|ui| {
-		section(ui, "Value readout", col, |ui| {
+		section(ui, tr("Value readout"), col, |ui| {
 			ui.horizontal(|ui| {
 				let size = vec2(84.0, 22.0);
 				for (text, state) in [
@@ -3638,7 +4292,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				}
 			});
 			ui.horizontal(|ui| {
-				for name in ["Rest", "Hover", "Typing", "Out of range"] {
+				for name in [tr("Rest"), tr("Hover"), tr("Typing"), tr("Out of range")] {
 					ui.add_sized(
 						[84.0, 14.0],
 						egui::Label::new(
@@ -3658,7 +4312,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 					v,
 					20.0,
 					20_000.0,
-					ValueFmt::unit("Hz"),
+					ValueFmt::unit(tr("Hz")),
 					ReadoutLook::Boxed,
 					vec2(84.0, 22.0),
 					ReadoutState::Rest,
@@ -3666,16 +4320,16 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				if let Some(v) = typed {
 					ui.data_mut(|d| d.insert_temp(id, v));
 				}
-				caption(ui, "Click to type: 3.2k, -6 dB, 250ms, C4, 1/8");
+				caption(ui, tr("Click to type: 3.2k, -6 dB, 250ms, C4, 1/8"));
 			});
 		});
-		section(ui, "Toggle, segmented, grid", col, |ui| {
+		section(ui, tr("Toggle, segmented, grid"), col, |ui| {
 			ui.horizontal(|ui| {
 				ui.spacing_mut().item_spacing.x = 8.0;
 				for (key, label, color, initial) in [
 					("pp-off", "⇄ Ping-pong", theme::STEREO_L, 0.0),
 					("pp-on", "⇄ Ping-pong", theme::STEREO_L, 1.0),
-					("inv", "Ø Invert R", theme::WARNING, 1.0),
+					("inv", tr("Ø Invert R"), theme::WARNING, 1.0),
 				] {
 					let (id, v) = demo_value(ui, key, initial);
 					if toggle(ui, v >= 0.5, label, color).clicked() {
@@ -3683,9 +4337,12 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 					}
 				}
 				let (id, v) = demo_value(ui, "slope", 2.0);
-				if let Some(i) =
-					segmented(ui, id.with("seg"), &["Off", "12", "24", "48"], v as usize)
-				{
+				if let Some(i) = segmented(
+					ui,
+					id.with("seg"),
+					&[tr("Off"), "12", "24", "48"],
+					v as usize,
+				) {
 					ui.data_mut(|d| d.insert_temp(id, i as f32));
 				}
 			});
@@ -3706,15 +4363,15 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				ui.data_mut(|d| d.insert_temp(id, i as f32));
 			}
 		});
-		section(ui, "Wave and mode picker cards", col, |ui| {
+		section(ui, tr("Wave and mode picker cards"), col, |ui| {
 			let (id, v) = demo_value(ui, "wave", 1.0);
 			ui.horizontal(|ui| {
 				ui.spacing_mut().item_spacing.x = 6.0;
 				for (i, (label, wave)) in [
-					("Sine", Wave::Sine),
-					("Saw", Wave::Saw),
-					("Square", Wave::Square),
-					("Triangle", Wave::Triangle),
+					(tr("Sine"), Wave::Sine),
+					(tr("Saw"), Wave::Saw),
+					(tr("Square"), Wave::Square),
+					(tr("Triangle"), Wave::Triangle),
 				]
 				.into_iter()
 				.enumerate()
@@ -3736,9 +4393,11 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 			ui.horizontal(|ui| {
 				ui.spacing_mut().item_spacing.x = 6.0;
 				let shapes: [(&str, CardCurve); 3] = [
-					("Tape", |x| (2.0 * x).tanh()),
-					("Tube", |x| ((2.5 * x + 0.4).tanh() - 0.4f32.tanh()) * 0.9),
-					("Hard clip", |x| (1.8 * x).clamp(-0.8, 0.8)),
+					(tr("Tape"), |x| (2.0 * x).tanh()),
+					(tr("Tube"), |x| {
+						((2.5 * x + 0.4).tanh() - 0.4f32.tanh()) * 0.9
+					}),
+					(tr("Hard clip"), |x| (1.8 * x).clamp(-0.8, 0.8)),
 				];
 				for (i, (label, f)) in shapes.into_iter().enumerate() {
 					let r = mode_card(
@@ -3757,7 +4416,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 		});
 	});
 	ui.horizontal_top(|ui| {
-		section(ui, "Meters", col, |ui| {
+		section(ui, tr("Meters"), col, |ui| {
 			ui.horizontal_top(|ui| {
 				ui.spacing_mut().item_spacing.x = 18.0;
 				let meter = |ui: &mut Ui,
@@ -3806,7 +4465,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				);
 				meter(
 					ui,
-					"CLIP",
+					tr("CLIP"),
 					&|ui| {
 						let (rect, _) = ui.allocate_exact_size(vec2(26.0, 140.0), Sense::hover());
 						paint_level_meter(ui.painter(), rect, &[0.4, -0.8], &[0.4, 0.1]);
@@ -3816,13 +4475,13 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				);
 				ui.vertical(|ui| {
 					ui.add_space(40.0);
-					caption(ui, "HEADER PAIR (IN / OUT)");
+					caption(ui, tr("HEADER PAIR (IN / OUT)"));
 					io_meters(ui, [-12.6, -13.4], [-14.1, -14.8], false);
 					ui.add_space(6.0);
 					caption(ui, "COMPACT (34 px)");
 					io_meters(ui, [-12.6, -13.4], [-4.1, -2.0], true);
 					ui.add_space(6.0);
-					caption(ui, "LIVE (peak hold 1.5 s)");
+					caption(ui, tr("LIVE (peak hold 1.5 s)"));
 					ui.horizontal(|ui| {
 						level_meter(
 							ui,
@@ -3841,11 +4500,18 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				});
 			});
 		});
-		section(ui, "Band / voice palette · glow", col, |ui| {
+		section(ui, tr("Band / voice palette · glow"), col, |ui| {
 			ui.horizontal_wrapped(|ui| {
 				ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
 				for (name, color) in [
-					"Coral", "Orange", "Yellow", "Green", "Teal", "Sky", "Violet", "Pink",
+					tr("Coral"),
+					tr("Orange"),
+					tr("Yellow"),
+					tr("Green"),
+					tr("Teal"),
+					tr("Sky"),
+					tr("Violet"),
+					tr("Pink"),
 				]
 				.iter()
 				.zip(theme::BAND_COLORS)
@@ -3891,7 +4557,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 				theme::glow_line(&p, pts, color);
 			}
 		});
-		section(ui, "Bound to the project", col, |ui| {
+		section(ui, tr("Bound to the project"), col, |ui| {
 			let device = state.project().tracks.iter().find_map(|t| {
 				t.channel
 					.inserts
@@ -3909,7 +4575,7 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 					})
 			});
 			let Some((r, name)) = device else {
-				caption(ui, "No built-in device in this project");
+				caption(ui, tr("No built-in device in this project"));
 				return;
 			};
 			caption(
@@ -3932,27 +4598,27 @@ pub fn gallery(ui: &mut Ui, state: &mut AppState) {
 		});
 	});
 	ui.horizontal_top(|ui| {
-		section(ui, "Frequency display · grid, analyzer, nodes, piano strip", 2.0 * col + 48.0, |ui| {
+		section(ui, tr("Frequency display · grid, analyzer, nodes, piano strip"), 2.0 * col + 48.0, |ui| {
 			eq_demo(ui, vec2(2.0 * col + 48.0, 260.0));
 			caption(
 				ui,
-				"Real EqBands response · pre (solid) and post (blue) analyzer · drag nodes (Shift fine, Alt axis lock), wheel = Q, double-click resets",
+				tr("Real EqBands response · pre (solid) and post (blue) analyzer · drag nodes (Shift fine, Alt axis lock), wheel = Q, double-click resets"),
 			);
 		});
-		section(ui, "ADSR editor", col, |ui| {
+		section(ui, tr("ADSR editor"), col, |ui| {
 			adsr_demo(ui, vec2(col, 160.0));
-			caption(ui, "Cube-root time axis · D moves decay and sustain · Shift fine");
+			caption(ui, tr("Cube-root time axis · D moves decay and sustain · Shift fine"));
 			ui.add_space(4.0);
 			filter_demo(ui, vec2(col, 104.0));
-			caption(ui, "Poly Synth filter, -48..+24 dB");
+			caption(ui, tr("Poly Synth filter, -48..+24 dB"));
 		});
 	});
 	ui.horizontal_top(|ui| {
-		section(ui, "Level history", 2.0 * col + 48.0, |ui| {
+		section(ui, tr("Level history"), 2.0 * col + 48.0, |ui| {
 			history_demo(ui, 2.0 * col + 48.0);
 			caption(
 				ui,
-				"Input fill, output line, gain reduction from the top · drag the threshold",
+				tr("Input fill, output line, gain reduction from the top · drag the threshold"),
 			);
 		});
 	});

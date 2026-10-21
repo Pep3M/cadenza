@@ -11,6 +11,7 @@
 //! [`crate::state::piano`]); notes are auditioned through the track's instrument, also
 //! while the transport is stopped.
 
+use crate::i18n::{tr, trf};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{NoteId, PPQ, Tick, TrackId};
@@ -29,9 +30,11 @@ use crate::theme;
 use crate::ui::arrange;
 use crate::ui::widgets;
 
-const TOOLBAR: f32 = 30.0;
-const RULER: f32 = 22.0;
-const VELOCITY_LANE: f32 = 78.0;
+const TOOLBAR: f32 = 34.0;
+const RULER: f32 = 24.0;
+/// The lane tabs row above the event lane.
+const LANE_TABS: f32 = 28.0;
+const VELOCITY_LANE: f32 = 110.0;
 /// Pixels at a note's edges that resize instead of moving.
 const EDGE: f32 = 6.0;
 
@@ -182,12 +185,16 @@ pub struct PianoUi {
 	key: Option<u8>,
 	/// Pitch sounding for the current note gesture.
 	sounding: Option<u8>,
+	/// Row under the pointer in the grid this frame (the keyboard highlights its key).
+	hover_pitch: Option<u8>,
 	pan: bool,
 	/// Grid width/height of the last frame (keyboard navigation, framing).
 	width: f32,
 	height: f32,
 	/// Note grid of the last frame (tests drive the mouse with it).
 	pub grid_rect: Option<Rect>,
+	/// Event lane of the last frame (tests).
+	pub lane_rect: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -196,6 +203,8 @@ struct Geometry {
 	keys: Rect,
 	ruler: Rect,
 	grid: Rect,
+	/// The lane tabs row (full width) above the event lane.
+	tabs: Option<Rect>,
 	velocity: Option<Rect>,
 	hbar: Rect,
 	vbar: Rect,
@@ -208,18 +217,23 @@ impl Geometry {
 		let bottom = full.bottom() - theme::SCROLLBAR;
 		let top = full.top() + TOOLBAR + RULER;
 		let vel_h = if velocity_lane {
-			VELOCITY_LANE.min((bottom - top) * 0.35)
+			VELOCITY_LANE.min((bottom - top) * 0.25)
 		} else {
 			0.0
 		};
-		let grid_bottom = bottom - vel_h;
+		let tabs_h = if velocity_lane { LANE_TABS } else { 0.0 };
+		let lane_top = bottom - vel_h;
+		let grid_bottom = lane_top - tabs_h;
 		Self {
 			toolbar: Rect::from_min_max(full.min, pos2(full.right(), full.top() + TOOLBAR)),
 			keys: Rect::from_min_max(pos2(full.left(), top), pos2(x0, grid_bottom)),
 			ruler: Rect::from_min_max(pos2(x0, full.top() + TOOLBAR), pos2(right, top)),
 			grid: Rect::from_min_max(pos2(x0, top), pos2(right, grid_bottom)),
+			tabs: velocity_lane.then(|| {
+				Rect::from_min_max(pos2(full.left(), grid_bottom), pos2(full.right(), lane_top))
+			}),
 			velocity: velocity_lane
-				.then(|| Rect::from_min_max(pos2(x0, grid_bottom), pos2(right, bottom))),
+				.then(|| Rect::from_min_max(pos2(x0, lane_top), pos2(right, bottom))),
 			hbar: Rect::from_min_max(pos2(x0, bottom), pos2(right, full.bottom())),
 			vbar: Rect::from_min_max(pos2(right, top), pos2(full.right(), grid_bottom)),
 		}
@@ -287,6 +301,7 @@ impl PianoUi {
 		self.width = g.grid.width();
 		self.height = g.grid.height();
 		self.grid_rect = Some(g.grid);
+		self.lane_rect = g.velocity;
 		let Some(t) = target(state) else {
 			self.toolbar(ui, state, &g, None);
 			empty(ui, state, full.with_min_y(g.toolbar.bottom()));
@@ -311,9 +326,27 @@ impl PianoUi {
 		v.scroll_y = timeline::clamp_scroll(v.scroll_y, v.content_height(), g.grid.height());
 
 		self.grid(ui, state, &g, &t);
+		if t.clip.notes().is_empty() && self.gesture.is_none() {
+			let p = ui.painter_at(g.grid);
+			p.text(
+				g.grid.center() - vec2(0.0, 10.0),
+				Align2::CENTER_BOTTOM,
+				tr("Empty clip"),
+				theme::semibold(13.0),
+				theme::TEXT_DIM,
+			);
+			p.text(
+				g.grid.center(),
+				Align2::CENTER_TOP,
+				tr("Press P and click to draw notes, or ask the producer (F10) to write a part"),
+				theme::small(),
+				theme::TEXT_FAINT,
+			);
+		}
 		self.keyboard(ui, state, &g, &t);
-		if let Some(r) = g.velocity {
-			event_lane_selector(ui, state, r, &g, &t);
+		if let (Some(r), Some(tabs)) = (g.velocity, g.tabs) {
+			lane_tabs(ui, state, tabs, &t);
+			lane_label(ui, state, r, &g, &t);
 			match state.view.piano.event_lane {
 				EventLane::Velocity => self.velocity_lane(ui, state, r, &t),
 				EventLane::Controller(c) => self.controller_lane(ui, state, c, r, &t),
@@ -325,9 +358,12 @@ impl PianoUi {
 		// Playhead (wraps with the pattern loop).
 		let x = g.grid.left() + state.view.piano.timeline.tick_to_x(state.position());
 		if (g.grid.left()..=g.grid.right()).contains(&x) {
-			let bottom = g.velocity.map_or(g.grid.bottom(), |r| r.bottom());
-			ui.painter()
-				.vline(x, g.ruler.top()..=bottom, Stroke::new(1.5, theme::PLAYHEAD));
+			let p = ui.painter_at(g.ruler.union(g.grid));
+			arrange::paint_playhead(&p, x, g.ruler.top()..=g.grid.bottom(), g.ruler.bottom());
+			if let Some(lane) = g.velocity {
+				ui.painter_at(lane)
+					.vline(x, lane.y_range(), Stroke::new(1.0, theme::PLAYHEAD));
+			}
 		}
 		self.properties(ui, state, &t);
 	}
@@ -462,6 +498,8 @@ impl PianoUi {
 		}
 	}
 
+	/// Folds the piano roll toolbar to the width actually available ([`piano_fold`]), not a
+	/// window-size tier, so any language's labels fit.
 	fn toolbar(&mut self, ui: &mut Ui, state: &mut AppState, g: &Geometry, t: Option<&Target>) {
 		let r = g.toolbar;
 		ui.painter().rect_filled(r, 0.0, theme::BG_PANEL);
@@ -472,111 +510,106 @@ impl PianoUi {
 		);
 		let mut bar = ui.new_child(
 			egui::UiBuilder::new()
-				.max_rect(r.shrink2(vec2(8.0, 3.0)))
+				.max_rect(r.shrink2(vec2(10.0, 0.0)))
 				.layout(egui::Layout::left_to_right(egui::Align::Center)),
 		);
-		let ui = &mut bar;
-		ui.spacing_mut().item_spacing.x = 5.0;
-		super::widgets::panel_title(ui, "Piano roll", Some("F7"));
+		bar.set_clip_rect(r);
+		bar.spacing_mut().item_spacing.x = 6.0;
+		let fold = piano_fold(&bar, r.width());
+		self.toolbar_rest(&mut bar, state, t, fold);
+	}
+
+	/// The piano roll toolbar's content at `fold` (picked by [`piano_fold`]).
+	fn toolbar_rest(&self, ui: &mut Ui, state: &mut AppState, t: Option<&Target>, fold: PianoFold) {
+		let compact = fold.compact;
+		widgets::panel_title(ui, tr("Piano roll"), (!compact).then_some("F7"));
 		if let Some(t) = t {
-			let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
-			ui.painter()
-				.rect_filled(dot, CornerRadius::same(2), t.color);
-			let track = state
-				.project()
-				.track(t.track)
-				.map(|t| t.name.clone())
-				.unwrap_or_default();
-			clip_selector(ui, state, t);
-			if ui
-				.small_button("+")
-				.on_hover_text("New empty clip on this track (opens it here)")
+			clip_selector(ui, state, t, compact);
+			if arrange::toolbar_chip(ui, false, "+", None, theme::BG_WIDGET, theme::TEXT)
+				.on_hover_text(tr("New empty clip on this track (opens it here)"))
 				.clicked()
 			{
 				let at = state.position();
 				state.new_clip_in_piano_roll(t.track, at);
 			}
-			ui.label(
-				RichText::new(format!("on {track}"))
-					.font(theme::small())
-					.color(theme::TEXT_DIM),
-			);
 		}
-		ui.separator();
-		let v = &mut state.view.piano;
-		for tool in Tool::ALL {
-			if ui
-				.selectable_label(v.tool == tool, tool.label())
-				.on_hover_text(format!("{} ({})", tool.tip(), tool.key()))
-				.clicked()
-			{
-				v.tool = tool;
-			}
-		}
-		ui.separator();
-		ui.label(
-			RichText::new("Snap:")
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
-		);
-		let main_name = {
-			let grid = state.view.piano.timeline.grid(signature(state));
-			if state.view.snap {
-				format!("Main ({})", arrange::grid_name(grid.step, grid.bar))
-			} else {
-				"Main (off)".to_string()
-			}
-		};
-		let v = &mut state.view.piano;
-		let name = |s: PianoSnap| {
-			if s == PianoSnap::Main {
-				main_name.clone()
-			} else {
-				s.name().to_string()
-			}
-		};
-		egui::ComboBox::from_id_salt("piano-snap")
-			.width(96.0)
-			.selected_text(RichText::new(name(v.snap)).font(theme::small()))
-			.show_ui(ui, |ui| {
-				for s in PianoSnap::ALL {
-					ui.selectable_value(&mut v.snap, s, name(s));
+		arrange::toolbar_divider(ui);
+		segment_group(ui, |ui| {
+			for tool in Tool::ALL {
+				let on = state.view.piano.tool == tool;
+				let (label, key) = fold
+					.tools
+					.label_and_key(tool.glyph(), tool.name(), tool.key());
+				if arrange::toolbar_chip(ui, on, &label, key, theme::BG_HOVER, theme::TEXT)
+					.on_hover_text(format!("{}: {} ({})", tool.name(), tool.tip(), tool.key()))
+					.clicked()
+				{
+					state.view.piano.tool = tool;
 				}
-			})
-			.response
-			.on_hover_text(
-				"Piano roll snap (FL's magnet). Main follows the arrange snap; Alt while \
-				 dragging: free",
-			);
-		ui.separator();
-		scale_picker(ui, &mut state.view.piano);
+			}
+		});
+		snap_chip(ui, state);
+		key_chip(ui, &mut state.view.piano, compact);
 		let v = &mut state.view.piano;
-		egui::ComboBox::from_id_salt("piano-ghosts")
-			.width(120.0)
-			.selected_text(RichText::new(v.ghosts.name()).font(theme::small()))
-			.show_ui(ui, |ui| {
+		if v.scale.is_some() {
+			let on = v.scale_rows;
+			if arrange::toolbar_chip(
+				ui,
+				on,
+				if compact { "▤" } else { tr("▤ Scale rows") },
+				None,
+				theme::ACCENT_DIM,
+				theme::ACCENT_TEXT,
+			)
+			.on_hover_text(tr(
+				"Shade the rows outside the scale (in-scale rows one step lighter)",
+			))
+			.clicked()
+			{
+				v.scale_rows = !on;
+			}
+		}
+		let ghosts = match v.ghosts {
+			Ghosts::Off => tr("Off"),
+			Ghosts::SameTrack => tr("This track"),
+			Ghosts::AllTracks => tr("All tracks"),
+		};
+		chip_menu(
+			ui,
+			"piano-ghosts",
+			(!compact).then_some(tr("Ghosts")),
+			ghosts,
+			tr("Show the notes of other clips dimmed behind this one"),
+			|ui| {
 				for gh in [Ghosts::Off, Ghosts::SameTrack, Ghosts::AllTracks] {
 					ui.selectable_value(&mut v.ghosts, gh, gh.name());
 				}
-			})
-			.response
-			.on_hover_text("Show the notes of other clips dimmed behind this one");
-		if ui
-			.selectable_label(v.velocity_lane, "Events")
-			.on_hover_text(
-				"Show the event lane under the notes (velocity, mod wheel, sustain, pitch bend, any CC)",
-			)
-			.clicked()
+			},
+		);
+		let lanes = v.velocity_lane;
+		if arrange::toolbar_chip(
+			ui,
+			lanes,
+			tr("Events"),
+			None,
+			theme::ACCENT_DIM,
+			theme::ACCENT_TEXT,
+		)
+		.on_hover_text(tr(
+			"Show the event lane under the notes (velocity, mod wheel, sustain, pitch bend, any CC)",
+		))
+		.clicked()
 		{
-			v.velocity_lane = !v.velocity_lane;
+			v.velocity_lane = !lanes;
 		}
 		ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+			ui.spacing_mut().item_spacing.x = 4.0;
 			if ui
 				.add(
 					egui::Button::new(RichText::new("×").size(15.0).color(theme::TEXT_DIM))
 						.frame(false),
 				)
-				.on_hover_text("Close the piano roll (F7)")
+				.on_hover_text(tr("Close the piano roll (F7)"))
 				.clicked()
 			{
 				state.close_piano_roll();
@@ -592,9 +625,9 @@ impl PianoUi {
 					.frame(false),
 				)
 				.on_hover_text(if maximized {
-					"Restore the layout (F11)"
+					tr("Restore the layout (F11)")
 				} else {
-					"Maximize the piano roll (F11)"
+					tr("Maximize the piano roll (F11)")
 				})
 				.clicked()
 			{
@@ -603,45 +636,48 @@ impl PianoUi {
 					.panels
 					.toggle_maximize_panel(PanelKind::PianoRoll);
 			}
-			if let Some(t) = t {
-				if ui
-					.small_button("Fit")
-					.on_hover_text("Zoom to the clip")
+			let Some(t) = t else {
+				return;
+			};
+			arrange::toolbar_divider(ui);
+			let zoom = |ui: &mut Ui, label: &str, tip: &str| {
+				arrange::toolbar_chip(ui, false, label, None, theme::BG_WIDGET, theme::TEXT)
+					.on_hover_text(tip)
 					.clicked()
-				{
-					state.view.piano.frame(&t.clip, self.width, self.height);
-				}
-				if ui
-					.small_button("+")
-					.on_hover_text("Zoom in (Ctrl+wheel)")
-					.clicked()
-				{
-					state.view.piano.timeline.zoom_around(1.5, self.width * 0.5);
-				}
-				if ui.small_button("−").on_hover_text("Zoom out").clicked() {
-					state
-						.view
-						.piano
-						.timeline
-						.zoom_around(1.0 / 1.5, self.width * 0.5);
-				}
-				ui.separator();
-				if ui
-					.button("Quantize")
-					.on_hover_text("Move the selected notes (or all) onto the snap grid (Ctrl+Q)")
-					.clicked()
-				{
-					quantize(state);
-				}
+			};
+			if zoom(ui, "+", tr("Zoom in (Ctrl+wheel)")) {
+				state.view.piano.timeline.zoom_around(1.5, self.width * 0.5);
+			}
+			if zoom(ui, "−", tr("Zoom out (Ctrl+wheel)")) {
+				state
+					.view
+					.piano
+					.timeline
+					.zoom_around(1.0 / 1.5, self.width * 0.5);
+			}
+			if zoom(ui, tr("Fit"), tr("Zoom to the clip")) {
+				state.view.piano.frame(&t.clip, self.width, self.height);
+			}
+			arrange::toolbar_divider(ui);
+			if filled_chip(ui, tr("Quantize"), Some("Q"))
+				.on_hover_text(tr(
+					"Move the selected notes (or all) onto the snap grid (Q / Ctrl+Q)",
+				))
+				.clicked()
+			{
+				quantize(state);
+			}
+			if !compact {
 				let n = state.view.piano.selected.len();
+				let total = t.clip.notes().len();
 				ui.label(
 					RichText::new(if n == 0 {
-						format!("{} notes", t.clip.notes().len())
+						trf("{total} notes", &[("total", &total)])
 					} else {
-						format!("{n} of {} selected", t.clip.notes().len())
+						trf("{n} of {total} selected", &[("n", &n), ("total", &total)])
 					})
 					.font(theme::small())
-					.color(theme::TEXT_FAINT),
+					.color(theme::TEXT_DIM),
 				);
 			}
 		});
@@ -662,18 +698,19 @@ impl PianoUi {
 		for pitch in bottom_pitch..=top_pitch {
 			let y = area.top() + v.pitch_to_y(pitch);
 			let row = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), v.row_height));
-			p.rect_filled(row, 0.0, row_color(pitch, v.scale));
+			let scale = v.scale.filter(|_| v.scale_rows);
+			p.rect_filled(row, 0.0, row_color(pitch, scale));
 			if pitch % 12 == 0 {
 				p.hline(
 					area.x_range(),
 					row.bottom() - 0.5,
-					Stroke::new(1.0, theme::GRID_BAR),
+					Stroke::new(1.0, theme::PIANO_GRID_BAR),
 				);
 			} else if v.row_height >= 9.0 {
 				p.hline(
 					area.x_range(),
 					row.bottom() - 0.5,
-					Stroke::new(1.0, theme::GRID_FINE),
+					Stroke::new(1.0, theme::PIANO_ROW_LINE),
 				);
 			}
 		}
@@ -724,11 +761,11 @@ impl PianoUi {
 					for n in c.notes().iter().filter(|n| visible_pitch(n.pitch)) {
 						let r = note_rect(&v, area, c.start, n.start, n.length, n.pitch);
 						if r.intersects(area) {
-							p.rect_filled(r, CornerRadius::same(2), color.gamma_multiply(0.16));
+							// Outlined in their own colour, so they never look editable.
 							p.rect_stroke(
-								r,
+								r.shrink2(vec2(0.0, 1.0)),
 								CornerRadius::same(2),
-								Stroke::new(1.0, color.gamma_multiply(0.32)),
+								Stroke::new(1.0, color.gamma_multiply(0.45)),
 								StrokeKind::Inside,
 							);
 						}
@@ -740,6 +777,7 @@ impl PianoUi {
 		let response = ui.interact(area, Id::new("piano-grid"), Sense::click_and_drag());
 		let pointer = ui.ctx().pointer_latest_pos();
 		let hover = response.hover_pos();
+		self.hover_pitch = hover.map(|pos| v.y_to_pitch(pos.y - area.top()));
 		let snap = step(state, ui);
 		let (pressed, down, released, r_pressed, r_down, mods) = ui.input(|i| {
 			(
@@ -773,13 +811,15 @@ impl PianoUi {
 				.values()
 				.fold((1.0f32, 0.0f32), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
 			let text = if values.len() == 1 || (hi - lo) < 0.005 {
-				format!("Velocity {}%", (hi * 100.0).round())
+				trf("Velocity {v}%", &[("v", &(hi * 100.0).round())])
 			} else {
-				format!(
-					"Velocity {}–{}% ({} notes)",
-					(lo * 100.0).round(),
-					(hi * 100.0).round(),
-					values.len()
+				trf(
+					"Velocity {lo}–{hi}% ({n} notes)",
+					&[
+						("lo", &(lo * 100.0).round()),
+						("hi", &(hi * 100.0).round()),
+						("n", &values.len()),
+					],
 				)
 			};
 			egui::Tooltip::for_widget(&response)
@@ -791,10 +831,12 @@ impl PianoUi {
 			&& self.erase.is_none()
 			&& let Some((n, _)) = hit(pos)
 		{
-			response.clone().on_hover_text_at_pointer(format!(
-				"{} · velocity {}% (Alt+wheel)",
-				cadenza_model::note_name(n.pitch),
-				(n.velocity * 100.0).round()
+			response.clone().on_hover_text_at_pointer(trf(
+				"{note_name} · velocity {velocity}% (Alt+wheel)",
+				&[
+					("note_name", &cadenza_model::note_name(n.pitch)),
+					("velocity", &(n.velocity * 100.0).round()),
+				],
 			));
 		}
 
@@ -1136,6 +1178,7 @@ impl PianoUi {
 				.unwrap_or(n.velocity)
 		};
 		let pr = ui.painter_at(area);
+		let flats = piano::prefers_flats(v.scale);
 		let (t_lo, t_hi) = (
 			tl.x_to_tick(0.0) - clip.start,
 			tl.x_to_tick(area.width()) - clip.start,
@@ -1156,7 +1199,15 @@ impl PianoUi {
 					// Duplicate drag: the original stays, the copy is drawn moved.
 					let r = note_rect(v, area, clip.start, n.start, n.length, n.pitch);
 					if r.intersects(area) {
-						paint_note(&pr, r, t.color, vel(n), false, n.pitch, v.row_height);
+						paint_note(
+							&pr,
+							r,
+							t.color,
+							vel(n),
+							false,
+							n.pitch,
+							(v.row_height, flats),
+						);
 					}
 				} else {
 					ghost_origin = true;
@@ -1193,13 +1244,29 @@ impl PianoUi {
 			}
 			let r = note_rect(v, area, clip.start, start, length, pitch);
 			let selected = v.selected.contains(&n.id) || in_rubber(r);
-			paint_note(&pr, r, t.color, vel(n), selected, pitch, v.row_height);
+			paint_note(
+				&pr,
+				r,
+				t.color,
+				vel(n),
+				selected,
+				pitch,
+				(v.row_height, flats),
+			);
 		}
 		match &self.gesture {
 			// The note being placed.
 			Some(Gesture::Draw { start, pitch, .. }) => {
 				let r = note_rect(v, area, clip.start, *start, v.last_length, *pitch);
-				paint_note(&pr, r, t.color, v.last_velocity, true, *pitch, v.row_height);
+				paint_note(
+					&pr,
+					r,
+					t.color,
+					v.last_velocity,
+					true,
+					*pitch,
+					(v.row_height, flats),
+				);
 			}
 			Some(Gesture::Paint {
 				first,
@@ -1210,7 +1277,15 @@ impl PianoUi {
 				for (k, pitch) in cells {
 					let s = *first + Tick(k * spacing.0) - clip.start;
 					let r = note_rect(v, area, clip.start, s, v.last_length, *pitch);
-					paint_note(&pr, r, t.color, v.last_velocity, true, *pitch, v.row_height);
+					paint_note(
+						&pr,
+						r,
+						t.color,
+						v.last_velocity,
+						true,
+						*pitch,
+						(v.row_height, flats),
+					);
 				}
 			}
 			Some(Gesture::Slice { at, from_y, to }) => {
@@ -1267,12 +1342,15 @@ impl PianoUi {
 					ui.set_max_width(180.0);
 					ui.horizontal(|ui| {
 						ui.label(
-							RichText::new("NOTE")
+							RichText::new(tr("NOTE"))
 								.font(theme::small())
 								.color(theme::TEXT_FAINT),
 						);
 						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-							close = ui.small_button("×").on_hover_text("Close (Esc)").clicked();
+							close = ui
+								.small_button("×")
+								.on_hover_text(tr("Close (Esc)"))
+								.clicked();
 						});
 					});
 					let n = &mut props.note;
@@ -1283,7 +1361,7 @@ impl PianoUi {
 						.num_columns(2)
 						.spacing(vec2(8.0, 4.0))
 						.show(ui, |ui| {
-							ui.label("Pitch");
+							ui.label(tr("Pitch"));
 							done(
 								ui.add(
 									egui::DragValue::new(&mut n.pitch)
@@ -1294,7 +1372,7 @@ impl PianoUi {
 								),
 							);
 							ui.end_row();
-							ui.label("Velocity");
+							ui.label(tr("Velocity"));
 							let mut vel = (n.velocity * 100.0).round();
 							let r = ui.add(
 								egui::DragValue::new(&mut vel)
@@ -1304,26 +1382,26 @@ impl PianoUi {
 							n.velocity = vel / 100.0;
 							done(r);
 							ui.end_row();
-							ui.label("Start");
+							ui.label(tr("Start"));
 							let mut start = n.start.beats();
 							let r = ui.add(
 								egui::DragValue::new(&mut start)
 									.range(0.0..=100_000.0)
 									.speed(0.0625)
 									.max_decimals(3)
-									.suffix(" beats"),
+									.suffix(tr(" beats")),
 							);
 							n.start = Tick::from_beats(start);
 							done(r);
 							ui.end_row();
-							ui.label("Length");
+							ui.label(tr("Length"));
 							let mut length = n.length.beats();
 							let r = ui.add(
 								egui::DragValue::new(&mut length)
 									.range(MIN_NOTE_LENGTH.beats()..=10_000.0)
 									.speed(0.0625)
 									.max_decimals(3)
-									.suffix(" beats"),
+									.suffix(tr(" beats")),
 							);
 							n.length = Tick::from_beats(length);
 							done(r);
@@ -1382,111 +1460,90 @@ impl PianoUi {
 			}
 			self.key = held;
 		}
-		let white_w = area.width() - 2.0;
-		let black_w = white_w * 0.6;
-		let top_pitch = v.y_to_pitch(0.0).saturating_add(1).min(127);
-		let bottom_pitch = v.y_to_pitch(area.height()).saturating_sub(1);
-		let row_top = |pitch: u8| area.top() + v.pitch_to_y(pitch);
+		// One row per key, aligned with the grid rows (design 04): white keys light,
+		// black keys dark, C labelled; the hovered row (keys or grid) is tinted and held
+		// or previewed keys light up.
+		let top_pitch = v.y_to_pitch(0.0);
+		let bottom_pitch = v.y_to_pitch(area.height());
+		let hovered = response
+			.hover_pos()
+			.map(|pos| pitch_at(pos.y))
+			.or(self.hover_pitch);
 		let pressed = |pitch: u8| {
 			self.key == Some(pitch) || state.previewing.iter().any(|(_, p)| *p == pitch)
 		};
-		// White keys span their row plus half of each neighbouring black row, like a
-		// real keyboard; black keys are drawn on top.
-		p.rect_filled(
-			Rect::from_min_max(area.min, pos2(area.left() + white_w, area.bottom())),
-			0.0,
-			theme::KEY_WHITE,
-		);
+		let flats = piano::prefers_flats(v.scale);
 		for pitch in bottom_pitch..=top_pitch {
-			if piano::is_black(pitch) {
-				continue;
-			}
-			let above = if pitch < 127 && piano::is_black(pitch + 1) {
-				row_top(pitch + 1) + v.row_height * 0.5
-			} else {
-				row_top(pitch)
-			};
-			let below = if pitch > 0 && piano::is_black(pitch - 1) {
-				row_top(pitch - 1) + v.row_height * 0.5
-			} else {
-				row_top(pitch) + v.row_height
-			};
-			let key =
-				Rect::from_min_max(pos2(area.left(), above), pos2(area.left() + white_w, below));
+			let y = area.top() + v.pitch_to_y(pitch);
+			let row = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), v.row_height));
+			let black = piano::is_black(pitch);
 			let in_scale = v.scale.is_none_or(|s| s.contains(pitch));
-			if pressed(pitch) {
-				p.rect_filled(key, 0.0, theme::ACCENT);
-			} else if !in_scale {
-				p.rect_filled(key, 0.0, theme::mix(theme::KEY_WHITE, theme::BG_DEEP, 0.3));
-			}
-			p.hline(
-				key.x_range(),
-				below - 0.5,
-				Stroke::new(1.0, Color32::from_rgb(0x9a, 0xa1, 0xab)),
-			);
-			if pitch % 12 == 0 && v.row_height >= 7.0 {
-				p.text(
-					pos2(key.right() - 4.0, row_top(pitch) + v.row_height * 0.5),
-					Align2::RIGHT_CENTER,
-					cadenza_theory::format_pitch(pitch, false),
-					FontId::proportional((v.row_height * 0.75).clamp(8.0, 11.0)),
-					Color32::from_rgb(0x3a, 0x40, 0x48),
-				);
-			}
-		}
-		for pitch in bottom_pitch..=top_pitch {
-			if !piano::is_black(pitch) {
-				continue;
-			}
-			let r = Rect::from_min_size(
-				pos2(area.left(), row_top(pitch)),
-				vec2(black_w, v.row_height),
-			);
-			p.rect_filled(
-				r,
-				CornerRadius {
-					ne: 2,
-					se: 2,
-					..Default::default()
-				},
-				if pressed(pitch) {
-					theme::ACCENT
-				} else {
-					theme::KEY_BLACK
-				},
-			);
-			if v.scale.is_some_and(|s| s.contains(pitch)) {
+			let base = match (black, in_scale) {
+				(false, true) => theme::KEY_WHITE,
+				(false, false) => theme::mix(theme::KEY_WHITE, theme::BG_DEEP, 0.08),
+				(true, _) => theme::KEY_BLACK,
+			};
+			let fill = if pressed(pitch) {
+				theme::ACCENT
+			} else if hovered == Some(pitch) {
+				theme::mix(base, theme::ACCENT, if black { 0.35 } else { 0.3 })
+			} else {
+				base
+			};
+			p.rect_filled(row, 0.0, fill);
+			let line = if pitch % 12 == 0 {
+				Color32::from_rgb(0x8a, 0x8e, 0x96)
+			} else {
+				theme::BORDER_SUBTLE
+			};
+			p.hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, line));
+			if v.scale.is_some_and(|s| s.contains(pitch)) && black {
 				// In-scale black keys get a small mark, so the scale reads on the keys.
 				p.rect_filled(
-					Rect::from_min_size(pos2(r.right() - 5.0, r.center().y - 1.0), vec2(3.0, 2.0)),
+					Rect::from_min_size(
+						pos2(area.right() - 9.0, row.center().y - 1.0),
+						vec2(4.0, 2.0),
+					),
 					0.0,
-					theme::ACCENT_DIM,
+					theme::ACCENT,
+				);
+			}
+			let label = pitch % 12 == 0 || (hovered == Some(pitch) && v.row_height >= 9.0);
+			if label && v.row_height >= 7.0 {
+				let on_dark = black || pressed(pitch);
+				p.text(
+					pos2(row.right() - 5.0, row.center().y),
+					Align2::RIGHT_CENTER,
+					cadenza_theory::format_pitch(pitch, flats),
+					theme::mono((v.row_height * 0.72).clamp(8.0, 10.0)),
+					if on_dark {
+						theme::TEXT_DIM
+					} else {
+						Color32::from_rgb(0x3a, 0x3d, 0x44)
+					},
 				);
 			}
 		}
 		p.vline(
 			area.right() - 0.5,
 			area.y_range(),
-			Stroke::new(1.0, theme::BORDER_STRONG),
+			Stroke::new(1.0, theme::BORDER),
 		);
 	}
 
 	fn velocity_lane(&mut self, ui: &mut Ui, state: &mut AppState, lane: Rect, t: &Target) {
 		let p = ui.painter_at(lane);
-		p.rect_filled(lane, 0.0, theme::BG_PANEL);
+		p.rect_filled(lane, 0.0, theme::CANVAS);
+		let inner = Rect::from_min_max(
+			pos2(lane.left(), lane.top() + 10.0),
+			pos2(lane.right(), lane.bottom() - 6.0),
+		);
 		p.hline(
 			lane.x_range(),
-			lane.top() + 0.5,
-			Stroke::new(1.0, theme::BORDER_STRONG),
+			inner.center().y,
+			Stroke::new(1.0, theme::BORDER_SUBTLE),
 		);
-		let inner = lane.shrink2(vec2(0.0, 6.0));
-		for frac in [0.25, 0.5, 0.75] {
-			p.hline(
-				lane.x_range(),
-				inner.bottom() - inner.height() * frac,
-				Stroke::new(1.0, theme::GRID_FINE),
-			);
-		}
+		lane_bar_lines(&p, state, lane);
 		let v = state.view.piano.clone();
 		let tl = v.timeline;
 		let clip = &t.clip;
@@ -1585,17 +1642,10 @@ impl PianoUi {
 				.unwrap_or(n.velocity);
 			let selected = v.selected.contains(&n.id);
 			let top = inner.bottom() - vel * inner.height();
-			let color = if selected {
-				theme::NOTE_SELECTED
-			} else {
-				theme::mix(t.color, Color32::WHITE, 0.2)
-			};
-			p.vline(
-				x + 1.0,
-				top..=inner.bottom(),
-				Stroke::new(2.0, color.gamma_multiply(0.8)),
-			);
-			p.circle_filled(pos2(x + 1.0, top), 3.0, color);
+			// Stems in the track colour; the selection's are white (design 04).
+			let color = if selected { theme::TEXT } else { t.color };
+			p.vline(x + 1.0, top..=inner.bottom(), Stroke::new(2.0, color));
+			p.circle_filled(pos2(x + 1.0, top), 3.5, color);
 		}
 		if let Some(VelocityDrag::Line { from, to, .. }) = &self.velocity {
 			let y = |v: f32| inner.bottom() - v * inner.height();
@@ -1623,13 +1673,9 @@ impl PianoUi {
 		t: &Target,
 	) {
 		let p = ui.painter_at(lane);
-		p.rect_filled(lane, 0.0, theme::BG_PANEL);
-		p.hline(
-			lane.x_range(),
-			lane.top() + 0.5,
-			Stroke::new(1.0, theme::BORDER_STRONG),
-		);
-		let inner = lane.shrink2(vec2(0.0, 6.0));
+		p.rect_filled(lane, 0.0, theme::CANVAS);
+		lane_bar_lines(&p, state, lane);
+		let inner = lane.shrink2(vec2(0.0, 8.0));
 		let (lo, hi) = controller.range();
 		let y_of = |v: f32| inner.bottom() - (v - lo) / (hi - lo) * inner.height();
 		let value_at = |y: f32| {
@@ -1646,9 +1692,9 @@ impl PianoUi {
 				Stroke::new(
 					1.0,
 					if center {
-						theme::GRID_BAR
+						theme::BORDER
 					} else {
-						theme::GRID_FINE
+						theme::BORDER_SUBTLE
 					},
 				),
 			);
@@ -1781,7 +1827,11 @@ impl PianoUi {
 		let base = y_of(controller.default_value().clamp(lo, hi));
 		let clip_x0 = x_of(Tick::ZERO).max(lane.left());
 		let clip_x1 = x_of(clip.length).min(lane.right());
-		let color = theme::mix(t.color, Color32::WHITE, 0.2);
+		// Controllers are violet like automation (design 04): a step graph over a soft
+		// fill, each event a ring.
+		let color = theme::AUTOMATION;
+		let fill = color.gamma_multiply(0.12);
+		let mut rings = Vec::new();
 		let mut value = controller.default_value();
 		let mut x = x_of(Tick::ZERO);
 		let mut line = Vec::new();
@@ -1793,7 +1843,7 @@ impl PianoUi {
 					p.rect_filled(
 						Rect::from_two_pos(pos2(a, y_of(value)), pos2(b, base)),
 						0.0,
-						color.gamma_multiply(0.25),
+						fill,
 					);
 				}
 			}
@@ -1802,19 +1852,23 @@ impl PianoUi {
 			value = pt.value;
 			x = nx;
 			if (lane.left() - 4.0..=lane.right() + 4.0).contains(&nx) {
-				p.circle_filled(pos2(nx, y_of(pt.value)), 2.5, color);
+				rings.push(pos2(nx, y_of(pt.value)));
 			}
 		}
 		if clip_x1 > x.max(clip_x0) {
 			p.rect_filled(
 				Rect::from_two_pos(pos2(x.max(clip_x0), y_of(value)), pos2(clip_x1, base)),
 				0.0,
-				color.gamma_multiply(0.25),
+				fill,
 			);
 		}
 		line.push(pos2(clip_x1, y_of(value)));
 		if line.len() > 1 {
 			p.add(egui::Shape::line(line, Stroke::new(1.5, color)));
+		}
+		for c in rings {
+			p.circle_filled(c, 3.5, theme::CANVAS);
+			p.circle_stroke(c, 3.0, Stroke::new(1.5, color));
 		}
 		if let Some(ControlDrag::Line {
 			from, to, moved, ..
@@ -1831,12 +1885,7 @@ impl PianoUi {
 		}
 		if let Some(pos) = response.hover_pos() {
 			ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-			let v = value_at(pos.y);
-			let text = match controller {
-				Controller::PitchBend => format!("{:+.0}", v * 8191.0),
-				c if c.is_switch() => if v >= 0.5 { "On" } else { "Off" }.to_owned(),
-				_ => format!("{}", (v * 127.0).round()),
-			};
+			let text = piano::controller_text(controller, value_at(pos.y));
 			p.text(
 				pos + vec2(10.0, -10.0),
 				Align2::LEFT_BOTTOM,
@@ -1932,7 +1981,9 @@ impl PianoUi {
 		let playhead = state.position();
 		if pressed(cmd, Key::C) && !sel.is_empty() {
 			state.view.piano.clipboard = piano::clipboard(&t.clip, &sel, playhead);
-			state.notices.info(format!("Copied {} notes", sel.len()));
+			state
+				.notices
+				.info(trf("Copied {n} notes", &[("n", &sel.len())]));
 		}
 		if pressed(cmd, Key::X) && !sel.is_empty() {
 			state.view.piano.clipboard = piano::clipboard(&t.clip, &sel, playhead);
@@ -1959,7 +2010,7 @@ impl PianoUi {
 				}
 				None => state
 					.notices
-					.info("Select notes to clone (Ctrl+A selects all)"),
+					.info(tr("Select notes to clone (Ctrl+A selects all)")),
 			}
 		}
 		if (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
@@ -1975,9 +2026,9 @@ impl PianoUi {
 				Some(cmd) => {
 					state.apply(cmd);
 				}
-				None => state
-					.notices
-					.info("Glue joins selected notes of the same pitch: select two or more"),
+				None => state.notices.info(tr(
+					"Glue joins selected notes of the same pitch: select two or more",
+				)),
 			}
 		}
 		if pressed(cmd, Key::L) {
@@ -2138,7 +2189,7 @@ pub fn quantize(state: &mut AppState) {
 		Some(cmd) => {
 			state.apply(cmd);
 		}
-		None => state.notices.info("Already on the grid"),
+		None => state.notices.info(tr("Already on the grid")),
 	}
 }
 
@@ -2157,9 +2208,16 @@ fn note_rect(
 	let x0 = area.left() + v.timeline.tick_to_x(clip_start + start);
 	let w = note_px(v, length).max(3.0);
 	let y = area.top() + v.pitch_to_y(pitch);
-	Rect::from_min_size(pos2(x0, y + 0.5), vec2(w, (v.row_height - 1.0).max(2.0)))
+	let inset = if v.row_height >= 8.0 { 1.0 } else { 0.5 };
+	Rect::from_min_size(
+		pos2(x0, y + inset),
+		vec2(w, (v.row_height - 2.0 * inset).max(2.0)),
+	)
 }
 
+/// A note (design 04): the track colour, more opaque the louder it is, its name when
+/// there is room and a release grip on the right edge; selected notes turn pale
+/// ([`theme::NOTE_SELECTED`]) with a light outline.
 fn paint_note(
 	p: &Painter,
 	r: Rect,
@@ -2167,54 +2225,66 @@ fn paint_note(
 	velocity: f32,
 	selected: bool,
 	pitch: u8,
-	row_height: f32,
+	look: (f32, bool),
 ) {
-	// Brighter for louder notes; selected notes turn warm red (FL Studio).
-	let base = if selected {
+	let (row_height, flats) = look;
+	let fill = if selected {
 		theme::NOTE_SELECTED
 	} else {
-		theme::mix(color, Color32::WHITE, 0.15)
+		theme::mix(
+			theme::ROW_WHITE,
+			color,
+			0.35 + 0.65 * velocity.clamp(0.0, 1.0),
+		)
 	};
-	let fill = theme::mix(
-		theme::mix(base, theme::BG_DEEP, 0.55),
-		base,
-		0.35 + 0.65 * velocity,
-	);
-	p.rect_filled(r, CornerRadius::same(2), fill);
-	// Velocity tick along the top edge.
-	let vw = (r.width() - 2.0).max(0.0) * velocity;
-	p.hline(
-		r.left() + 1.0..=r.left() + 1.0 + vw,
-		r.top() + 1.0,
-		Stroke::new(1.0, Color32::from_white_alpha(110)),
-	);
-	p.rect_stroke(
-		r,
-		CornerRadius::same(2),
-		if selected {
-			Stroke::new(1.5, theme::mix(theme::NOTE_SELECTED, Color32::WHITE, 0.6))
-		} else {
-			Stroke::new(1.0, theme::mix(color, theme::BG_DEEP, 0.5))
-		},
-		StrokeKind::Inside,
-	);
-	if row_height >= 11.0 && r.width() > 26.0 {
+	let radius = CornerRadius::same(2);
+	p.rect_filled(r, radius, fill);
+	if selected {
+		p.rect_stroke(
+			r,
+			radius,
+			Stroke::new(1.0, theme::TEXT),
+			StrokeKind::Outside,
+		);
+	} else {
+		p.rect_stroke(
+			r,
+			radius,
+			Stroke::new(1.0, Color32::from_black_alpha(70)),
+			StrokeKind::Inside,
+		);
+	}
+	// Release grip: the edge that resizes.
+	if r.width() >= 12.0 && r.height() >= 6.0 {
+		p.rect_filled(
+			Rect::from_min_max(
+				pos2(r.right() - 4.0, r.top() + 2.0),
+				pos2(r.right() - 1.0, r.bottom() - 2.0),
+			),
+			CornerRadius::same(1),
+			Color32::from_rgba_premultiplied(8, 8, 10, 90),
+		);
+	}
+	if row_height >= 11.0 && r.width() > 30.0 {
 		p.with_clip_rect(r.shrink(1.0)).text(
 			pos2(r.left() + 4.0, r.center().y),
 			Align2::LEFT_CENTER,
-			cadenza_theory::format_pitch(pitch, false),
-			FontId::proportional((row_height * 0.68).clamp(8.0, 10.5)),
+			cadenza_theory::format_pitch(pitch, flats),
+			theme::mono_medium((row_height * 0.66).clamp(8.0, 10.0)),
 			theme::text_on(fill),
 		);
 	}
 }
 
+/// Row fill (design 04): with scale rows, in-scale rows one step lighter than the
+/// rest and the root lighter still; without, black-key rows darker.
 fn row_color(pitch: u8, scale: Option<Scale>) -> Color32 {
 	match scale {
 		Some(s) if !s.contains(pitch) => theme::ROW_OUT_OF_SCALE,
 		Some(s) if (i32::from(pitch) - i32::from(s.root.0)).rem_euclid(12) == 0 => theme::ROW_ROOT,
-		_ if piano::is_black(pitch) => theme::ROW_BLACK,
-		_ => theme::ROW_WHITE,
+		Some(_) => theme::ROW_WHITE,
+		None if piano::is_black(pitch) => theme::ROW_BLACK,
+		None => theme::ROW_WHITE,
 	}
 }
 
@@ -2227,25 +2297,33 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 	let tl = state.view.piano.timeline;
 	let meter = cadenza_core::MeterMap::new(state.project().meter());
 	let p = ui.painter_at(r);
-	p.rect_filled(r, 0.0, theme::BG_RAISED);
+	p.rect_filled(r, 0.0, theme::BG_PANEL);
+	// The clip's span: a band in its track colour along the bottom edge.
 	let x0 = r.left() + tl.tick_to_x(t.clip.start);
 	let x1 = r.left() + tl.tick_to_x(t.clip.end());
 	p.rect_filled(
-		Rect::from_min_max(pos2(x0, r.bottom() - 4.0), pos2(x1, r.bottom())),
+		Rect::from_min_max(pos2(x0, r.bottom() - 3.0), pos2(x1, r.bottom())),
 		0.0,
-		t.color,
+		t.color.gamma_multiply(0.85),
 	);
-	// Pattern mode: the span Play loops (the clip, at least a bar).
+	// Pattern mode: the span Play loops (the clip, at least a bar), purple along the top.
 	let config = state.transport_config().0;
 	if config.pattern == Some(t.clip.id)
 		&& let Some((s, e)) = config.loop_range
 	{
-		let band = Rect::from_min_max(
-			pos2(r.left() + tl.tick_to_x(s), r.top() + 1.0),
-			pos2(r.left() + tl.tick_to_x(e), r.top() + 6.0),
+		let (a, b) = (r.left() + tl.tick_to_x(s), r.left() + tl.tick_to_x(e));
+		p.rect_filled(
+			Rect::from_min_max(pos2(a, r.top()), pos2(b, r.top() + 4.0)),
+			0.0,
+			theme::PATTERN.gamma_multiply(0.9),
 		);
-		p.rect_filled(band, CornerRadius::same(2), theme::PATTERN);
+		for (x, dir) in [(a, 1.0), (b, -1.0)] {
+			let tab = Rect::from_two_pos(pos2(x, r.top()), pos2(x + dir * 3.0, r.top() + 9.0));
+			p.rect_filled(tab, CornerRadius::same(1), theme::PATTERN);
+		}
 	}
+	// The same scale as the arrange ruler: tall numbered bar lines, beat and step ticks
+	// by zoom, beat numbers when bars are wide.
 	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(r.width()));
 	let shortest = meter
 		.view()
@@ -2254,44 +2332,54 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 		.min()
 		.unwrap_or(Tick(PPQ * 4));
 	let bar_px = tl.ticks_to_px(shortest);
-	let every = ((40.0 / bar_px).ceil().max(1.0) as u64).next_power_of_two() as i64;
+	let every = ((48.0 / bar_px).ceil().max(1.0) as u64).next_power_of_two() as i64;
+	let beat_px = tl.ticks_to_px(Tick(PPQ));
 	for line in tl.grid_lines(meter.view(), from, to, None) {
-		let x = r.left() + tl.tick_to_x(line.tick);
+		let x = (r.left() + tl.tick_to_x(line.tick)).round() + 0.5;
 		match line.kind {
 			LineKind::Bar(index) => {
-				p.vline(
-					x,
-					r.top() + 8.0..=r.bottom(),
-					Stroke::new(1.0, theme::TEXT_FAINT),
-				);
-				if index % every == 0 {
+				let numbered = index % every == 0;
+				let top = if numbered {
+					r.top() + 5.0
+				} else {
+					r.bottom() - 9.0
+				};
+				p.vline(x, top..=r.bottom(), Stroke::new(1.0, theme::BORDER_STRONG));
+				if numbered {
 					p.text(
-						pos2(x + 4.0, r.top() + 2.0),
+						pos2(x + 4.0, r.top() + 6.0),
 						Align2::LEFT_TOP,
 						format!("{}", index + 1),
-						theme::mono(10.0),
+						theme::mono_medium(11.0),
 						theme::TEXT_DIM,
 					);
 				}
 			}
-			LineKind::Beat => {
-				let (bar, beat_no, _) = timeline::bbt(line.tick, meter.view());
+			LineKind::Beat if beat_px >= 10.0 => {
 				p.vline(
 					x,
-					r.bottom() - 5.0..=r.bottom(),
-					Stroke::new(1.0, theme::GRID_BAR),
+					r.bottom() - 7.0..=r.bottom(),
+					Stroke::new(1.0, theme::BORDER_STRONG),
 				);
-				if bar_px > 160.0 {
+				if bar_px > 220.0 {
+					let (bar, beat_no, _) = timeline::bbt(line.tick, meter.view());
 					p.text(
-						pos2(x + 3.0, r.top() + 4.0),
+						pos2(x + 3.0, r.top() + 7.0),
 						Align2::LEFT_TOP,
 						format!("{bar}.{beat_no}"),
-						theme::mono(8.5),
+						theme::mono(9.5),
 						theme::TEXT_FAINT,
 					);
 				}
 			}
-			LineKind::Step => {}
+			LineKind::Step if beat_px >= 48.0 => {
+				p.vline(
+					x,
+					r.bottom() - 3.0..=r.bottom(),
+					Stroke::new(1.0, theme::BORDER),
+				);
+			}
+			_ => {}
 		}
 	}
 	p.hline(
@@ -2315,8 +2403,255 @@ fn ruler(ui: &mut Ui, state: &mut AppState, g: &Geometry, t: &Target) {
 	}
 }
 
-/// Root + scale kind pickers ("No scale" turns highlighting off).
-fn scale_picker(ui: &mut Ui, v: &mut PianoView) {
+/// The piano roll toolbar's fold: the tool chips' [`arrange::ToolFold`], and whether
+/// everything else (the F7 key, the clip selector, scale/ghost labels, the selected-note
+/// count) also drops to its narrowest form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PianoFold {
+	tools: arrange::ToolFold,
+	compact: bool,
+}
+
+/// Picks the piano roll toolbar's fold from the width actually available, in this
+/// language's own metrics, not a window-size tier: below 1320 px the toolbar's other labels
+/// (the F7 key, the clip selector, scale/ghost labels, the selected-note count) drop to
+/// their narrowest form; independently, the tool chips (Draw/Paint/Select/Slice) measure
+/// their own "glyph name" width ([`arrange::chip_width`]) and fold their key, then their
+/// name, when a translation needs more room than is left for them. Pure text measurement —
+/// nothing here is drawn, so trying a fold never touches the accessibility tree.
+fn piano_fold(ui: &Ui, width: f32) -> PianoFold {
+	let compact = width < 1320.0;
+	// Conservative estimate of everything else in the row (title, clip selector, snap/key
+	// chips, ghosts/events, zoom, Quantize, note count) at its narrowest or widest form, so
+	// in practice only the tools' own measured width decides whether they fold further.
+	let reserve = if compact { 260.0 } else { 520.0 };
+	let available = (width - reserve).max(0.0);
+	let spacing = ui.spacing().item_spacing.x.max(2.0);
+	let tools: [(&str, &str, &str); 4] = Tool::ALL.map(|t| (t.glyph(), t.name(), t.key()));
+	for tools_fold in [arrange::ToolFold::Full, arrange::ToolFold::NoKey] {
+		let w: f32 = tools
+			.iter()
+			.map(|&(g, n, k)| {
+				let (label, key) = tools_fold.label_and_key(g, n, k);
+				arrange::chip_width(ui, &label, key) + spacing
+			})
+			.sum();
+		if w <= available {
+			return PianoFold {
+				tools: tools_fold,
+				compact,
+			};
+		}
+	}
+	PianoFold {
+		tools: arrange::ToolFold::Glyph,
+		compact,
+	}
+}
+
+/// A recessed segmented group (tools, snap): its chips sit on the deep background.
+fn segment_group(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+	egui::Frame::new()
+		.fill(theme::BG_DEEP)
+		.corner_radius(CornerRadius::same(4))
+		.inner_margin(egui::Margin::same(2))
+		.show(ui, |ui| {
+			ui.horizontal(|ui| {
+				ui.spacing_mut().item_spacing.x = 2.0;
+				add(ui);
+			});
+		});
+}
+
+/// A filled toolbar chip: optional faint `prefix`, the `value`, then a faint `suffix`
+/// (a key or ▾). `swatch` paints a colour square first (the clip chip).
+fn chip(
+	ui: &mut Ui,
+	swatch: Option<Color32>,
+	prefix: Option<&str>,
+	value: &str,
+	suffix: Option<&str>,
+) -> egui::Response {
+	let font = theme::medium(12.0);
+	let faint = theme::small();
+	let width = |text: &str, font: &FontId| {
+		ui.fonts_mut(|f| {
+			f.layout_no_wrap(text.into(), font.clone(), Color32::WHITE)
+				.size()
+				.x
+		})
+	};
+	let gap = 6.0;
+	let mut w = 16.0 + width(value, &font);
+	if swatch.is_some() {
+		w += 9.0 + gap;
+	}
+	if let Some(p) = prefix {
+		w += width(p, &faint) + gap;
+	}
+	if let Some(s) = suffix {
+		w += width(s, &faint) + gap;
+	}
+	let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+	let p = ui.painter();
+	p.rect_filled(
+		rect,
+		CornerRadius::same(4),
+		if resp.hovered() {
+			theme::BG_HOVER
+		} else {
+			theme::BG_WIDGET
+		},
+	);
+	let mut x = rect.left() + 8.0;
+	let y = rect.center().y;
+	if let Some(c) = swatch {
+		p.rect_filled(
+			Rect::from_center_size(pos2(x + 4.5, y), vec2(9.0, 9.0)),
+			CornerRadius::same(2),
+			c,
+		);
+		x += 9.0 + gap;
+	}
+	if let Some(t) = prefix {
+		x = p
+			.text(
+				pos2(x, y),
+				Align2::LEFT_CENTER,
+				t,
+				faint.clone(),
+				theme::TEXT_FAINT,
+			)
+			.right() + gap;
+	}
+	x =
+		p.text(pos2(x, y), Align2::LEFT_CENTER, value, font, theme::TEXT)
+			.right() + gap;
+	if let Some(t) = suffix {
+		p.text(pos2(x, y), Align2::LEFT_CENTER, t, faint, theme::TEXT_FAINT);
+	}
+	let label = match prefix {
+		Some(p) => format!("{p} {value}"),
+		None => value.to_string(),
+	};
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+	resp
+}
+
+/// A filled chip with a key hint (Quantize Q).
+fn filled_chip(ui: &mut Ui, label: &str, key: Option<&str>) -> egui::Response {
+	chip(ui, None, None, label, key)
+}
+
+/// A chip that opens a menu below it: "<prefix> <value> ▾".
+fn chip_menu(
+	ui: &mut Ui,
+	id: &str,
+	prefix: Option<&str>,
+	value: &str,
+	tip: &str,
+	add: impl FnOnce(&mut Ui),
+) {
+	let resp = chip(ui, None, prefix, value, Some("▾")).on_hover_text(tip);
+	egui::Popup::menu(&resp).id(Id::new(id)).show(|ui| {
+		ui.set_min_width(150.0);
+		add(ui);
+	});
+}
+
+/// The piano roll's magnet: a Snap toggle (off <-> the last snap) and the step menu.
+fn snap_chip(ui: &mut Ui, state: &mut AppState) {
+	let ts = signature(state);
+	let main_grid = state.view.piano.timeline.grid(ts);
+	let main = state.view.snap.then_some(main_grid.step);
+	let snap = state.view.piano.snap;
+	let step = snap.step(ts, main);
+	let short = |s: PianoSnap| -> String {
+		match (s, s.step(ts, main)) {
+			(PianoSnap::Main, Some(step)) => {
+				trf("Main {grid}", &[("grid", &grid(step, main_grid.bar))])
+			}
+			(PianoSnap::Main, None) => tr("Main (off)").into(),
+			(PianoSnap::Off, _) => tr("Off").into(),
+			(_, Some(step)) => grid(step, ts.ticks_per_bar()),
+			(s, None) => s.name().into(),
+		}
+	};
+	fn grid(step: Tick, bar: Tick) -> String {
+		let name = arrange::grid_name(step, bar);
+		name.trim_start_matches("Grid ").to_string()
+	}
+	let memory = Id::new("piano-snap-last");
+	segment_group(ui, |ui| {
+		let on = step.is_some();
+		if arrange::toolbar_chip(
+			ui,
+			on,
+			tr("Snap"),
+			None,
+			theme::ACCENT_DIM,
+			theme::ACCENT_TEXT,
+		)
+		.on_hover_text(tr(
+			"Piano roll snap (FL's magnet): click turns it off and back on; Alt while \
+			 dragging: free",
+		))
+		.clicked()
+		{
+			state.view.piano.snap = if snap == PianoSnap::Off {
+				ui.data(|d| d.get_temp(memory)).unwrap_or(PianoSnap::Step)
+			} else {
+				ui.data_mut(|d| d.insert_temp(memory, snap));
+				PianoSnap::Off
+			};
+		}
+		let resp = chip_value(ui, &format!("{} ▾", short(snap)))
+			.on_hover_text(tr("Snap step. Main follows the arrange snap"));
+		egui::Popup::menu(&resp)
+			.id(Id::new("piano-snap"))
+			.show(|ui| {
+				ui.set_min_width(150.0);
+				for s in PianoSnap::ALL {
+					let name = if s == PianoSnap::Main {
+						trf(
+							"Main ({short})",
+							&[("short", &short(s).trim_start_matches("Main "))],
+						)
+					} else {
+						s.name().to_string()
+					};
+					ui.selectable_value(&mut state.view.piano.snap, s, name);
+				}
+			});
+	});
+}
+
+/// The value half of a segmented chip (mono, transparent until hovered).
+fn chip_value(ui: &mut Ui, text: &str) -> egui::Response {
+	let font = theme::mono(11.0);
+	let w = ui.fonts_mut(|f| {
+		f.layout_no_wrap(text.into(), font.clone(), Color32::WHITE)
+			.size()
+			.x
+	});
+	let (rect, resp) = ui.allocate_exact_size(vec2(w + 14.0, 22.0), Sense::click());
+	if resp.hovered() {
+		ui.painter()
+			.rect_filled(rect, CornerRadius::same(3), theme::BG_HOVER);
+	}
+	ui.painter().text(
+		pos2(rect.left() + 7.0, rect.center().y),
+		Align2::LEFT_CENTER,
+		text,
+		font,
+		theme::TEXT_DIM,
+	);
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
+	resp
+}
+
+/// "Key C minor ▾": root and scale kind ("No scale" turns highlighting off).
+fn key_chip(ui: &mut Ui, v: &mut PianoView, compact: bool) {
 	const KINDS: [ScaleKind; 9] = [
 		ScaleKind::Major,
 		ScaleKind::NaturalMinor,
@@ -2328,93 +2663,121 @@ fn scale_picker(ui: &mut Ui, v: &mut PianoView) {
 		ScaleKind::MinorPentatonic,
 		ScaleKind::Blues,
 	];
+	let flats = piano::prefers_flats(v.scale);
+	let value = v.scale.map_or(tr("None").to_string(), |s| {
+		format!(
+			"{} {}",
+			PitchClass(s.root.0).name(flats),
+			crate::state::scale_kind_name(s.kind)
+		)
+	});
 	let root = v.scale.map_or(0, |s| s.root.0);
-	egui::ComboBox::from_id_salt("piano-root")
-		.width(44.0)
-		.selected_text(
-			RichText::new(if v.scale.is_some() {
-				PitchClass(root).name(false)
-			} else {
-				"Key"
-			})
-			.font(theme::small()),
-		)
-		.show_ui(ui, |ui| {
-			for pc in 0..12u8 {
-				let kind = v.scale.map_or(ScaleKind::Major, |s| s.kind);
-				if ui
-					.selectable_label(v.scale.is_some() && root == pc, PitchClass(pc).name(false))
-					.clicked()
-				{
-					v.scale = Some(Scale::new(PitchClass(pc), kind));
-				}
-			}
-		})
-		.response
-		.on_hover_text("Key of the scale highlighting");
-	egui::ComboBox::from_id_salt("piano-scale")
-		.width(108.0)
-		.selected_text(
-			RichText::new(
-				v.scale
-					.map_or("No scale", |s| crate::state::scale_kind_name(s.kind)),
-			)
-			.font(theme::small()),
-		)
-		.show_ui(ui, |ui| {
-			if ui.selectable_label(v.scale.is_none(), "No scale").clicked() {
+	let kind = v.scale.map_or(ScaleKind::Major, |s| s.kind);
+	chip_menu(
+		ui,
+		"piano-key",
+		(!compact || v.scale.is_none()).then_some(tr("Key")),
+		if compact && v.scale.is_none() {
+			"—"
+		} else {
+			&value
+		},
+		tr("Key of the scale highlighting (scale rows, keyboard marks, note names)"),
+		|ui| {
+			ui.label(
+				RichText::new(tr("Root"))
+					.font(theme::small())
+					.color(theme::TEXT_FAINT),
+			);
+			egui::Grid::new("piano-key-roots")
+				.spacing(vec2(2.0, 2.0))
+				.show(ui, |ui| {
+					for pc in 0..12u8 {
+						if ui
+							.selectable_label(
+								v.scale.is_some() && root == pc,
+								PitchClass(pc).name(flats),
+							)
+							.clicked()
+						{
+							v.scale = Some(Scale::new(PitchClass(pc), kind));
+						}
+						if pc % 6 == 5 {
+							ui.end_row();
+						}
+					}
+				});
+			ui.separator();
+			if ui
+				.selectable_label(v.scale.is_none(), tr("No scale"))
+				.clicked()
+			{
 				v.scale = None;
 			}
-			for kind in KINDS {
+			for k in KINDS {
 				if ui
 					.selectable_label(
-						v.scale.is_some_and(|s| s.kind == kind),
-						crate::state::scale_kind_name(kind),
+						v.scale.is_some_and(|s| s.kind == k),
+						crate::state::scale_kind_name(k),
 					)
 					.clicked()
 				{
-					v.scale = Some(Scale::new(PitchClass(root), kind));
+					v.scale = Some(Scale::new(PitchClass(root), k));
 				}
 			}
-		})
-		.response
-		.on_hover_text("Rows outside the scale are dimmed");
+		},
+	);
 }
 
-/// The track's MIDI clips (in time order, with their bar): switches the edited clip.
-fn clip_selector(ui: &mut Ui, state: &mut AppState, t: &Target) {
+/// "■ Chords on Keys ▾": the track's MIDI clips (in time order, with their bar);
+/// picking one edits it here.
+fn clip_selector(ui: &mut Ui, state: &mut AppState, t: &Target, compact: bool) {
 	let meter = cadenza_core::MeterMap::new(state.project().meter());
-	let clips: Vec<(cadenza_core::ClipId, String)> = state
+	let (track_name, clips): (String, Vec<(cadenza_core::ClipId, String)>) = state
 		.project()
 		.track(t.track)
 		.map(|track| {
 			let mut c: Vec<&Clip> = track.clips.iter().filter(|c| c.is_midi()).collect();
 			c.sort_by_key(|c| c.start);
-			c.into_iter()
+			let clips = c
+				.into_iter()
 				.map(|c| {
 					let bar = meter.view().bar_index(c.start) + 1;
 					(c.id, format!("{} · bar {bar}", c.name))
 				})
-				.collect()
+				.collect();
+			(track.name.clone(), clips)
 		})
 		.unwrap_or_default();
-	let current = clips
-		.iter()
-		.position(|(id, _)| *id == t.clip.id)
-		.unwrap_or(0);
+	let on = format!("on {track_name} ▾");
+	let copies = cadenza_model::links::link_count(state.project(), t.clip.id);
+	let name = if copies > 1 {
+		trf(
+			"{name} · linked ×{copies}",
+			&[("name", &t.clip.name), ("copies", &copies)],
+		)
+	} else {
+		t.clip.name.clone()
+	};
+	let resp = chip(
+		ui,
+		Some(t.color),
+		None,
+		&name,
+		Some(if compact { "▾" } else { &on }),
+	)
+	.on_hover_text(tr("Clips of this track: pick one to edit it here"));
 	let mut pick = None;
-	egui::ComboBox::from_id_salt("piano-clip")
-		.width(150.0)
-		.selected_text(RichText::new(&t.clip.name).strong().color(theme::TEXT))
-		.show_ui(ui, |ui| {
-			for (i, (id, label)) in clips.iter().enumerate() {
-				if ui.selectable_label(i == current, label).clicked() {
+	egui::Popup::menu(&resp)
+		.id(Id::new("piano-clip"))
+		.show(|ui| {
+			ui.set_min_width(170.0);
+			for (id, label) in &clips {
+				if ui.selectable_label(*id == t.clip.id, label).clicked() {
 					pick = Some(*id);
 				}
 			}
-		})
-		.response
-		.on_hover_text("Clips of this track: pick one to edit it here");
+		});
 	if let Some(id) = pick.filter(|id| *id != t.clip.id) {
 		state.open_piano_roll(id);
 	}
@@ -2425,15 +2788,17 @@ fn empty(ui: &mut Ui, state: &mut AppState, rect: Rect) {
 	p.text(
 		rect.center() - vec2(0.0, 22.0),
 		Align2::CENTER_CENTER,
-		"No clip open",
+		tr("No clip open"),
 		FontId::proportional(14.0),
 		theme::TEXT_DIM,
 	);
 	p.text(
 		rect.center(),
 		Align2::CENTER_CENTER,
-		"Press F7 or double-click an instrument track to open the piano roll \
+		tr(
+			"Press F7 or double-click an instrument track to open the piano roll \
 		 (double-click a MIDI clip to edit that one)",
+		),
 		theme::small(),
 		theme::TEXT_FAINT,
 	);
@@ -2446,7 +2811,7 @@ fn empty(ui: &mut Ui, state: &mut AppState, rect: Rect) {
 		if ui
 			.put(
 				button,
-				egui::Button::new(format!("Open a clip of '{name}'")),
+				egui::Button::new(trf("Open a clip of '{name}'", &[("name", &name)])),
 			)
 			.clicked()
 		{
@@ -2490,45 +2855,83 @@ fn piano_grid(
 	}
 }
 
-/// The event lane's selector, left of the lane (under the keyboard): velocity, the
-/// common controllers (marked when the clip has events in them) and any CC number.
-fn event_lane_selector(ui: &mut Ui, state: &mut AppState, lane: Rect, g: &Geometry, t: &Target) {
-	let label = Rect::from_min_max(
-		pos2(g.keys.left(), lane.top()),
-		pos2(lane.left(), lane.bottom()),
+/// Bar lines through an event lane, so its events line up with the notes above.
+fn lane_bar_lines(p: &Painter, state: &AppState, lane: Rect) {
+	let tl = state.view.piano.timeline;
+	let meter = cadenza_core::MeterMap::new(state.project().meter());
+	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(lane.width()));
+	for line in tl.grid_lines(meter.view(), from, to, None) {
+		if let LineKind::Bar(_) = line.kind {
+			let x = (lane.left() + tl.tick_to_x(line.tick)).round() + 0.5;
+			p.vline(x, lane.y_range(), Stroke::new(1.0, theme::BORDER_SUBTLE));
+		}
+	}
+}
+
+/// The lane tabs row above the event lane (design 04): velocity and the common
+/// controllers as tabs (a dot marks lanes with data), "+ CC" for any other controller,
+/// and the gesture hint on the right.
+fn lane_tabs(ui: &mut Ui, state: &mut AppState, rect: Rect, t: &Target) {
+	let p = ui.painter_at(rect);
+	p.rect_filled(rect, 0.0, theme::BG_PANEL);
+	p.hline(
+		rect.x_range(),
+		rect.top() + 0.5,
+		Stroke::new(1.0, theme::BORDER),
 	);
-	let lp = ui.painter_at(label);
-	lp.rect_filled(label, 0.0, theme::BG_PANEL);
-	lp.vline(
-		label.right() - 0.5,
-		label.y_range(),
-		Stroke::new(1.0, theme::BORDER_STRONG),
+	p.hline(
+		rect.x_range(),
+		rect.bottom() - 0.5,
+		Stroke::new(1.0, theme::BORDER_SUBTLE),
+	);
+	p.text(
+		pos2(rect.left() + 8.0, rect.center().y),
+		Align2::LEFT_CENTER,
+		tr("Lanes"),
+		theme::small(),
+		theme::TEXT_FAINT,
 	);
 	let current = state.view.piano.event_lane;
-	let has = |l: EventLane| match l {
-		EventLane::Velocity => false,
-		EventLane::Controller(c) => t.clip.controller(c).is_some(),
-	};
-	let mut child = ui.new_child(
+	let mut bar = ui.new_child(
 		egui::UiBuilder::new()
-			.max_rect(label.shrink(3.0))
-			.layout(egui::Layout::top_down(egui::Align::Min)),
+			.max_rect(Rect::from_min_max(
+				pos2(rect.left() + theme::KEYBOARD_WIDTH, rect.top()),
+				pos2(rect.right() - 8.0, rect.bottom()),
+			))
+			.layout(egui::Layout::left_to_right(egui::Align::Center)),
 	);
+	bar.set_clip_rect(rect);
+	let ui = &mut bar;
+	ui.spacing_mut().item_spacing.x = 2.0;
 	let mut pick = None;
-	egui::ComboBox::from_id_salt("piano-event-lane")
-		.width(label.width() - 8.0)
-		.selected_text(RichText::new(current.label()).font(theme::small()))
-		.show_ui(&mut child, |ui| {
-			ui.set_min_width(170.0);
-			let mut lanes: Vec<EventLane> = EventLane::COMMON.to_vec();
-			for l in t.clip.controllers() {
-				let l = EventLane::Controller(l.controller);
-				if !lanes.contains(&l) {
-					lanes.push(l);
+	for lane in EventLane::tabs(&t.clip, current) {
+		let data = match lane {
+			EventLane::Velocity => false,
+			EventLane::Controller(c) => t.clip.controller(c).is_some(),
+		};
+		if lane_tab(ui, &lane.label(), lane == current, data)
+			.on_hover_text(match lane {
+				EventLane::Velocity => tr("Note velocities").to_string(),
+				EventLane::Controller(c) => {
+					trf("{label} events of this clip", &[("label", &c.label())])
 				}
-			}
-			for l in lanes {
-				let text = if has(l) {
+			})
+			.clicked()
+		{
+			pick = Some(lane);
+		}
+	}
+	ui.add_space(4.0);
+	let resp = lane_tab(ui, "+ CC", false, false).on_hover_text(tr(
+		"Edit another controller: any CC number, pressure, volume…",
+	));
+	egui::Popup::menu(&resp)
+		.id(Id::new("piano-event-lane"))
+		.show(|ui| {
+			ui.set_min_width(170.0);
+			for l in EventLane::COMMON {
+				let has = matches!(l, EventLane::Controller(c) if t.clip.controller(c).is_some());
+				let text = if has {
 					format!("● {}", l.label())
 				} else {
 					format!("   {}", l.label())
@@ -2551,11 +2954,129 @@ fn event_lane_selector(ui: &mut Ui, state: &mut AppState, lane: Rect, g: &Geomet
 					pick = Some(EventLane::Controller(Controller::Cc(n)));
 				}
 			});
-		})
-		.response
-		.on_hover_text("What the event lane edits: velocity or a MIDI controller");
+		});
+	let hint = match current {
+		EventLane::Velocity => tr("Drag = set · Alt or right drag = line · Alt+wheel on notes"),
+		EventLane::Controller(_) => {
+			tr("Drag = draw · Alt or right drag = ramp · right-click = delete")
+		}
+	};
+	let font = theme::small();
+	let hint_w = ui.fonts_mut(|f| {
+		f.layout_no_wrap(hint.into(), font.clone(), Color32::WHITE)
+			.size()
+			.x
+	});
+	if ui.available_width() > hint_w + 24.0 {
+		p.text(
+			pos2(rect.right() - 10.0, rect.center().y),
+			Align2::RIGHT_CENTER,
+			hint,
+			font,
+			theme::TEXT_FAINT,
+		);
+	}
 	if let Some(l) = pick {
 		state.view.piano.event_lane = l;
-		state.view.piano.velocity_lane = true;
+	}
+}
+
+/// One lane tab: filled when current, a small dot when the lane has data.
+fn lane_tab(ui: &mut Ui, label: &str, on: bool, data: bool) -> egui::Response {
+	let font = theme::small();
+	let w = ui.fonts_mut(|f| {
+		f.layout_no_wrap(label.into(), font.clone(), Color32::WHITE)
+			.size()
+			.x
+	});
+	let dot = if data { 9.0 } else { 0.0 };
+	let (rect, resp) = ui.allocate_exact_size(vec2(w + 18.0 + dot, 20.0), Sense::click());
+	let p = ui.painter();
+	let fill = if on {
+		theme::BG_HOVER
+	} else if resp.hovered() {
+		theme::BG_WIDGET
+	} else {
+		Color32::TRANSPARENT
+	};
+	p.rect_filled(rect, CornerRadius::same(3), fill);
+	let color = if on || resp.hovered() {
+		theme::TEXT
+	} else {
+		theme::TEXT_DIM
+	};
+	p.text(
+		pos2(rect.left() + 9.0, rect.center().y),
+		Align2::LEFT_CENTER,
+		label,
+		font,
+		color,
+	);
+	if data {
+		p.circle_filled(
+			pos2(rect.right() - 9.0, rect.center().y),
+			2.5,
+			theme::AUTOMATION,
+		);
+	}
+	resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
+	resp
+}
+
+/// The event lane's left column (under the keyboard): its name over its value scale,
+/// or a controller's value at the playhead.
+fn lane_label(ui: &mut Ui, state: &AppState, lane: Rect, g: &Geometry, t: &Target) {
+	let label = Rect::from_min_max(
+		pos2(g.keys.left(), lane.top()),
+		pos2(lane.left(), lane.bottom()),
+	);
+	let p = ui.painter_at(label);
+	p.rect_filled(label, 0.0, theme::BG_PANEL);
+	p.vline(
+		label.right() - 0.5,
+		label.y_range(),
+		Stroke::new(1.0, theme::BORDER),
+	);
+	let current = state.view.piano.event_lane;
+	p.text(
+		label.left_top() + vec2(7.0, 6.0),
+		Align2::LEFT_TOP,
+		current.short(),
+		theme::small(),
+		theme::TEXT_DIM,
+	);
+	let bottom = label.left_bottom() + vec2(7.0, -6.0);
+	match current {
+		EventLane::Velocity => {
+			p.text(
+				bottom - vec2(0.0, 12.0),
+				Align2::LEFT_BOTTOM,
+				"127",
+				theme::mono(10.0),
+				theme::TEXT_FAINT,
+			);
+			p.text(
+				bottom,
+				Align2::LEFT_BOTTOM,
+				"0",
+				theme::mono(10.0),
+				theme::TEXT_FAINT,
+			);
+		}
+		EventLane::Controller(c) => {
+			let at = state.position() - t.clip.start;
+			let value = t
+				.clip
+				.controller(c)
+				.and_then(|l| l.value_at(at))
+				.unwrap_or_else(|| c.default_value());
+			p.text(
+				bottom,
+				Align2::LEFT_BOTTOM,
+				piano::controller_text(c, value),
+				theme::mono(10.5),
+				theme::AUTOMATION,
+			);
+		}
 	}
 }

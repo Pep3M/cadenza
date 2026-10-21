@@ -24,6 +24,7 @@
 //! the thread answers with [`AudioEvent::Probe`] carrying the player's [`DeviceProbe`]
 //! (again after the devices reopen, since a new player has a new ring).
 
+use crate::i18n::{tr, trf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -32,8 +33,8 @@ use std::time::{Duration, Instant};
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_engine::{
 	AudioConfig, AudioDevices, AuditionScope, DeviceProbe, EditorState, EditorUpdate, InputInfo,
-	InputStats, MeterBank, MetronomeSettings, Player, PlayerClock, PluginCrash, PluginHosting,
-	PluginXruns, RecordSetup, Recording, RecordingMonitor,
+	InputStats, Listen, MeterBank, MetronomeSettings, MidiMapMonitor, MonitorFx, Player,
+	PlayerClock, PluginCrash, PluginHosting, PluginXruns, RecordSetup, Recording, RecordingMonitor,
 };
 use cadenza_model::{AutomationLane, Clip, Project};
 use cadenza_plugin_host::PluginCatalog;
@@ -64,6 +65,8 @@ enum Request {
 	Param(DeviceId, String, f32),
 	/// Live send level (dB).
 	Send(DeviceId, f32),
+	/// New MIDI controller assignments (the project's `midi_map`).
+	MidiMap(Box<Project>),
 	/// New automation lanes for the running graph.
 	Automation {
 		lanes: Vec<AutomationLane>,
@@ -105,6 +108,10 @@ enum Request {
 	TestTone(bool),
 	/// The device the probe follows (`None`: off).
 	Probe(Option<DeviceId>),
+	/// Monitoring switches on the output (mono, dim).
+	MonitorFx(MonitorFx),
+	/// The device playing a listen mode (compressor key, EQ band solo; `None`: off).
+	Listen(Option<(DeviceId, Listen)>),
 	/// List audio devices and MIDI inputs (reported as `Devices`).
 	ListDevices,
 	StartRecording(Box<RecordSetup>),
@@ -139,6 +146,10 @@ pub enum AudioEvent {
 	Ready {
 		clock: PlayerClock,
 		input: Arc<InputStats>,
+		/// The master's post-fader output (live loudness on the master strip).
+		master: Arc<DeviceProbe>,
+		/// What the mapped MIDI controllers did (MIDI learn).
+		midi_map: Arc<MidiMapMonitor>,
 		status: DeviceStatus,
 	},
 	/// Audio devices and MIDI input ports.
@@ -245,6 +256,16 @@ impl AudioEngine {
 		self.send(Request::Probe(device));
 	}
 
+	/// Mono / dim on the output (monitoring only, never rendered).
+	pub fn monitor_fx(&self, fx: MonitorFx) {
+		self.send(Request::MonitorFx(fx));
+	}
+
+	/// Listen mode of one device (monitoring only, never rendered; `None`: off).
+	pub fn listen(&self, target: Option<(DeviceId, Listen)>) {
+		self.send(Request::Listen(target));
+	}
+
 	pub fn list_devices(&self) {
 		self.send(Request::ListDevices);
 	}
@@ -294,6 +315,11 @@ impl AudioEngine {
 
 	pub fn live_param(&self, device: DeviceId, param: &str, value: f32) {
 		self.send(Request::Param(device, param.to_owned(), value));
+	}
+
+	/// Hands the project's MIDI controller assignments to the player (no reload).
+	pub fn midi_map(&self, project: Project) {
+		self.send(Request::MidiMap(Box::new(project)));
 	}
 
 	pub fn live_send(&self, send: DeviceId, db: f32) {
@@ -397,6 +423,20 @@ struct Kept {
 	metronome: Option<MetronomeSettings>,
 	latency_offset: i64,
 	probe: Option<DeviceId>,
+	monitor_fx: MonitorFx,
+	listen: Option<(DeviceId, Listen)>,
+}
+
+/// Points the player's listen mode at `target` (or switches it off).
+fn apply_listen(
+	player: &mut Player,
+	target: Option<(DeviceId, Listen)>,
+) -> Result<(), cadenza_engine::EngineError> {
+	match (target, player.listen()) {
+		(Some((device, mode)), _) => player.set_listen(device, mode),
+		(None, Some((device, _))) => player.set_listen(device, Listen::Off),
+		(None, None) => Ok(()),
+	}
 }
 
 fn status(player: &Player, kept: &Kept) -> DeviceStatus {
@@ -426,6 +466,8 @@ fn open(config: &AudioConfig, kept: &mut Kept) -> Result<Player, String> {
 	}
 	player.set_latency_offset(kept.latency_offset);
 	let _ = player.set_probe(kept.probe);
+	let _ = player.set_monitor(kept.monitor_fx);
+	let _ = apply_listen(&mut player, kept.listen);
 	Ok(player)
 }
 
@@ -435,8 +477,9 @@ fn open_midi(player: &mut Player, kept: &mut Kept) {
 		None => player.set_midi_input(None),
 		Some(name) => cadenza_engine::midi_input_ports().and_then(|ports| {
 			let port = ports.iter().find(|p| &p.name == name).ok_or_else(|| {
-				cadenza_engine::EngineError::Midi(format!(
-					"MIDI input '{name}' is not connected; pick another one in the audio settings"
+				cadenza_engine::EngineError::Midi(trf(
+					"MIDI input '{name}' is not connected; pick another one in the audio settings",
+					&[("name", &name)],
 				))
 			})?;
 			player.set_midi_input(Some(port))
@@ -495,13 +538,14 @@ fn run(
 								.unwrap_or_default(),
 						}),
 						Request::StartRecording(_) => emit(AudioEvent::RecordFailed(
-							"there is no audio device; choose one in the audio settings".into(),
+							tr("there is no audio device; choose one in the audio settings").into(),
 						)),
 						Request::OpenEditor { device, .. } => emit(AudioEvent::EditorFailed {
 							device,
-							error:
-								"plugin editors need the audio engine, and there is no audio output"
-									.into(),
+							error: tr(
+								"plugin editors need the audio engine, and there is no audio output",
+							)
+							.into(),
 						}),
 						Request::CaptureStates {
 							reply: Some(tx), ..
@@ -509,6 +553,8 @@ fn run(
 							let _ = tx.send(Vec::new());
 						}
 						Request::Probe(device) => kept.probe = device,
+						Request::MonitorFx(fx) => kept.monitor_fx = fx,
+						Request::Listen(target) => kept.listen = target,
 						_ => {}
 					}
 				}
@@ -521,6 +567,8 @@ fn run(
 	emit(AudioEvent::Ready {
 		clock: player.clock(),
 		input: player.input_stats(),
+		master: player.master_tap(),
+		midi_map: player.midi_map_monitor(),
 		status: status(&player, &kept),
 	});
 	if kept.probe.is_some() {
@@ -627,6 +675,7 @@ fn run(
 					player.set_live_param(device, &param, value).map(|_| ())
 				}
 				Request::Send(send, db) => player.set_live_send(send, db).map(|_| ()),
+				Request::MidiMap(project) => player.set_midi_map(&project),
 				Request::Automation { lanes, tempo } => match player.set_automation(&lanes, &tempo)
 				{
 					Ok(true) => Ok(()),
@@ -689,7 +738,7 @@ fn run(
 				Request::Configure(config) => {
 					if player.is_recording() {
 						emit(AudioEvent::Error(
-							"stop recording before changing the audio settings".into(),
+							tr("stop recording before changing the audio settings").into(),
 						));
 						continue;
 					}
@@ -698,8 +747,9 @@ fn run(
 					player = match open(&config, &mut kept) {
 						Ok(p) => p,
 						Err(e) => {
-							emit(AudioEvent::Error(format!(
-								"{e}; back to the default output"
+							emit(AudioEvent::Error(trf(
+								"{e}; back to the default output",
+								&[("e", &e)],
 							)));
 							match open(&AudioConfig::default(), &mut kept) {
 								Ok(p) => p,
@@ -714,6 +764,8 @@ fn run(
 					emit(AudioEvent::Ready {
 						clock: player.clock(),
 						input: player.input_stats(),
+						master: player.master_tap(),
+						midi_map: player.midi_map_monitor(),
 						status: status(&player, &kept),
 					});
 					if kept.probe.is_some() {
@@ -727,6 +779,8 @@ fn run(
 					emit(AudioEvent::Ready {
 						clock: player.clock(),
 						input: player.input_stats(),
+						master: player.master_tap(),
+						midi_map: player.midi_map_monitor(),
 						status: status(&player, &kept),
 					});
 					Ok(())
@@ -752,6 +806,14 @@ fn run(
 					Ok(())
 				}
 				Request::TestTone(on) => player.set_test_tone(on),
+				Request::MonitorFx(fx) => {
+					kept.monitor_fx = fx;
+					player.set_monitor(fx)
+				}
+				Request::Listen(target) => {
+					kept.listen = target;
+					apply_listen(&mut player, target)
+				}
 				Request::Probe(device) => {
 					kept.probe = device;
 					let result = player.set_probe(device);
@@ -767,6 +829,8 @@ fn run(
 					emit(AudioEvent::Ready {
 						clock: player.clock(),
 						input: player.input_stats(),
+						master: player.master_tap(),
+						midi_map: player.midi_map_monitor(),
 						status: status(&player, &kept),
 					});
 					Ok(())

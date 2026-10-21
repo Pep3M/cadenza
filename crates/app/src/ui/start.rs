@@ -3,6 +3,7 @@
 //! project or the demo, or reopen a recent project; an unclean shutdown shows a recovery
 //! banner on top.
 
+use crate::i18n::{tr, trf, trn};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -46,13 +47,15 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 					ui.add_space(40.0);
 					recovery_banner(ui, state);
 					ui.label(
-						RichText::new("Start a song")
+						RichText::new(tr("Start a song"))
 							.font(theme::semibold(28.0))
 							.color(theme::TEXT),
 					);
 					ui.label(
-						RichText::new("Pick a starting point. Everything can be changed later.")
-							.color(theme::TEXT_DIM),
+						RichText::new(tr(
+							"Pick a starting point. Everything can be changed later.",
+						))
+						.color(theme::TEXT_DIM),
 					);
 					ui.add_space(24.0);
 					cards(ui, state, width);
@@ -75,10 +78,10 @@ fn recovery_banner(ui: &mut Ui, state: &mut AppState) {
 		.project
 		.as_deref()
 		.map(cadenza_model::files::project_stem)
-		.unwrap_or_else(|| "An unsaved project".into());
+		.unwrap_or_else(|| tr("An unsaved project").into());
 	let why = match r.reason {
-		RecoveryReason::Crashed => "wasn't closed cleanly.",
-		RecoveryReason::Newer => "has newer autosaved changes.",
+		RecoveryReason::Crashed => tr("wasn't closed cleanly."),
+		RecoveryReason::Newer => tr("has newer autosaved changes."),
 	};
 	let saved = age(r.modified, SystemTime::now());
 	Frame::new()
@@ -96,20 +99,23 @@ fn recovery_banner(ui: &mut Ui, state: &mut AppState) {
 						.color(theme::TEXT),
 				);
 				ui.label(
-					RichText::new(format!("{why} The last autosave is from {saved}."))
-						.color(theme::TEXT),
+					RichText::new(trf(
+						"{why} The last autosave is from {saved}.",
+						&[("why", &why), ("saved", &saved)],
+					))
+					.color(theme::TEXT),
 				);
 				ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 					let discard = if r.project.is_some() {
-						"Open saved version"
+						tr("Open saved version")
 					} else {
-						"Discard"
+						tr("Discard")
 					};
 					if ui.button(discard).clicked() {
 						state.dismiss_recovery();
 					}
 					let recover = egui::Button::new(
-						RichText::new("Recover autosave")
+						RichText::new(tr("Recover autosave"))
 							.font(theme::medium(12.0))
 							.color(theme::TEXT_ON_COLOR),
 					)
@@ -162,7 +168,7 @@ fn cards(ui: &mut Ui, state: &mut AppState, width: f32) {
 			let h = (height - gap) / 2.0;
 			if action_card(
 				ui,
-				"Empty project",
+				tr("Empty project"),
 				"120 bpm · 4/4",
 				"Ctrl N",
 				vec2(rest, h),
@@ -173,8 +179,8 @@ fn cards(ui: &mut Ui, state: &mut AppState, width: f32) {
 			}
 			if action_card(
 				ui,
-				"Demo song",
-				"First Light · a finished song to explore",
+				tr("Demo song"),
+				tr("First Light · a finished song to explore"),
 				"",
 				vec2(rest, h),
 			)
@@ -206,7 +212,7 @@ fn producer_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 		ui.horizontal(|ui| {
 			avatar(ui);
 			ui.label(
-				RichText::new("Describe it to the producer")
+				RichText::new(tr("Describe it to the producer"))
 					.font(theme::semibold(13.5))
 					.color(theme::TEXT),
 			);
@@ -221,17 +227,22 @@ fn producer_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 				.id(id)
 				.desired_rows(6)
 				.desired_width(f32::INFINITY)
-				.hint_text(
+				.hint_text(tr(
 					"A chill lo-fi beat at 80 bpm with Rhodes, upright bass and vinyl crackle",
-				),
+				)),
 		);
 		ui.add_space(6.0);
 		ui.horizontal(|ui| {
 			ui.label(
-				RichText::new(format!(
-					"{} · up to ${:.2}",
-					state.ai.settings.current_model(),
-					state.ai.settings.max_cost_usd
+				RichText::new(trf(
+					"{current_model} · up to ${max_cost_usd}",
+					&[
+						("current_model", &state.ai.settings.current_model()),
+						(
+							"max_cost_usd",
+							&crate::i18n::decimal(format!("{:.2}", state.ai.settings.max_cost_usd)),
+						),
+					],
 				))
 				.font(theme::mono(10.5))
 				.color(theme::TEXT_FAINT),
@@ -239,7 +250,7 @@ fn producer_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 			ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
 				let ready = !busy && !state.start.prompt.trim().is_empty();
 				let create =
-					egui::Button::new(RichText::new("Create").font(theme::medium(12.0)).color(
+					egui::Button::new(RichText::new(tr("Create")).font(theme::medium(12.0)).color(
 						if ready {
 							theme::TEXT_ON_ACCENT
 						} else {
@@ -253,7 +264,9 @@ fn producer_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 					});
 				let clicked = ui
 					.add_enabled(ready, create)
-					.on_hover_text("A new project, then the producer builds it (one undo step)")
+					.on_hover_text(tr(
+						"A new project, then the producer builds it (one undo step)",
+					))
 					.clicked();
 				if ready && (clicked || enter) {
 					let request = std::mem::take(&mut state.start.prompt);
@@ -281,14 +294,16 @@ fn style_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 		ui.set_width(width - 32.0);
 		ui.set_height(height - 32.0);
 		ui.label(
-			RichText::new("From a style")
+			RichText::new(tr("From a style"))
 				.font(theme::semibold(13.5))
 				.color(theme::TEXT),
 		);
 		ui.label(
-			RichText::new("Tempo, song form and the style guide the producer follows.")
-				.font(theme::small())
-				.color(theme::TEXT_DIM),
+			RichText::new(tr(
+				"Tempo, song form and the style guide the producer follows.",
+			))
+			.font(theme::small())
+			.color(theme::TEXT_DIM),
 		);
 		ui.add_space(6.0);
 		let shown = if state.start.all_styles {
@@ -348,9 +363,9 @@ fn style_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 			});
 		if styles.len() > STYLES_SHOWN {
 			let label = if state.start.all_styles {
-				"Fewer styles".to_owned()
+				tr("Fewer styles").to_owned()
 			} else {
-				format!("All {} styles →", styles.len())
+				trf("All {styles} styles →", &[("styles", &styles.len())])
 			};
 			if ui
 				.add(
@@ -372,7 +387,9 @@ fn style_card(ui: &mut Ui, state: &mut AppState, width: f32, height: f32) {
 				Some(form) => {
 					state.apply_library_form(&form, Some(&style));
 				}
-				None => state.notices.warn(format!("{style} lists no song form")),
+				None => state
+					.notices
+					.warn(trf("{style} lists no song form", &[("style", &style)])),
 			}
 		}
 	});
@@ -442,12 +459,12 @@ fn action_card(
 fn recent_list(ui: &mut Ui, state: &mut AppState, recent: &[PathBuf], width: f32) {
 	ui.horizontal(|ui| {
 		ui.label(
-			RichText::new("Recent")
+			RichText::new(tr("Recent"))
 				.font(theme::semibold(15.0))
 				.color(theme::TEXT),
 		);
 		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-			let open = egui::Button::new(RichText::new("Open…").font(theme::medium(12.0)))
+			let open = egui::Button::new(RichText::new(tr("Open…")).font(theme::medium(12.0)))
 				.right_text(
 					RichText::new("Ctrl O")
 						.font(theme::mono(10.5))
@@ -462,7 +479,7 @@ fn recent_list(ui: &mut Ui, state: &mut AppState, recent: &[PathBuf], width: f32
 	ui.add_space(6.0);
 	if recent.is_empty() {
 		ui.label(
-			RichText::new("Projects you open or save show up here.")
+			RichText::new(tr("Projects you open or save show up here."))
 				.font(theme::small())
 				.color(theme::TEXT_FAINT),
 		);
@@ -528,7 +545,7 @@ fn recent_list(ui: &mut Ui, state: &mut AppState, recent: &[PathBuf], width: f32
 			if exists {
 				folder.clone()
 			} else {
-				format!("{folder} · missing")
+				trf("{folder} · missing", &[("folder", &folder)])
 			},
 			theme::small(),
 			if exists {
@@ -553,11 +570,7 @@ fn recent_list(ui: &mut Ui, state: &mut AppState, recent: &[PathBuf], width: f32
 			p.text(
 				pos2(col(0.78), rect.center().y),
 				Align2::LEFT_CENTER,
-				format!(
-					"{} track{}",
-					info.tracks,
-					if info.tracks == 1 { "" } else { "s" }
-				),
+				trn("{n} track", "{n} tracks", info.tracks),
 				theme::small(),
 				theme::TEXT_DIM,
 			);
@@ -621,17 +634,20 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
 				.sense(Sense::click()),
 			)
 		};
-		if link(ui, "F1 Keyboard shortcuts").clicked() {
+		if link(ui, tr("F1 Keyboard shortcuts")).clicked() {
 			state.view.help = true;
 		}
 		let scanning = state.jobs.scan.is_some();
 		let plugins_text = if scanning {
-			"Plugins: scanning…".to_owned()
+			tr("Plugins: scanning…").to_owned()
 		} else {
-			format!("Plugins: {plugins} CLAP / VST3 found · Rescan")
+			trf(
+				"Plugins: {plugins} CLAP / VST3 found · Rescan",
+				&[("plugins", &plugins)],
+			)
 		};
 		if link(ui, &plugins_text)
-			.on_hover_text("Scan the system plugin folders for CLAP/VST3 plugins")
+			.on_hover_text(tr("Scan the system plugin folders for CLAP/VST3 plugins"))
 			.clicked()
 			&& !scanning
 		{

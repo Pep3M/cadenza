@@ -6,6 +6,7 @@
 //! full width, harmonics, a row of S knobs. The pure logic lives in
 //! [`crate::state::saturator_editor`].
 
+use crate::i18n::{tr, trf};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -209,10 +210,13 @@ fn card(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect, mode: Mode, 
 	if resp.clicked() {
 		pick_mode(state, cx.r, mode);
 	}
-	let resp = resp.on_hover_text(format!(
-		"{name}: {} (key {})",
-		sat::mode_description(mode),
-		sat::mode_index(mode) + 1
+	let resp = resp.on_hover_text(trf(
+		"{name}: {mode_description} (key {mode_index})",
+		&[
+			("name", &name),
+			("mode_description", &sat::mode_description(mode)),
+			("mode_index", &(sat::mode_index(mode) + 1)),
+		],
 	));
 	if !ui.is_rect_visible(rect) {
 		return;
@@ -309,7 +313,9 @@ fn curve_display(
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::ResizeVertical);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Shaping curve"));
+	resp.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Shaping curve"))
+	});
 	if resp.drag_started() {
 		v.drag = Some((values.drive, 0.0));
 	}
@@ -335,7 +341,9 @@ fn curve_display(
 			"Reset saturator drive".to_owned()
 		});
 	}
-	let resp = resp.on_hover_text("Drag up/down for drive (0.5 dB steps); double-click = 0 dB");
+	let resp = resp.on_hover_text(tr(
+		"Drag up/down for drive (0.5 dB steps); double-click = 0 dB",
+	));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -407,7 +415,7 @@ fn curve_display(
 	p.text(
 		rect.left_top() + vec2(9.0, 7.0),
 		Align2::LEFT_TOP,
-		"Shaping curve \u{b7} drag \u{21d5} for drive",
+		tr("Shaping curve \u{b7} drag \u{21d5} for drive"),
 		caption,
 		theme::TEXT_FAINT,
 	);
@@ -493,12 +501,15 @@ fn scope(ui: &mut Ui, v: &mut SatView, values: &SatValues, rect: Rect, now: f64)
 	devices::legend(
 		&p,
 		pos2(rect.left() + 9.0, rect.top() + 12.0),
-		&[("Before", theme::TEXT_FAINT), ("After", light(color))],
+		&[
+			(tr("Before"), theme::TEXT_FAINT),
+			(tr("After"), light(color)),
+		],
 	);
 	p.text(
 		pos2(rect.right() - 9.0, rect.top() + 12.0),
 		Align2::RIGHT_CENTER,
-		if live { "live" } else { "test sine" },
+		if live { "live" } else { tr("test sine") },
 		theme::mono(10.0),
 		theme::TEXT_FAINT,
 	);
@@ -573,11 +584,17 @@ fn harmonics(ui: &mut Ui, cx: &BodyCx, values: &SatValues, rect: Rect, bare: boo
 		}
 		if hover.is_some_and(|h| h.x >= x && h.x <= x + bar_w + gap) {
 			tip = Some(if i == 0 {
-				format!("{label}: the fundamental")
+				trf("{label}: the fundamental", &[("label", &label)])
 			} else if *d <= -sat::HARMONIC_RANGE_DB {
-				format!("{label}: none")
+				trf("{label}: none", &[("label", &label)])
 			} else {
-				format!("{label}: {:.1} dB below the fundamental", -d)
+				trf(
+					"{label}: {d} dB below the fundamental",
+					&[
+						("label", &label),
+						("d", &crate::i18n::decimal(format!("{:.1}", -d))),
+					],
+				)
 			});
 		}
 	}
@@ -587,7 +604,7 @@ fn harmonics(ui: &mut Ui, cx: &BodyCx, values: &SatValues, rect: Rect, bare: boo
 	let t = p.text(
 		pos2(rect.left() + 9.0, y),
 		Align2::LEFT_CENTER,
-		"Harmonics added \u{b7} even",
+		tr("Harmonics added \u{b7} even"),
 		font.clone(),
 		theme::TEXT_DIM,
 	);
@@ -616,11 +633,11 @@ fn harmonics(ui: &mut Ui, cx: &BodyCx, values: &SatValues, rect: Rect, bare: boo
 
 fn knob_defs(mode: Mode, size: KnobSize) -> [KnobDef; 3] {
 	[
-		KnobDef::new(DRIVE, "Drive", KnobSize::XL)
+		KnobDef::new(DRIVE, tr("Drive"), KnobSize::XL)
 			.color(mode_color(mode))
 			.step(sat::DRIVE_STEP),
-		KnobDef::new(TONE, "Tone", size),
-		KnobDef::new(OUTPUT, "Output", size),
+		KnobDef::new(TONE, tr("Tone"), size),
+		KnobDef::new(OUTPUT, tr("Output"), size),
 	]
 }
 
@@ -669,8 +686,10 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SatView, now: f6
 	devices::footer(
 		ui,
 		rect,
-		"Mode cards morph the curve over 150 ms (keys 1/2/3). Harmonics are computed from the \
+		tr(
+			"Mode cards morph the curve over 150 ms (keys 1/2/3). Harmonics are computed from the \
 		 shaping curve with a test sine, so they also show when the transport is stopped.",
+		),
 	);
 }
 
@@ -725,7 +744,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SatView, now:
 		.into_iter()
 		.map(|k| k.sized(KnobSize::S))
 		.collect();
-	knobs.push(KnobDef::new(MIX, "Mix", KnobSize::S));
+	knobs.push(KnobDef::new(MIX, tr("Mix"), KnobSize::S));
 	let cols = devices::small_columns(rect.width(), knobs.len());
 	let k = Rect::from_min_max(pos2(rect.left(), harm.bottom() + 8.0), rect.max);
 	devices::knob_grid(ui, state, cx, k, &knobs, cols);

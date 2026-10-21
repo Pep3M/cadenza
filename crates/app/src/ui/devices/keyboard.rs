@@ -3,6 +3,7 @@
 //! computer keyboard while the editor has the focus (Z / X octave), all through
 //! [`AppState::preview_note_on`] / `preview_note_off`.
 
+use crate::i18n::tr;
 use cadenza_core::TrackId;
 use egui::{
 	Align2, CornerRadius, CursorIcon, Id, Key, Modifiers, Pos2, Rect, Sense, Ui, pos2, vec2,
@@ -188,7 +189,7 @@ pub fn keyboard_row(
 		vec2(octaves as f32 * 7.0 * WHITE_W, 40.0),
 	);
 	keyboard(ui, state, cx, keys, kb, octaves, now);
-	let hint = "Click keys or use A\u{2013}K on the computer keyboard \u{b7} Z / X octave";
+	let hint = tr("Click keys or use A\u{2013}K on the computer keyboard \u{b7} Z / X octave");
 	let g = ui
 		.painter()
 		.layout_no_wrap(hint.to_owned(), theme::medium(12.0), theme::TEXT_FAINT);
@@ -214,7 +215,7 @@ fn octave_picker(ui: &mut Ui, cx: &BodyCx, keys: &mut SynthKeys, rect: Rect) {
 			minus,
 			"\u{2212}",
 			-1i8,
-			"Octave down",
+			tr("Octave down"),
 			CornerRadius {
 				nw: 4,
 				sw: 4,
@@ -226,7 +227,7 @@ fn octave_picker(ui: &mut Ui, cx: &BodyCx, keys: &mut SynthKeys, rect: Rect) {
 			plus,
 			"+",
 			1,
-			"Octave up",
+			tr("Octave up"),
 			CornerRadius {
 				nw: 0,
 				sw: 0,
@@ -289,7 +290,7 @@ fn keyboard(
 		Id::new(("device-keyboard", cx.salt, cx.r.device)),
 		Sense::click_and_drag(),
 	);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Keyboard"));
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Keyboard")));
 	let at = |pos: Pos2| {
 		ps::key_at(
 			keys.base,
@@ -321,17 +322,11 @@ fn keyboard(
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
-	let lit: Vec<u8> =
-		cx.r.track
-			.map(|t| {
-				state
-					.previewing
-					.iter()
-					.filter(|(tr, _)| *tr == t)
-					.map(|(_, n)| *n)
-					.collect()
-			})
-			.unwrap_or_default();
+	let live = state.live_voices(cx.r.device);
+	if !live.is_idle() {
+		ui.ctx().request_repaint();
+	}
+	let lit = state.lit_keys(cx.r, &live);
 	let p = ui.painter();
 	for (i, note) in ps::white_keys(keys.base, octaves).into_iter().enumerate() {
 		let k = Rect::from_min_size(

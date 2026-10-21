@@ -3,18 +3,21 @@
 //! seven nodes, the band chips, the selected band's controls and the output gain. The
 //! gesture -> parameter mapping lives in [`crate::state::eq_editor`].
 
+use crate::i18n::{mark, tr, tr_str, trf};
 use std::sync::{Arc, Mutex};
 
 use cadenza_core::ParamAddress;
 use cadenza_dsp::response::EqBands;
+use cadenza_dsp::{Listen, readings};
 use egui::{
-	Align, Color32, CornerRadius, CursorIcon, Id, Layout, Rect, Sense, Stroke, Ui, UiBuilder, pos2,
-	vec2,
+	Align, Color32, CornerRadius, CursorIcon, Id, Layout, Rect, Sense, Stroke, StrokeKind, Ui,
+	UiBuilder, pos2, vec2,
 };
 
 use crate::state::AppState;
 use crate::state::device_display::{self, AnalyzerState, DbRange, SampleWindow, Tap};
 use crate::state::eq_editor::{self as eq, BANDS, Change, EqValues, N_BANDS};
+use crate::state::match_eq::MatchPhase;
 use crate::state::selection::DeviceRef;
 use crate::theme;
 use crate::ui::device_editor::BodyCx;
@@ -22,6 +25,7 @@ use crate::ui::device_kit::{
 	self, BandCurve, Bracket, ControlInfo, FreqDisplay, FreqEvent, FreqNode, KnobSize, ParamKnob,
 	ReadoutLook, ReadoutState, ValueFmt,
 };
+use cadenza_mcp::tools::match_eq::MatchReference;
 
 /// Wheel notches over a node are committed as one step once the wheel rests this long.
 const WHEEL_REST: f64 = 0.5;
@@ -35,6 +39,8 @@ const COMPACT_KNOBS_H: f32 = 84.0;
 
 /// The band colours: the palette minus sky blue, which reads as the accent.
 const COLOR_SLOTS: [usize; N_BANDS] = [0, 1, 2, 3, 4, 6, 7];
+/// How much of their colour the other bands keep while one is soloed.
+const SOLO_DIM: f32 = 0.3;
 
 pub fn band_color(band: usize) -> Color32 {
 	theme::BAND_COLORS[COLOR_SLOTS[band]]
@@ -57,12 +63,18 @@ struct EqView {
 	range24: bool,
 	analyzer: bool,
 	pre: bool,
+	/// The analyzer shows the side instead of the mid (mono sum).
+	side: bool,
 	footer: bool,
 	pre_window: SampleWindow,
 	post_window: SampleWindow,
 	pre_bins: AnalyzerState,
 	post_bins: AnalyzerState,
 	wheel: Option<WheelEdit>,
+	/// Band gain readings shown instead of the probe's (screenshots).
+	synthetic: Option<[f32; readings::MAX]>,
+	/// Octave band of the collision strip under the pointer (last frame).
+	collision_hover: Option<usize>,
 }
 
 impl Default for EqView {
@@ -72,12 +84,15 @@ impl Default for EqView {
 			range24: false,
 			analyzer: true,
 			pre: true,
+			side: false,
 			footer: false,
 			pre_window: SampleWindow::new(device_display::FFT_MAX),
 			post_window: SampleWindow::new(device_display::FFT_MAX),
 			pre_bins: AnalyzerState::default(),
 			post_bins: AnalyzerState::default(),
 			wheel: None,
+			synthetic: None,
+			collision_hover: None,
 		}
 	}
 }
@@ -106,6 +121,33 @@ pub fn set_analyzer(ctx: &egui::Context, salt: &str, r: DeviceRef, pre: &[f32], 
 	let mut v = lock(&v);
 	v.pre_bins.bins = pre.to_vec();
 	v.post_bins.bins = post.to_vec();
+}
+
+/// Shows `gains` (dB per band, [`N_BANDS`] order) as the bands' live gains, as if the
+/// probe had read them (screenshots).
+pub fn set_live_gains(ctx: &egui::Context, salt: &str, r: DeviceRef, gains: &[f32]) {
+	let v = view(ctx, view_id(salt, r));
+	let mut v = lock(&v);
+	let mut out = [0.0; readings::MAX];
+	let start = readings::EQ_BAND_GAIN_DB_START;
+	for (o, g) in out[start..].iter_mut().zip(gains) {
+		*o = *g;
+	}
+	v.synthetic = Some(out);
+}
+
+/// The device's band gain readings while it plays (`None`: idle or not probed).
+fn live_readings(state: &AppState, cx: &BodyCx, v: &EqView) -> Option<[f32; readings::MAX]> {
+	if v.synthetic.is_some() {
+		return v.synthetic;
+	}
+	let ours = state.probe_target() == Some(cx.r.device);
+	let probe = state.probe().filter(|_| ours)?;
+	if !state.is_playing() && cx.frames.is_empty() {
+		return None;
+	}
+	let (values, n) = probe.readings();
+	(n >= readings::EQ_BAND_GAIN_DB_START + readings::EQ_BANDS).then_some(values)
 }
 
 /// The selected band of an editor.
@@ -140,6 +182,15 @@ pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef) {
 			&eq::sleep(band),
 			&format!("{} off", BANDS[band].name),
 		);
+	}
+	// ← → the band, ↑ ↓ its gain (filters: their frequency).
+	let keys = crate::ui::device_editor::arrows(ctx);
+	v.selected = (v.selected as i32 + keys.h).clamp(0, N_BANDS as i32 - 1) as usize;
+	if keys.v != 0 {
+		let band = &BANDS[v.selected];
+		let param = band.gain.unwrap_or(band.freq);
+		drop(v);
+		crate::ui::device_editor::nudge_param(state, r, param, keys.v as f32, keys.shift);
 	}
 }
 
@@ -203,6 +254,30 @@ pub fn eq_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 	} else {
 		dock(ui, state, cx, &mut v);
 	}
+	if let Some(mode) = eq::listen_follow(state.listen_mode(r.device), v.selected) {
+		state.set_listen(r.device, mode);
+	}
+}
+
+/// "🎧 Listen": hear the selected band isolated (monitoring only).
+fn listen_toggle(ui: &mut Ui, state: &mut AppState, r: DeviceRef, band: usize) {
+	let on = state.listen_mode(r.device) == Listen::Band(band as u8);
+	let resp = device_kit::glyph_toggle(
+		ui,
+		on,
+		device_kit::Glyph::Headphones,
+		tr("Listen"),
+		theme::SOLO,
+	)
+	.on_hover_text(tr(
+		"Hear only this band of the input (Alt+click a node). Monitoring only: not saved, never rendered",
+	));
+	if resp.clicked() {
+		state.set_listen(
+			r.device,
+			eq::toggle_listen(state.listen_mode(r.device), band),
+		);
+	}
 }
 
 fn update_analyzer(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut EqView) {
@@ -210,11 +285,11 @@ fn update_analyzer(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut EqView) {
 	let ours = state.probe_target() == Some(cx.r.device);
 	if v.analyzer && ours && !cx.frames.is_empty() {
 		let rate = state.probe().map_or(48_000.0, |p| p.sample_rate() as f32);
-		v.post_window.push_frames(cx.frames, Tap::Output);
+		v.post_window.push_channel(cx.frames, Tap::Output, v.side);
 		let bins = device_display::spectrum_bins(v.post_window.samples(), rate);
 		v.post_bins.update(&bins, dt);
 		if v.pre {
-			v.pre_window.push_frames(cx.frames, Tap::Input);
+			v.pre_window.push_channel(cx.frames, Tap::Input, v.side);
 			let bins = device_display::spectrum_bins(v.pre_window.samples(), rate);
 			v.pre_bins.update(&bins, dt);
 		} else {
@@ -282,15 +357,30 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 	let rate = state.probe().map_or(48_000.0, |p| p.sample_rate() as f32);
 	let bands = EqBands::new(values.as_slice(), rate);
 	let bands = &bands;
+	// Dynamic bands: the live curve (static + each band's movement) over the static one.
+	let live = live_readings(state, cx, v);
+	let offsets = eq::live_offsets(&values, live.as_ref().map(|r| &r[..]));
+	let live_bands = EqBands::with_offsets(values.as_slice(), rate, &offsets);
+	let moving = offsets.iter().any(|o| o.abs() > 0.05);
+	let static_sum = |f: f32| bands.response_db(f);
 	let dormant: Vec<bool> = (0..N_BANDS).map(|b| eq::is_dormant(&values, b)).collect();
 	let responses: Vec<Box<dyn Fn(f32) -> f32 + '_>> = (0..N_BANDS)
 		.map(|b| Box::new(move |f| bands.band_response_db(b, f)) as Box<dyn Fn(f32) -> f32>)
 		.collect();
+	// While a band is soloed (Listen), the other bands' curves step back.
+	let soloed = match state.listen_mode(r.device) {
+		Listen::Band(b) => Some(usize::from(b)),
+		_ => None,
+	};
 	let fills: Vec<BandCurve> = (0..N_BANDS)
 		.filter(|&b| !dormant[b])
 		.map(|b| BandCurve {
 			response: &*responses[b],
-			color: band_color(b),
+			color: if soloed.is_some_and(|s| s != b) {
+				band_color(b).gamma_multiply(SOLO_DIM)
+			} else {
+				band_color(b)
+			},
 			selected: b == v.selected,
 		})
 		.collect();
@@ -307,10 +397,23 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 				ai: BANDS[b]
 					.params()
 					.any(|p| state.ai_change(r.device, p).is_some()),
+				dynamic: eq::is_dynamic(&values, b).then(|| {
+					let activity = live.map_or(0.0, |_| eq::activity(&values, b, offsets[b]));
+					(db + offsets[b], activity)
+				}),
 			}
 		})
 		.collect();
-	let sum = |f: f32| bands.response_db(f);
+	let split = eq::uses_mid_side(&values);
+	let sum = |f: f32| {
+		if split {
+			live_bands.channel_response_db(false, f)
+		} else {
+			live_bands.response_db(f)
+		}
+	};
+	let side_sum = |f: f32| live_bands.channel_response_db(true, f);
+	let badges: Vec<Option<&str>> = (0..N_BANDS).map(|b| eq::badge(&values, b)).collect();
 	let changes = state.ai_changes_of(r.device);
 	let before_bands = (!changes.is_empty()).then(|| {
 		let before = EqValues::from_fn(|p| {
@@ -339,8 +442,43 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 				color: band_color(v.selected),
 			}
 		});
-	let show_pre = v.analyzer && v.pre && !v.pre_bins.is_empty();
-	let show_post = v.analyzer && !v.post_bins.is_empty();
+	// Match EQ: the proposal dashed, the EQ input and the reference spectra.
+	let matching = state
+		.match_eq()
+		.filter(|m| m.device == r)
+		.and_then(|m| match &m.phase {
+			MatchPhase::Ready(sp) => Some(sp.clone()),
+			_ => None,
+		});
+	let proposal = matching.as_ref().and_then(|_| state.match_eq_proposal());
+	// Collision view: a suggested cut replaces the match proposal on the dashed curve.
+	let collisions = super::collisions::layer(state, r);
+	let suggested = state.collision_suggestion(r).map(|s| s.changes.clone());
+	let proposed_bands = suggested
+		.as_deref()
+		.or(proposal.as_ref().map(|(_, changes)| changes.as_slice()))
+		.map(|changes| {
+			let pv = crate::state::match_eq::proposed_values(&values, changes);
+			EqBands::new(pv.as_slice(), rate)
+		});
+	let proposed_curve = proposed_bands
+		.as_ref()
+		.map(|b| move |f: f32| b.response_db(f));
+	let match_bins = matching
+		.as_ref()
+		.map(crate::state::match_eq::display_spectra);
+	let show_pre = v.analyzer
+		&& v.pre
+		&& !v.pre_bins.is_empty()
+		&& match_bins.is_none()
+		&& collisions.is_none();
+	let show_post = v.analyzer && !v.post_bins.is_empty() && match_bins.is_none();
+	let collision_spectra = collisions.as_ref().map(|c| c.spectra()).unwrap_or_default();
+	let hot = super::collisions::hot_band(state, r, v.collision_hover);
+	let heat = collisions.as_ref().map(|c| c.heat(hot)).unwrap_or_default();
+	if live.is_some() && (0..N_BANDS).any(|b| eq::is_dynamic(&values, b)) {
+		ui.ctx().request_repaint();
+	}
 	let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
 	let out = FreqDisplay::new(Id::new(("eq-display", cx.salt, r.device)), rect.size())
 		.range(if v.range24 {
@@ -348,18 +486,47 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 		} else {
 			DbRange::PM12
 		})
-		.pre(show_pre.then_some(v.pre_bins.bins.as_slice()))
+		.pre(
+			match_bins
+				.as_ref()
+				.map(|(input, _)| input.as_slice())
+				.or(collisions.as_ref().map(|c| c.own.as_slice()))
+				.or(show_pre.then_some(v.pre_bins.bins.as_slice())),
+		)
+		.spectra(&collision_spectra)
+		.heat(&heat)
 		.post(show_post.then_some(v.post_bins.bins.as_slice()))
+		.reference(match_bins.as_ref().map(|(_, r)| r.as_slice()))
+		.proposal(proposed_curve.as_ref().map(|f| f as &dyn Fn(f32) -> f32))
 		.bands(&fills)
 		.before(before_curve.as_ref().map(|f| f as &dyn Fn(f32) -> f32))
-		.sum(&sum, theme::TEXT)
+		.ghost(moving.then_some(&static_sum as &dyn Fn(f32) -> f32))
+		.sum(&sum, theme::EQ_MID)
+		.sum2(
+			split.then_some(&side_sum as &dyn Fn(f32) -> f32),
+			theme::EQ_SIDE,
+		)
+		.sum_tags(split.then_some(["M", "S"]))
+		.badges(&badges)
 		.nodes(&nodes)
 		.selected(Some(v.selected))
 		.piano(true)
 		.curve_grab(&grab)
 		.bracket(bracket);
-	let out = if cx.compact { out.small_nodes() } else { out }.show(&mut child);
-	for e in out.events {
+	let mut out = if cx.compact { out.small_nodes() } else { out }.show(&mut child);
+	super::modulation::eq_overlay(
+		ui,
+		state,
+		r,
+		cx.info,
+		out.plot,
+		if v.range24 {
+			DbRange::PM24
+		} else {
+			DbRange::PM12
+		},
+	);
+	for e in std::mem::take(&mut out.events) {
 		match e {
 			FreqEvent::Move {
 				node,
@@ -377,7 +544,13 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 					}
 				}
 			}
-			FreqEvent::Click { node } => v.selected = node,
+			FreqEvent::Click { node } => {
+				v.selected = node;
+				if ui.input(|i| i.modifiers.alt) {
+					let mode = eq::toggle_listen(state.listen_mode(r.device), node);
+					state.set_listen(r.device, mode);
+				}
+			}
 			FreqEvent::Reset { node } => {
 				v.selected = node;
 				commit_band(state, r, node, &eq::reset_node(&values, node));
@@ -393,7 +566,7 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 						state,
 						r,
 						&eq::wake(band, freq, db),
-						&format!("Wake {}", BANDS[band].name),
+						&trf("Wake {name}", &[("name", &tr_str(BANDS[band].name))]),
 					);
 				}
 			}
@@ -402,10 +575,20 @@ fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect:
 	for (band, resp) in out.node_responses.iter().enumerate() {
 		node_menu(resp, state, r, band, &mut v.selected);
 	}
-	out.response.on_hover_text_at_pointer(
+	v.collision_hover =
+		super::collisions::interact(ui, state, r, collisions.as_ref(), &out, cx.salt);
+	if state.collision_suggestion(r).is_some() {
+		super::collisions::card(ui, state, r, rect);
+	} else if state.match_eq().is_some_and(|m| m.device == r) {
+		match_card(ui, state, rect);
+	}
+	if v.collision_hover.is_some() {
+		return;
+	}
+	out.response.on_hover_text_at_pointer(tr(
 		"Drag a node (Shift fine, Alt one axis, Ctrl gain only) · wheel: Q / slope · \
 		 double-click a node to reset, empty space to wake a band",
-	);
+	));
 }
 
 /// Right-click on a node: automate its params, reset the band.
@@ -420,7 +603,7 @@ fn node_menu(
 	resp.context_menu(|ui| {
 		*selected = band;
 		ui.label(
-			egui::RichText::new(b.name)
+			egui::RichText::new(tr_str(b.name))
 				.font(theme::semibold(12.0))
 				.color(band_color(band)),
 		);
@@ -428,9 +611,9 @@ fn node_menu(
 			let address = ParamAddress::device(r.track, r.device, id);
 			let word = eq::param_word(id);
 			let text = if state.is_automated(&address) {
-				format!("Show {word} automation")
+				trf("Show {word} automation", &[("word", &word)])
 			} else {
-				format!("Automate {word}")
+				trf("Automate {word}", &[("word", &word)])
 			};
 			if ui.button(text).clicked() {
 				state.automate(address);
@@ -438,12 +621,12 @@ fn node_menu(
 			}
 		}
 		ui.separator();
-		if ui.button("Reset band").clicked() {
+		if ui.button(tr("Reset band")).clicked() {
 			commit(
 				state,
 				r,
 				&eq::reset_band(band),
-				&format!("Reset {}", b.name),
+				&trf("Reset {name}", &[("name", &tr_str(b.name))]),
 			);
 			ui.close();
 		}
@@ -474,14 +657,14 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 	);
 	out.add_space((column.height() - 128.0).max(0.0) * 0.5);
 	out.label(
-		egui::RichText::new("OUTPUT")
+		egui::RichText::new(tr("OUTPUT"))
 			.font(theme::medium(10.5))
 			.color(theme::TEXT_FAINT),
 	);
 	out.add_space(6.0);
 	ParamKnob::new(cx.r, eq::OUTPUT)
 		.size(KnobSize::L)
-		.label("Gain")
+		.label(tr("Gain"))
 		.id_salt(Id::new(cx.salt))
 		.show(&mut out, state);
 
@@ -502,12 +685,24 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 	row.with_layout(Layout::right_to_left(Align::Center), |ui| {
 		ui.spacing_mut().item_spacing.x = 6.0;
 		footer_toggle(ui, v);
+		match_button(ui, state, cx.r);
 		range_selector(ui, cx, v);
-		ui.label(
-			egui::RichText::new("Range")
-				.font(theme::medium(12.0))
-				.color(theme::TEXT_FAINT),
-		);
+		// The caption goes first when the row is tight (long translations, narrow docks).
+		let caption = egui::RichText::new(tr("Range"))
+			.font(theme::medium(12.0))
+			.color(theme::TEXT_FAINT);
+		let w = ui
+			.painter()
+			.layout_no_wrap(
+				tr("Range").to_owned(),
+				theme::medium(12.0),
+				theme::TEXT_FAINT,
+			)
+			.size()
+			.x;
+		if ui.available_width() >= w + 12.0 {
+			ui.label(caption);
+		}
 	});
 	if v.footer {
 		let foot = Rect::from_min_size(
@@ -523,9 +718,10 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 		let mut row = child(ui, foot.shrink2(vec2(12.0, 0.0)));
 		row.spacing_mut().item_spacing.x = 10.0;
 		analyzer_toggles(&mut row, v);
+		super::collisions::toggle(&mut row, state, cx.r);
 		row.with_layout(Layout::right_to_left(Align::Center), |ui| {
 			ui.label(
-				egui::RichText::new("Display only. No effect on the sound.")
+				egui::RichText::new(tr("Display only. No effect on the sound."))
 					.font(theme::medium(12.0))
 					.color(theme::TEXT_FAINT),
 			);
@@ -540,7 +736,7 @@ pub fn compact_height(width: f32, footer: bool) -> f32 {
 
 /// Everything of the compact form below the display.
 fn compact_rest(footer: bool) -> f32 {
-	8.0 + 24.0 + 8.0 + 20.0 + COMPACT_KNOBS_H + 30.0 + if footer { 30.0 } else { 0.0 }
+	8.0 + 24.0 + 8.0 + 24.0 + 28.0 + COMPACT_KNOBS_H + 30.0 + if footer { 30.0 } else { 0.0 }
 }
 
 /// The design's 344 × 196 ratio, shrunk (to 110 px) when the room is short.
@@ -579,11 +775,11 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 			chips(&mut row, state, cx.r, v, Some(width));
 			ui.add_space(8.0);
 			let band = v.selected;
-			let (name_rect, _) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
+			let (name_rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
 			let mut row = child(ui, name_rect.shrink2(vec2(2.0, 0.0)));
 			row.spacing_mut().item_spacing.x = 6.0;
 			row.label(
-				egui::RichText::new(BANDS[band].name)
+				egui::RichText::new(tr_str(BANDS[band].name))
 					.font(theme::semibold(12.0))
 					.color(band_color(band)),
 			);
@@ -595,6 +791,18 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 					.font(theme::mono(11.0))
 					.color(theme::TEXT_FAINT),
 			);
+			row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+				listen_toggle(ui, state, cx.r, band);
+				dynamic_controls(ui, state, cx, band, true);
+			});
+			let (ms_rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
+			let mut row = child(ui, ms_rect.shrink2(vec2(2.0, 2.0)));
+			row.spacing_mut().item_spacing.x = 6.0;
+			dim_label(&mut row, tr("Channel"));
+			channel_selector(&mut row, state, cx, band);
+			row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+				match_button(ui, state, cx.r);
+			});
 			let (knob_rect, _) =
 				ui.allocate_exact_size(vec2(width, COMPACT_KNOBS_H), Sense::hover());
 			compact_knobs(ui, state, cx, band, knob_rect);
@@ -619,7 +827,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 						.sense(Sense::click()),
 					)
 					.on_hover_cursor(CursorIcon::PointingHand)
-					.on_hover_text("Display range");
+					.on_hover_text(tr("Display range"));
 				if resp.clicked() {
 					v.range24 = !v.range24;
 				}
@@ -630,6 +838,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 				row.spacing_mut().item_spacing.x = 8.0;
 				range_selector(&mut row, cx, v);
 				analyzer_toggles(&mut row, v);
+				super::collisions::toggle(&mut row, state, cx.r);
 			}
 		});
 }
@@ -638,17 +847,27 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView) {
 fn compact_knobs(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, band: usize, rect: Rect) {
 	let b = &BANDS[band];
 	let color = band_color(band);
-	let mut knobs: Vec<(&'static str, &'static str, Color32)> = vec![(b.freq, "Freq", color)];
+	let mut knobs: Vec<(&'static str, &'static str, Color32)> = vec![(b.freq, mark("Freq"), color)];
 	if let Some(g) = b.gain {
-		knobs.push((g, "Gain", color));
+		knobs.push((g, mark("Gain"), color));
 	}
 	if let Some(q) = b.q {
 		knobs.push((q, "Q", color));
 	}
 	if let Some(s) = b.slope {
-		knobs.push((s, "Slope", color));
+		knobs.push((s, mark("Slope"), color));
 	}
-	knobs.push((eq::OUTPUT, "Output", theme::TEXT));
+	if let Some(d) = b
+		.dynamic()
+		.filter(|_| eq::is_dynamic(&shown_values(state, cx.r), band))
+	{
+		knobs.push((d.threshold, mark("Thr"), theme::GAIN_REDUCTION));
+		knobs.push((d.ratio, mark("Ratio"), theme::GAIN_REDUCTION));
+	}
+	// Six value tags need about 64 px each; narrower, the output stays in the dock.
+	if rect.width() / (knobs.len() + 1) as f32 >= 64.0 {
+		knobs.push((eq::OUTPUT, mark("Output"), theme::TEXT));
+	}
 	let slot = rect.width() / knobs.len() as f32;
 	for (i, (id, label, color)) in knobs.into_iter().enumerate() {
 		let cell = Rect::from_min_size(
@@ -685,6 +904,7 @@ fn note_text(freq: f32) -> String {
 /// `width` the chips share it equally (compact).
 fn chips(ui: &mut Ui, state: &AppState, r: DeviceRef, v: &mut EqView, width: Option<f32>) {
 	let values = shown_values(state, r);
+	let listened = state.listen_mode(r.device);
 	let gap = ui.spacing().item_spacing.x;
 	for (band, b) in BANDS.iter().enumerate() {
 		let awake = !eq::is_dormant(&values, band);
@@ -705,7 +925,7 @@ fn chips(ui: &mut Ui, state: &AppState, r: DeviceRef, v: &mut EqView, width: Opt
 				egui::WidgetType::SelectableLabel,
 				true,
 				v.selected == band,
-				b.name,
+				tr_str(b.name),
 			)
 		});
 		let p = ui.painter();
@@ -717,6 +937,14 @@ fn chips(ui: &mut Ui, state: &AppState, r: DeviceRef, v: &mut EqView, width: Opt
 			theme::BG_RAISED
 		};
 		p.rect_filled(rect, CornerRadius::same(theme::RADIUS_MD), bg);
+		if listened == Listen::Band(band as u8) {
+			p.rect_stroke(
+				rect,
+				CornerRadius::same(theme::RADIUS_MD),
+				Stroke::new(1.0, theme::SOLO),
+				StrokeKind::Inside,
+			);
+		}
 		let color = band_color(band);
 		let dot_r = if width.is_some() { 3.5 } else { 4.0 };
 		let content = dot_r * 2.0 + 5.0 + galley.size().x;
@@ -766,12 +994,12 @@ fn band_controls(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView)
 	let band = v.selected;
 	let b = &BANDS[band];
 	ui.label(
-		egui::RichText::new(b.name)
+		egui::RichText::new(tr_str(b.name))
 			.font(theme::semibold(12.0))
 			.color(band_color(band)),
 	);
 	ui.add_space(4.0);
-	dim_label(ui, "Freq");
+	dim_label(ui, tr("Freq"));
 	let freq = value_box(ui, state, cx, band, b.freq, 78.0);
 	ui.label(
 		egui::RichText::new(note_text(freq))
@@ -780,7 +1008,7 @@ fn band_controls(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView)
 	);
 	if let Some(g) = b.gain {
 		ui.add_space(4.0);
-		dim_label(ui, "Gain");
+		dim_label(ui, tr("Gain"));
 		value_box(ui, state, cx, band, g, 76.0);
 	}
 	if let Some(q) = b.q {
@@ -790,7 +1018,7 @@ fn band_controls(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView)
 	}
 	if let Some(s) = b.slope {
 		ui.add_space(4.0);
-		dim_label(ui, "Slope");
+		dim_label(ui, tr("Slope"));
 		let value = state
 			.param_value(cx.r.track, cx.r.device, s)
 			.unwrap_or_else(|| model_value(state, cx.r, s));
@@ -804,6 +1032,68 @@ fn band_controls(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView)
 		{
 			commit_band(state, cx.r, band, &[(s, i as f32)]);
 		}
+	}
+	ui.add_space(4.0);
+	channel_selector(ui, state, cx, band);
+	ui.add_space(4.0);
+	listen_toggle(ui, state, cx.r, band);
+	if b.dynamic().is_some() {
+		dynamic_controls(ui, state, cx, band, false);
+	}
+}
+
+/// Stereo | Mid | Side of the selected band (one undo step per click).
+fn channel_selector(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, band: usize) {
+	let values = shown_values(state, cx.r);
+	let selected = eq::channel_index(&values, band);
+	let labels = &eq::CHANNELS;
+	if let Some(i) = device_kit::segmented(
+		ui,
+		Id::new(("eq-channel", cx.salt, cx.r.device, band)),
+		labels,
+		selected,
+	) && i != selected
+	{
+		commit_band(state, cx.r, band, &eq::set_channel(band, i));
+	}
+}
+
+/// The selected band's "Dynamic" toggle and, while on, its threshold and ratio (dock:
+/// also the shared attack / release when the row has room).
+fn dynamic_controls(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, band: usize, compact: bool) {
+	let Some(d) = BANDS[band].dynamic() else {
+		return;
+	};
+	let values = shown_values(state, cx.r);
+	let on = eq::is_dynamic(&values, band);
+	let resp = device_kit::toggle(ui, on, tr("Dynamic"), theme::GAIN_REDUCTION).on_hover_text(tr(
+		"Dynamic band: it stays at 0 dB until its own frequency region (or the key) passes \
+		 the threshold, then moves toward its gain",
+	));
+	if resp.clicked() {
+		let changes = eq::toggle_dynamic(&values, band);
+		let label = if on {
+			trf("{name} static", &[("name", &tr_str(BANDS[band].name))])
+		} else {
+			trf("{name} dynamic", &[("name", &tr_str(BANDS[band].name))])
+		};
+		commit(state, cx.r, &changes, &label);
+	}
+	if !on || compact {
+		return;
+	}
+	ui.add_space(2.0);
+	dim_label(ui, tr("Thr"));
+	value_box(ui, state, cx, band, d.threshold, 70.0);
+	dim_label(ui, tr("Ratio"));
+	value_box(ui, state, cx, band, d.ratio, 56.0);
+	// Attack and release are shared by every dynamic band: shown when there is room
+	// (Range and the footer toggle still need theirs on the right).
+	if ui.available_width() > 2.0 * (64.0 + 40.0) + 260.0 {
+		dim_label(ui, tr("Att"));
+		value_box(ui, state, cx, band, eq::DYN_ATTACK, 64.0);
+		dim_label(ui, tr("Rel"));
+		value_box(ui, state, cx, band, eq::DYN_RELEASE, 64.0);
 	}
 }
 
@@ -852,6 +1142,7 @@ fn value_box(
 			max: info.max,
 			default: info.default,
 			fmt: ValueFmt::unit(info.unit),
+			tip: Some(info.description),
 		},
 	);
 	if let Some(v) = typed.or(menu) {
@@ -877,7 +1168,7 @@ fn footer_toggle(ui: &mut Ui, v: &mut EqView) {
 	let arrow = if v.footer { "▾" } else { "▸" };
 	let font = theme::medium(12.0);
 	let galley = ui.painter().layout_no_wrap(
-		format!("{arrow}  Analyzer and display"),
+		trf("{arrow}  Analyzer and display", &[("arrow", &arrow)]),
 		font,
 		theme::TEXT_DIM,
 	);
@@ -887,7 +1178,7 @@ fn footer_toggle(ui: &mut Ui, v: &mut EqView) {
 			egui::WidgetType::Checkbox,
 			true,
 			v.footer,
-			"Analyzer and display",
+			tr("Analyzer and display"),
 		)
 	});
 	let bg = if v.footer || resp.hovered() {
@@ -905,16 +1196,181 @@ fn footer_toggle(ui: &mut Ui, v: &mut EqView) {
 }
 
 fn analyzer_toggles(ui: &mut Ui, v: &mut EqView) {
-	if device_kit::toggle(ui, v.analyzer, "Analyzer", theme::ACCENT)
-		.on_hover_text("The spectrum after the EQ (needs the transport running)")
+	if device_kit::toggle(ui, v.analyzer, tr("Analyzer"), theme::ACCENT)
+		.on_hover_text(tr(
+			"The spectrum after the EQ (needs the transport running)",
+		))
 		.clicked()
 	{
 		v.analyzer = !v.analyzer;
 	}
-	if device_kit::toggle(ui, v.pre, "Pre", theme::TEXT_DIM)
-		.on_hover_text("Also the spectrum before the EQ")
+	if device_kit::toggle(ui, v.pre, tr("Pre"), theme::TEXT_DIM)
+		.on_hover_text(tr("Also the spectrum before the EQ"))
 		.clicked()
 	{
 		v.pre = !v.pre;
+	}
+	if device_kit::toggle(ui, v.side, tr("Side"), theme::EQ_SIDE)
+		.on_hover_text(tr("Analyze the side (L − R) instead of the mid"))
+		.clicked()
+	{
+		v.side = !v.side;
+		v.pre_window.clear();
+		v.post_window.clear();
+	}
+}
+
+/// "Match…": the reference picker (an audio file or another track).
+fn match_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
+	let busy = state.match_eq().is_some_and(|m| m.device == r);
+	let resp = ui
+		.add_enabled(
+			!busy,
+			egui::Button::new(egui::RichText::new(tr("Match…")).font(theme::medium(12.0)))
+				.min_size(vec2(0.0, CHIP_H)),
+		)
+		.on_hover_text(tr(
+			"Match EQ: fit the bands so this track's tone moves toward a reference (an audio file or another track)",
+		));
+	egui::Popup::menu(&resp).show(|ui| {
+		ui.set_min_width(200.0);
+		if ui.button(tr("Audio file…")).clicked() {
+			state.match_eq_file_dialog(r);
+			ui.close();
+		}
+		let tracks = state.match_reference_tracks(r);
+		if !tracks.is_empty() {
+			ui.separator();
+			ui.label(
+				egui::RichText::new(tr("Another track"))
+					.font(theme::medium(11.0))
+					.color(theme::TEXT_FAINT),
+			);
+			for (id, name) in tracks {
+				if ui.button(name).clicked() {
+					state.start_match_eq(r, MatchReference::Track(id));
+					ui.close();
+				}
+			}
+		}
+	});
+}
+
+/// The match card over the display: progress, or the amount / max gain, the tonal
+/// difference before -> after and Apply / Cancel.
+fn match_card(ui: &mut Ui, state: &mut AppState, display: Rect) {
+	let Some(m) = state.match_eq() else {
+		return;
+	};
+	let name = m.reference_name.clone();
+	let phase = m.phase.clone();
+	let (mut amount, mut max_gain) = (m.amount, m.max_gain_db);
+	let width = (display.width() - 16.0).min(560.0);
+	let card = Rect::from_min_size(
+		pos2(display.right() - width - 8.0, display.top() + 8.0),
+		vec2(width, 62.0),
+	);
+	ui.painter()
+		.rect_filled(card, CornerRadius::same(theme::RADIUS_MD), theme::BG_RAISED);
+	ui.painter().rect_stroke(
+		card,
+		CornerRadius::same(theme::RADIUS_MD),
+		Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.6)),
+		StrokeKind::Inside,
+	);
+	let inner = card.shrink2(vec2(10.0, 5.0));
+	let half = inner.height() * 0.5;
+	let mut top = child(ui, inner.with_max_y(inner.top() + half));
+	let mut bottom = child(ui, inner.with_min_y(inner.top() + half));
+	top.spacing_mut().item_spacing.x = 8.0;
+	bottom.spacing_mut().item_spacing.x = 8.0;
+	top.label(
+		egui::RichText::new(trf("Match to {name}", &[("name", &name)]))
+			.font(theme::semibold(12.0))
+			.color(theme::ACCENT),
+	);
+	let mut cancel = false;
+	let mut apply = false;
+	let buttons = |ui: &mut Ui, ready: bool, apply: &mut bool, cancel: &mut bool| {
+		ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+			let close = if ready { tr("Cancel") } else { tr("Close") };
+			*cancel = ui.button(close).clicked();
+			if ready {
+				*apply = theme::primary_button(ui, tr("Apply")).clicked();
+			}
+		});
+	};
+	match phase {
+		MatchPhase::Running(f) => {
+			top.add(
+				egui::ProgressBar::new(f)
+					.desired_width(160.0)
+					.text(tr("Analyzing…")),
+			);
+			ui.ctx().request_repaint();
+			bottom.with_layout(Layout::right_to_left(Align::Center), |ui| {
+				cancel = ui.button(tr("Cancel")).clicked();
+			});
+		}
+		MatchPhase::Failed(e) => {
+			top.add(
+				egui::Label::new(
+					egui::RichText::new(e)
+						.font(theme::medium(11.5))
+						.color(theme::WARNING),
+				)
+				.truncate(),
+			);
+			buttons(&mut bottom, false, &mut apply, &mut cancel);
+		}
+		MatchPhase::Ready(_) => {
+			if let Some((fit, _)) = state.match_eq_proposal() {
+				top.label(
+					egui::RichText::new(crate::i18n::decimal(format!(
+						"{:.1} dB → {:.1} dB",
+						fit.before_db, fit.residual_db
+					)))
+					.font(theme::mono(11.0))
+					.color(theme::TEXT_DIM),
+				)
+				.on_hover_text(tr(
+					"Tonal difference from the reference before → after the proposed bands",
+				));
+			}
+			let ui = &mut bottom;
+			ui.label(
+				egui::RichText::new(tr("Amount"))
+					.font(theme::medium(11.5))
+					.color(theme::TEXT_FAINT),
+			);
+			ui.add(
+				egui::Slider::new(&mut amount, 0.0..=100.0)
+					.suffix(" %")
+					.fixed_decimals(0)
+					.show_value(true),
+			);
+			ui.label(
+				egui::RichText::new(tr("Max"))
+					.font(theme::medium(11.5))
+					.color(theme::TEXT_FAINT),
+			);
+			ui.add(
+				egui::DragValue::new(&mut max_gain)
+					.range(1.0..=12.0)
+					.speed(0.1)
+					.fixed_decimals(1)
+					.suffix(" dB"),
+			);
+			buttons(ui, true, &mut apply, &mut cancel);
+		}
+	}
+	if let Some(m) = state.match_eq_mut() {
+		m.amount = amount;
+		m.max_gain_db = max_gain;
+	}
+	if apply {
+		state.apply_match_eq();
+	} else if cancel {
+		state.cancel_match_eq();
 	}
 }

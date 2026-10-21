@@ -368,6 +368,8 @@ fn every_command_round_trips() {
 				length: Some(beats(8.0)),
 				track: None,
 				take: None,
+				muted: None,
+				link: None,
 			},
 		},
 		Command::UpdateClip {
@@ -1336,6 +1338,7 @@ fn command_json_shape_is_stable() {
 					sidechain: None,
 					aux_outputs: Vec::new(),
 					zones: Vec::new(),
+					modulators: Vec::new(),
 				},
 				index: None,
 			},
@@ -2593,4 +2596,368 @@ fn armed_tracks_are_saved_undoable_and_follow_track_removal() {
 		.push(json!(TrackId::new().to_string()));
 	let loaded = Project::from_json_str(&v.to_string()).unwrap();
 	assert_eq!(loaded.armed, vec![keys_id, vox_id]);
+}
+
+#[test]
+fn muting_a_clip_is_one_undoable_step_and_omitted_from_json_when_off() {
+	let mut doc = Document::new(Project::new("m"));
+	let mut t = Track::new("Keys", TrackKind::Instrument);
+	let clip = Clip::midi("A", Tick(0), Tick(PPQ));
+	let id = clip.id;
+	t.clips.push(clip);
+	doc.execute(Command::AddTrack {
+		track: t,
+		index: None,
+	})
+	.unwrap();
+	let json = serde_json::to_string(doc.project()).unwrap();
+	assert!(!json.contains("muted"));
+	doc.execute(Command::UpdateClip {
+		clip: id,
+		patch: ClipPatch {
+			muted: Some(true),
+			..ClipPatch::default()
+		},
+	})
+	.unwrap();
+	assert_eq!(doc.history_labels().last().copied(), Some("Mute clip"));
+	let (_, c) = doc.project().find_clip(id).unwrap();
+	assert!(c.muted && c.plays() && !c.sounds());
+	let json = serde_json::to_string(doc.project()).unwrap();
+	assert!(json.contains("\"muted\":true"));
+	let back: Project = serde_json::from_str(&json).unwrap();
+	assert!(back.find_clip(id).unwrap().1.muted);
+	assert!(doc.project().summary().tracks[0].clips[0].muted);
+	doc.undo().unwrap();
+	assert!(!doc.project().find_clip(id).unwrap().1.muted);
+}
+
+fn linked_fixture() -> (Document, TrackId, ClipId, ClipId, NoteId) {
+	let mut doc = Document::new(Project::new("links"));
+	let mut t = Track::new("Keys", TrackKind::Instrument);
+	let note = Note::new(60, Tick(0), Tick(PPQ), 0.8);
+	let note_id = note.id;
+	let clip = Clip::midi("Pat", Tick(0), Tick(PPQ * 4)).with_notes([note]);
+	let a = clip.id;
+	t.clips.push(clip);
+	let track = t.id;
+	doc.execute(Command::AddTrack {
+		track: t,
+		index: None,
+	})
+	.unwrap();
+	let b = ClipId::new();
+	let commands = links::copy_clip(
+		doc.project(),
+		a,
+		b,
+		None,
+		Tick(PPQ * 4),
+		true,
+		cadenza_core::LinkId::new(),
+	)
+	.unwrap();
+	doc.execute(Command::Batch {
+		label: "Paste".into(),
+		commands,
+	})
+	.unwrap();
+	(doc, track, a, b, note_id)
+}
+
+#[test]
+fn linked_clips_share_note_and_controller_edits_in_one_undo_step() {
+	let (mut doc, _, a, b, note) = linked_fixture();
+	assert_eq!(links::link_count(doc.project(), a), 2);
+	let before = doc.history_labels().len();
+	doc.execute(Command::UpdateNotes {
+		clip: b,
+		notes: vec![NotePatch {
+			id: note,
+			pitch: Some(67),
+			velocity: None,
+			start: None,
+			length: None,
+		}],
+	})
+	.unwrap();
+	doc.execute(Command::AddNotes {
+		clip: a,
+		notes: vec![Note::new(72, Tick(PPQ), Tick(PPQ), 0.5)],
+	})
+	.unwrap();
+	doc.execute(Command::SetControllerLane {
+		clip: a,
+		controller: Controller::Cc(1),
+		points: vec![ControllerPoint {
+			tick: Tick(0),
+			value: 0.5,
+		}],
+	})
+	.unwrap();
+	let p = doc.project();
+	let (ca, cb) = (p.find_clip(a).unwrap().1, p.find_clip(b).unwrap().1);
+	assert!(ca.same_midi_content(cb));
+	assert_eq!(cb.notes().len(), 2);
+	assert_eq!(cb.notes()[0].pitch, 67);
+	assert_eq!(cb.controllers().len(), 1);
+	assert_eq!(doc.history_labels().len(), before + 3);
+	doc.undo().unwrap();
+	doc.undo().unwrap();
+	doc.undo().unwrap();
+	let p = doc.project();
+	let (ca, cb) = (p.find_clip(a).unwrap().1, p.find_clip(b).unwrap().1);
+	assert!(ca.same_midi_content(cb));
+	assert_eq!(cb.notes()[0].pitch, 60);
+	assert_eq!(cb.notes().len(), 1);
+	let summary = p.summary();
+	assert_eq!(summary.tracks[0].clips[0].link, Some(vec![b]));
+	let json = serde_json::to_string(p).unwrap();
+	let back = Project::from_json_str(&json).unwrap();
+	assert_eq!(
+		back.find_clip(b).unwrap().1.link,
+		p.find_clip(a).unwrap().1.link
+	);
+}
+
+#[test]
+fn linked_clips_validate_content_and_unlink() {
+	let (mut doc, track, a, b, note) = linked_fixture();
+	let link = doc.project().find_clip(a).unwrap().1.link;
+	// A clip with other content cannot join the group.
+	let mut other = Clip::midi("Other", Tick(PPQ * 8), Tick(PPQ));
+	other.link = link;
+	let err = doc
+		.execute(Command::AddClip { track, clip: other })
+		.unwrap_err();
+	assert!(err.to_string().contains("linked clips share"), "{err}");
+	// A shorter copy keeps the shared notes past its end; the longest copy bounds them.
+	doc.execute(Command::UpdateClip {
+		clip: b,
+		patch: ClipPatch {
+			length: Some(Tick(PPQ / 2)),
+			..ClipPatch::default()
+		},
+	})
+	.unwrap();
+	doc.execute(Command::AddNotes {
+		clip: b,
+		notes: vec![Note::new(62, Tick(PPQ * 2), Tick(PPQ), 0.5)],
+	})
+	.unwrap();
+	assert!(
+		doc.execute(Command::AddNotes {
+			clip: b,
+			notes: vec![Note::new(62, Tick(PPQ * 5), Tick(PPQ), 0.5)],
+		})
+		.is_err()
+	);
+	// Make unique: the last copy becomes independent too; edits no longer propagate.
+	let unique = links::make_unique(doc.project(), b).unwrap();
+	doc.execute(unique).unwrap();
+	assert_eq!(
+		doc.history_labels().last().copied(),
+		Some("Make clip unique")
+	);
+	assert!(doc.project().find_clip(a).unwrap().1.link.is_none());
+	doc.execute(Command::RemoveNotes {
+		clip: a,
+		notes: vec![note],
+	})
+	.unwrap();
+	assert_eq!(doc.project().find_clip(b).unwrap().1.notes().len(), 1);
+	doc.undo().unwrap();
+	doc.undo().unwrap();
+	assert_eq!(links::link_count(doc.project(), b), 2);
+	// Removing one copy keeps the rest consistent; undo restores it linked.
+	doc.execute(Command::RemoveClip { clip: a }).unwrap();
+	doc.undo().unwrap();
+	assert_eq!(links::link_count(doc.project(), a), 2);
+	// Splitting a linked clip unlinks the cut part first.
+	let cmds = takes::split_clip(doc.project(), a, Tick(PPQ * 2), ClipId::new(), None).unwrap();
+	doc.execute(Command::Batch {
+		label: "Split".into(),
+		commands: cmds,
+	})
+	.unwrap();
+	assert!(doc.project().find_clip(a).unwrap().1.link.is_none());
+	assert_eq!(doc.project().find_clip(b).unwrap().1.notes().len(), 1);
+}
+
+fn lfo_on(param: &str, depth: f32) -> Modulator {
+	let mut m = Modulator::lfo(cadenza_core::ModulatorId::new());
+	m.targets.push(ModTarget {
+		param: param.into(),
+		depth,
+	});
+	m
+}
+
+#[test]
+fn modulators_round_trip_validate_and_stay_out_of_old_json() {
+	let fx = fixture();
+	let set = |mods: Vec<Modulator>| Command::SetModulators {
+		track: Some(fx.lead),
+		device: fx.synth,
+		modulators: mods,
+	};
+	let modulated = round_trip(&fx.project, set(vec![lfo_on("cutoff", 0.3)]));
+	let synth = modulated.device(Some(fx.lead), fx.synth).unwrap();
+	assert_eq!(synth.modulators.len(), 1);
+	assert_eq!(set(vec![]).label(), "Remove modulation");
+	// Summary line.
+	let summary = modulated.summary();
+	let line = &summary.tracks[0].instrument.as_ref().unwrap().modulators[0];
+	assert_eq!(line, "LFO sine 1 Hz -> cutoff +0.30");
+
+	// JSON: omitted when empty, kept when set, and loads back.
+	let plain = serde_json::to_string(&fx.project).unwrap();
+	assert!(!plain.contains("modulators"));
+	let json = serde_json::to_string(&modulated).unwrap();
+	assert!(json.contains("\"modulators\"") && json.contains("\"type\":\"lfo\""));
+	let back: Project = serde_json::from_str(&json).unwrap();
+	assert_eq!(back, modulated);
+
+	// Validation.
+	let err = exec_err(&fx.project, set(vec![lfo_on("cutoff", 1.5)])).to_string();
+	assert!(err.contains("depth") && err.contains("-1..=1"), "{err}");
+	let too_many = (0..9).map(|_| lfo_on("cutoff", 0.1)).collect();
+	let err = exec_err(&fx.project, set(too_many)).to_string();
+	assert!(err.contains("at most 8"), "{err}");
+	let mut targets = lfo_on("cutoff", 0.1);
+	targets.targets = (0..17)
+		.map(|i| ModTarget {
+			param: format!("p{i}"),
+			depth: 0.1,
+		})
+		.collect();
+	assert!(
+		exec_err(&fx.project, set(vec![targets]))
+			.to_string()
+			.contains("at most 16")
+	);
+	let mut twice = lfo_on("cutoff", 0.1);
+	twice.targets.push(twice.targets[0].clone());
+	assert!(
+		exec_err(&fx.project, set(vec![twice]))
+			.to_string()
+			.contains("once per modulator")
+	);
+	let mut fast = lfo_on("cutoff", 0.1);
+	if let ModulatorKind::Lfo { rate_hz, .. } = &mut fast.kind {
+		*rate_hz = 100.0;
+	}
+	assert!(
+		exec_err(&fx.project, set(vec![fast]))
+			.to_string()
+			.contains("rate_hz")
+	);
+	let mut keyed = Modulator::envelope(cadenza_core::ModulatorId::new());
+	if let ModulatorKind::Envelope { source, .. } = &mut keyed.kind {
+		*source = EnvelopeSource::Sidechain;
+	}
+	let err = exec_err(&fx.project, set(vec![keyed])).to_string();
+	assert!(err.contains("set_sidechain"), "{err}");
+	let dup = lfo_on("cutoff", 0.1);
+	assert!(
+		exec_err(&fx.project, set(vec![dup.clone(), dup]))
+			.to_string()
+			.contains("unique")
+	);
+}
+
+fn cc_map(cc: u8, target: ParamAddress, min: f32, max: f32) -> MidiMapping {
+	MidiMapping {
+		controller: Controller::Cc(cc),
+		channel: None,
+		target,
+		min,
+		max,
+		mode: MapMode::Absolute,
+		takeover: Takeover::Jump,
+	}
+}
+
+#[test]
+fn midi_map_validates_round_trips_and_follows_removed_targets() {
+	let fx = fixture();
+	let cutoff = ParamAddress::device(Some(fx.lead), fx.synth, "cutoff");
+	let set = |map: Vec<MidiMapping>| Command::SetMidiMap { map };
+	let mapped = round_trip(
+		&fx.project,
+		set(vec![
+			cc_map(74, cutoff.clone(), 100.0, 8000.0),
+			cc_map(7, ParamAddress::track_volume(fx.lead), -60.0, 6.0),
+		]),
+	);
+	assert_eq!(mapped.midi_map.len(), 2);
+	assert_eq!(mapped.midi_map[0].tag(), "CC 74");
+	assert_eq!(mapped.midi_map[0].value_at(0.5), 4050.0);
+
+	// JSON: omitted when empty, defaults left out, loads back.
+	let plain = serde_json::to_string(&fx.project).unwrap();
+	assert!(!plain.contains("midi_map"));
+	let json = serde_json::to_string(&mapped).unwrap();
+	assert!(json.contains("\"midi_map\"") && json.contains("\"cc74\""));
+	assert!(!json.contains("\"mode\"") && !json.contains("takeover"));
+	let back: Project = serde_json::from_str(&json).unwrap();
+	assert_eq!(back, mapped);
+
+	// Validation, with actionable errors.
+	let mut twice = vec![cc_map(74, cutoff.clone(), 0.0, 1.0)];
+	twice.push(cc_map(71, cutoff.clone(), 0.0, 1.0));
+	assert!(
+		exec_err(&fx.project, set(twice))
+			.to_string()
+			.contains("mapped twice")
+	);
+	let same_cc = vec![
+		cc_map(74, cutoff.clone(), 0.0, 1.0),
+		cc_map(74, ParamAddress::track_pan(fx.lead), -1.0, 1.0),
+	];
+	assert!(
+		exec_err(&fx.project, set(same_cc))
+			.to_string()
+			.contains("already moves")
+	);
+	let mut other_channel = cc_map(74, ParamAddress::track_pan(fx.lead), -1.0, 1.0);
+	other_channel.channel = Some(1);
+	let mut first = cc_map(74, cutoff.clone(), 0.0, 1.0);
+	first.channel = Some(0);
+	round_trip(&fx.project, set(vec![first, other_channel]));
+	let mut bad_channel = cc_map(74, cutoff.clone(), 0.0, 1.0);
+	bad_channel.channel = Some(16);
+	assert!(
+		exec_err(&fx.project, set(vec![bad_channel]))
+			.to_string()
+			.contains("0..=15")
+	);
+	let mut relative_bend = cc_map(1, cutoff.clone(), 0.0, 1.0);
+	relative_bend.controller = Controller::PitchBend;
+	relative_bend.mode = MapMode::Relative;
+	assert!(
+		exec_err(&fx.project, set(vec![relative_bend]))
+			.to_string()
+			.contains("relative")
+	);
+	let loud = cc_map(7, ParamAddress::track_volume(fx.lead), -60.0, 40.0);
+	exec_err(&fx.project, set(vec![loud]));
+	let gone = ParamAddress::device(Some(fx.lead), DeviceId::new(), "cutoff");
+	exec_err(&fx.project, set(vec![cc_map(1, gone, 0.0, 1.0)]));
+
+	// Removing the device drops its assignment; undo restores both.
+	let mut doc = Document::new(mapped.clone());
+	doc.execute(Command::SetInstrument {
+		track: fx.lead,
+		device: None,
+	})
+	.unwrap();
+	assert_eq!(doc.project().midi_map.len(), 1);
+	doc.undo().unwrap();
+	assert_eq!(doc.project(), &mapped);
+	doc.execute(Command::RemoveTrack { track: fx.lead })
+		.unwrap();
+	assert!(doc.project().midi_map.is_empty());
+	doc.undo().unwrap();
+	assert_eq!(doc.project(), &mapped);
 }

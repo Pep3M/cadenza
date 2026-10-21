@@ -1,6 +1,7 @@
 //! Dedicated device editor bodies (one module per built-in).
 
 pub mod chorus;
+pub mod collisions;
 pub mod compressor;
 pub mod delay;
 pub mod drum_machine;
@@ -10,6 +11,7 @@ pub mod eq;
 pub mod gain;
 pub mod keyboard;
 pub mod limiter;
+pub mod modulation;
 pub mod poly_synth;
 pub mod reverb;
 pub mod sampler;
@@ -175,6 +177,7 @@ pub fn small_rows_height(width: f32, count: usize) -> f32 {
 
 /// The footer strip at the bottom of a dock body with a one-line note.
 pub fn footer(ui: &mut Ui, body: Rect, text: &str) {
+	let text = crate::i18n::tr_str(text);
 	let foot = Rect::from_min_size(
 		pos2(body.left() - 8.0, body.bottom() - FOOTER_H),
 		vec2(body.width() + 16.0, FOOTER_H),
@@ -241,4 +244,37 @@ pub fn compact_scroll(ui: &mut Ui, cx: &BodyCx, height: f32, add: impl FnOnce(&m
 				ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
 			add(ui, rect);
 		});
+}
+
+/// Playhead lines of the sounding voices (`xs`: screen x, newest first) over a waveform
+/// in `area`: the newest bright with a small head, older ones fainter. `faint` draws them
+/// all dim (pads and zones that sound but are not the selected one).
+pub fn playheads(p: &egui::Painter, area: Rect, xs: &[f32], faint: bool) {
+	for (k, &x) in xs.iter().enumerate() {
+		if !(area.left()..=area.right()).contains(&x) {
+			continue;
+		}
+		let alpha = match (faint, k) {
+			(true, _) => 0.45,
+			(false, 0) => 0.95,
+			(false, _) => 0.5,
+		};
+		let c = theme::TEXT.gamma_multiply(alpha);
+		p.vline(
+			x,
+			area.y_range(),
+			Stroke::new(if faint { 1.0 } else { 1.5 }, c),
+		);
+		if !faint && k == 0 {
+			p.add(egui::Shape::convex_polygon(
+				vec![
+					pos2(x - 4.0, area.top()),
+					pos2(x + 4.0, area.top()),
+					pos2(x, area.top() + 5.0),
+				],
+				c,
+				Stroke::NONE,
+			));
+		}
+	}
 }

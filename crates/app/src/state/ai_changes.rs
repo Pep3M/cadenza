@@ -4,6 +4,7 @@
 //! it; Keep, undoing the AI step or a new request clear it, and touching a changed param
 //! keeps that change and drops it from the set.
 
+use crate::i18n::mark;
 use std::collections::{BTreeMap, HashMap};
 
 use cadenza_core::DeviceId;
@@ -196,37 +197,101 @@ pub fn delta_text(before: f32, after: f32, unit: &str) -> String {
 /// Suggestions of the device editor's Ask AI popover for a built-in id.
 pub fn suggestions(device_id: &str) -> &'static [&'static str] {
 	match device_id {
-		"eq" => &[
-			"Make it brighter",
-			"Clean up the low end",
-			"Remove boxiness",
-			"Tame harshness",
-		],
-		"compressor" => &[
-			"Glue it more",
-			"Less pumping",
-			"More punch",
-			"Gentler, more transparent",
-		],
-		"limiter" => &["Louder, keep it clean", "Hit -14 LUFS", "Less squashed"],
-		"reverb" => &["Smaller room", "Longer, darker tail", "Less muddy"],
-		"delay" => &["Sync to 1/8 dotted", "Fewer repeats", "Wider ping-pong"],
-		"chorus" => &["Subtler", "Wider", "Slower, lusher"],
-		"saturator" => &["Warmer", "More grit", "Softer"],
-		"gain" => &["Make it mono", "Narrower", "Lower by 3 dB"],
-		"poly_synth" => &["Brighter pad", "Shorter pluck", "Fatter, more detune"],
-		"electric_piano" => &["Mellower", "More bell", "Add tremolo"],
-		"drum_machine" => &["Punchier kick", "Tighter hats", "Lower the snare"],
-		"sampler" | "drum_sampler" => &["Shorter release", "Brighter", "Less velocity range"],
+		"eq" => {
+			&const {
+				[
+					mark("Make it brighter"),
+					mark("Clean up the low end"),
+					mark("Remove boxiness"),
+					mark("Tame harshness"),
+				]
+			}
+		}
+		"compressor" => {
+			&const {
+				[
+					mark("Glue it more"),
+					mark("Less pumping"),
+					mark("More punch"),
+					mark("Gentler, more transparent"),
+				]
+			}
+		}
+		"limiter" => {
+			&const {
+				[
+					mark("Louder, keep it clean"),
+					mark("Hit -14 LUFS"),
+					mark("Less squashed"),
+				]
+			}
+		}
+		"reverb" => {
+			&const {
+				[
+					mark("Smaller room"),
+					mark("Longer, darker tail"),
+					mark("Less muddy"),
+				]
+			}
+		}
+		"delay" => {
+			&const {
+				[
+					mark("Sync to 1/8 dotted"),
+					mark("Fewer repeats"),
+					mark("Wider ping-pong"),
+				]
+			}
+		}
+		"chorus" => &const { [mark("Subtler"), mark("Wider"), mark("Slower, lusher")] },
+		"saturator" => &const { [mark("Warmer"), mark("More grit"), mark("Softer")] },
+		"gain" => {
+			&const {
+				[
+					mark("Make it mono"),
+					mark("Narrower"),
+					mark("Lower by 3 dB"),
+				]
+			}
+		}
+		"poly_synth" => {
+			&const {
+				[
+					mark("Brighter pad"),
+					mark("Shorter pluck"),
+					mark("Fatter, more detune"),
+				]
+			}
+		}
+		"electric_piano" => &const { [mark("Mellower"), mark("More bell"), mark("Add tremolo")] },
+		"drum_machine" => {
+			&const {
+				[
+					mark("Punchier kick"),
+					mark("Tighter hats"),
+					mark("Lower the snare"),
+				]
+			}
+		}
+		"sampler" | "drum_sampler" => {
+			&const {
+				[
+					mark("Shorter release"),
+					mark("Brighter"),
+					mark("Less velocity range"),
+				]
+			}
+		}
 		_ => GENERIC,
 	}
 }
 
 /// Suggestions that fit any device.
 pub const GENERIC: &[&str] = &[
-	"Make it subtler",
-	"Make it stronger",
-	"Explain these settings",
+	mark("Make it subtler"),
+	mark("Make it stronger"),
+	mark("Explain these settings"),
 ];
 
 #[cfg(test)]

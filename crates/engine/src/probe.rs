@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use cadenza_dsp::readings;
+use cadenza_model::modulation::MAX_MODULATORS;
 
 use crate::QUANTUM;
 
@@ -44,6 +45,8 @@ pub struct DeviceProbe {
 	active: AtomicBool,
 	readings: [AtomicU32; readings::MAX],
 	reading_count: AtomicU32,
+	modulation: [AtomicU32; MAX_MODULATORS],
+	modulation_count: AtomicU32,
 	/// Serializes readers only; the writer never touches it.
 	reader: Mutex<()>,
 }
@@ -61,8 +64,10 @@ impl DeviceProbe {
 			start: AtomicU64::new(0),
 			dropped: AtomicU64::new(0),
 			active: AtomicBool::new(false),
-			readings: Default::default(),
+			readings: std::array::from_fn(|_| AtomicU32::new(0)),
 			reading_count: AtomicU32::new(0),
+			modulation: std::array::from_fn(|_| AtomicU32::new(0)),
+			modulation_count: AtomicU32::new(0),
 			reader: Mutex::new(()),
 		}
 	}
@@ -104,6 +109,17 @@ impl DeviceProbe {
 		(index < n).then(|| values[index])
 	}
 
+	/// The current output of each of the device's modulators, in order (LFO -1..1,
+	/// envelope 0..1); empty when it has none.
+	pub fn modulation(&self) -> ([f32; MAX_MODULATORS], usize) {
+		let n = (self.modulation_count.load(Ordering::Acquire) as usize).min(MAX_MODULATORS);
+		let mut out = [0.0; MAX_MODULATORS];
+		for (o, a) in out.iter_mut().zip(&self.modulation).take(n) {
+			*o = f32::from_bits(a.load(Ordering::Relaxed));
+		}
+		(out, n)
+	}
+
 	/// Appends every frame written since the previous drain to `out`; returns how many.
 	pub fn drain(&self, out: &mut Vec<ProbeFrame>) -> usize {
 		let _guard = self.reader.lock().unwrap_or_else(|e| e.into_inner());
@@ -131,6 +147,7 @@ impl DeviceProbe {
 		self.start
 			.store(self.write.load(Ordering::Relaxed), Ordering::Release);
 		self.reading_count.store(0, Ordering::Release);
+		self.modulation_count.store(0, Ordering::Release);
 		self.active.store(false, Ordering::Relaxed);
 	}
 
@@ -164,6 +181,15 @@ impl DeviceProbe {
 			a.store(v.to_bits(), Ordering::Relaxed);
 		}
 		self.reading_count.store(n as u32, Ordering::Release);
+	}
+
+	/// Audio thread: the modulator values of the quantum just pushed.
+	pub(crate) fn publish_modulation(&self, values: &[f32]) {
+		let n = values.len().min(MAX_MODULATORS);
+		for (a, v) in self.modulation.iter().zip(&values[..n]) {
+			a.store(v.to_bits(), Ordering::Relaxed);
+		}
+		self.modulation_count.store(n as u32, Ordering::Release);
 	}
 
 	/// Audio thread: whether the device ran in the last quantum.

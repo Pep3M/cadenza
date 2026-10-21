@@ -1,6 +1,7 @@
 //! Inspector: tabs Track | Clip | Device over the selection (the tab follows what was
 //! selected last; `state::inspector`), and the undo history footer.
 
+use crate::i18n::{tr, trf, trn, trn_with};
 use cadenza_core::{ParamAddress, TrackId};
 use cadenza_engine::ProbeFrame;
 use cadenza_model::{
@@ -12,8 +13,10 @@ use egui::{CornerRadius, Id, RichText, Sense, Stroke, StrokeKind, Ui, vec2};
 use crate::state::AppState;
 use crate::state::edits::{TRACK_PALETTE, kind_name};
 use crate::state::inspector::{self, InspectorTab, Targets};
+use crate::state::layout::PanelKind;
 use crate::state::selection::DeviceRef;
 use crate::state::timeline::format_bbt;
+use crate::state::windows::WindowItem;
 use crate::theme;
 use crate::ui::device_kit::{self, ReadoutLook, ReadoutState, ValueFmt};
 use crate::ui::widgets::{self, Gesture};
@@ -43,7 +46,7 @@ const HISTORY_MIN_H: f32 = 84.0;
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
 	ui.add_space(4.0);
-	widgets::panel_title(ui, "Inspector", Some("F8"));
+	widgets::panel_title(ui, tr("Inspector"), Some("F8"));
 	ui.add_space(4.0);
 	let tab = state.inspector_tab();
 	let targets = state.inspector_targets();
@@ -87,6 +90,56 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 	history(ui, state);
 }
 
+/// The body of a floating Track / Clip properties window (T37): the item's header and
+/// the inspector tab that edits it (the same rows, one command per edit).
+pub fn item_window(ui: &mut Ui, state: &mut AppState, item: WindowItem) {
+	let (tab, targets) = match item {
+		WindowItem::Track(t) => (
+			InspectorTab::Track,
+			Targets {
+				track: Some(t),
+				clip: None,
+				device: None,
+				clips: 0,
+			},
+		),
+		WindowItem::Clip(c) => (
+			InspectorTab::Clip,
+			Targets {
+				track: None,
+				clip: Some(c),
+				device: None,
+				clips: 1,
+			},
+		),
+		WindowItem::Device(_) => return,
+	};
+	header(ui, state, tab, &targets);
+	ui.add_space(4.0);
+	egui::ScrollArea::vertical()
+		.id_salt(("float-item", item.id_key()))
+		.auto_shrink([false, false])
+		.show(ui, |ui| {
+			ui.spacing_mut().item_spacing.y = 4.0;
+			match item {
+				WindowItem::Track(Some(t)) => track(ui, state, t),
+				WindowItem::Track(None) => channel_controls(ui, state, None),
+				WindowItem::Clip(c) => clip(ui, state, c),
+				WindowItem::Device(_) => {}
+			}
+			ui.add_space(6.0);
+		});
+}
+
+/// Shows `r` in the inspector's Device tab, or in its window while the inspector is
+/// hidden (track / clip windows).
+fn show_device(state: &mut AppState, r: DeviceRef) {
+	state.selection.select_device(r);
+	if !state.view.panels.visible(PanelKind::Inspector) && state.has_device_editor(r) {
+		state.open_device_editor(r);
+	}
+}
+
 /// The item the active tab edits: colour chip, name and what it is.
 fn header(ui: &mut Ui, state: &AppState, tab: InspectorTab, targets: &Targets) {
 	let p = state.project();
@@ -104,10 +157,10 @@ fn header(ui: &mut Ui, state: &AppState, tab: InspectorTab, targets: &Targets) {
 			let where_ = r
 				.track
 				.and_then(track_of)
-				.map_or("Master".to_owned(), |t| t.name.clone());
+				.map_or(tr("Master").to_owned(), |t| t.name.clone());
 			let kind = d.map_or("", |d| match d.kind {
-				DeviceKind::Builtin { .. } => "Built-in",
-				DeviceKind::Clap { .. } => "CLAP plugin",
+				DeviceKind::Builtin { .. } => tr("Built-in"),
+				DeviceKind::Clap { .. } => tr("CLAP plugin"),
 				DeviceKind::Vst3 { .. } => "VST3 plugin",
 			});
 			let role = if r
@@ -134,37 +187,43 @@ fn header(ui: &mut Ui, state: &AppState, tab: InspectorTab, targets: &Targets) {
 				Some((t, c)) => (
 					theme::track_color(t.color.as_deref()),
 					c.name.clone(),
-					format!(
-						"{} clip on {} · {}",
-						if c.is_midi() { "MIDI" } else { "Audio" },
-						index_of(t.id),
-						t.name
-					),
+					if c.is_midi() {
+						trf(
+							"MIDI clip on {number} · {track}",
+							&[("number", &index_of(t.id)), ("track", &t.name)],
+						)
+					} else {
+						trf(
+							"Audio clip on {number} · {track}",
+							&[("number", &index_of(t.id)), ("track", &t.name)],
+						)
+					},
 				),
 				None => (theme::TEXT_FAINT, String::new(), String::new()),
 			}
 		}
-		InspectorTab::Track if targets.track == Some(None) => {
-			(theme::ACCENT, "Master".to_owned(), "Main output".to_owned())
-		}
+		InspectorTab::Track if targets.track == Some(None) => (
+			theme::ACCENT,
+			tr("Master").to_owned(),
+			tr("Main output").to_owned(),
+		),
 		InspectorTab::Track if targets.track.is_some() => {
 			let id = targets.track.flatten().expect("track");
 			match track_of(id) {
 				Some(t) => (
 					theme::track_color(t.color.as_deref()),
 					t.name.clone(),
-					format!(
-						"{} track {} · {} clip{}",
-						kind_name(t.kind),
-						index_of(id),
+					trn_with(
+						"{kind} track {number} · {n} clip",
+						"{kind} track {number} · {n} clips",
 						t.clips.len(),
-						if t.clips.len() == 1 { "" } else { "s" }
+						&[("kind", &kind_name(t.kind)), ("number", &index_of(id))],
 					),
 				),
 				None => (theme::TEXT_FAINT, String::new(), String::new()),
 			}
 		}
-		_ => (theme::TEXT_FAINT, p.name.clone(), "Project".to_owned()),
+		_ => (theme::TEXT_FAINT, p.name.clone(), tr("Project").to_owned()),
 	};
 	let width = ui.available_width();
 	let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
@@ -353,7 +412,7 @@ fn text_field(ui: &mut Ui, id: Id, current: &str, mono: bool) -> Option<String> 
 
 /// The track's name field (one `UpdateTrack` when committed).
 fn name_row(ui: &mut Ui, state: &mut AppState, t: &cadenza_model::Track) {
-	let name = row(ui, "Name", |ui| {
+	let name = row(ui, tr("Name"), |ui| {
 		text_field(ui, Id::new(("insp-track-name", t.id)), &t.name, false)
 	});
 	if let Some(name) = name {
@@ -381,20 +440,23 @@ fn project_overview(ui: &mut Ui, state: &AppState) {
 	let length_bars = meter.bar_at(meter.bar_ceil(end)).index;
 	let rows = [
 		(
-			"Tempo",
+			tr("Tempo"),
 			format!("{:.2} BPM", p.tempo.bpm_at(cadenza_core::Tick::ZERO)),
 		),
 		(
-			"Signature",
+			tr("Signature"),
 			format!(
 				"{}/{}",
 				p.time_signature.numerator, p.time_signature.denominator
 			),
 		),
-		("Tracks", p.tracks.len().to_string()),
-		("Length", format!("{length_bars} bars")),
+		(tr("Tracks"), p.tracks.len().to_string()),
 		(
-			"Style",
+			tr("Length"),
+			trf("{length_bars} bars", &[("length_bars", &length_bars)]),
+		),
+		(
+			tr("Style"),
 			p.meta.style.clone().unwrap_or_else(|| "—".to_owned()),
 		),
 	];
@@ -403,7 +465,7 @@ fn project_overview(ui: &mut Ui, state: &AppState) {
 	}
 	ui.add_space(8.0);
 	ui.label(
-		RichText::new("Select a track, clip or device to edit its properties.")
+		RichText::new(tr("Select a track, clip or device to edit its properties."))
 			.font(theme::small())
 			.color(theme::TEXT_FAINT),
 	);
@@ -414,7 +476,9 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 		return;
 	};
 	name_row(ui, state, &t);
-	let picked = row(ui, "Colour", |ui| colour_swatches(ui, t.color.as_deref()));
+	let picked = row(ui, tr("Colour"), |ui| {
+		colour_swatches(ui, t.color.as_deref())
+	});
 	if let Some(hex) = picked {
 		state.apply(Command::UpdateTrack {
 			track: id,
@@ -425,9 +489,9 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 			},
 		});
 	}
-	row(ui, "Kind", |ui| value_box(ui, kind_name(t.kind), None));
+	row(ui, tr("Kind"), |ui| value_box(ui, kind_name(t.kind), None));
 	if t.kind == TrackKind::Instrument {
-		row(ui, "Instrument", |ui| match &t.instrument {
+		row(ui, tr("Instrument"), |ui| match &t.instrument {
 			Some(d) => {
 				let r = DeviceRef {
 					track: Some(id),
@@ -435,17 +499,19 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 				};
 				if ui
 					.link(RichText::new(&d.name).font(theme::medium(12.0)))
-					.on_hover_text("Show it in the Device tab")
+					.on_hover_text(tr(
+						"Show it (Device tab, or its window with the inspector hidden)",
+					))
 					.clicked()
 				{
-					state.selection.select_device(r);
+					show_device(state, r);
 				}
 				editor_button(ui, state, d.id);
 				device_editor_button(ui, state, r);
 			}
 			None => {
 				ui.label(
-					RichText::new("none: double-click one in the browser")
+					RichText::new(tr("none: double-click one in the browser"))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
@@ -453,14 +519,14 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 		});
 	}
 	if t.kind == TrackKind::Audio {
-		row(ui, "Input", |ui| {
+		row(ui, tr("Input"), |ui| {
 			let (rect, _) = ui.allocate_exact_size(vec2(84.0, 20.0), Sense::hover());
 			crate::ui::record::input_controls(ui, state, &t, Id::new(("insp-input", id)), rect);
 		});
 	}
 	if t.kind != TrackKind::Folder {
 		let channel = t.channel.clone();
-		row(ui, "Output", |ui| {
+		row(ui, tr("Output"), |ui| {
 			let w = ui.available_width();
 			crate::ui::mixer::output_selector(ui, state, &t, &channel, w);
 		});
@@ -470,13 +536,13 @@ fn track(ui: &mut Ui, state: &mut AppState, id: TrackId) {
 		if t.kind == TrackKind::Folder {
 			"FOLDER (VCA)"
 		} else {
-			"CHANNEL"
+			tr("CHANNEL")
 		},
 	);
 	channel_controls(ui, state, Some(id));
 	ui.add_space(10.0);
 	if ui
-		.add(egui::Button::new(RichText::new("Delete track").font(theme::small())).small())
+		.add(egui::Button::new(RichText::new(tr("Delete track")).font(theme::small())).small())
 		.clicked()
 	{
 		state.apply(Command::RemoveTrack { track: id });
@@ -533,7 +599,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 		.and_then(|t| state.project().track(t))
 		.map_or(theme::ACCENT, |t| theme::track_color(t.color.as_deref()));
 	let folder = kind == Some(TrackKind::Folder);
-	row(ui, "Volume", |ui| {
+	row(ui, tr("Volume"), |ui| {
 		let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
 		let (g, resp) = widgets::volume_slider(
 			ui,
@@ -546,7 +612,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 		if state.is_automated(&address) {
 			crate::ui::automation::automated_badge(ui, resp.rect);
 		}
-		resp.on_hover_text("Drag (Shift: fine), double-click: 0 dB")
+		resp.on_hover_text(tr("Drag (Shift: fine), double-click: 0 dB"))
 			.context_menu(|ui| crate::ui::automation::automate_item(ui, state, address));
 		match g {
 			Gesture::Preview(v) => state.preview_volume(track, v),
@@ -555,7 +621,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 		}
 	});
 	if !folder {
-		row(ui, "Pan", |ui| {
+		row(ui, tr("Pan"), |ui| {
 			let (g, resp) = widgets::pan(
 				ui,
 				Id::new(("insp-pan", track)),
@@ -566,7 +632,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 			if state.is_automated(&address) {
 				crate::ui::automation::automated_badge(ui, resp.rect);
 			}
-			resp.on_hover_text("Drag (Shift: fine), double-click: center")
+			resp.on_hover_text(tr("Drag (Shift: fine), double-click: center"))
 				.context_menu(|ui| crate::ui::automation::automate_item(ui, state, address));
 			match g {
 				Gesture::Preview(v) => state.preview_pan(track, v),
@@ -578,7 +644,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 	if let Some(t) = track {
 		row(ui, "", |ui| {
 			let w = ((ui.available_width() - 8.0) / 3.0).clamp(36.0, 64.0);
-			if widgets::toggle(ui, ch.mute, "Mute", theme::MUTE, vec2(w, 20.0)).clicked() {
+			if widgets::toggle(ui, ch.mute, tr("Mute"), theme::MUTE, vec2(w, 20.0)).clicked() {
 				state.apply(Command::SetChannel {
 					track: Some(t),
 					patch: ChannelPatch {
@@ -587,7 +653,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 					},
 				});
 			}
-			if widgets::toggle(ui, ch.solo, "Solo", theme::SOLO, vec2(w, 20.0)).clicked() {
+			if widgets::toggle(ui, ch.solo, tr("Solo"), theme::SOLO, vec2(w, 20.0)).clicked() {
 				state.apply(Command::SetChannel {
 					track: Some(t),
 					patch: ChannelPatch {
@@ -598,8 +664,8 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 			}
 			if state.can_arm(t) {
 				let armed = state.is_armed(t);
-				if widgets::toggle(ui, armed, "● Arm", theme::RECORD, vec2(w, 20.0))
-					.on_hover_text("Arm for recording")
+				if widgets::toggle(ui, armed, tr("● Arm"), theme::RECORD, vec2(w, 20.0))
+					.on_hover_text(tr("Arm for recording"))
 					.clicked()
 				{
 					state.toggle_arm(t);
@@ -611,7 +677,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 		return;
 	}
 	if let Some(t) = track {
-		section(ui, "SENDS");
+		section(ui, tr("SENDS"));
 		let w = ui.available_width();
 		for s in &ch.sends {
 			crate::ui::mixer::send_row(ui, state, t, s, w + 4.0, "inspector");
@@ -627,7 +693,7 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 			.collect();
 		if !buses.is_empty() {
 			ui.menu_button(
-				RichText::new("+ Send")
+				RichText::new(tr("+ Send"))
 					.font(theme::small())
 					.color(theme::TEXT_DIM),
 				|ui| {
@@ -645,13 +711,13 @@ fn channel_controls(ui: &mut Ui, state: &mut AppState, track: Option<TrackId>) {
 			);
 		} else if ch.sends.is_empty() {
 			ui.label(
-				RichText::new("No buses to send to")
+				RichText::new(tr("No buses to send to"))
 					.font(theme::small())
 					.color(theme::TEXT_FAINT),
 			);
 		}
 	}
-	section(ui, "INSERTS");
+	section(ui, tr("INSERTS"));
 	for d in &ch.inserts {
 		insert_row(ui, state, track, d);
 	}
@@ -697,7 +763,7 @@ fn insert_row(
 	);
 	let pr = ui
 		.interact(power, Id::new(("insp-bypass", d.id)), Sense::click())
-		.on_hover_text(if d.bypass { "Enable" } else { "Bypass" });
+		.on_hover_text(if d.bypass { tr("Enable") } else { tr("Bypass") });
 	p.circle_filled(
 		power.center(),
 		3.5,
@@ -717,12 +783,16 @@ fn insert_row(
 	let plugin = state.is_plugin(d.id);
 	let nr = ui.interact(name, Id::new(("insp-insert", d.id)), Sense::click());
 	nr.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} insert", d.name))
+		egui::WidgetInfo::labeled(
+			egui::WidgetType::Button,
+			true,
+			trf("{name} insert", &[("name", &d.name)]),
+		)
 	});
 	let nr = nr.on_hover_text(if plugin {
-		"Click: edit in the Device tab. Double-click: the plugin's window"
+		tr("Click: edit in the Device tab. Double-click: the plugin's window")
 	} else {
-		"Click: edit in the Device tab. Double-click: the device editor"
+		tr("Click: edit in the Device tab. Double-click: the device editor")
 	});
 	let font = theme::medium(12.0);
 	let shown = crate::ui::mixer::elide(ui, &d.name, &font, name.width() - 4.0);
@@ -742,7 +812,7 @@ fn insert_row(
 			Stroke::new(1.0, theme::TEXT_FAINT),
 		);
 	}
-	if state.device_editor_target() == Some(r) || state.plugin_editor_open(d.id) {
+	if state.device_editor_shown(r) || state.plugin_editor_open(d.id) {
 		p.rect_stroke(
 			rect,
 			CornerRadius::same(theme::RADIUS),
@@ -761,7 +831,7 @@ fn insert_row(
 	}
 	let cr = ui
 		.interact(close, Id::new(("insp-remove", d.id)), Sense::click())
-		.on_hover_text("Remove");
+		.on_hover_text(tr("Remove"));
 	if hovered {
 		p.text(
 			close.center(),
@@ -790,7 +860,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 	};
 	let meter = cadenza_core::MeterMap::new(state.project().meter());
 	let ts = state.project().meter().signature_at(c.start);
-	let name = row(ui, "Name", |ui| {
+	let name = row(ui, tr("Name"), |ui| {
 		text_field(ui, Id::new(("insp-clip-name", id)), &c.name, false)
 	});
 	if let Some(name) = name {
@@ -802,7 +872,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 			},
 		});
 	}
-	let start = row(ui, "Start", |ui| {
+	let start = row(ui, tr("Start"), |ui| {
 		text_field(
 			ui,
 			Id::new(("insp-clip-start", id)),
@@ -819,12 +889,13 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 					state.apply(cmd);
 				}
 			}
-			None => state.notices.info(format!(
-				"'{text}' is not a position: type bar.beat.tick, e.g. 5.1.000"
+			None => state.notices.info(trf(
+				"'{text}' is not a position: type bar.beat.tick, e.g. 5.1.000",
+				&[("text", &text)],
 			)),
 		}
 	}
-	let length = row(ui, "Length", |ui| {
+	let length = row(ui, tr("Length"), |ui| {
 		text_field(
 			ui,
 			Id::new(("insp-clip-length", id)),
@@ -840,8 +911,9 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 				state.apply(cmd);
 			}
 		}
-		Some((text, None)) => state.notices.info(format!(
-			"'{text}' is not a length: type bars.beats.ticks, e.g. 4.0.000"
+		Some((text, None)) => state.notices.info(trf(
+			"'{text}' is not a length: type bars.beats.ticks, e.g. 4.0.000",
+			&[("text", &text)],
 		)),
 		None => {}
 	}
@@ -851,7 +923,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 		.iter()
 		.position(|t| t.id == track.id)
 		.map_or(0, |i| i + 1);
-	row(ui, "Track", |ui| {
+	row(ui, tr("Track"), |ui| {
 		value_box(ui, &format!("{index} · {}", track.name), None)
 	});
 	ui.add_space(2.0);
@@ -864,9 +936,11 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 				pitch,
 				velocity,
 			} = inspector::note_stats(&c.content).unwrap_or_default();
-			row(ui, "Notes", |ui| value_box(ui, &count.to_string(), None));
+			row(ui, tr("Notes"), |ui| {
+				value_box(ui, &count.to_string(), None)
+			});
 			let name = crate::state::poly_synth_editor::note_name;
-			row(ui, "Pitch", |ui| {
+			row(ui, tr("Pitch"), |ui| {
 				value_box(
 					ui,
 					&pitch.map_or("—".to_owned(), |(lo, hi)| {
@@ -879,7 +953,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 					None,
 				)
 			});
-			row(ui, "Velocity", |ui| {
+			row(ui, tr("Velocity"), |ui| {
 				value_box(
 					ui,
 					&velocity.map_or("—".to_owned(), |(lo, hi)| {
@@ -890,16 +964,36 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 							format!("{} – {}", v(lo), v(hi))
 						}
 					}),
-					Some("MIDI velocity (1-127) of the softest and the loudest note"),
+					Some(tr(
+						"MIDI velocity (1-127) of the softest and the loudest note",
+					)),
 				)
 			});
 			ui.add_space(6.0);
 			ui.horizontal(|ui| {
 				if ui
-					.button(RichText::new("Open in piano roll  F7").font(theme::small()))
+					.button(RichText::new(tr("Open in piano roll  F7")).font(theme::small()))
 					.clicked()
 				{
 					state.open_piano_roll(id);
+				}
+				let copies = cadenza_model::links::link_count(state.project(), id);
+				if copies > 1
+					&& ui
+						.button(
+							RichText::new(trf(
+								"Make unique (linked ×{copies})",
+								&[("copies", &copies)],
+							))
+							.font(theme::small()),
+						)
+						.on_hover_text(tr(
+							"This clip shares its notes with its linked copies: editing one edits \
+							 all. Make unique gives it its own notes.",
+						))
+						.clicked()
+				{
+					crate::ui::make_clips_unique(state, id);
 				}
 				delete_clip_button(ui, state, id);
 			});
@@ -917,12 +1011,17 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 							.color(theme::TEXT),
 					);
 					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						if ui
-							.small_button("Device tab")
-							.on_hover_text("Select the instrument and show it in the Device tab")
-							.clicked()
-						{
-							state.selection.select_device(r);
+						let docked = state.view.panels.visible(PanelKind::Inspector);
+						let (label, hint) = if docked {
+							(
+								tr("Device tab"),
+								tr("Select the instrument and show it in the Device tab"),
+							)
+						} else {
+							(tr("Open"), tr("Open the instrument's window"))
+						};
+						if ui.small_button(label).on_hover_text(hint).clicked() {
+							show_device(state, r);
 						}
 					});
 				});
@@ -940,13 +1039,13 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 				|| file.display().to_string(),
 				|f| f.to_string_lossy().into_owned(),
 			);
-			row(ui, "File", |ui| {
+			row(ui, tr("File"), |ui| {
 				value_box(ui, &file_name, Some(&file.display().to_string()))
 			});
-			row(ui, "Offset", |ui| {
+			row(ui, tr("Offset"), |ui| {
 				value_box(ui, &format!("{offset_seconds:.3} s"), None)
 			});
-			let gain = row(ui, "Gain", |ui| {
+			let gain = row(ui, tr("Gain"), |ui| {
 				readout_field(
 					ui,
 					Id::new(("insp-clip-gain", id)),
@@ -965,7 +1064,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 				- state.project().tempo.tick_to_seconds(c.start);
 			let max = duration.max(0.001) as f32;
 			let fade = |f: Option<ClipFade>| f.map_or(0.0, |f| f.seconds as f32);
-			let typed_in = row(ui, "Fade in", |ui| {
+			let typed_in = row(ui, tr("Fade in"), |ui| {
 				readout_field(
 					ui,
 					Id::new(("insp-fade-in", id)),
@@ -975,7 +1074,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 					"s",
 				)
 			});
-			let typed_out = row(ui, "Fade out", |ui| {
+			let typed_out = row(ui, tr("Fade out"), |ui| {
 				readout_field(
 					ui,
 					Id::new(("insp-fade-out", id)),
@@ -1004,7 +1103,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 			ui.add_space(6.0);
 			ui.horizontal(|ui| {
 				if ui
-					.button(RichText::new("Open audio editor").font(theme::small()))
+					.button(RichText::new(tr("Open audio editor")).font(theme::small()))
 					.clicked()
 				{
 					state.open_audio_editor(id);
@@ -1044,7 +1143,7 @@ fn clip_preview(
 				p.text(
 					rect.center(),
 					egui::Align2::CENTER_CENTER,
-					"No notes yet",
+					tr("No notes yet"),
 					theme::small(),
 					theme::TEXT_FAINT,
 				);
@@ -1105,7 +1204,7 @@ fn clip_preview(
 
 fn delete_clip_button(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 	if ui
-		.button(RichText::new("Delete clip").font(theme::small()))
+		.button(RichText::new(tr("Delete clip")).font(theme::small()))
 		.clicked()
 	{
 		state.apply(Command::RemoveClip { clip: id });
@@ -1139,7 +1238,7 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 					.iter()
 					.map(|p| ParamRow {
 						id: p.id.to_owned(),
-						name: p.name.to_owned(),
+						name: crate::i18n::tr_str(p.name).to_owned(),
 						min: p.min,
 						max: p.max,
 						default: p.default,
@@ -1180,7 +1279,8 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 		.is_some_and(|i| i.id == d.id);
 	ui.horizontal(|ui| {
 		if !is_instrument
-			&& widgets::toggle(ui, d.bypass, "Bypass", theme::BYPASS, vec2(54.0, 18.0)).clicked()
+			&& widgets::toggle(ui, d.bypass, tr("Bypass"), theme::BYPASS, vec2(54.0, 18.0))
+				.clicked()
 		{
 			state.apply(Command::SetDeviceBypass {
 				track: r.track,
@@ -1188,7 +1288,7 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 				bypass: !d.bypass,
 			});
 		}
-		if ui.small_button("Remove").clicked() {
+		if ui.small_button(tr("Remove")).clicked() {
 			state.remove_device(r.track, d.id);
 		}
 		editor_button(ui, state, d.id);
@@ -1201,9 +1301,12 @@ fn device(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 			crate::state::samples::SampleKind::Sampler => "zones",
 		};
 		ui.label(
-			RichText::new(format!("{} {what} loaded", d.zones.len()))
-				.font(theme::small())
-				.color(theme::TEXT_DIM),
+			RichText::new(trf(
+				"{n} {what} loaded",
+				&[("n", &d.zones.len()), ("what", &what)],
+			))
+			.font(theme::small())
+			.color(theme::TEXT_DIM),
 		);
 	}
 	ui.add_space(6.0);
@@ -1258,7 +1361,7 @@ fn generic_params(ui: &mut Ui, state: &mut AppState, r: DeviceRef, params: Vec<P
 		return;
 	};
 	if params.is_empty() {
-		ui.label(RichText::new("No editable parameters").color(theme::TEXT_FAINT));
+		ui.label(RichText::new(tr("No editable parameters")).color(theme::TEXT_FAINT));
 		return;
 	}
 	let params = filter_params(ui, d.id, params);
@@ -1519,7 +1622,7 @@ fn compact_instrument(ui: &mut Ui, state: &mut AppState, r: DeviceRef, id: &str)
 		"drum_machine" => drum_machine::compact_height(width),
 		"drum_sampler" => drum_sampler::compact_height(width),
 		"sampler" => sampler::compact_height(width),
-		_ => poly_synth::compact_height(width),
+		_ => poly_synth::compact_height(width, poly_synth::wavetable_count(state, r)),
 	};
 	let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
 	let accent = r
@@ -1557,21 +1660,21 @@ fn editor_button(ui: &mut Ui, state: &mut AppState, device: cadenza_core::Device
 		return;
 	}
 	if !cadenza_engine::EDITORS_SUPPORTED {
-		ui.add_enabled(false, egui::Button::new("Edit").small())
-			.on_disabled_hover_text(
+		ui.add_enabled(false, egui::Button::new(tr("Edit")).small())
+			.on_disabled_hover_text(tr(
 				"Plugin editor windows are not supported on this platform yet; use the \
 				 parameter controls below",
-			);
+			));
 		return;
 	}
 	let open = state.plugin_editor_open(device);
-	let label = if open { "Close editor" } else { "Edit" };
+	let label = if open { tr("Close editor") } else { tr("Edit") };
 	if ui
 		.small_button(label)
-		.on_hover_text(
+		.on_hover_text(tr(
 			"The plugin's own editor window (also: double-click the device in the mixer); \
 			 changes made there are part of the project and undoable",
-		)
+		))
 		.clicked()
 	{
 		state.toggle_plugin_editor(device);
@@ -1585,16 +1688,16 @@ fn device_editor_button(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 		return;
 	}
 	let label = match state.device(r).and_then(crate::state::samples::kind) {
-		Some(crate::state::samples::SampleKind::Drums) => "Edit pads",
-		Some(crate::state::samples::SampleKind::Sampler) => "Edit zones",
-		None => "Edit",
+		Some(crate::state::samples::SampleKind::Drums) => tr("Edit pads"),
+		Some(crate::state::samples::SampleKind::Sampler) => tr("Edit zones"),
+		None => tr("Edit"),
 	};
 	if ui
 		.small_button(label)
-		.on_hover_text(
-			"The device editor in the bottom dock (also: double-click the device in the \
-			 mixer or the instrument in its track header)",
-		)
+		.on_hover_text(tr(
+			"The device's floating window (also: click the device in the mixer or \
+			 double-click the instrument in its track header)",
+		))
 		.clicked()
 	{
 		state.toggle_device_editor(r);
@@ -1618,7 +1721,7 @@ fn filter_params(
 	let total = params.len();
 	ui.horizontal(|ui| {
 		ui.label(
-			RichText::new(format!("{total} parameters"))
+			RichText::new(trf("{total} parameters", &[("total", &total)]))
 				.font(theme::small())
 				.color(theme::TEXT_DIM),
 		);
@@ -1641,9 +1744,9 @@ fn filter_params(
 	};
 	if found > MAX_PLUGIN_PARAMS {
 		let label = if all {
-			format!("Show the first {MAX_PLUGIN_PARAMS}")
+			trf("Show the first {n}", &[("n", &MAX_PLUGIN_PARAMS)])
 		} else {
-			format!("Show all {found}")
+			trf("Show all {found}", &[("found", &found)])
 		};
 		if ui.small_button(label).clicked() {
 			all = !all;
@@ -1655,7 +1758,7 @@ fn filter_params(
 	});
 	if shown.is_empty() {
 		ui.label(
-			RichText::new("No parameter matches")
+			RichText::new(tr("No parameter matches"))
 				.font(theme::small())
 				.color(theme::TEXT_FAINT),
 		);
@@ -1687,34 +1790,33 @@ fn history(ui: &mut Ui, state: &mut AppState) {
 		let title = ui
 			.add(
 				egui::Label::new(
-					RichText::new(format!("{} History", if folded { "▸" } else { "▾" }))
-						.font(theme::heading())
-						.color(theme::TEXT),
+					RichText::new(trf(
+						"{arrow} History",
+						&[("arrow", &if folded { "▸" } else { "▾" })],
+					))
+					.font(theme::heading())
+					.color(theme::TEXT),
 				)
 				.sense(Sense::click()),
 			)
 			.on_hover_text(if folded {
-				"Show the history"
+				tr("Show the history")
 			} else {
-				"Fold the history"
+				tr("Fold the history")
 			});
 		if title.clicked() {
 			state.view.inspector.history_folded = !folded;
 		}
 		ui.label(
-			RichText::new(format!(
-				"{} step{}",
-				done.len(),
-				if done.len() == 1 { "" } else { "s" }
-			))
-			.font(theme::small())
-			.color(theme::TEXT_FAINT),
+			RichText::new(trn("{n} step", "{n} steps", done.len()))
+				.font(theme::small())
+				.color(theme::TEXT_FAINT),
 		);
 		ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 			if ui
 				.add_enabled(
 					state.document().can_redo(),
-					egui::Button::new("Redo").small(),
+					egui::Button::new(tr("Redo")).small(),
 				)
 				.on_hover_text("Ctrl+Shift+Z")
 				.clicked()
@@ -1724,7 +1826,7 @@ fn history(ui: &mut Ui, state: &mut AppState) {
 			if ui
 				.add_enabled(
 					state.document().can_undo(),
-					egui::Button::new("Undo").small(),
+					egui::Button::new(tr("Undo")).small(),
 				)
 				.on_hover_text("Ctrl+Z")
 				.clicked()
@@ -1744,7 +1846,7 @@ fn history(ui: &mut Ui, state: &mut AppState) {
 			ui.spacing_mut().item_spacing.y = 2.0;
 			if done.is_empty() && undone.is_empty() {
 				ui.label(
-					RichText::new("No edits yet")
+					RichText::new(tr("No edits yet"))
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
@@ -1820,7 +1922,10 @@ fn history_row(ui: &mut Ui, n: usize, label: &str, undone: bool, current: bool) 
 		color,
 	);
 	if undone {
-		resp.on_hover_text(format!("{label} (undone: Redo brings it back)"));
+		resp.on_hover_text(trf(
+			"{label} (undone: Redo brings it back)",
+			&[("label", &label)],
+		));
 	} else if elided {
 		resp.on_hover_text(label);
 	}

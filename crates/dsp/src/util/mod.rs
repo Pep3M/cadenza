@@ -10,6 +10,7 @@ pub mod oscillator;
 pub mod pitch;
 pub mod smoother;
 pub mod svf;
+pub mod wavetable;
 
 use crate::processor::{DeviceInfo, MidiEvent};
 

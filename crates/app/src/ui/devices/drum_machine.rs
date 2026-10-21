@@ -11,12 +11,13 @@
 //! voice, below 700 px the compact form takes over (also the inspector's). The pure
 //! logic lives in [`crate::state::drum_machine_editor`].
 
+use crate::i18n::{mark, tr, tr_str, trf};
 use std::sync::{Arc, Mutex};
 
 use cadenza_core::TrackId;
 use egui::{
-	Align2, Color32, CornerRadius, CursorIcon, Id, Key, Layout, Modifiers, Pos2, Rect, Sense,
-	Shape, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
+	Align2, Color32, CornerRadius, CursorIcon, Id, Layout, Pos2, Rect, Sense, Shape, Stroke,
+	StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 
 use crate::state::AppState;
@@ -44,8 +45,10 @@ const LEVEL_TRACK: Color32 = Color32::from_rgb(0x0e, 0x0f, 0x11);
 const GRID: Color32 = Color32::from_rgb(0x16, 0x18, 0x1b);
 const PITCH: Color32 = theme::BAND_COLORS[2];
 const ENVELOPE: Color32 = Color32::from_rgb(0xf4, 0xf5, 0xf7);
-const FOOTER: &str = "Strip shows the voice's own envelope from its current settings. Pads \
-	flash in the voice colour when the engine triggers them.";
+const FOOTER: &str = mark(
+	"Strip shows the voice's own envelope from its current settings. Pads \
+	flash in the voice colour when the engine triggers them.",
+);
 
 fn color(voice: &Voice) -> Color32 {
 	theme::BAND_COLORS[voice.color]
@@ -117,20 +120,18 @@ pub fn set_flash(ctx: &egui::Context, salt: &str, r: DeviceRef, flash: Option<(u
 }
 
 /// ← → move between the voices while the editor has the focus.
-pub fn shortcuts(ctx: &egui::Context, r: DeviceRef) {
-	let delta = ctx.input_mut(|i| {
-		if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
-			-1
-		} else if i.consume_key(Modifiers::NONE, Key::ArrowRight) {
-			1
-		} else {
-			0
-		}
-	});
-	if delta != 0 {
-		let shared = view(ctx, view_id(DOCK, r));
-		let mut v = lock(&shared);
-		v.selected = dm::step_voice(v.selected, delta);
+/// ← → the voice, ↑ ↓ its level.
+pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef) {
+	let keys = crate::ui::device_editor::arrows(ctx);
+	let shared = view(ctx, view_id(DOCK, r));
+	let mut v = lock(&shared);
+	if keys.h != 0 {
+		v.selected = dm::step_voice(v.selected, keys.h);
+	}
+	let level = VOICES[v.selected.min(VOICES.len() - 1)].level;
+	drop(v);
+	if keys.v != 0 {
+		crate::ui::device_editor::nudge_param(state, r, level, keys.v as f32, keys.shift);
 	}
 }
 
@@ -298,7 +299,7 @@ fn voice_strip(
 		p.text(
 			row.left_center(),
 			Align2::LEFT_CENTER,
-			sp.label,
+			tr_str(sp.label),
 			theme::medium(font),
 			theme::TEXT_DIM,
 		);
@@ -318,7 +319,7 @@ fn voice_strip(
 		p.text(
 			pos2(inner.left(), bar.top() - 2.0),
 			Align2::LEFT_BOTTOM,
-			"Level",
+			tr("Level"),
 			theme::medium(font),
 			theme::TEXT_FAINT,
 		);
@@ -377,16 +378,13 @@ fn pad(
 	}
 	if resp.double_clicked() {
 		devices::commit_changes(state, cx.r, cx.info, &dm::reset_voice(voice), |_| {
-			format!("Reset {}", voice.name.to_lowercase())
+			trf(
+				"Reset {name}",
+				&[("name", &tr_str(voice.name).to_lowercase())],
+			)
 		});
 	}
-	let _ = resp.on_hover_text(format!(
-		"{}: click to audition ({} plays it), {}-click to select without playing, \
-		 double-click resets the voice",
-		voice.name,
-		voice.note_label,
-		select_key()
-	));
+	let _ = resp.on_hover_text(trf("{name}: click to audition ({note_label} plays it), {select_key}-click to select without playing, double-click resets the voice", &[("name", &tr_str(voice.name)), ("note_label", &voice.note_label), ("select_key", &select_key())]));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -435,13 +433,17 @@ fn pad(
 	);
 	let font = theme::semibold(if narrow { 12.0 } else { 14.0 });
 	let fits = p
-		.layout_no_wrap(voice.name.to_owned(), font.clone(), theme::TEXT)
+		.layout_no_wrap(tr_str(voice.name).to_owned(), font.clone(), theme::TEXT)
 		.size()
 		.x <= inner.width();
 	p.text(
 		pos2(inner.left(), inner.bottom()),
 		Align2::LEFT_BOTTOM,
-		if fits { voice.name } else { voice.short },
+		if fits {
+			tr_str(voice.name)
+		} else {
+			tr_str(voice.short)
+		},
 		font,
 		Color32::from_rgb(0xf4, 0xf5, 0xf7),
 	);
@@ -465,7 +467,7 @@ fn level_bar(
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::ResizeHorizontal);
-	let label = format!("{} level", voice.name);
+	let label = trf("{name} level", &[("name", &tr_str(voice.name))]);
 	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, &label));
 	if resp.drag_started() {
 		v.selected = i;
@@ -488,20 +490,25 @@ fn level_bar(
 	{
 		let db = dm::drag_level(voice.level, d.start, d.dx, d.width);
 		devices::commit_changes(state, cx.r, cx.info, &[(voice.level, db)], |_| {
-			format!("{} level", voice.name)
+			trf("{name} level", &[("name", &tr_str(voice.name))])
 		});
 	}
 	if resp.double_clicked() {
 		let db = dm::param(voice.level).default;
 		devices::commit_changes(state, cx.r, cx.info, &[(voice.level, db)], |_| {
-			format!("Reset {} level", voice.name.to_lowercase())
+			trf(
+				"Reset {name} level",
+				&[("name", &tr_str(voice.name).to_lowercase())],
+			)
 		});
 	}
 	let db = value(state, cx, voice.level);
-	let resp = resp.on_hover_text(format!(
-		"{} level {}: drag sideways, double-click resets",
-		voice.name,
-		crate::state::device::format_value(db, "dB")
+	let resp = resp.on_hover_text(trf(
+		"{name} level {value}: drag sideways, double-click resets",
+		&[
+			("name", &tr_str(voice.name)),
+			("value", &crate::state::device::format_value(db, "dB")),
+		],
 	));
 	let c = color(voice);
 	let p = ui.painter();
@@ -572,7 +579,7 @@ fn finish_wheel_now(state: &mut AppState, cx: &BodyCx, v: &mut DrumView) {
 			cx.r,
 			cx.info,
 			&[(voice.level, (w.value * 2.0).round() / 2.0)],
-			|_| format!("{} level", voice.name),
+			|_| trf("{name} level", &[("name", &tr_str(voice.name))]),
 		);
 	}
 }
@@ -727,17 +734,17 @@ fn big_picture(ui: &Ui, state: &AppState, cx: &BodyCx, i: usize, rect: Rect) {
 		4.0,
 		3.0,
 	));
-	let mut legend: Vec<(&str, Color32)> = vec![("Amp envelope", ENVELOPE.gamma_multiply(0.7))];
+	let mut legend: Vec<(&str, Color32)> = vec![(tr("Amp envelope"), ENVELOPE.gamma_multiply(0.7))];
 	if i == 0 {
-		legend.push(("Pitch sweep", PITCH));
+		legend.push((tr("Pitch sweep"), PITCH));
 	}
 	if i == 3 {
-		legend = vec![("Closed", c), ("Open", c.gamma_multiply(0.45))];
+		legend = vec![(tr("Closed"), c), (tr("Open"), c.gamma_multiply(0.45))];
 	}
 	let out = p.text(
 		rect.left_top() + vec2(8.0, 6.0),
 		Align2::LEFT_TOP,
-		"Output",
+		tr("Output"),
 		theme::medium(10.5),
 		theme::TEXT_DIM,
 	);
@@ -801,7 +808,7 @@ fn selected_panel(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DrumVi
 	let name = p.text(
 		pos2(main.left() + 18.0, main.top() + head_h * 0.5),
 		Align2::LEFT_CENTER,
-		voice.name,
+		tr_str(voice.name),
 		theme::semibold(15.0),
 		theme::TEXT,
 	);
@@ -812,9 +819,9 @@ fn selected_panel(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DrumVi
 		theme::mono(11.5),
 		theme::TEXT_FAINT,
 	);
-	let hint = format!(
-		"Click a pad to audition \u{b7} {}-click to select without playing",
-		select_key()
+	let hint = trf(
+		"Click a pad to audition · {select_key}-click to select without playing",
+		&[("select_key", &select_key())],
 	);
 	let g = p.layout_no_wrap(hint, theme::medium(11.0), theme::TEXT_FAINT);
 	if note.right() + 16.0 + g.size().x < main.right() {
@@ -864,7 +871,7 @@ fn kit_column(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 	ui.painter().text(
 		pos2(col.center().x, col.top()),
 		Align2::CENTER_TOP,
-		"KIT",
+		tr("KIT"),
 		theme::semibold(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -875,8 +882,8 @@ fn kit_column(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 		cx,
 		knobs,
 		&[
-			KnobDef::new(TONE, "Tone", size),
-			KnobDef::new(GAIN, "Gain", size).step(0.5),
+			KnobDef::new(TONE, tr("Tone"), size),
+			KnobDef::new(GAIN, tr("Gain"), size).step(0.5),
 		],
 		1,
 	);
@@ -945,7 +952,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DrumView, rec
 	let name = p.text(
 		pos2(rect.left() + 16.0, y + TITLE_H * 0.5),
 		Align2::LEFT_CENTER,
-		voice.name,
+		tr_str(voice.name),
 		theme::semibold(12.5),
 		theme::TEXT,
 	);
@@ -961,8 +968,8 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DrumView, rec
 	big_picture(ui, state, cx, i, picture);
 	y = picture.bottom() + GAP;
 	let mut knobs = voice_knobs(voice, KnobSize::S);
-	knobs.push(KnobDef::new(TONE, "Kit tone", KnobSize::S));
-	knobs.push(KnobDef::new(GAIN, "Kit gain", KnobSize::S).step(0.5));
+	knobs.push(KnobDef::new(TONE, tr("Kit tone"), KnobSize::S));
+	knobs.push(KnobDef::new(GAIN, tr("Kit gain"), KnobSize::S).step(0.5));
 	let cols = devices::small_columns(rect.width(), knobs.len());
 	let k = Rect::from_min_max(pos2(rect.left(), y), rect.max);
 	let rows = knobs.len().div_ceil(cols);

@@ -6,6 +6,7 @@ use egui::{
 	Ui, Vec2, pos2, vec2,
 };
 
+use crate::i18n::tr;
 use crate::state::meters::{FLOOR_DB, MeterLevels};
 use crate::theme;
 
@@ -50,9 +51,9 @@ pub fn format_db(db: f32) -> String {
 	if db <= FADER_MIN_DB + 0.05 {
 		"-inf".into()
 	} else if db.abs() < 0.05 {
-		"0.0".into()
+		crate::i18n::decimal("0.0".into())
 	} else {
-		format!("{db:+.1}")
+		crate::i18n::decimal(format!("{db:+.1}"))
 	}
 }
 
@@ -255,7 +256,7 @@ pub fn pan_knob(ui: &mut Ui, id: Id, pan: f32, size: Vec2) -> (Gesture, Response
 	}
 	(
 		gesture,
-		response.on_hover_text("Pan: drag (Shift: fine), double-click: center"),
+		response.on_hover_text(tr("Pan: drag (Shift: fine), double-click: center")),
 	)
 }
 
@@ -325,18 +326,34 @@ fn meter_color(db: f32) -> Color32 {
 
 /// Stereo level meter (RMS bar, lighter peak bar, hold line, clip lamp on top).
 /// Returns true when the clip lamp was clicked.
-pub fn meter(ui: &mut Ui, id: Id, levels: MeterLevels, size: Vec2) -> bool {
+pub fn meter(
+	ui: &mut Ui,
+	id: Id,
+	levels: MeterLevels,
+	size: Vec2,
+	mode: crate::state::mixer::MeterMode,
+) -> bool {
 	let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
 	let lamp = Rect::from_min_size(rect.min, vec2(rect.width(), 5.0));
 	let clicked = ui.interact(lamp, id, Sense::click()).clicked();
 	if ui.is_rect_visible(rect) {
-		paint_meter(ui.painter(), rect, levels);
+		paint_meter_mode(ui.painter(), rect, levels, mode);
 	}
 	clicked
 }
 
-/// Paints a meter into `rect` (also used by the arrange-view track headers).
+/// Paints a Peak+RMS meter into `rect` (the arrange-view track headers).
 pub fn paint_meter(p: &egui::Painter, rect: Rect, levels: MeterLevels) {
+	paint_meter_mode(p, rect, levels, crate::state::mixer::MeterMode::PeakRms);
+}
+
+/// Paints a meter in `mode` (see [`crate::state::mixer::meter_bars`]).
+pub fn paint_meter_mode(
+	p: &egui::Painter,
+	rect: Rect,
+	levels: MeterLevels,
+	mode: crate::state::mixer::MeterMode,
+) {
 	let lamp = Rect::from_min_size(rect.min, vec2(rect.width(), 5.0));
 	p.rect_filled(
 		lamp,
@@ -357,21 +374,23 @@ pub fn paint_meter(p: &egui::Painter, rect: Rect, levels: MeterLevels) {
 			vec2(w, body.height()),
 		);
 		let y = |db: f32| col.bottom() - db_to_meter(db) * col.height();
-		let peak = levels.peak_db[c];
-		if peak > FLOOR_DB {
+		let bars = crate::state::mixer::meter_bars(levels.peak_db[c], levels.rms_db[c], mode);
+		if let Some(peak) = bars.ghost {
 			let r = Rect::from_x_y_ranges(col.x_range(), y(peak)..=col.bottom());
 			p.rect_filled(r, 0.0, meter_color(peak).gamma_multiply(0.45));
 		}
-		let rms = levels.rms_db[c];
-		if rms > FLOOR_DB {
+		if let Some(top) = bars.body {
 			// Colored by zone so loud passages read at a glance.
 			for (lo, hi) in [(FLOOR_DB, -12.0), (-12.0, -3.0), (-3.0, FADER_MAX_DB)] {
-				if rms <= lo {
+				if top <= lo {
 					break;
 				}
-				let r = Rect::from_x_y_ranges(col.x_range(), y(rms.min(hi))..=y(lo));
+				let r = Rect::from_x_y_ranges(col.x_range(), y(top.min(hi))..=y(lo));
 				p.rect_filled(r, 0.0, meter_color(lo + 0.01));
 			}
+		}
+		if let Some(peak) = bars.line {
+			p.hline(col.x_range(), y(peak), Stroke::new(1.0, meter_color(peak)));
 		}
 		if levels.hold_db > FLOOR_DB {
 			p.hline(
@@ -391,6 +410,30 @@ pub fn paint_meter(p: &egui::Painter, rect: Rect, levels: MeterLevels) {
 }
 
 /// Small square toggle (M / S / bypass) colored when on.
+/// `ui.checkbox` with a Graphite box: an inset square with a visible border when
+/// unchecked (egui's default fill alone vanishes on the dialog panels), accent-tinted
+/// when checked.
+pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<egui::WidgetText>) -> Response {
+	let on = *checked;
+	ui.scope(|ui| {
+		let w = &mut ui.visuals_mut().widgets;
+		let (fill, border) = if on {
+			(theme::ACCENT_DIM, theme::ACCENT_BORDER)
+		} else {
+			(theme::BG_DEEP, theme::BORDER_STRONG)
+		};
+		w.inactive.bg_fill = fill;
+		w.inactive.bg_stroke = Stroke::new(1.0, border);
+		w.hovered.bg_fill = fill;
+		w.hovered.bg_stroke = Stroke::new(1.0, theme::TEXT_DIM);
+		w.active.bg_fill = fill;
+		w.noninteractive.bg_fill = fill;
+		w.noninteractive.bg_stroke = Stroke::new(1.0, theme::BORDER);
+		ui.checkbox(checked, text)
+	})
+	.inner
+}
+
 pub fn toggle(ui: &mut Ui, on: bool, label: &str, on_color: Color32, size: Vec2) -> Response {
 	let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 	response.widget_info(|| {

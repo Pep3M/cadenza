@@ -3,6 +3,7 @@
 //! The views only find the target under the pointer, show [`DropAction::describe`] as
 //! the drop hint and call [`super::AppState::drop_payload`] on release.
 
+use crate::i18n::{tr, trf};
 use std::path::PathBuf;
 
 use cadenza_core::{DeviceId, Tick, TrackId};
@@ -45,7 +46,7 @@ impl Payload {
 				|| path.display().to_string(),
 				|f| f.to_string_lossy().into(),
 			),
-			Payload::Insert { .. } => "Insert".into(),
+			Payload::Insert { .. } => tr("Insert").into(),
 			Payload::Pattern { name, .. } => name.clone(),
 		}
 	}
@@ -195,98 +196,146 @@ impl DropAction {
 				.track(*t)
 				.map_or_else(|| "?".to_owned(), |t| format!("'{}'", t.name))
 		};
-		let channel = |t: &Option<TrackId>| t.as_ref().map_or_else(|| "Master".into(), track);
+		let channel = |t: &Option<TrackId>| t.as_ref().map_or_else(|| tr("Master").into(), track);
+		let beat = |a: &Tick| crate::i18n::num(a.beats() + 1.0, 2);
 		match self {
-			DropAction::SetInstrument { track: t, item } => {
-				format!("Set {} as the instrument of {}", item.name, track(t))
-			}
+			DropAction::SetInstrument { track: t, item } => trf(
+				"Set {device} as the instrument of {track}",
+				&[("device", &item.name), ("track", &track(t))],
+			),
 			DropAction::InsertEffect {
 				track: t,
 				item,
 				index: Some(i),
-			} => format!("Insert {} on {} at slot {}", item.name, channel(t), i + 1),
-			DropAction::InsertEffect { track: t, item, .. } => {
-				format!("Insert {} on {}", item.name, channel(t))
-			}
+			} => trf(
+				"Insert {device} on {track} at slot {slot}",
+				&[
+					("device", &item.name),
+					("track", &channel(t)),
+					("slot", &(i + 1)),
+				],
+			),
+			DropAction::InsertEffect { track: t, item, .. } => trf(
+				"Insert {device} on {track}",
+				&[("device", &item.name), ("track", &channel(t))],
+			),
 			DropAction::NewTrack { item, .. } => match item.role {
-				DeviceRole::Instrument => format!("New instrument track with {}", item.name),
-				DeviceRole::Effect => format!("New bus with {}", item.name),
+				DeviceRole::Instrument => trf(
+					"New instrument track with {device}",
+					&[("device", &item.name)],
+				),
+				DeviceRole::Effect => trf("New bus with {device}", &[("device", &item.name)]),
 			},
-			DropAction::LoadPreset { preset, .. } => format!("Load preset '{}'", preset.name),
+			DropAction::LoadPreset { preset, .. } => {
+				trf("Load preset '{preset}'", &[("preset", &preset.name)])
+			}
 			DropAction::DeviceWithPreset {
 				track: t, preset, ..
-			} => format!("Add '{}' to {}", preset.name, track(t)),
-			DropAction::MoveInsert { to, copy, slot, .. } => format!(
-				"{} to {} slot {}",
-				if *copy { "Copy" } else { "Move" },
-				channel(to),
-				slot + 1
+			} => trf(
+				"Add '{preset}' to {track}",
+				&[("preset", &preset.name), ("track", &track(t))],
 			),
-			DropAction::ImportAudio { track: t, at, .. } => format!(
-				"Import audio {}{}",
-				t.as_ref().map_or_else(
-					|| "on a new track".to_owned(),
-					|t| format!("on {}", track(t))
+			DropAction::MoveInsert { to, copy, slot, .. } => {
+				let args: &[(&str, &dyn std::fmt::Display)] =
+					&[("track", &channel(to)), ("slot", &(slot + 1))];
+				if *copy {
+					trf("Copy to {track} slot {slot}", args)
+				} else {
+					trf("Move to {track} slot {slot}", args)
+				}
+			}
+			DropAction::ImportAudio { track: t, at, .. } => match (t, at) {
+				(Some(t), Some(a)) => trf(
+					"Import audio on {track} at beat {beat}",
+					&[("track", &track(t)), ("beat", &beat(a))],
 				),
-				at.map_or_else(
-					|| " at the playhead".to_owned(),
-					|a| format!(" at beat {:.2}", a.beats() + 1.0)
-				)
-			),
-			DropAction::ImportMidi { track: t, at, .. } => format!(
-				"Import MIDI {}{}",
-				t.as_ref().map_or_else(
-					|| "as new tracks".to_owned(),
-					|t| format!("into {}", track(t))
+				(Some(t), None) => trf(
+					"Import audio on {track} at the playhead",
+					&[("track", &track(t))],
 				),
-				at.map_or_else(String::new, |a| format!(" at beat {:.2}", a.beats() + 1.0))
-			),
-			DropAction::OpenProject(p) => format!(
-				"Open {}",
-				p.file_name().unwrap_or_default().to_string_lossy()
+				(None, Some(a)) => trf(
+					"Import audio on a new track at beat {beat}",
+					&[("beat", &beat(a))],
+				),
+				(None, None) => tr("Import audio on a new track at the playhead").to_owned(),
+			},
+			DropAction::ImportMidi { track: t, at, .. } => match (t, at) {
+				(Some(t), Some(a)) => trf(
+					"Import MIDI into {track} at beat {beat}",
+					&[("track", &track(t)), ("beat", &beat(a))],
+				),
+				(Some(t), None) => trf("Import MIDI into {track}", &[("track", &track(t))]),
+				(None, Some(a)) => trf(
+					"Import MIDI as new tracks at beat {beat}",
+					&[("beat", &beat(a))],
+				),
+				(None, None) => tr("Import MIDI as new tracks").to_owned(),
+			},
+			DropAction::OpenProject(p) => trf(
+				"Open {file}",
+				&[("file", &p.file_name().unwrap_or_default().to_string_lossy())],
 			),
 			DropAction::LoadSample { path, slot, .. } => {
 				let name = path.file_name().unwrap_or_default().to_string_lossy();
 				match slot {
-					super::samples::SampleSlot::Pad(n) => {
-						format!("Load {name} into pad {}", super::samples::pad_label(*n))
-					}
-					super::samples::SampleSlot::Zone(i) => {
-						format!("Replace zone {} with {name}", i + 1)
-					}
+					super::samples::SampleSlot::Pad(n) => trf(
+						"Load {file} into pad {pad}",
+						&[("file", &name), ("pad", &super::samples::pad_label(*n))],
+					),
+					super::samples::SampleSlot::Zone(i) => trf(
+						"Replace zone {zone} with {file}",
+						&[("zone", &(i + 1)), ("file", &name)],
+					),
 					super::samples::SampleSlot::Keyboard => {
-						format!("Map {name} across the keyboard")
+						trf("Map {file} across the keyboard", &[("file", &name)])
 					}
-					super::samples::SampleSlot::Area { key, vel } => format!(
-						"Add a zone with {name} at {} \u{b7} vel {vel}",
-						cadenza_model::note_name(*key)
+					super::samples::SampleSlot::Area { key, vel } => trf(
+						"Add a zone with {file} at {key} \u{b7} vel {vel}",
+						&[
+							("file", &name),
+							("key", &cadenza_model::note_name(*key)),
+							("vel", &vel),
+						],
 					),
 				}
 			}
-			DropAction::MapKit { folder, .. } => format!(
-				"Map the kit in '{}' onto the pads by name",
-				folder.file_name().unwrap_or_default().to_string_lossy()
+			DropAction::MapKit { folder, .. } => trf(
+				"Map the kit in '{folder}' onto the pads by name",
+				&[(
+					"folder",
+					&folder.file_name().unwrap_or_default().to_string_lossy(),
+				)],
 			),
-			DropAction::NewSampler { path } => format!(
-				"New sampler track with {}",
-				path.file_name().unwrap_or_default().to_string_lossy()
+			DropAction::NewSampler { path } => trf(
+				"New sampler track with {file}",
+				&[(
+					"file",
+					&path.file_name().unwrap_or_default().to_string_lossy(),
+				)],
 			),
 			DropAction::AddPattern {
 				name, track: t, at, ..
-			} => format!(
-				"Write '{name}' {}{}",
-				t.as_ref().map_or_else(
-					|| "on a new track".to_owned(),
-					|t| format!("on {}", track(t))
-				),
-				at.map_or_else(
-					|| " at the playhead's bar".to_owned(),
-					|a| format!(
-						" from bar {}",
-						project.meter().bar_position(a).floor() + 1.0
-					)
-				)
-			),
+			} => {
+				let bar = |a: &Tick| project.meter().bar_position(*a).floor() + 1.0;
+				match (t, at) {
+					(Some(t), Some(a)) => trf(
+						"Write '{pattern}' on {track} from bar {bar}",
+						&[("pattern", name), ("track", &track(t)), ("bar", &bar(a))],
+					),
+					(Some(t), None) => trf(
+						"Write '{pattern}' on {track} at the playhead's bar",
+						&[("pattern", name), ("track", &track(t))],
+					),
+					(None, Some(a)) => trf(
+						"Write '{pattern}' on a new track from bar {bar}",
+						&[("pattern", name), ("bar", &bar(a))],
+					),
+					(None, None) => trf(
+						"Write '{pattern}' on a new track at the playhead's bar",
+						&[("pattern", name)],
+					),
+				}
+			}
 			DropAction::Reject(why) => why.clone(),
 		}
 	}
@@ -324,7 +373,7 @@ pub fn resolve(project: &Project, payload: &Payload, target: DropTarget, copy: b
 				slot: project.channel(to).map_or(0, |c| c.inserts.len()),
 				copy,
 			},
-			_ => DropAction::Reject("Drop inserts on a mixer strip".into()),
+			_ => DropAction::Reject(tr("Drop inserts on a mixer strip").into()),
 		},
 		Payload::File(path) => resolve_file(project, path, target),
 		Payload::Pattern { id, name } => {
@@ -342,7 +391,7 @@ pub fn resolve(project: &Project, payload: &Payload, target: DropTarget, copy: b
 					add(Some(t), target.at())
 				}
 				_ => DropAction::Reject(
-					"Drop patterns on an instrument track, or below the tracks for a new one"
+					tr("Drop patterns on an instrument track, or below the tracks for a new one")
 						.into(),
 				),
 			}
@@ -372,7 +421,8 @@ fn resolve_device(project: &Project, item: &BrowserItem, target: DropTarget) -> 
 				}
 			}
 			_ => DropAction::Reject(
-				"Instruments go on an instrument track, or below the tracks for a new one".into(),
+				tr("Instruments go on an instrument track, or below the tracks for a new one")
+					.into(),
 			),
 		},
 		DeviceRole::Effect => match target {
@@ -399,7 +449,7 @@ fn resolve_device(project: &Project, item: &BrowserItem, target: DropTarget) -> 
 			| DropTarget::Kit { .. }
 			| DropTarget::Zone { .. }
 			| DropTarget::ZoneArea { .. } => {
-				DropAction::Reject("Drop effects on a track or a mixer strip".into())
+				DropAction::Reject(tr("Drop effects on a track or a mixer strip").into())
 			}
 		},
 	}
@@ -418,11 +468,14 @@ fn resolve_preset(
 		};
 		return match d.and_then(builtin_id) {
 			Some(id) if id == device => DropAction::LoadPreset { device: r, preset },
-			_ => DropAction::Reject(format!("'{}' is a preset of another device", preset.name)),
+			_ => DropAction::Reject(trf(
+				"'{name}' is a preset of another device",
+				&[("name", &preset.name)],
+			)),
 		};
 	}
 	let Some(track) = target.track().and_then(|t| project.track(t)) else {
-		return DropAction::Reject("Drop presets on a device or a track".into());
+		return DropAction::Reject(tr("Drop presets on a device or a track").into());
 	};
 	let existing = track
 		.instrument
@@ -444,14 +497,17 @@ fn resolve_preset(
 		.map(|i| i.role);
 	match role {
 		Some(DeviceRole::Instrument) if track.kind != TrackKind::Instrument => {
-			DropAction::Reject(format!("'{}' needs an instrument track", preset.name))
+			DropAction::Reject(trf(
+				"'{name}' needs an instrument track",
+				&[("name", &preset.name)],
+			))
 		}
 		Some(_) => DropAction::DeviceWithPreset {
 			track: track.id,
 			device: device.to_owned(),
 			preset,
 		},
-		None => DropAction::Reject(format!("Unknown device '{device}'")),
+		None => DropAction::Reject(trf("Unknown device '{device}'", &[("device", &device)])),
 	}
 }
 
@@ -464,19 +520,22 @@ fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -
 				folder: path.to_path_buf(),
 			},
 			_ => DropAction::Reject(
-				"Folders map a kit onto the drum sampler: drop it on its pads".into(),
+				tr("Folders map a kit onto the drum sampler: drop it on its pads").into(),
 			),
 		};
 	}
 	if let DropTarget::Kit { .. } = target {
 		return DropAction::Reject(
-			"Drop audio files on a pad, or a folder here to map a whole kit".into(),
+			tr("Drop audio files on a pad, or a folder here to map a whole kit").into(),
 		);
 	}
 	let Some(kind) = kind else {
-		return DropAction::Reject(format!(
-			"Cadenza cannot use {}",
-			path.file_name().unwrap_or_default().to_string_lossy()
+		return DropAction::Reject(trf(
+			"Cadenza cannot use {file_name}",
+			&[(
+				"file_name",
+				&path.file_name().unwrap_or_default().to_string_lossy(),
+			)],
 		));
 	};
 	let path = path.to_path_buf();
@@ -498,7 +557,7 @@ fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -
 	if let Some((device, slot)) = sample_target {
 		return match kind {
 			FileKind::Audio => DropAction::LoadSample { device, path, slot },
-			_ => DropAction::Reject("Drop audio files on pads and zones".into()),
+			_ => DropAction::Reject(tr("Drop audio files on pads and zones").into()),
 		};
 	}
 	if let (FileKind::Audio, DropTarget::BelowSampler { .. }) = (kind, target) {
@@ -519,7 +578,7 @@ fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -
 			}
 			Some(super::samples::SampleKind::Drums) => {
 				return DropAction::Reject(
-					"Drop samples on a pad of the drum sampler editor".into(),
+					tr("Drop samples on a pad of the drum sampler editor").into(),
 				);
 			}
 			None => {}
@@ -541,7 +600,7 @@ fn resolve_file(project: &Project, path: &std::path::Path, target: DropTarget) -
 				.filter(|_| track_kind == Some(TrackKind::Instrument)),
 			at: target.at(),
 		},
-		FileKind::Folder => DropAction::Reject("Folders cannot be dropped".into()),
+		FileKind::Folder => DropAction::Reject(tr("Folders cannot be dropped").into()),
 	}
 }
 

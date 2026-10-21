@@ -11,6 +11,7 @@
 //!   addressing that device;
 //! - removing a track also disconnects sidechains keyed by it and drops instrument output
 //!   routes targeting it.
+//! - MIDI assignments follow the automation lanes: removed with the target they move.
 
 use std::collections::HashSet;
 
@@ -420,6 +421,28 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetModulators {
+			track,
+			device,
+			modulators,
+		} => {
+			let d = existing_device_mut(project, *track, *device)?;
+			if d.is_plugin() && !modulators.is_empty() {
+				return Err(ModelError::invalid(
+					format!("modulators of device {device}"),
+					format!("{} modulators", modulators.len()),
+					"only built-in devices can be modulated; automate plugin parameters instead",
+				));
+			}
+			crate::modulation::validate_modulators(*device, modulators, d.sidechain.is_some())?;
+			let old = std::mem::replace(&mut d.modulators, modulators.clone());
+			Ok(vec![Command::SetModulators {
+				track: *track,
+				device: *device,
+				modulators: old,
+			}])
+		}
+
 		Command::SetSidechain {
 			track,
 			device,
@@ -608,7 +631,17 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.track(*track)
 				.ok_or(ModelError::TrackNotFound(*track))?;
 			validate::clip_on_track(t, clip)?;
-			validate::clip(clip)?;
+			// Linked content may reach past this copy (the longest copy bounds it when
+			// notes are edited); an independent clip keeps its notes inside.
+			let span = if clip.link.is_some() {
+				Tick(i64::MAX)
+			} else {
+				clip.length
+			};
+			validate::clip_within(clip, span)?;
+			if let Some(link) = clip.link {
+				validate::link_member(project, clip, link, clip.id)?;
+			}
 			validate::clip_fades(clip, &project.tempo)?;
 			if project.clip_id_in_use(clip.id) {
 				return Err(ModelError::DuplicateClipId(clip.id));
@@ -737,6 +770,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.find_clip(*clip)
 				.ok_or(ModelError::ClipNotFound(*clip))?;
 			let existing = midi_notes(c)?;
+			let span = validate::content_span(project, c);
 			let mut ids: HashSet<_> = existing.iter().map(|n| n.id).collect();
 			for n in notes {
 				if !ids.insert(n.id) {
@@ -745,11 +779,12 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 						note: n.id,
 					});
 				}
-				validate::note(c, n)?;
+				validate::note_within(c.id, span, n)?;
 			}
 			let target = midi_notes_mut(project, *clip)?;
 			target.extend(notes.iter().cloned());
 			sort_notes(target);
+			sync_link(project, *clip);
 			Ok(vec![Command::RemoveNotes {
 				clip: *clip,
 				notes: notes.iter().map(|n| n.id).collect(),
@@ -792,6 +827,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				}
 				keep
 			});
+			sync_link(project, *clip);
 			Ok(vec![Command::AddNotes {
 				clip: *clip,
 				notes: removed,
@@ -813,6 +849,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				.find_clip(*clip)
 				.ok_or(ModelError::ClipNotFound(*clip))?;
 			let existing = midi_notes(c)?;
+			let span = validate::content_span(project, c);
 			let mut ids = HashSet::with_capacity(patches.len());
 			let mut updated = Vec::with_capacity(patches.len());
 			let mut inverse = Vec::with_capacity(patches.len());
@@ -838,7 +875,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					start: patch.start.unwrap_or(old.start),
 					length: patch.length.unwrap_or(old.length),
 				};
-				validate::note(c, &new)?;
+				validate::note_within(c.id, span, &new)?;
 				inverse.push(NotePatch {
 					id: old.id,
 					pitch: patch.pitch.map(|_| old.pitch),
@@ -855,6 +892,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 				}
 			}
 			sort_notes(target);
+			sync_link(project, *clip);
 			Ok(vec![Command::UpdateNotes {
 				clip: *clip,
 				notes: inverse,
@@ -935,6 +973,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					Vec::new()
 				}
 			};
+			sync_link(project, *clip);
 			Ok(vec![Command::SetControllerLane {
 				clip: *clip,
 				controller: *controller,
@@ -1079,6 +1118,12 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			Ok(vec![Command::SetArmedTracks { armed: old }])
 		}
 
+		Command::SetMidiMap { map } => {
+			crate::midi_map::validate(project, map)?;
+			let old = std::mem::replace(&mut project.midi_map, map.clone());
+			Ok(vec![Command::SetMidiMap { map: old }])
+		}
+
 		Command::SetProjectMeta { meta } => {
 			validate::meta(meta)?;
 			let old = std::mem::replace(&mut project.meta, meta.clone());
@@ -1138,10 +1183,12 @@ fn update_clip(
 		&& patch.length.is_none()
 		&& patch.track.is_none()
 		&& patch.take.is_none()
+		&& patch.muted.is_none()
+		&& patch.link.is_none()
 	{
 		return Err(empty_patch(
 			"update_clip",
-			"name, start, length, track and/or take",
+			"name, start, length, track, take, muted and/or link",
 		));
 	}
 	if let Some(Some(take)) = &patch.take {
@@ -1162,9 +1209,25 @@ fn update_clip(
 	if let Some(start) = patch.start {
 		validate::start("clip", start)?;
 	}
+	let link = patch.link.unwrap_or(current.link);
+	if let Some(Some(l)) = patch.link {
+		validate::link_member(project, current, l, clip)?;
+	}
 	if let Some(length) = patch.length {
 		validate::length("clip", length)?;
-		let outside = current.notes().iter().filter(|n| n.start >= length).count();
+		// Linked content may reach past this clip as long as another copy plays it.
+		let others = link
+			.map(|l| {
+				project
+					.linked_clips(l)
+					.filter(|c| c.id != clip)
+					.map(|c| c.length)
+					.max()
+					.unwrap_or(Tick::ZERO)
+			})
+			.unwrap_or(Tick::ZERO);
+		let span = length.max(others);
+		let outside = current.notes().iter().filter(|n| n.start >= span).count();
 		if outside > 0 {
 			return Err(ModelError::NotesWouldStartOutsideClip {
 				clip,
@@ -1179,6 +1242,8 @@ fn update_clip(
 		length: patch.length.map(|_| current.length),
 		track: patch.track.map(|_| from),
 		take: patch.take.map(|_| current.take),
+		muted: patch.muted.map(|_| current.muted),
+		link: patch.link.map(|_| current.link),
 	};
 
 	let source = project
@@ -1201,6 +1266,12 @@ fn update_clip(
 	}
 	if let Some(take) = patch.take {
 		updated.take = take;
+	}
+	if let Some(muted) = patch.muted {
+		updated.muted = muted;
+	}
+	if let Some(link) = patch.link {
+		updated.link = link;
 	}
 	let dest = project.track_mut(to).ok_or(ModelError::TrackNotFound(to))?;
 	dest.clips.push(updated);
@@ -1250,6 +1321,12 @@ fn take_lanes(project: &mut Project, pred: impl Fn(&ParamAddress) -> bool) -> Ve
 		}
 		keep
 	});
+	// MIDI assignments of the removed targets go too (restored after them).
+	if project.midi_map.iter().any(|m| pred(&m.target)) {
+		let old = project.midi_map.clone();
+		project.midi_map.retain(|m| !pred(&m.target));
+		restore.push(Command::SetMidiMap { map: old });
+	}
 	restore
 }
 
@@ -1311,6 +1388,22 @@ fn insert_index(
 			location: location(track),
 			device,
 		})
+}
+
+/// Copies the MIDI content of `clip` to every clip linked to it, keeping the link
+/// invariant (identical content) after a note or controller edit.
+fn sync_link(project: &mut Project, clip: cadenza_core::ClipId) {
+	let Some((link, content)) = project
+		.find_clip(clip)
+		.and_then(|(_, c)| c.link.map(|l| (l, c.content.clone())))
+	else {
+		return;
+	};
+	for c in project.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()) {
+		if c.link == Some(link) && c.id != clip {
+			c.content = content.clone();
+		}
+	}
 }
 
 fn midi_notes(clip: &crate::Clip) -> Result<&[Note], ModelError> {

@@ -4,6 +4,7 @@
 //! freeze at their last phase and dim. Compact: the traces at full width, then rows of S
 //! knobs. The gesture -> parameter mapping lives in [`crate::state::chorus_editor`].
 
+use crate::i18n::{mark, tr, trf};
 use std::sync::{Arc, Mutex};
 
 use egui::{Align2, Color32, CursorIcon, Id, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
@@ -143,7 +144,7 @@ fn lfo(
 			Sense::click_and_drag(),
 		)
 		.on_hover_cursor(CursorIcon::Move);
-	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Chorus LFO"));
+	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Chorus LFO")));
 	if resp.drag_started() {
 		v.wave = Some(WaveDrag {
 			rate: values.rate,
@@ -172,7 +173,9 @@ fn lfo(
 			"Reset chorus rate and depth".to_owned()
 		});
 	}
-	let resp = resp.on_hover_text("Drag up/down for depth, sideways for rate; double-click resets");
+	let resp = resp.on_hover_text(tr(
+		"Drag up/down for depth, sideways for rate; double-click resets",
+	));
 
 	if !visible {
 		return;
@@ -235,12 +238,18 @@ fn lfo(
 	let y_top = rect.top() + if compact { 11.0 } else { 14.0 };
 	let y_bottom = rect.bottom() - if compact { 9.0 } else { 11.0 };
 	let apart = ch::apart_label(&values);
-	let apart_short = format!("Voice R \u{b7} {:.0}\u{b0}", values.offset_degrees());
+	let apart_short = trf(
+		"Voice R · {offset_degrees}°",
+		&[(
+			"offset_degrees",
+			&crate::i18n::decimal(format!("{:.0}", values.offset_degrees())),
+		)],
+	);
 	let legend_right = devices::legend(
 		&p,
 		pos2(rect.left() + edge, y_top),
 		&[
-			("Voice L", theme::STEREO_L),
+			(tr("Voice L"), theme::STEREO_L),
 			(if compact { &apart_short } else { &apart }, theme::STEREO_R),
 		],
 	);
@@ -280,10 +289,18 @@ fn lfo(
 			&p,
 			at + vec2(14.0, -14.0),
 			Align2::LEFT_BOTTOM,
-			&format!(
-				"{} \u{b7} depth {:.0} %",
-				crate::state::device::format_value(values.rate, "Hz"),
-				values.depth
+			&trf(
+				"{value} · depth {depth} %",
+				&[
+					(
+						"value",
+						&crate::state::device::format_value(values.rate, "Hz"),
+					),
+					(
+						"depth",
+						&crate::i18n::decimal(format!("{:.0}", values.depth)),
+					),
+				],
 			),
 			theme::TEXT,
 			rect,
@@ -321,7 +338,7 @@ fn fan(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ChorusView, rect:
 		)
 		.on_hover_cursor(CursorIcon::ResizeHorizontal);
 	resp.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Stereo width fan")
+		egui::WidgetInfo::labeled(egui::WidgetType::Other, true, tr("Stereo width fan"))
 	});
 	if resp.drag_started() {
 		v.fan = true;
@@ -346,8 +363,9 @@ fn fan(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ChorusView, rect:
 			"Reset chorus width".to_owned()
 		});
 	}
-	let resp =
-		resp.on_hover_text("Drag a voice sideways for the stereo width; double-click resets");
+	let resp = resp.on_hover_text(tr(
+		"Drag a voice sideways for the stereo width; double-click resets",
+	));
 	if !ui.is_rect_visible(rect) {
 		return;
 	}
@@ -397,7 +415,7 @@ fn fan(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ChorusView, rect:
 	p.text(
 		rect.left_top() + vec2(9.0, 8.0),
 		Align2::LEFT_TOP,
-		"Stereo width",
+		tr("Stereo width"),
 		theme::medium(10.5),
 		theme::TEXT_FAINT,
 	);
@@ -422,12 +440,12 @@ fn fan(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ChorusView, rect:
 // --- Dock (16d) ---------------------------------------------------------------------
 
 const WIDE_KNOBS: [KnobDef; 6] = [
-	KnobDef::new(RATE, "Rate", KnobSize::L),
-	KnobDef::new(DEPTH, "Depth", KnobSize::L),
-	KnobDef::new(DELAY, "Delay", KnobSize::M),
-	KnobDef::new(FEEDBACK, "Feedback", KnobSize::M),
-	KnobDef::new(WIDTH, "Width", KnobSize::M),
-	KnobDef::new(MIX, "Mix", KnobSize::M),
+	KnobDef::new(RATE, mark("Rate"), KnobSize::L),
+	KnobDef::new(DEPTH, mark("Depth"), KnobSize::L),
+	KnobDef::new(DELAY, mark("Delay"), KnobSize::M),
+	KnobDef::new(FEEDBACK, mark("Feedback"), KnobSize::M),
+	KnobDef::new(WIDTH, mark("Width"), KnobSize::M),
+	KnobDef::new(MIX, mark("Mix"), KnobSize::M),
 ];
 
 fn small(knobs: &[KnobDef]) -> Vec<KnobDef> {
@@ -463,11 +481,15 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut ChorusView) {
 		ui,
 		rect,
 		if moving {
-			"Drag the wave up or down for depth, sideways for rate; drag a voice on the fan for \
-			 the stereo width."
+			tr(
+				"Drag the wave up or down for depth, sideways for rate; drag a voice on the fan for \
+			 the stereo width.",
+			)
 		} else {
-			"Transport stopped: the traces keep moving if audio is passing, otherwise they \
-			 freeze at their last phase and dim to 50 %."
+			tr(
+				"Transport stopped: the traces keep moving if audio is passing, otherwise they \
+			 freeze at their last phase and dim to 50 %.",
+			)
 		},
 	);
 }

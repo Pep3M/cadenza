@@ -5,6 +5,7 @@
 //! keyboard mapping (FL-style A–K). The view turns the changes into one command per
 //! gesture.
 
+use crate::i18n::{mark, tr, trf};
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 
 use crate::state::device::{KnobSpec, format_value};
@@ -27,8 +28,38 @@ pub const VEL_SENS: &str = "velocity_sensitivity";
 pub const GLIDE: &str = "glide";
 pub const GAIN: &str = "gain";
 
-/// The waves in parameter order (0 = sine ... 3 = triangle).
-pub const WAVE_NAMES: [&str; 4] = ["Sine", "Saw", "Square", "Triangle"];
+pub const OSC1_TABLE: &str = "osc1_table";
+pub const OSC2_TABLE: &str = "osc2_table";
+pub const OSC1_POSITION: &str = "osc1_position";
+pub const OSC2_POSITION: &str = "osc2_position";
+
+/// The waves in parameter order (0 = sine ... 3 = triangle, 4 = wavetable).
+pub const WAVE_NAMES: [&str; 5] = [
+	mark("Sine"),
+	mark("Saw"),
+	mark("Square"),
+	mark("Triangle"),
+	mark("Wavetable"),
+];
+/// The wave value of the wavetable oscillator.
+pub const WAVETABLE: usize = cadenza_dsp::response::WAVE_WAVETABLE;
+/// The built-in tables in `oscN_table` order (names as `cadenza_dsp` lists them).
+pub const TABLE_NAMES: [&str; 5] = [
+	mark("Basic"),
+	mark("PWM"),
+	mark("Formant"),
+	mark("Harmonics"),
+	mark("Digital"),
+];
+/// The oscillators' table and position parameters, osc 1 first.
+pub const TABLE_PARAMS: [&str; 2] = [OSC1_TABLE, OSC2_TABLE];
+pub const POSITION_PARAMS: [&str; 2] = [OSC1_POSITION, OSC2_POSITION];
+/// A vertical drag over the wavetable picture sweeps the whole table in this many points.
+pub const POSITION_PX: f32 = 160.0;
+/// One wheel notch over the picture moves the position this much.
+pub const POSITION_STEP: f32 = 0.02;
+/// Frames the waterfall picture draws behind the current one.
+pub const WATERFALL_FRAMES: usize = 9;
 /// The oscillators' wave parameters, osc 1 first.
 pub const WAVE_PARAMS: [&str; 2] = [OSC1_WAVE, OSC2_WAVE];
 /// The filter display draws the response at this rate (the engine default).
@@ -66,9 +97,64 @@ pub fn default(id: &str) -> f32 {
 
 // --- Oscillators ----------------------------------------------------------------------
 
-/// The wave index (0..=3) a wave parameter value selects.
+/// The wave index (0..=4) a wave parameter value selects.
 pub fn wave_index(value: f32) -> usize {
-	(value.round().clamp(0.0, 3.0)) as usize
+	(value.round().clamp(0.0, WAVETABLE as f32)) as usize
+}
+
+/// The table index (0..=4) a table parameter value selects.
+pub fn table_index(value: f32) -> usize {
+	(value.round().clamp(0.0, (TABLE_NAMES.len() - 1) as f32)) as usize
+}
+
+/// The oscillators (0, 1) playing a wavetable, given each one's wave value.
+pub fn wavetable_oscs(waves: [f32; 2]) -> Vec<usize> {
+	(0..2)
+		.filter(|&o| wave_index(waves[o]) == WAVETABLE)
+		.collect()
+}
+
+/// The position after a vertical drag of `dy` points from `start` (up = later frames;
+/// `fine`: ×0.1).
+pub fn drag_position(start: f32, dy: f32, fine: bool) -> f32 {
+	let scale = if fine { 0.1 } else { 1.0 };
+	(start - dy / POSITION_PX * scale).clamp(0.0, 1.0)
+}
+
+/// The position after `notches` wheel notches from `start`.
+pub fn wheel_position(start: f32, notches: f32) -> f32 {
+	((start + notches * POSITION_STEP) * 1000.0)
+		.round()
+		.clamp(0.0, 1000.0)
+		/ 1000.0
+}
+
+/// The frames the waterfall draws, back (position 1) to front (position 0): each one's
+/// position and `points` samples of its cycle, read from the synth's own tables.
+pub fn waterfall(table: usize, points: usize) -> Vec<(f32, Vec<f32>)> {
+	(0..WATERFALL_FRAMES)
+		.rev()
+		.map(|i| {
+			let pos = i as f32 / (WATERFALL_FRAMES - 1) as f32;
+			(pos, frame(table, pos, points))
+		})
+		.collect()
+}
+
+/// One cycle of `table` at `position`, `points` samples (what the oscillator plays).
+pub fn frame(table: usize, position: f32, points: usize) -> Vec<f32> {
+	let mut out = vec![0.0; points];
+	cadenza_dsp::response::wavetable_frame(table, position, &mut out);
+	out
+}
+
+/// "Formant · 0.42": the readout under the picture.
+pub fn position_tag(table: usize, position: f32) -> String {
+	format!(
+		"{} · {}",
+		tr(TABLE_NAMES[table.min(TABLE_NAMES.len() - 1)]),
+		crate::i18n::num(position as f64, 2)
+	)
 }
 
 /// "Copy to other osc": the other oscillator's wave set to `osc`'s.
@@ -156,8 +242,8 @@ impl Env {
 
 	pub fn title(self) -> &'static str {
 		match self {
-			Env::Amp => "AMP ENVELOPE",
-			Env::Filter => "FILTER ENVELOPE",
+			Env::Amp => tr("AMP ENVELOPE"),
+			Env::Filter => tr("FILTER ENVELOPE"),
 		}
 	}
 
@@ -201,8 +287,8 @@ impl Env {
 	/// The undo step's name for a node gesture that moved `stages`.
 	pub fn label(self, stages: &[AdsrStage]) -> String {
 		let env = match self {
-			Env::Amp => "Amp",
-			Env::Filter => "Filter",
+			Env::Amp => tr("Amp"),
+			Env::Filter => tr("Filter"),
 		};
 		let names: Vec<&str> = stages.iter().map(|s| stage_name(*s)).collect();
 		format!("{env} {}", names.join(" and ").to_lowercase())
@@ -211,20 +297,20 @@ impl Env {
 
 pub fn stage_name(stage: AdsrStage) -> &'static str {
 	match stage {
-		AdsrStage::Attack => "Attack",
-		AdsrStage::Decay => "Decay",
-		AdsrStage::Sustain => "Sustain",
-		AdsrStage::Release => "Release",
+		AdsrStage::Attack => tr("Attack"),
+		AdsrStage::Decay => tr("Decay"),
+		AdsrStage::Sustain => tr("Sustain"),
+		AdsrStage::Release => tr("Release"),
 	}
 }
 
 /// The readouts under an envelope: ("Attack", "350 ms"), ("Decay", "1.20 s")...
 pub fn readouts(v: &AdsrValues) -> [(&'static str, String); 4] {
 	[
-		("Attack", format_value(v.attack, "ms")),
-		("Decay", format_value(v.decay, "ms")),
-		("Sustain", format_value(v.sustain, "%")),
-		("Release", format_value(v.release, "ms")),
+		(tr("Attack"), format_value(v.attack, "ms")),
+		(tr("Decay"), format_value(v.decay, "ms")),
+		(tr("Sustain"), format_value(v.sustain, "%")),
+		(tr("Release"), format_value(v.release, "ms")),
 	]
 }
 
@@ -369,11 +455,14 @@ pub fn scope_label(notes: &[u8]) -> String {
 	notes.sort_unstable();
 	notes.dedup();
 	if notes.is_empty() {
-		return "Scope".to_owned();
+		return tr("Scope").to_owned();
 	}
 	let names: Vec<String> = notes.iter().take(6).map(|n| note_name(*n)).collect();
 	let more = if notes.len() > 6 { " \u{2026}" } else { "" };
-	format!("Scope \u{b7} {}{more}", names.join(" "))
+	trf(
+		"Scope · {names}{more}",
+		&[("names", &names.join(" ")), ("more", &more)],
+	)
 }
 
 #[cfg(test)]
@@ -499,6 +588,32 @@ mod tests {
 		assert_eq!(copy_wave(0, 1.0), (OSC2_WAVE, 1.0));
 		assert_eq!(copy_wave(1, 2.6), (OSC1_WAVE, 3.0));
 		assert_eq!(wave_index(-1.0), 0);
+		assert_eq!(wave_index(4.2), WAVETABLE);
+	}
+
+	#[test]
+	fn wavetable_position_gestures_and_waterfall() {
+		assert_eq!(wavetable_oscs([4.0, 1.0]), [0]);
+		assert_eq!(wavetable_oscs([4.0, 4.0]), [0, 1]);
+		assert!(wavetable_oscs([0.0, 3.0]).is_empty());
+		assert_eq!(
+			drag_position(0.5, -POSITION_PX * 0.25, false),
+			0.75,
+			"up = later"
+		);
+		assert_eq!(drag_position(0.9, -POSITION_PX, false), 1.0);
+		assert!((drag_position(0.5, POSITION_PX, true) - 0.4).abs() < 1e-6);
+		assert_eq!(wheel_position(0.5, 3.0), 0.56);
+		assert_eq!(wheel_position(0.01, -2.0), 0.0);
+		assert_eq!(table_index(7.0), 4);
+		let frames = waterfall(0, 64);
+		assert_eq!(frames.len(), WATERFALL_FRAMES);
+		assert_eq!(frames[0].0, 1.0, "back frame first");
+		assert_eq!(frames.last().unwrap().0, 0.0);
+		// Basic: the front frame is the sine the DSP plays.
+		let sine = &frames.last().unwrap().1;
+		assert!((sine[16] - 1.0).abs() < 0.02 && sine[0].abs() < 0.02);
+		assert!(position_tag(2, 0.4).starts_with("Formant"));
 	}
 
 	#[test]

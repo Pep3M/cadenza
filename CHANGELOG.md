@@ -56,6 +56,7 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 
 - Linux installs go to `~/.local/opt/cadenza`, not the app's data folder.
 - macOS: AppKit Touch Bar support disabled to avoid a crash on quit.
+- Security: `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10 (RUSTSEC-2026-0381, RUSTSEC-2026-0382).
 
 ### Packaging
 

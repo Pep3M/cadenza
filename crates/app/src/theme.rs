@@ -327,7 +327,7 @@ fn applied_id() -> egui::Id {
 
 /// Whether [`apply`] already ran on `ctx` with the fonts the current language needs (a
 /// fresh context needs the fonts again, and so does one whose language just switched
-/// into or out of CJK: see [`needs_cjk_fallback`]/[`cjk_fallback_font`]).
+/// into or out of CJK: see [`needs_cjk_fallback`]/[`find_cjk_fonts`]).
 pub fn applied(ctx: &egui::Context) -> bool {
 	ctx.data(|d| d.get_temp::<bool>(applied_id()).unwrap_or(false))
 }
@@ -345,8 +345,7 @@ pub fn needs_apply(ctx: &egui::Context) -> bool {
 }
 
 /// Whether `c` is a CJK character (Hiragana, Katakana, Hangul or a Han ideograph): these
-/// need the system [`find_cjk_font`] fallback, never the embedded IBM Plex Sans.
-#[cfg(test)]
+/// need the system [`find_cjk_fonts`] fallback, never the embedded IBM Plex Sans.
 pub(crate) fn is_cjk(c: char) -> bool {
 	matches!(c as u32,
 		0x3000..=0x303F   // CJK symbols and punctuation
@@ -359,52 +358,130 @@ pub(crate) fn is_cjk(c: char) -> bool {
 	)
 }
 
-/// Looks up a system font file that can draw CJK glyphs (Noto Sans CJK, Source Han
-/// Sans, Droid Sans Fallback, WenQuanYi on Linux; PingFang/Hiragino on macOS; Microsoft
-/// YaHei/Malgun Gothic/Yu Gothic/MS Gothic on Windows), in the order a desktop install is
-/// likely to have them. `None` when no candidate file exists on this machine: callers
-/// show a clear notice instead of silently drawing empty boxes.
-const CJK_FONT_CANDIDATES: &[&str] = &[
+/// System font files that can draw CJK glyphs, each with the language it suits best
+/// (`None` = generic): Noto Sans CJK, Source Han Sans, Droid Sans Fallback, WenQuanYi on
+/// Linux; Hiragino, PingFang, Apple SD Gothic Neo, Arial Unicode on macOS; Yu Gothic,
+/// Microsoft YaHei, Malgun Gothic, MS Gothic on Windows. No single macOS/Windows face
+/// covers kana, simplified Han and Hangul, so [`find_cjk_fonts`] combines several.
+const CJK_FONT_CANDIDATES: &[(&str, Option<&str>)] = &[
 	// Linux: common package install paths (fontconfig's own cache varies by distro, so
 	// this checks the files directly rather than shelling out to `fc-match`).
-	"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-	"/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
-	"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-	"/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
-	"/usr/share/fonts/adobe-source-han-sans/SourceHanSans-Regular.otf",
-	"/usr/share/fonts/source-han-sans/SourceHanSans-Regular.otf",
-	"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-	"/usr/share/fonts/truetype/droid/DroidSansFallback.ttf",
-	"/usr/share/fonts/wqy-microhei/wqy-microhei.ttc",
-	"/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
+	("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", None),
+	("/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf", None),
+	(
+		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+		None,
+	),
+	(
+		"/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
+		None,
+	),
+	(
+		"/usr/share/fonts/adobe-source-han-sans/SourceHanSans-Regular.otf",
+		None,
+	),
+	(
+		"/usr/share/fonts/source-han-sans/SourceHanSans-Regular.otf",
+		None,
+	),
+	(
+		"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+		None,
+	),
+	(
+		"/usr/share/fonts/truetype/droid/DroidSansFallback.ttf",
+		None,
+	),
+	("/usr/share/fonts/wqy-microhei/wqy-microhei.ttc", None),
+	("/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc", None),
 	// macOS.
-	"/System/Library/Fonts/PingFang.ttc",
-	"/System/Library/Fonts/Hiragino Sans GB.ttc",
-	"/Library/Fonts/Microsoft/Microsoft YaHei.ttf",
+	(
+		"/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+		Some("ja"),
+	),
+	("/System/Library/Fonts/Hiragino Sans GB.ttc", Some("zh")),
+	("/System/Library/Fonts/PingFang.ttc", Some("zh")),
+	("/System/Library/Fonts/AppleSDGothicNeo.ttc", Some("ko")),
+	("/Library/Fonts/Microsoft/Microsoft YaHei.ttf", Some("zh")),
+	("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", None),
+	("/Library/Fonts/Arial Unicode.ttf", None),
 	// Windows.
-	"C:\\Windows\\Fonts\\msyh.ttc",
-	"C:\\Windows\\Fonts\\msyh.ttf",
-	"C:\\Windows\\Fonts\\malgun.ttf",
-	"C:\\Windows\\Fonts\\YuGothR.ttc",
-	"C:\\Windows\\Fonts\\msgothic.ttc",
+	("C:\\Windows\\Fonts\\YuGothR.ttc", Some("ja")),
+	("C:\\Windows\\Fonts\\msyh.ttc", Some("zh")),
+	("C:\\Windows\\Fonts\\msyh.ttf", Some("zh")),
+	("C:\\Windows\\Fonts\\malgun.ttf", Some("ko")),
+	("C:\\Windows\\Fonts\\msgothic.ttc", Some("ja")),
 ];
 
-/// A CJK fallback face found on this machine.
+/// One face (of a font file or collection) used as a CJK fallback.
 pub struct CjkFont {
 	pub path: &'static str,
+	pub index: u32,
 	pub bytes: Vec<u8>,
 }
 
-/// Reads the first [`CJK_FONT_CANDIDATES`] path that exists, if any.
-pub fn find_cjk_font() -> Option<CjkFont> {
-	CJK_FONT_CANDIDATES.iter().find_map(|&path| {
-		std::fs::read(path)
-			.ok()
-			.map(|bytes| CjkFont { path, bytes })
-	})
+/// Every CJK character the UI can draw: the CJK languages' translations and native
+/// names (the language picker shows all of them).
+fn cjk_text() -> std::collections::BTreeSet<char> {
+	crate::i18n::Language::ALL
+		.into_iter()
+		.filter(|l| l.needs_cjk_fallback())
+		.flat_map(|l| std::iter::once(l.native_name()).chain(crate::i18n::all_translations(l)))
+		.flat_map(str::chars)
+		.filter(|&c| is_cjk(c))
+		.collect()
 }
 
-/// [`fonts`] plus a system CJK fallback appended after Hack, when `needs_cjk` and one is
+/// System faces that together draw every [`cjk_text`] character: candidates suiting
+/// `prefer` (a language code) first, so its glyph shapes win, then the others; a face is
+/// kept only when it covers characters the earlier ones miss (from a collection, the
+/// face covering the most). Empty when no candidate exists on this machine.
+pub fn find_cjk_fonts(prefer: &str) -> Vec<CjkFont> {
+	use skrifa::MetadataProvider;
+	let mut missing = cjk_text();
+	let ordered = CJK_FONT_CANDIDATES
+		.iter()
+		.filter(|(_, lang)| *lang == Some(prefer))
+		.chain(
+			CJK_FONT_CANDIDATES
+				.iter()
+				.filter(|(_, lang)| *lang != Some(prefer)),
+		);
+	let mut found = Vec::new();
+	for &(path, _) in ordered {
+		if missing.is_empty() {
+			break;
+		}
+		let Ok(bytes) = std::fs::read(path) else {
+			continue;
+		};
+		let Ok(file) = skrifa::raw::FileRef::new(&bytes) else {
+			continue;
+		};
+		let best = file
+			.fonts()
+			.enumerate()
+			.filter_map(|(i, font)| {
+				let charmap = font.ok()?.charmap();
+				let covered: Vec<char> = missing
+					.iter()
+					.copied()
+					.filter(|&c| charmap.map(c).is_some())
+					.collect();
+				Some((i as u32, covered))
+			})
+			.max_by_key(|(_, covered)| covered.len());
+		if let Some((index, covered)) = best.filter(|(_, covered)| !covered.is_empty()) {
+			for c in &covered {
+				missing.remove(c);
+			}
+			found.push(CjkFont { path, index, bytes });
+		}
+	}
+	found
+}
+
+/// [`fonts`] plus system CJK fallbacks appended after Hack, when `needs_cjk` and any is
 /// found on this machine. Returns the definitions and, when a CJK fallback was needed but
 /// none was found, a notice to show the user (no glyphs: the UI would draw empty boxes).
 pub fn fonts_for_language(needs_cjk: bool) -> (egui::FontDefinitions, Option<String>) {
@@ -412,39 +489,37 @@ pub fn fonts_for_language(needs_cjk: bool) -> (egui::FontDefinitions, Option<Str
 	if !needs_cjk {
 		return (defs, None);
 	}
-	match find_cjk_font() {
-		Some(cjk) => {
-			defs.font_data.insert(
-				"cjk-fallback".to_owned(),
-				egui::FontData::from_owned(cjk.bytes).into(),
-			);
-			// Every family UI text actually draws with, not just `Proportional`: egui
-			// has no font weights, so buttons/tabs (`medium`), panel titles/track names
-			// (`semibold`) and the position counter (`mono_medium`) are each their own
-			// named family (see `fonts`) and would otherwise show CJK text as boxes.
-			for family in [
-				FontFamily::Proportional,
-				FontFamily::Monospace,
-				FontFamily::Name(MEDIUM.into()),
-				FontFamily::Name(SEMIBOLD.into()),
-				FontFamily::Name(MONO_MEDIUM.into()),
-			] {
-				defs.families
-					.entry(family)
-					.or_default()
-					.push("cjk-fallback".to_owned());
-			}
-			(defs, None)
-		}
-		None => (
+	let found = find_cjk_fonts(crate::i18n::current().code());
+	if found.is_empty() {
+		return (
 			defs,
 			Some(
 				"No CJK font found on this system: install one (e.g. Noto Sans CJK) for \
 				 Japanese, Chinese or Korean text to show."
 					.to_owned(),
 			),
-		),
+		);
 	}
+	for (n, cjk) in found.into_iter().enumerate() {
+		let name = format!("cjk-fallback-{n}");
+		let mut data = egui::FontData::from_owned(cjk.bytes);
+		data.index = cjk.index;
+		defs.font_data.insert(name.clone(), data.into());
+		// Every family UI text actually draws with, not just `Proportional`: egui has no
+		// font weights, so buttons/tabs (`medium`), panel titles/track names (`semibold`)
+		// and the position counter (`mono_medium`) are each their own named family (see
+		// `fonts`) and would otherwise show CJK text as boxes.
+		for family in [
+			FontFamily::Proportional,
+			FontFamily::Monospace,
+			FontFamily::Name(MEDIUM.into()),
+			FontFamily::Name(SEMIBOLD.into()),
+			FontFamily::Name(MONO_MEDIUM.into()),
+		] {
+			defs.families.entry(family).or_default().push(name.clone());
+		}
+	}
+	(defs, None)
 }
 
 /// Applies the Cadenza style to `ctx`; returns a notice when the language needs a CJK
@@ -647,17 +722,18 @@ mod tests {
 		);
 
 		let (with_cjk, notice) = fonts_for_language(true);
-		match find_cjk_font() {
-			Some(_) => {
+		match find_cjk_fonts("en").len() {
+			n @ 1.. => {
 				assert!(notice.is_none());
+				let last = format!("cjk-fallback-{}", n - 1);
 				assert!(
 					with_cjk.families[&FontFamily::Proportional]
 						.last()
-						.is_some_and(|f| f == "cjk-fallback")
+						.is_some_and(|f| *f == last)
 				);
-				assert!(with_cjk.font_data.contains_key("cjk-fallback"));
+				assert!(with_cjk.font_data.contains_key("cjk-fallback-0"));
 			}
-			None => {
+			0 => {
 				assert!(notice.is_some_and(|n| n.contains("CJK")));
 				assert_eq!(
 					with_cjk.families[&FontFamily::Proportional].len(),
@@ -738,7 +814,8 @@ mod tests {
 			!cjk_symbols.is_empty(),
 			"expected some CJK symbols (native names at least)"
 		);
-		if let Some(cjk) = find_cjk_font() {
+		let found = find_cjk_fonts("en");
+		if !found.is_empty() {
 			let (cjk_defs, notice) = fonts_for_language(true);
 			assert!(
 				notice.is_none(),
@@ -752,11 +829,8 @@ mod tests {
 				.iter()
 				.filter(|&&c| !covered(c, &cjk_faces))
 				.collect();
-			assert!(
-				missing.is_empty(),
-				"no glyph for {missing:?} in {}",
-				cjk.path
-			);
+			let paths: Vec<_> = found.iter().map(|f| f.path).collect();
+			assert!(missing.is_empty(), "no glyph for {missing:?} in {paths:?}");
 		}
 	}
 }

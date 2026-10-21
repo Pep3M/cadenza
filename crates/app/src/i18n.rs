@@ -87,7 +87,7 @@ impl Language {
 	}
 
 	/// Whether the UI needs a system CJK font loaded as a fallback (see
-	/// `theme::cjk_fallback_font`): Japanese, Simplified Chinese and Korean do (Cyrillic, in
+	/// `theme::find_cjk_fonts`): Japanese, Simplified Chinese and Korean do (Cyrillic, in
 	/// `Spanish`'s Latin family and `ru`, is already covered by IBM Plex Sans, but CJK
 	/// ideographs are not).
 	pub fn needs_cjk_fallback(self) -> bool {

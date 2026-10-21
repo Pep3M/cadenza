@@ -138,11 +138,14 @@ jobs:
           if (-not (Test-Path $iscc)) {
             choco install innosetup -y --no-progress
           }
-          # Simplified Chinese is not among Inno Setup's bundled translations; without it the
-          # installer just lacks that language.
+          # Simplified Chinese is bundled only with newer Inno Setup releases; else fetch it
+          # (without it the installer just lacks that language).
+          $zh = Join-Path (Split-Path $iscc) 'Languages\ChineseSimplified.isl'
           try {
-            Invoke-WebRequest -UseBasicParsing -OutFile packaging/windows/ChineseSimplified.isl `
-              https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl
+            if (-not (Test-Path $zh)) {
+              Invoke-WebRequest -UseBasicParsing -OutFile packaging/windows/ChineseSimplified.isl `
+                https://raw.githubusercontent.com/jrsoftware/issrc/is-6_4_3/Files/Languages/Unofficial/ChineseSimplified.isl
+            }
           } catch {
             Write-Warning "ChineseSimplified.isl not downloaded: $_"
           }

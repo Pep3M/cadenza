@@ -4,6 +4,7 @@ mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cadenza_engine::compile;
@@ -17,10 +18,30 @@ thread_local! {
 	static TRACKING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Where the first tracked allocation happened (the counter is shared by the tests running
+/// in parallel, so without it every test fails and none says why).
+static FIRST: OnceLock<String> = OnceLock::new();
+
 fn record() {
-	if TRACKING.try_with(Cell::get).unwrap_or(false) {
-		ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
+	if TRACKING.try_with(Cell::get).unwrap_or(false)
+		&& ALLOCATIONS.fetch_add(1, Ordering::SeqCst) == 0
+	{
+		// Untracked while capturing: the backtrace allocates.
+		TRACKING.with(|t| t.set(false));
+		let trace = std::backtrace::Backtrace::force_capture().to_string();
+		let _ = FIRST.set(trace);
+		TRACKING.with(|t| t.set(true));
 	}
+}
+
+#[track_caller]
+fn assert_no_allocations() {
+	let n = ALLOCATIONS.load(Ordering::SeqCst);
+	assert!(
+		n == 0,
+		"{n} allocation(s) on a tracked thread; the first one:\n{}",
+		FIRST.get().map_or("(no backtrace)", String::as_str)
+	);
 }
 
 unsafe impl GlobalAlloc for CountingAlloc {
@@ -307,7 +328,7 @@ fn graph_process_does_not_allocate() {
 	graph.process(&mut left, &mut right);
 	TRACKING.with(|t| t.set(false));
 
-	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert_no_allocations();
 	assert!(probe.is_active());
 	assert!(
 		probe
@@ -340,7 +361,7 @@ fn metering_does_not_allocate() {
 	graph.process(&mut left, &mut right);
 	TRACKING.with(|t| t.set(false));
 
-	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert_no_allocations();
 	assert!(loudest > 0.0, "meters saw the song");
 	assert_eq!(meters.master().rms, [0.0, 0.0]);
 }
@@ -384,7 +405,7 @@ fn stopped_note_preview_does_not_allocate() {
 	graph.process(&mut left, &mut right);
 	TRACKING.with(|t| t.set(false));
 
-	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert_no_allocations();
 	assert!(loudest > 0.0, "the stopped preview sounded");
 }
 
@@ -467,7 +488,7 @@ fn looping_auditioning_and_rescheduling_do_not_allocate() {
 	graph.process(&mut left, &mut right);
 	TRACKING.with(|t| t.set(false));
 
-	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert_no_allocations();
 	assert!(loudest > 0.0, "the auditioned loop sounded");
 }
 
@@ -670,7 +691,7 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 		master_tap.drain(&mut tapped);
 	}
 	TRACKING.with(|t| t.set(false));
-	assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+	assert_no_allocations();
 	assert!(probe.is_active());
 	assert!(master_tap.is_active());
 

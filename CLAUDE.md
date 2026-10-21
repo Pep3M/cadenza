@@ -24,7 +24,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
-| `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | mcp |
+| `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | model, mcp |
 | `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
@@ -60,7 +60,11 @@ macOS clippy + release tests (+ `cargo check --target x86_64-apple-darwin`) only
 main/staging, pushes to main, `v*` tags and `workflow_dispatch` (`platforms` input); docs-only
 changes skipped, superseded runs cancelled. No secrets: AI tests use the scripted provider.
 Release (`release.yml`, `v*` tags or manual; `packaging/`; every release bumps `[workspace.package] version` and adds its section to `CHANGELOG.md`): Linux tar.gz + AppImage (built on
-ubuntu-22.04), Windows zip (no sandbox binary), macOS universal `Cadenza.app` (lipo, ad-hoc
+ubuntu-22.04), Windows zip (no sandbox binary) + `-setup.exe` (Inno Setup, `packaging/windows/cadenza.iss`,
+`iscc` on the runner, static CRT via `RUSTFLAGS`; fixed `AppId` = in-place upgrades; per-user by
+default in `%LOCALAPPDATA%\Programs\Cadenza` like `install.ps1`, or all users; Start menu/desktop
+shortcuts, `.cdz`/`.cdzpack` associations, optional PATH entry; wizard in the app's 10 languages,
+Simplified Chinese `.isl` downloaded by the job), macOS universal `Cadenza.app` (lipo, ad-hoc
 signed) in a dmg; each ships `cadenza`, `cadenza-app`, `cadenza-plugin-scanner` (+
 `cadenza-plugin-sandbox` on Unix) side by side, plus LICENSE/README. Tags publish a GitHub Release
 (prerelease when the tag has a `-suffix`) with `SHA256SUMS` and the installers (`install.sh`:
@@ -282,9 +286,13 @@ on a scratch `Document`), `flatten_group` (keep what plays). `Track::input` is e
 (format_version stays 1); summaries show `input` and `take`.
 
 Project files (phase 14, `model::files`): a portable project is a folder
-`<Name>/<Name>.cadenza.json` + `Audio/` (recordings, imports, processed copies) + `Samples/`
+`<Name>/<Name>.cdz` + `Audio/` (recordings, imports, processed copies) + `Samples/`
 (collected zone files) + `Renders/` (exports) + `.cadenza/` (autosaves, session marker; safe to
-delete). In memory every file path is absolute; `save_json(path)` stores paths inside the folder
+delete). Project files are `.cdz` (JSON text) and nothing else: `load_json`/`save_json`/
+`save_json_absolute` refuse other names (`ModelError::NotAProjectFile`, `files::is_project_file`,
+`PROJECT_EXTENSION`); archives are `.cdzpack` (`ARCHIVE_EXTENSION`), archives from before 0.2
+(`.cadenzapack`/`.cadenza.zip`/`.zip`) still unpack, their `<Name>.cadenza.json`
+(`LEGACY_PROJECT_SUFFIX`) extracted as `<Name>.cdz`. In memory every file path is absolute; `save_json(path)` stores paths inside the folder
 holding the file relative to it (`/` separators) and `load_json` resolves them against that
 folder, so moving the folder keeps working; other paths stay absolute and old absolute
 projects load unchanged (format_version stays 1). `save_json` is atomic (temp + fsync +
@@ -983,7 +991,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
 - `jobs`: waveform peaks (decoded + `WaveformPeaks` on a worker, cached by path), plugin
   rescans, exports, file copies and file dialogs (files and folders) run off the UI thread.
 - Project files (phase 14; `state::safety`, `state::export`, `state::project_io`,
-  `ui::project_dialogs`): File menu New / Open (projects and `.cadenza.zip`/`.cadenzapack`
+  `ui::project_dialogs`): File menu New / Open (`.cdz` projects and `.cdzpack`
   archives, extracted into a chosen folder) / Open Recent (persisted, 10) / Start Screen / Save /
   Save As / Import / Export… (Ctrl+E) / Collect Project Files / Locate Missing Files / Export
   Project Archive / Autosave interval. Start screen (no project on the command line;
@@ -1133,7 +1141,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   devices -> track/lane (instrument or insert), mixer insert slot, below the tracks (new
   instrument track / bus); presets -> device or track; mixer inserts reorder / move to another
   strip (Ctrl copies); browser Files tab (bookmarks, audio/MIDI filter) and OS file drops:
-  audio/MIDI import at the drop beat/track (new tracks below), `.cadenza.json` opens (dirty
+  audio/MIDI import at the drop beat/track (new tracks below), `.cdz` opens (dirty
   prompt). Other shortcuts: Space, Home, Ctrl+Z/Shift+Z, Ctrl+S/Shift+S/O/N/I, Ctrl+E (export dialog), Ctrl+D, S
   split, Del (automation points first, then clips), A lanes; arrange: drag empty lane =
   rubber band, drag a clip's left edge = trim start. Dirty state is confirmed on new/open/close.

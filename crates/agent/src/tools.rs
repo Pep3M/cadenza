@@ -42,12 +42,13 @@ const READ_ONLY_TOOLS: &[&str] = &[
 
 /// Formats the `render` tool may write.
 const RENDER_EXTENSIONS: &[&str] = &["wav", "flac", "mp3"];
-/// Project archive extensions for `pack_project` (`.cadenza.zip` ends in `.zip`).
-const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cadenzapack"];
+/// Project archive extension for `pack_project`.
+const ARCHIVE_EXTENSIONS: &[&str] = &[cadenza_model::files::ARCHIVE_EXTENSION];
 /// MIDI file extensions for `import_midi`/`export_midi`.
 const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
 pub use cadenza_core::paths::real_path;
+use cadenza_model::files::PROJECT_EXTENSION;
 
 /// A drive-relative (`C:file`) or `..` component: never inside the session folder. An
 /// absolute path's drive prefix is fine (it is checked against the root).
@@ -410,7 +411,7 @@ impl ToolBridge {
 		match name {
 			"save_project" => {
 				let path = match obj.get("path").and_then(Value::as_str) {
-					Some(raw) => self.policy.resolve(raw, "json")?,
+					Some(raw) => self.policy.resolve(raw, PROJECT_EXTENSION)?,
 					None => self.policy.default_project.clone(),
 				};
 				obj.insert("path".into(), path_value(&path));
@@ -420,7 +421,7 @@ impl ToolBridge {
 					.get("path")
 					.and_then(Value::as_str)
 					.ok_or("missing 'path'")?;
-				let path = self.policy.resolve(raw, "json")?;
+				let path = self.policy.resolve(raw, PROJECT_EXTENSION)?;
 				obj.insert("path".into(), path_value(&path));
 			}
 			"render" => {
@@ -661,7 +662,7 @@ mod tests {
 	fn policy() -> (PathPolicy, tempfile::TempDir) {
 		let dir = tempfile::tempdir().unwrap();
 		(
-			PathPolicy::new(dir.path(), "song.cadenza.json", "song.wav").unwrap(),
+			PathPolicy::new(dir.path(), "song.cdz", "song.wav").unwrap(),
 			dir,
 		)
 	}
@@ -775,8 +776,8 @@ mod tests {
 		assert!(ok("import_audio", "/etc/passwd.wav").is_err());
 		assert!(ok("import_audio", "song.mid").is_err());
 		assert!(ok("import_midi", "song.mid").is_ok());
-		assert!(ok("pack_project", "share/Song.cadenza.zip").is_ok());
-		assert!(ok("pack_project", "/tmp/Song.cadenza.zip").is_err());
+		assert!(ok("pack_project", "share/Song.cdzpack").is_ok());
+		assert!(ok("pack_project", "/tmp/Song.cdzpack").is_err());
 		let relink =
 			|folder: &str| bridge.apply_policy("relink_files", json!({ "search_folder": folder }));
 		std::fs::create_dir_all(root.join("takes")).unwrap();

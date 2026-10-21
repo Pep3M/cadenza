@@ -457,7 +457,7 @@ mod tests {
 	fn settings_map_to_an_engine_job() {
 		let p = project();
 		let mut d = ExportDialog::default();
-		d.open_for(&p, Some(Path::new("/music/Song/Song.cadenza.json")));
+		d.open_for(&p, Some(Path::new("/music/Song/Song.cdz")));
 		assert_eq!(d.folder, Some(PathBuf::from("/music/Song/Renders")));
 		assert_eq!(d.name, "Song");
 		let spec = d.spec(&p, RangeContext::default()).unwrap();

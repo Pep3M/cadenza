@@ -122,8 +122,8 @@ mod tests {
 	#[test]
 	fn short_paths_keep_file_names() {
 		assert_eq!(
-			short_paths("Opened /home/me/Songs/first_light.cadenza.json"),
-			"Opened first_light.cadenza.json"
+			short_paths("Opened /home/me/Songs/first_light.cdz"),
+			"Opened first_light.cdz"
 		);
 		assert_eq!(
 			short_paths("Saved \"/tmp/a b/x.wav\". Done"),

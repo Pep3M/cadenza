@@ -2516,10 +2516,12 @@ impl AppState {
 	}
 
 	pub fn save_as(&mut self, path: PathBuf) -> bool {
-		let path = if path.extension().is_none() {
-			path.with_extension("cadenza.json")
-		} else {
+		let path = if cadenza_model::files::is_project_file(&path) {
 			path
+		} else {
+			let mut s = path.into_os_string();
+			s.push(cadenza_model::files::PROJECT_SUFFIX);
+			PathBuf::from(s)
 		};
 		self.save_to(Some(path))
 	}
@@ -4053,8 +4055,8 @@ impl AppState {
 			.map(str::to_owned)
 			.unwrap_or_else(|| self.project().name.clone());
 		let name = match action {
-			FileAction::PackArchive => format!("{stem}.cadenza.zip"),
-			_ => format!("{stem}.cadenza.json"),
+			FileAction::PackArchive => format!("{stem}.cdzpack"),
+			_ => format!("{stem}.cdz"),
 		};
 		let dir = match action {
 			FileAction::ExportFolder => self.export.folder.clone().or(dir),

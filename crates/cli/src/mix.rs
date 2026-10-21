@@ -20,7 +20,7 @@ use crate::compose::Printer;
 
 #[derive(Args, Debug)]
 pub struct MixArgs {
-	/// Project to mix (.cadenza.json)
+	/// Project to mix (.cdz)
 	pub project: PathBuf,
 	/// Integrated loudness target in LUFS (default: the song style's, else -14)
 	#[arg(long, allow_hyphen_values = true)]

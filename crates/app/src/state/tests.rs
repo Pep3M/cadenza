@@ -188,7 +188,7 @@ fn browser_devices_target_the_selection() {
 fn unsaved_changes_are_confirmed_and_files_round_trip() {
 	let (mut s, _) = state_with_song();
 	let dir = tempfile::tempdir().unwrap();
-	let path = dir.path().join("song.cadenza.json");
+	let path = dir.path().join("song.cdz");
 
 	// Clean: proceeds at once.
 	s.request(Pending::New);
@@ -208,7 +208,7 @@ fn unsaved_changes_are_confirmed_and_files_round_trip() {
 	assert!(s.save_as(dir.path().join("song")));
 	assert_eq!(s.path(), Some(path.as_path()), "extension added");
 	assert!(!s.dirty);
-	assert!(s.title().contains("song.cadenza.json"));
+	assert!(s.title().contains("song.cdz"));
 
 	s.request(Pending::New);
 	assert!(s.open(&path));
@@ -796,7 +796,7 @@ fn edits_by_another_owner_of_the_session_go_through_the_same_bookkeeping() {
 
 	// A save by the other owner clears the dirty flag and updates the path.
 	let dir = tempfile::tempdir().unwrap();
-	let path = dir.path().join("x.cadenza.json");
+	let path = dir.path().join("x.cdz");
 	cadenza_mcp::tools::project::save_project(
 		&mut shared.lock().unwrap(),
 		cadenza_mcp::tools::project::SaveProjectArgs {
@@ -1319,7 +1319,7 @@ fn saved_song(dir: &Path) -> (AppState, PathBuf) {
 	let dir = &real_dir(dir);
 	let (mut s, _) = state_with_song();
 	s.enable_safety(dir.join("state"));
-	let file = dir.join("Song").join("Song.cadenza.json");
+	let file = dir.join("Song").join("Song.cdz");
 	assert!(s.save_as(file.clone()));
 	(s, file)
 }
@@ -1503,7 +1503,7 @@ fn save_as_elsewhere_offers_to_collect_outside_files() {
 	)
 	.unwrap();
 	s.import_audio(&wav);
-	assert!(s.save_as(tmp.path().join("Copy").join("Copy.cadenza.json")));
+	assert!(s.save_as(tmp.path().join("Copy").join("Copy.cdz")));
 	assert!(s.collect_prompt);
 }
 
@@ -1685,7 +1685,7 @@ fn arm_states_are_saved_with_the_song_and_undoable() {
 	s.redo();
 	assert_eq!(s.record.armed, vec![keys, vox]);
 
-	let path = tmp.path().join("Song").join("Song.cadenza.json");
+	let path = tmp.path().join("Song").join("Song.cdz");
 	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 	assert!(s.save_as(path.clone()));
 	let mut reopened = AppState::headless();

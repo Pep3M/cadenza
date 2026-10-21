@@ -62,6 +62,7 @@ impl Project {
 	/// the previous version as `<file>.bak`.
 	pub fn save_json(&self, path: impl AsRef<Path>) -> Result<(), ModelError> {
 		let path = path.as_ref();
+		check_project_file(path)?;
 		let json = self.to_json_string_at(path)?;
 		write_atomic(path, json.as_bytes(), true)
 	}
@@ -70,6 +71,7 @@ impl Project {
 	/// stored away from the project folder).
 	pub fn save_json_absolute(&self, path: impl AsRef<Path>) -> Result<(), ModelError> {
 		let path = path.as_ref();
+		check_project_file(path)?;
 		let json = self.to_json_string()?;
 		write_atomic(path, json.as_bytes(), false)
 	}
@@ -78,6 +80,7 @@ impl Project {
 	/// project folder still finds its audio. Old projects with absolute paths load as-is.
 	pub fn load_json(path: impl AsRef<Path>) -> Result<Self, ModelError> {
 		let path = path.as_ref();
+		check_project_file(path)?;
 		let json = std::fs::read_to_string(path).map_err(|e| io_error(path, e))?;
 		Self::from_json_str_at(&json, path)
 	}
@@ -193,6 +196,17 @@ pub fn write_atomic(path: &Path, bytes: &[u8], backup: bool) -> Result<(), Model
 		let _ = d.sync_all();
 	}
 	Ok(())
+}
+
+/// Project files are `.cdz`; anything else is refused before touching the disk.
+fn check_project_file(path: &Path) -> Result<(), ModelError> {
+	if crate::files::is_project_file(path) {
+		Ok(())
+	} else {
+		Err(ModelError::NotAProjectFile {
+			path: path.display().to_string(),
+		})
+	}
 }
 
 fn io_error(path: &Path, e: std::io::Error) -> ModelError {

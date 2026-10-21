@@ -1182,7 +1182,7 @@ fn json_round_trip() {
 
 	let dir = std::env::temp_dir().join(format!("cadenza-model-test-{}", Uuid::new_v4()));
 	std::fs::create_dir_all(&dir).unwrap();
-	let path = dir.join("song.cadenza.json");
+	let path = dir.join("song.cdz");
 	fx.project.save_json(&path).unwrap();
 	// Relative file references resolve against the project's folder on load.
 	let mut expected = fx.project.clone();
@@ -1191,7 +1191,7 @@ fn json_round_trip() {
 	std::fs::remove_dir_all(&dir).unwrap();
 
 	assert!(matches!(
-		Project::load_json(dir.join("missing.json")),
+		Project::load_json(dir.join("missing.cdz")),
 		Err(ModelError::Io { .. })
 	));
 }

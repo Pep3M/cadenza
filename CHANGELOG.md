@@ -48,6 +48,10 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 
 ### Changed
 
+- **Project files are now `.cdz`** (was `.cadenza.json`) and project archives `.cdzpack`
+  (was `.cadenza.zip` / `.cadenzapack`). Only `.cdz` files open as projects: rename older
+  projects (`Song.cadenza.json` → `Song.cdz`; the content is unchanged). Older archives
+  still unpack, with their project file renamed to `.cdz`.
 - A mixer insert opens its editor in a floating window on a single click.
 - In the Sampler, Alt+arrows move the selected zone (plain arrows nudge values).
 - Shift+A switches A/B on the Poly Synth and Electric Piano, whose A–K keys play notes.
@@ -60,13 +64,18 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 
 ### Packaging
 
+- **Windows installer**: `cadenza-<version>-windows-x86_64-setup.exe`, a classic setup
+  wizard (per-user or all users, Start menu and desktop shortcuts, `.cdz` / `.cdzpack` file
+  associations, optional `PATH` entry, uninstaller, in-place upgrades, wizard in the app's
+  ten languages). The zip and `install.ps1` stay.
+- Windows binaries link the C runtime statically: no VC++ redistributable needed.
 - AUR package `cadenza-bin` for Arch Linux and Omarchy.
 
 ### Compatibility
 
-- Existing projects open and sound the same: every new device parameter has a default that
-  reproduces the old output bit for bit, and new project fields are optional
-  (`format_version` stays 1).
+- Existing projects open and sound the same once renamed to `.cdz`: every new device
+  parameter has a default that reproduces the old output bit for bit, and new project
+  fields are optional (`format_version` stays 1).
 
 ## [0.1.1] - 2026-10-15
 

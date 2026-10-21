@@ -29,7 +29,7 @@ pub enum ChatProvider {
 
 #[derive(Args, Debug)]
 pub struct ChatArgs {
-	/// Project to work on (.cadenza.json)
+	/// Project to work on (.cdz)
 	pub project: PathBuf,
 	/// What to do, e.g. "add a bridge after the second chorus"
 	pub request: String,

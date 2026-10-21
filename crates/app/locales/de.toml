@@ -39,7 +39,7 @@
 ", same clock as the output" = ", gleicher Takt wie der Ausgang"
 ", {n} duplicate shared" = [", {n} geteiltes Duplikat", ", {n} geteilte Duplikate"]
 "-inf dB" = "-inf dB"
-".cadenza.json → window" = ".cadenza.json → Fenster"
+".cdz → window" = ".cdz → Fenster"
 "1 = sparse … 5 = full" = "1 = spärlich … 5 = voll"
 "1 undo step" = "1 Rückgängig-Schritt"
 "1 week ago" = "Vor 1 Woche"

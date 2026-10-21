@@ -1100,7 +1100,7 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Packs the saved project's folder into one archive (.cadenza.zip) for \
+		description = "Packs the saved project's folder into one archive (.cdzpack) for \
 			sharing, with the current (even unsaved) project state; caches, autosaves, backups \
 			and (unless include_renders) Renders/ are left out. Files outside the folder are \
 			listed in 'outside': run collect_files first to include them."

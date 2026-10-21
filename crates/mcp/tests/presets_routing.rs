@@ -242,7 +242,7 @@ fn plugin_presets_state_capture_and_save() {
 	assert_eq!(state(&s).as_deref(), Some(quiet.as_str()));
 
 	// save_project captures automatically and writes the state into the file.
-	let path = dir.path().join("song.json");
+	let path = dir.path().join("song.cdz");
 	let saved = project::save_project(&mut s, args(json!({ "path": path }))).unwrap();
 	assert_eq!(saved.captured_plugin_states, Some(1));
 	assert!(saved.warnings.is_empty(), "{:?}", saved.warnings);

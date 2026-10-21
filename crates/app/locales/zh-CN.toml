@@ -35,7 +35,7 @@
 ", same clock as the output" = "，与输出使用相同时钟"
 ", {n} duplicate shared" = ["，共享了 {n} 个副本"]
 "-inf dB" = "-inf dB"
-".cadenza.json → window" = ".cadenza.json → 窗口"
+".cdz → window" = ".cdz → 窗口"
 "1 = sparse … 5 = full" = "1 = 稀疏 … 5 = 密集"
 "1 undo step" = "1 个撤销步骤"
 "1 week ago" = "1 周前"

@@ -719,7 +719,7 @@ mod tests {
 		)
 		.unwrap();
 
-		let project_file = dir.path().join("Song.cadenza.json");
+		let project_file = dir.path().join("Song.cdz");
 		let out = processed_path(Some(&project_file), &source, Process::Normalize);
 		assert_eq!(out, dir.path().join("Audio").join("tone-normalized-1.wav"));
 		let grown = render_processed(&source, &out, (0.25, 0.75), Process::Normalize).unwrap();

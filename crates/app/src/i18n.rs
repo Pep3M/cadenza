@@ -468,7 +468,9 @@ pub(crate) mod keys {
 				} else if p.extension().is_some_and(|x| x == "rs")
 					&& p.file_name().is_some_and(|n| n != "i18n.rs")
 				{
-					let text = std::fs::read_to_string(&p).unwrap();
+					// rustc reads CRLF as LF; a Windows checkout has CRLF, which would
+					// leave "\r" in string continuations.
+					let text = std::fs::read_to_string(&p).unwrap().replace("\r\n", "\n");
 					scan(&text, &p.display().to_string(), &mut keys);
 				}
 			}

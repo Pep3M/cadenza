@@ -55,7 +55,7 @@ impl DeviceProbe {
 	/// A ring holding about half a second at `sample_rate`.
 	pub fn new(sample_rate: u32) -> Self {
 		let capacity = ((f64::from(sample_rate) * PROBE_SECONDS) as usize).max(QUANTUM * 4);
-		Self {
+		let probe = Self {
 			sample_rate,
 			capacity: capacity as u64,
 			slots: (0..capacity * FRAME).map(|_| AtomicU32::new(0)).collect(),
@@ -69,7 +69,11 @@ impl DeviceProbe {
 			modulation: std::array::from_fn(|_| AtomicU32::new(0)),
 			modulation_count: AtomicU32::new(0),
 			reader: Mutex::new(()),
-		}
+		};
+		// Where std's mutex is a pthread one (macOS), its first lock allocates it: do that
+		// here, not in the first `drain` of a running meter.
+		drop(probe.reader.lock());
+		probe
 	}
 
 	pub fn sample_rate(&self) -> u32 {

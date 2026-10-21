@@ -82,10 +82,15 @@ Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
 #if FileExists(CompilerPath + "Languages\Korean.isl")
 Name: "ko"; MessagesFile: "compiler:Languages\Korean.isl"
 #endif
-; Simplified Chinese is an unofficial Inno Setup translation: the release workflow
-; downloads it next to this script.
-#if FileExists(SourcePath + "ChineseSimplified.isl")
-Name: "zh"; MessagesFile: "ChineseSimplified.isl"
+; Simplified Chinese is bundled only with newer Inno Setup releases; for older compilers
+; the release workflow downloads it next to this script.
+#if FileExists(CompilerPath + "Languages\ChineseSimplified.isl")
+  #define ChineseIsl "compiler:Languages\ChineseSimplified.isl"
+#elif FileExists(SourcePath + "ChineseSimplified.isl")
+  #define ChineseIsl "ChineseSimplified.isl"
+#endif
+#ifdef ChineseIsl
+Name: "zh"; MessagesFile: "{#ChineseIsl}"
 #endif
 
 [CustomMessages]
@@ -132,7 +137,7 @@ ko.Integration=통합:
 ko.AddToPath=cadenza 명령을 PATH에 추가 (터미널에서 사용)
 ko.Associate=.cdz 프로젝트와 .cdzpack 아카이브를 Cadenza로 열기
 #endif
-#if FileExists(SourcePath + "ChineseSimplified.isl")
+#ifdef ChineseIsl
 zh.Integration=集成:
 zh.AddToPath=将 cadenza 命令添加到 PATH（在终端中使用）
 zh.Associate=使用 Cadenza 打开 .cdz 项目和 .cdzpack 归档

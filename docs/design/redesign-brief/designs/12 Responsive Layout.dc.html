@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div style="display:flex;flex-direction:column;gap:56px;flex:none">
+
+<!-- 1366 -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">12a · 1366 × 768 · browser as rail, inspector and AI as overlays, narrow mixer</div>
+<div data-screen-label="12a 1366x768" style="width:1366px;height:768px;background:#0e0f11;display:grid;grid-template-rows:26px 48px minmax(0,1fr) 210px 22px;overflow:hidden;font-size:12px;position:relative;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:14px;padding:0 10px;border-bottom:1px solid #1d1f23"><span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5;font-size:11px">CADENZA</span><div style="display:flex;gap:12px;color:#a3a6ad"><span>File</span><span>Edit</span><span>Track</span><span>View</span><span>AI</span><span>Help</span></div><div style="flex:1;text-align:center;color:#a3a6ad">first_light <span style="color:#f2a944">●</span></div></div>
+<div style="display:flex;align-items:center;gap:10px;padding:0 10px;background:#15161a;border-bottom:1px solid #24262b">
+<div style="display:flex;gap:2px"><div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">⏮</div><div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328"><span style="width:9px;height:9px;background:#a3a6ad;border-radius:1px"></span></div><div style="width:36px;height:28px;display:flex;align-items:center;justify-content:center;background:#1d3a2b;color:#4fc38a;box-shadow:inset 0 0 0 1px #2f6b4b">▶</div><div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:10px;height:10px;border-radius:50%;background:#f0524f"></span></div></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 6px;color:#a3a6ad">Pat</span><span style="padding:2px 6px;background:#2a2c32;border-radius:3px;font-weight:500">Song</span></div>
+<span style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#15323a;color:#5ac8d8;border-radius:4px;box-shadow:inset 0 0 0 1px #24525d">⟳</span><span style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px;color:#a3a6ad">♩</span>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:12px;padding:0 12px;height:36px;background:#0e0f11;border:1px solid #24262b;border-radius:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:500">6.1.000</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">92.00 · 4/4</span></div>
+<div style="flex:1"></div>
+<span style="height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px">Modes <span style="color:#c884e8">●</span> ▾</span>
+<div style="width:90px;display:flex;flex-direction:column;gap:2px"><div style="height:4px;background:#0e0f11;border-radius:2px;overflow:hidden"><div style="width:70%;height:100%;background:#4fc38a"></div></div><div style="height:4px;background:#0e0f11;border-radius:2px;overflow:hidden"><div style="width:66%;height:100%;background:#4fc38a"></div></div></div>
+</div>
+<div style="display:grid;grid-template-columns:40px minmax(0,1fr);min-height:0">
+<div style="background:#15161a;border-right:1px solid #24262b;display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:8px">
+<sc-for list="{{ rail }}" as="r" hint-placeholder-count="4"><span style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:4px;background:{{ r.bg }};color:{{ r.fg }};font-size:12px">{{ r.i }}</span></sc-for>
+</div>
+<div style="display:flex;flex-direction:column;min-width:0;background:#111215;overflow:hidden">
+<div style="display:flex;height:22px;border-bottom:1px solid #24262b"><div style="width:168px;flex:none;background:#15161a;border-right:1px solid #24262b"></div><div style="flex:1;position:relative;background:#15161a"><sc-for list="{{ bars }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.l }}%;top:5px;bottom:0;border-left:1px solid #2a2c32;padding-left:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#a3a6ad">{{ b.n }}</div></sc-for></div></div>
+<sc-for list="{{ tracks }}" as="t" hint-placeholder-count="7"><div style="display:flex;height:52px;border-bottom:1px solid #1d1f23"><div style="width:168px;flex:none;display:flex;background:#15161a;border-right:1px solid #24262b"><div style="width:3px;background:{{ t.c }}"></div><div style="flex:1;padding:6px 8px;display:flex;flex-direction:column;justify-content:space-between"><span style="font-weight:600">{{ t.n }}</span><div style="display:flex;gap:2px"><span style="width:18px;height:16px;background:#212328;border-radius:3px;font-size:10px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">M</span><span style="width:18px;height:16px;background:#212328;border-radius:3px;font-size:10px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">S</span><span style="flex:1;height:16px;background:#0e0f11;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;text-align:right;padding-right:4px">{{ t.v }}</span></div></div></div><div style="flex:1;position:relative;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px);background-size:6.25% 100%"><sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1"><div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:3px;bottom:3px;background:{{ t.tint }};border-left:2px solid {{ t.c }};border-radius:3px"></div></sc-for></div></div></sc-for>
+</div>
+</div>
+<div style="background:#15161a;border-top:1px solid #24262b;display:flex;gap:2px;padding:4px;overflow:hidden">
+<sc-for list="{{ narrow }}" as="s" hint-placeholder-count="12"><div style="width:76px;flex:none;background:#1c1d21;border-radius:4px;display:flex;flex-direction:column;overflow:hidden"><div style="height:3px;background:{{ s.c }}"></div><span style="padding:3px 5px;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.n }}</span><span style="margin:0 4px;height:14px;background:#2a2c32;border-radius:2px;font-size:9.5px;display:flex;align-items:center;padding:0 4px;color:#a3a6ad">{{ s.ins }}</span><div style="flex:1;display:flex;justify-content:center;gap:6px;padding:6px 0"><div style="width:3px;background:#0e0f11;position:relative"><div style="position:absolute;bottom:{{ s.f }}%;left:-7px;width:17px;height:8px;background:#c4c7cd;border-radius:2px"></div></div><div style="width:4px;background:#0e0f11;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.m }}%;background:#4fc38a"></div></div><div style="width:4px;background:#0e0f11;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.m }}%;background:#4fc38a"></div></div></div><div style="display:flex;gap:1px;padding:0 3px 3px"><span style="flex:1;height:14px;background:#2a2c32;border-radius:2px;font-size:9.5px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">M</span><span style="flex:1;height:14px;background:#2a2c32;border-radius:2px;font-size:9.5px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">S</span></div></div></sc-for>
+</div>
+<div style="display:flex;align-items:center;gap:10px;padding:0 10px;border-top:1px solid #1d1f23;font-size:10.5px;color:#a3a6ad"><span style="color:#f2a944">● Unsaved</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;color:#80848c">F6 F8 F10 open as overlays</span></div>
+<!-- AI overlay -->
+<div style="position:absolute;right:0;top:74px;bottom:22px;width:380px;background:#15161a;border-left:1px solid #2a2c32;box-shadow:-16px 0 40px rgba(0,0,0,.55);display:flex;flex-direction:column">
+<div style="height:34px;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid #24262b"><span style="padding:3px 9px;background:#212328;border-radius:4px;font-weight:600">Producer</span><span style="padding:3px 9px;color:#a3a6ad">Mix</span><span style="flex:1"></span><span style="font-size:10.5px;color:#80848c">overlay · Esc</span><span style="color:#a3a6ad;padding:1px 6px;background:#212328;border-radius:3px;font-size:11px">Pin</span></div>
+<div style="flex:1;padding:12px;display:flex;flex-direction:column;gap:10px"><div style="align-self:flex-end;background:#1d2a3d;padding:7px 10px;border-radius:8px 8px 2px 8px">Make the chorus wider</div><div style="line-height:1.5">Widened Pad and Keys in the Chorus and added a short stereo delay on Lead.</div><div style="border:1px solid #2c4a73;background:#131c28;border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px"><span style="font-weight:600">What changed · 1 undo step</span><div style="display:flex;gap:6px"><span style="flex:1;text-align:center;padding:5px 0;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px">Keep</span><span style="flex:1;text-align:center;padding:5px 0;background:#212328;border-radius:4px">Undo</span></div></div></div>
+<div style="padding:8px;border-top:1px solid #24262b"><div style="height:40px;background:#0e0f11;border:1px solid #24262b;border-radius:6px;padding:7px 9px;color:#80848c">Ask the producer…</div></div>
+</div>
+</div>
+</div>
+
+<!-- 2560 -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">12b · 2560 × 1440 · everything docked, editor and mixer side by side</div>
+<div data-screen-label="12b 2560x1440" style="width:2560px;height:1440px;background:#0e0f11;display:grid;grid-template-rows:28px 56px minmax(0,1fr) 440px 24px;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:18px;padding:0 12px;border-bottom:1px solid #1d1f23"><span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5">CADENZA</span><div style="display:flex;gap:14px;color:#a3a6ad;font-size:12.5px"><span>File</span><span>Edit</span><span>Track</span><span>View</span><span>AI</span><span>Help</span></div><div style="flex:1;text-align:center;color:#a3a6ad">first_light <span style="color:#f2a944">● unsaved</span></div></div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;background:#15161a;border-bottom:1px solid #24262b">
+<div style="display:flex;gap:2px"><div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">⏮</div><div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328"><span style="width:10px;height:10px;background:#a3a6ad;border-radius:1px"></span></div><div style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;background:#1d3a2b;color:#4fc38a;box-shadow:inset 0 0 0 1px #2f6b4b">▶</div><div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:11px;height:11px;border-radius:50%;background:#f0524f"></span></div></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 8px;color:#a3a6ad">Pattern</span><span style="padding:2px 8px;background:#2a2c32;border-radius:3px;font-weight:500">Song</span></div>
+<div style="height:32px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#15323a;border-radius:4px;color:#5ac8d8;box-shadow:inset 0 0 0 1px #24525d">⟳ Loop</div><div style="height:32px;padding:0 10px;display:flex;align-items:center;background:#212328;border-radius:4px">♩ Click</div><div style="height:32px;padding:0 10px;display:flex;align-items:center;background:#212328;border-radius:4px">Count-in 1 bar</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 18px;height:44px;background:#0e0f11;border:1px solid #24262b;border-radius:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:500">6.1.000</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">0:13.043</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px">92.00 · 4/4</span></div>
+<div style="flex:1"></div>
+<span style="height:24px;padding:0 8px;display:flex;align-items:center;background:#212328;border-radius:4px">Overdub ▾</span><span style="height:24px;padding:0 8px;display:flex;align-items:center;background:#212328;border-radius:4px">Punch Off</span><span style="height:24px;padding:0 8px;display:flex;align-items:center;gap:6px;background:#212328;border-radius:4px"><span style="width:6px;height:6px;border-radius:50%;background:#c884e8"></span>Read ▾</span><span style="height:24px;padding:0 8px;display:flex;align-items:center;background:#212328;border-radius:4px">Follow Page ▾</span>
+<div style="width:200px;display:flex;flex-direction:column;gap:3px"><span style="font-size:11px;color:#4fc38a">● 48 kHz · 256 · 5.3 ms</span><div style="height:4px;background:#0e0f11;border-radius:2px;overflow:hidden"><div style="width:72%;height:100%;background:#4fc38a"></div></div><div style="height:4px;background:#0e0f11;border-radius:2px;overflow:hidden"><div style="width:68%;height:100%;background:#4fc38a"></div></div></div>
+</div>
+<div style="display:grid;grid-template-columns:300px minmax(0,1fr) 320px 440px;min-height:0">
+<div style="background:#15161a;border-right:1px solid #24262b;padding:10px;display:flex;flex-direction:column;gap:6px"><span style="font-weight:600;font-size:13px">Browser</span><sc-for list="{{ blist }}" as="b" hint-placeholder-count="12"><div style="height:24px;display:flex;align-items:center;gap:8px"><span style="width:16px;height:16px;border-radius:3px;background:{{ b.bg }}"></span><span style="color:#c4c7cd">{{ b.n }}</span></div></sc-for></div>
+<div style="display:flex;flex-direction:column;min-width:0;background:#111215;overflow:hidden">
+<div style="display:flex;height:24px;border-bottom:1px solid #24262b"><div style="width:220px;flex:none;background:#15161a;border-right:1px solid #24262b"></div><div style="flex:1;position:relative;background:#15161a"><sc-for list="{{ bars32 }}" as="b" hint-placeholder-count="32"><div style="position:absolute;left:{{ b.l }}%;top:6px;bottom:0;border-left:1px solid #2a2c32;padding-left:4px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ b.n }}</div></sc-for></div></div>
+<sc-for list="{{ tracksBig }}" as="t" hint-placeholder-count="10"><div style="display:flex;height:76px;border-bottom:1px solid #1d1f23"><div style="width:220px;flex:none;display:flex;background:#15161a;border-right:1px solid #24262b"><div style="width:4px;background:{{ t.c }}"></div><div style="flex:1;padding:8px;display:flex;flex-direction:column;justify-content:space-between"><span style="font-weight:600;font-size:13px">{{ t.n }}</span><span style="font-size:11px;color:#a3a6ad">{{ t.d }}</span><div style="display:flex;gap:3px"><span style="width:20px;height:18px;background:#212328;border-radius:3px;font-size:10.5px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">M</span><span style="width:20px;height:18px;background:#212328;border-radius:3px;font-size:10.5px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">S</span><span style="flex:1;height:18px;background:#0e0f11;border-radius:3px"></span></div></div></div><div style="flex:1;position:relative;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px);background-size:3.125% 100%"><sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1"><div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:4px;bottom:4px;background:{{ t.tint }};border-left:2px solid {{ t.c }};border-radius:3px"></div></sc-for></div></div></sc-for>
+</div>
+<div style="background:#15161a;border-left:1px solid #24262b;padding:12px;display:flex;flex-direction:column;gap:8px"><span style="font-weight:600;font-size:13px">Inspector</span><span style="font-size:15px;font-weight:600">Chords</span><sc-for list="{{ insp }}" as="i" hint-placeholder-count="6"><div style="display:flex;justify-content:space-between;height:24px;align-items:center"><span style="color:#a3a6ad">{{ i.k }}</span><span style="width:130px;height:20px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;display:flex;align-items:center;justify-content:flex-end;padding:0 6px">{{ i.v }}</span></div></sc-for></div>
+<div style="background:#15161a;border-left:1px solid #24262b;display:flex;flex-direction:column"><div style="height:38px;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid #24262b"><span style="padding:4px 10px;background:#212328;border-radius:4px;font-weight:600;font-size:13px">Producer</span><span style="padding:4px 10px;color:#a3a6ad;font-size:13px">Mix</span><span style="flex:1"></span><span style="font-size:11px;color:#80848c">docked</span></div><div style="flex:1;padding:14px;display:flex;flex-direction:column;gap:12px"><div style="align-self:flex-end;background:#1d2a3d;padding:8px 11px;border-radius:8px 8px 2px 8px;font-size:13px">Make the chorus wider</div><div style="font-size:13px;line-height:1.5">Widened Pad and Keys in the Chorus and added a short stereo delay on Lead.</div><div style="border:1px solid #2c4a73;background:#131c28;border-radius:6px;padding:12px;display:flex;flex-direction:column;gap:8px"><span style="font-weight:600">What changed · 1 undo step</span><div style="display:flex;gap:6px"><span style="flex:1;text-align:center;padding:6px 0;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px">Keep</span><span style="flex:1;text-align:center;padding:6px 0;background:#212328;border-radius:4px">Undo</span></div></div></div></div>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);border-top:1px solid #24262b;min-height:0">
+<div style="background:#111215;border-right:1px solid #24262b;display:flex;flex-direction:column;min-width:0;overflow:hidden"><div style="height:30px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#15161a;border-bottom:1px solid #24262b"><span style="font-weight:600;font-size:13px">Piano roll</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">F7</span><span style="color:#a3a6ad">Chords on Keys</span></div><div style="flex:1;display:flex"><div style="width:48px;background:repeating-linear-gradient(180deg,#c9ccd2 0 14px,#c9ccd2 14px 15px,#1c1d21 15px 24px,#c9ccd2 24px 38px)"></div><div style="flex:1;position:relative;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px),repeating-linear-gradient(180deg,#16171b 0 15px,#111215 15px 30px);background-size:6.25% 100%,100% 100%"><sc-for list="{{ prNotes }}" as="n" hint-placeholder-count="0"><div style="position:absolute;left:{{ n.x }}%;top:{{ n.y }}px;width:{{ n.w }}%;height:13px;background:#e3b24f;border-radius:2px"></div></sc-for></div></div></div>
+<div style="background:#15161a;display:flex;gap:4px;padding:6px;overflow:hidden"><sc-for list="{{ wide }}" as="s" hint-placeholder-count="9"><div style="width:112px;flex:none;background:#1c1d21;border-radius:4px;display:flex;flex-direction:column;overflow:hidden"><div style="height:3px;background:{{ s.c }}"></div><span style="padding:5px 7px;font-weight:600">{{ s.n }}</span><span style="margin:0 5px;height:18px;background:#2a2c32;border-radius:3px;font-size:11px;display:flex;align-items:center;padding:0 6px">{{ s.ins }}</span><div style="flex:1;display:flex;justify-content:center;gap:8px;padding:12px 0"><div style="width:3px;background:#0e0f11;position:relative"><div style="position:absolute;bottom:{{ s.f }}%;left:-8px;width:20px;height:10px;background:#c4c7cd;border-radius:2px"></div></div><div style="width:5px;background:#0e0f11;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.m }}%;background:#4fc38a"></div></div><div style="width:5px;background:#0e0f11;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.m }}%;background:#4fc38a"></div></div></div><div style="display:flex;gap:2px;padding:3px 5px 5px"><span style="flex:1;height:18px;background:#2a2c32;border-radius:3px;font-size:10.5px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">M</span><span style="flex:1;height:18px;background:#2a2c32;border-radius:3px;font-size:10.5px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">S</span></div></div></sc-for></div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid #1d1f23;font-size:11px;color:#a3a6ad"><span style="color:#f2a944">● Unsaved</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;color:#80848c">all panels docked</span></div>
+</div>
+</div>
+</div>
+
+<div style="width:720px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd;padding-top:36px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 12</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Layout model and sizes</span><span style="color:#a3a6ad">The F-key panel model stays. What is new: each panel is docked or an overlay depending on window width, and the editor and mixer share the bottom as tabs or side by side.</span></div>
+<div style="display:flex;flex-direction:column;border-radius:6px;overflow:hidden;box-shadow:inset 0 0 0 1px #3a3c42;font-size:14px">
+<div style="display:grid;grid-template-columns:120px 110px minmax(0,1fr);gap:12px;padding:10px 14px;background:#1c1d21;color:#a3a6ad;font-size:13px"><span>Panel</span><span>Size range</span><span>Below the breakpoint</span></div>
+<sc-for list="{{ rules }}" as="r" hint-placeholder-count="7"><div style="display:grid;grid-template-columns:120px 110px minmax(0,1fr);gap:12px;padding:10px 14px;background:#15161a;border-top:1px solid #24262b"><span style="color:#e8e9ec;font-weight:600">{{ r.p }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:13px">{{ r.s }}</span><span style="text-wrap:pretty">{{ r.b }}</span></div></sc-for>
+</div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="2">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    let seed = 17; const r = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const C = ['#e8705f', '#5aa2f5', '#e3b24f', '#9a82ec', '#4fc3a1', '#e07fb0', '#ec8d4f', '#b97be0', '#4fbfd1', '#8a93a3'];
+    const N = ['Drums', 'Bass', 'Keys', 'Pad', 'Lead', 'Vocal', 'Guitar', 'Strings', 'Perc', 'Reverb'];
+    const clips = (bars) => { const o = []; let x = Math.floor(r() * 3) * 4; while (x < bars) { const w = [4, 4, 8][Math.floor(r() * 3)]; o.push({ l: x / bars * 100, w: Math.min(w, bars - x) / bars * 100 - .3 }); x += w + (r() > .7 ? 4 : 0); } return o; };
+    const tracks = N.slice(0, 7).map((n, i) => ({ n, c: C[i], tint: C[i] + '26', v: ['−6.0', '−8.0', '−7.0', '−12', '−9.5', '−3.0', '−6.0'][i], clips: clips(16) }));
+    const tracksBig = N.map((n, i) => ({ n, c: C[i], tint: C[i] + '26', d: ['Drum Machine', 'Poly Synth', 'Electric Piano', 'Poly Synth', 'Poly Synth', 'Audio · In 1', 'Audio · In 2', 'Sampler', 'Drum Sampler', 'Bus'][i], clips: i === 9 ? [] : clips(32) }));
+    const narrow = N.map((n, i) => ({ n, c: C[i], ins: ['Comp', 'EQ', 'EQ', 'Chorus', 'Delay', 'EQ', 'EQ', 'EQ', 'Comp', 'Reverb'][i], f: 60 + (i % 3) * 6, m: 30 + Math.round(r() * 40) })).concat([{ n: 'Master', c: '#4c9cf5', ins: 'Limiter', f: 80, m: 70 }]);
+    const wide = narrow.slice(0, 8).concat([narrow[10]]).map(s => ({ ...s, ins: { Comp: 'Compressor', EQ: 'Parametric EQ', Chorus: 'Chorus', Delay: 'Delay', Reverb: 'Reverb', Limiter: 'Limiter' }[s.ins] }));
+    const rail = [['▤', 1], ['♪'], ['⌕'], ['☰']].map(([i, on]) => ({ i, bg: on ? '#212328' : 'transparent', fg: on ? '#e8e9ec' : '#80848c' }));
+    const blist = ['Drum Machine', 'Drum Sampler', 'Electric Piano', 'Poly Synth', 'Sampler', 'Chorus', 'Compressor', 'Delay', 'Gain / Utility', 'Limiter', 'Parametric EQ', 'Reverb'].map((n, i) => ({ n, bg: i < 5 ? '#1d2a3d' : '#2a2333' }));
+    const insp = [['Start', '5.1.000'], ['Length', '4.0.000'], ['Loop', 'Off'], ['Transpose', '0 st'], ['Velocity', '+0 %'], ['Notes', '12']].map(([k, v]) => ({ k, v }));
+    const prNotes = []; [[0, 3], [25, 3], [50, 3], [75, 3]].forEach(([x], b) => [60, 90, 120].forEach((y, k) => prNotes.push({ x: x + .2, w: 22, y: y + [0, 15, -15, 30][b] + k * 0 })));
+    const rules = [
+      ['Arrange', '≥ 480 w', 'Always docked. Takes the remaining space; hidden only while another panel is maximized (F11).'],
+      ['Transport', '48–56 h', 'Under 1600 px: Click, Count-in, MIDI record, Punch, Automation and Follow fold into a "Modes ▾" popover with a dot when any is non-default. Counter and play state never fold.'],
+      ['Browser F6', '220–420 w', 'Under 1600 px: a 40 px icon rail; clicking an icon opens the browser as an overlay that closes after a drop.'],
+      ['Inspector F8', '260–400 w', 'Under 1600 px: overlay from the right, closes on Esc or when the selection changes.'],
+      ['AI F10', '360–640 w', 'Under 1800 px: overlay drawer with a pin to dock it (the arrange shrinks). The Mix tab asks for 560 px.'],
+      ['Mixer F9', '180 h – 60 %', 'Strips switch to Narrow (76 px) automatically when Normal strips don\u2019t fit; the master is always pinned on the right.'],
+      ['Editor F7', '200 h – 70 %', 'Under 2200 px the editor and mixer share the bottom as tabs; at 2200 px and up they sit side by side.'],
+    ].map(([p, s, b]) => ({ p, s, b }));
+    const ux = [
+      { h: 'HiDPI and scaling', items: [
+        'All tokens are in egui points. Set pixels_per_point from the OS scale (1.0, 1.25, 1.5, 2.0) with a user override in View → Interface scale (80–200 %).',
+        'Round 1 px strokes, the playhead and meter edges to whole physical pixels so they stay sharp at 125 % and 150 %.',
+        'Rasterize Lucide SVGs at size × pixels_per_point and cache them per scale; rebuild the atlas when the scale changes.',
+        'Fonts: load Plex Sans and Plex Mono once and let egui scale them; never below 10.5 pt at 100 %.',
+      ]},
+      { h: 'Interaction', items: [
+        'F-keys toggle panels in every layout; in overlay mode the same key opens and closes the overlay. F11 maximizes the panel under the mouse, F12 closes all tool panels and keeps the arrange.',
+        'Splitters remember sizes per breakpoint, so going from a laptop to an external monitor restores your large layout.',
+        'View → Layouts saves named layouts (for example "Mixing", "Writing") with panel sizes and docking.',
+      ]},
+    ];
+    this._v = { tracks, tracksBig, narrow, wide, rail, blist, insp, prNotes, rules, ux, bars: Array.from({ length: 16 }, (_, i) => ({ n: i + 1, l: i / 16 * 100 })), bars32: Array.from({ length: 32 }, (_, i) => ({ n: i + 1, l: i / 32 * 100 })) };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

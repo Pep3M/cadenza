@@ -121,7 +121,7 @@ async fn a_shared_session_sees_tool_edits_and_tracks_saves() {
 		assert_ne!(session.change_key(), start);
 		assert!(!session.is_clean());
 	}
-	let path = dir.path().join("song.cadenza.json");
+	let path = dir.path().join("song.cdz");
 	server
 		.call_tool_json("save_project", json!({"path": path.display().to_string()}))
 		.await

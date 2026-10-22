@@ -41,7 +41,7 @@ fn s(p: &Path) -> &str {
 #[test]
 fn midi_export_and_import_round_trip() {
 	let dir = tempfile::tempdir().unwrap();
-	let project = dir.path().join("song.cadenza.json");
+	let project = dir.path().join("song.cdz");
 	song(&project);
 	let mid = dir.path().join("song.mid");
 	let out = cadenza(&["export-midi", s(&project), "-o", s(&mid)]);
@@ -65,7 +65,7 @@ fn midi_export_and_import_round_trip() {
 		String::from_utf8_lossy(&out.stderr)
 	);
 
-	let imported = dir.path().join("imported.cadenza.json");
+	let imported = dir.path().join("imported.cdz");
 	let out = cadenza(&["import-midi", s(&mid), "-o", s(&imported)]);
 	assert!(
 		out.status.success(),
@@ -106,7 +106,7 @@ fn midi_export_and_import_round_trip() {
 #[test]
 fn render_writes_flac_and_16_bit_wav() {
 	let dir = tempfile::tempdir().unwrap();
-	let project = dir.path().join("song.cadenza.json");
+	let project = dir.path().join("song.cdz");
 	song(&project);
 	for (name, extra) in [("mix.flac", vec![]), ("mix.wav", vec!["--bit-depth", "16"])] {
 		let path = dir.path().join(name);
@@ -172,7 +172,7 @@ fn mock_completions(bodies: Vec<String>) -> String {
 #[test]
 fn chat_applies_one_request_and_saves_the_project() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = dir.path().join("song.cadenza.json");
+	let path = dir.path().join("song.cdz");
 	song(&path);
 	let tool = serde_json::json!({
 		"id": "a", "model": "local",
@@ -223,7 +223,7 @@ fn chat_applies_one_request_and_saves_the_project() {
 #[test]
 fn mix_runs_an_engineer_pass_and_prints_what_changed() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = dir.path().join("song.cadenza.json");
+	let path = dir.path().join("song.cdz");
 	song(&path);
 	let reference = dir.path().join("ref.wav");
 	let tone = cadenza_audio_io::AudioBuffer::from_planar(
@@ -325,7 +325,7 @@ fn collect_pack_and_unpack_make_a_portable_project() {
 		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Int16),
 	)
 	.unwrap();
-	let project = dir.path().join("Song").join("Song.cadenza.json");
+	let project = dir.path().join("Song").join("Song.cdz");
 	let mut p = Project::new("Song");
 	let mut t = Track::new("Vox", TrackKind::Audio);
 	t.clips.push(Clip::audio(
@@ -348,7 +348,7 @@ fn collect_pack_and_unpack_make_a_portable_project() {
 	let json = std::fs::read_to_string(&project).unwrap();
 	assert!(json.contains("\"Audio/take.wav\""), "{json}");
 
-	let archive = dir.path().join("Song.cadenza.zip");
+	let archive = dir.path().join("Song.cdzpack");
 	let out = cadenza(&["pack", s(&project), "-o", s(&archive)]);
 	assert!(
 		out.status.success(),
@@ -372,7 +372,7 @@ fn collect_pack_and_unpack_make_a_portable_project() {
 #[test]
 fn export_writes_mixdown_and_stems_like_the_dialog() {
 	let dir = tempfile::tempdir().unwrap();
-	let project = dir.path().join("Song").join("Song.cadenza.json");
+	let project = dir.path().join("Song").join("Song.cdz");
 	std::fs::create_dir_all(project.parent().unwrap()).unwrap();
 	song(&project);
 	let out = cadenza(&[

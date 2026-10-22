@@ -55,7 +55,16 @@ fn builtin_factory_and_user_presets() {
 		.unwrap();
 	assert_eq!(list.device, "poly_synth");
 	let names: Vec<&str> = list.presets.iter().map(|p| p.name.as_str()).collect();
-	assert_eq!(names, ["Warm Pad", "Pluck Lead", "Sub Bass"]);
+	assert_eq!(
+		names,
+		[
+			"Warm Pad",
+			"Pluck Lead",
+			"Sub Bass",
+			"Vowel Pad",
+			"Digital Pluck"
+		]
+	);
 
 	let loaded = presets::load_preset(
 		&mut s,
@@ -146,7 +155,7 @@ fn set_sidechain_keys_compressors_and_explains_mistakes() {
 	let (kick, _) = track(&mut s, "Kick", "instrument", Some("drum_machine"));
 	let (bass, _) = track(&mut s, "Bass", "instrument", Some("poly_synth"));
 	let comp = insert(&mut s, Some(bass), "compressor");
-	let eq = insert(&mut s, Some(bass), "eq");
+	let chorus = insert(&mut s, Some(bass), "chorus");
 
 	tracks::set_sidechain(
 		&mut s,
@@ -162,7 +171,7 @@ fn set_sidechain_keys_compressors_and_explains_mistakes() {
 
 	let err = tracks::set_sidechain(
 		&mut s,
-		args(json!({ "track_id": bass, "device_id": eq, "source_track_id": kick })),
+		args(json!({ "track_id": bass, "device_id": chorus, "source_track_id": kick })),
 	)
 	.unwrap_err();
 	assert!(err.to_string().contains("no sidechain input"), "{err}");
@@ -233,7 +242,7 @@ fn plugin_presets_state_capture_and_save() {
 	assert_eq!(state(&s).as_deref(), Some(quiet.as_str()));
 
 	// save_project captures automatically and writes the state into the file.
-	let path = dir.path().join("song.json");
+	let path = dir.path().join("song.cdz");
 	let saved = project::save_project(&mut s, args(json!({ "path": path }))).unwrap();
 	assert_eq!(saved.captured_plugin_states, Some(1));
 	assert!(saved.warnings.is_empty(), "{:?}", saved.warnings);

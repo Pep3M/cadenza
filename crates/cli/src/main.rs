@@ -182,10 +182,10 @@ enum Command {
 		#[arg(long)]
 		dry_run: bool,
 	},
-	/// Pack a project folder into one .cadenza.zip archive for sharing
+	/// Pack a project folder into one .cdzpack archive for sharing
 	Pack {
 		project: PathBuf,
-		/// Archive to write (default: <project>.cadenza.zip next to the project file)
+		/// Archive to write (default: <project>.cdzpack next to the project file)
 		#[arg(short, long)]
 		output: Option<PathBuf>,
 		/// Include the Renders/ folder
@@ -202,7 +202,7 @@ enum Command {
 	/// builds both into target/release), on the PATH, or named by CADENZA_APP. It is a
 	/// separate binary so this CLI stays free of GPU and windowing dependencies.
 	Gui {
-		/// Project to open (.cadenza.json)
+		/// Project to open (.cdz)
 		project: Option<PathBuf>,
 	},
 	/// Let the embedded AI producer compose, arrange, mix and render a song from a brief

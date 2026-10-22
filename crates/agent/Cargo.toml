@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 cadenza-core.workspace = true
 cadenza-mcp.workspace = true
+cadenza-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -19,4 +20,3 @@ async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-cadenza-model.workspace = true

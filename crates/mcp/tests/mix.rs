@@ -234,3 +234,103 @@ async fn outputs_stay_within_their_token_budgets() {
 		targets.len()
 	);
 }
+
+/// A synth chord through a Parametric EQ with `peak2_gain` at 2 kHz.
+fn eq_synth(gain: f32) -> (Track, cadenza_core::DeviceId) {
+	let mut t = synth("Lead", 48, -12.0);
+	if let cadenza_model::ClipContent::Midi { notes, .. } = &mut t.clips[0].content {
+		for (k, pitch) in [55u8, 60, 64, 67, 72, 79].into_iter().enumerate() {
+			notes.push(Note::new(
+				pitch,
+				Tick::from_beats(k as f64 * 0.25),
+				Tick::from_beats(15.0),
+				0.7,
+			));
+		}
+	}
+	let eq = Device::builtin("eq", "EQ")
+		.with_param("peak2_freq", 2_000.0)
+		.with_param("peak2_q", 1.0)
+		.with_param("peak2_gain", gain);
+	let id = eq.id;
+	t.channel.inserts.push(eq);
+	(t, id)
+}
+
+#[tokio::test]
+async fn match_eq_fits_the_eq_to_a_reference_file() {
+	let dir = tempfile::tempdir().unwrap();
+	// The reference: the same part with +7 dB at 2 kHz.
+	let (shaped, _) = eq_synth(7.0);
+	let wav = dir.path().join("bright ref.wav");
+	call(
+		&server_with(vec![shaped], None),
+		"render",
+		json!({ "path": wav, "tail": false }),
+	)
+	.await;
+	let (flat, eq) = eq_synth(0.0);
+	let track = flat.id;
+	let instrument = flat.instrument.as_ref().unwrap().id;
+	let server = server_with(vec![flat, kit()], None);
+	let out = call(
+		&server,
+		"match_eq",
+		json!({ "track_id": track, "device_id": eq, "reference_file": wav }),
+	)
+	.await;
+	assert!(out.to_string().len() < 1_500, "budget: {out}");
+	assert_eq!(out["undo_label"], "Match EQ to bright ref.wav");
+	let bands = out["bands"].as_array().unwrap();
+	assert!(
+		bands.iter().any(|b| {
+			let f = b["freq_hz"].as_f64().unwrap();
+			b["gain_db"].as_f64().unwrap() > 2.5 && (f / 2_000.0).log2().abs() < 0.7
+		}),
+		"a boost near 2 kHz: {out}"
+	);
+	assert!(
+		out["residual_db"].as_f64().unwrap() < out["difference_db"].as_f64().unwrap() * 0.6,
+		"{out}"
+	);
+	assert!(out["applied"][0].as_str().unwrap().contains("Hz"));
+	let history = call(&server, "history", json!({})).await;
+	assert!(history.to_string().contains("Match EQ to bright ref.wav"));
+	let project = call(&server, "get_project", json!({})).await.to_string();
+	assert!(project.contains("peak"), "{project}");
+
+	// Another track as the reference, dry run: nothing changes.
+	let drums = call(&server, "get_project", json!({})).await["tracks"][1]["id"].clone();
+	let dry = call(
+		&server,
+		"match_eq",
+		json!({ "track_id": track, "device_id": eq, "reference_track_id": drums,
+			"amount": 50, "max_gain_db": 3, "dry_run": true }),
+	)
+	.await;
+	assert!(dry.get("undo_label").is_none(), "{dry}");
+	assert!(
+		dry["bands"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.all(|b| b["gain_db"].as_f64().unwrap().abs() <= 3.0 + 1e-6),
+		"{dry}"
+	);
+
+	// Actionable errors.
+	let err = |args: Value| {
+		let server = &server;
+		async move { server.call_tool_json("match_eq", args).await.unwrap_err() }
+	};
+	let e = err(json!({ "track_id": track, "device_id": eq })).await;
+	assert!(e.contains("missing reference"), "{e}");
+	let e = err(json!({ "track_id": track, "device_id": instrument, "reference_file": wav })).await;
+	assert!(e.contains("not the built-in Parametric EQ"), "{e}");
+	let e = err(json!({ "track_id": track, "device_id": eq, "reference_track_id": track })).await;
+	assert!(e.contains("own track"), "{e}");
+	let e =
+		err(json!({ "track_id": track, "device_id": eq, "reference_file": wav, "amount": 150 }))
+			.await;
+	assert!(e.contains("0..100"), "{e}");
+}

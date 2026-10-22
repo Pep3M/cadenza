@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+
+<section style="padding:80px;display:flex;flex-direction:column;gap:48px;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div style="display:flex;flex-direction:column;gap:12px;max-width:1400px">
+<div style="font-size:18px;color:#a3a6ad;font-family:'IBM Plex Mono',monospace">Turn 1 · Design directions</div>
+<div style="font-size:56px;font-weight:600;letter-spacing:-0.02em">Cadenza — three directions</div>
+<div style="font-size:22px;line-height:1.5;color:#c4c7cd;text-wrap:pretty">Each direction shows the everyday main window (transport, browser, arrange, mixer, AI producer) right after the AI added a bass line. Same content, same layout model, so you compare only the visual language. Pick one (or mix: "1a layout with 1c clips") and I'll build the token system and the remaining screens in it.</div>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:96px;align-items:flex-start">
+
+<!-- ============ 1a GRAPHITE ============ -->
+<div id="1a" style="display:flex;flex-direction:column;gap:32px;width:1920px">
+<div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,0.9fr);gap:56px;padding:40px;background:#16171a;border-radius:12px">
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="display:flex;align-items:center;gap:14px"><span style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;background:#4c9cf5;color:#0b1220;padding:4px 12px;border-radius:6px">1a</span><span style="font-size:44px;font-weight:600;letter-spacing:-0.01em">Graphite</span></div>
+<div style="font-size:22px;line-height:1.5;color:#c4c7cd;text-wrap:pretty">Calm, neutral instrument. Cool graphite chrome in five tight steps, one refined Cadenza blue for focus and selection. Clips are tinted glass-free panes with a colored edge, so the notes inside carry the color. The safest choice for long sessions.</div>
+<div style="font-size:18px;color:#8b8f97;line-height:1.6">Radii 3–4 px · 1 px borders · flat, no gradients · state = icon + label + color</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="font-size:16px;color:#8b8f97">Surfaces → text → accent &amp; states</div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:64px;background:#0e0f11;border-radius:4px;border:1px solid #2a2c31"></div><div style="flex:1;height:64px;background:#141518;border-radius:4px"></div><div style="flex:1;height:64px;background:#1a1b1f;border-radius:4px"></div><div style="flex:1;height:64px;background:#212328;border-radius:4px"></div><div style="flex:1;height:64px;background:#2a2c32;border-radius:4px"></div><div style="flex:1;height:64px;background:#363940;border-radius:4px"></div></div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:40px;background:#e8e9ec;border-radius:4px"></div><div style="flex:1;height:40px;background:#a3a6ad;border-radius:4px"></div><div style="flex:1;height:40px;background:#6e727a;border-radius:4px"></div><div style="flex:2;height:40px;background:#4c9cf5;border-radius:4px"></div></div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:28px;background:#4fc38a;border-radius:4px"></div><div style="flex:1;height:28px;background:#f0524f;border-radius:4px"></div><div style="flex:1;height:28px;background:#e8b84a;border-radius:4px"></div><div style="flex:1;height:28px;background:#4c9cf5;border-radius:4px"></div><div style="flex:1;height:28px;background:#c884e8;border-radius:4px"></div><div style="flex:1;height:28px;background:#5ac8d8;border-radius:4px"></div></div>
+<div style="font-size:14px;color:#6e727a;font-family:'IBM Plex Mono',monospace">play · record · mute · solo/select · automation · loop</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px">
+<div style="font-size:16px;color:#8b8f97">Type</div>
+<div style="font-size:40px;font-weight:600">IBM Plex Sans</div>
+<div style="font-size:20px;color:#c4c7cd">UI 12 / 13 · headings 15 semibold</div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:40px;font-weight:500;color:#e8e9ec">5.3.120 ◆ ✓ →</div>
+<div style="font-size:20px;color:#c4c7cd">IBM Plex Mono for time, values, meters</div>
+</div>
+</div>
+
+<div data-screen-label="1a Graphite main window" style="width:1920px;height:1080px;background:#0e0f11;display:grid;grid-template-rows:28px 56px minmax(0,1fr) 24px;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<!-- menu -->
+<div style="display:flex;align-items:center;gap:18px;padding:0 12px;background:#0e0f11;border-bottom:1px solid #1f2125">
+<span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5;font-size:12px">CADENZA</span>
+<div style="display:flex;gap:14px;color:#a3a6ad;font-size:12.5px"><span>File</span><span>Edit</span><span>Track</span><span>View</span><span>AI</span><span>Help</span></div>
+<div style="flex:1;text-align:center;color:#a3a6ad;font-size:12px">first_light <span style="color:#e8b84a">● unsaved</span></div>
+<span style="color:#6e727a;font-size:11.5px">F1 Shortcuts</span>
+</div>
+<!-- transport -->
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;background:#141518;border-bottom:1px solid #24262b">
+<div style="display:flex;gap:2px">
+<div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad;font-size:12px">⏮</div>
+<div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;color:#a3a6ad"><span style="width:10px;height:10px;background:#a3a6ad;border-radius:1px"></span></div>
+<div style="width:44px;height:32px;display:flex;align-items:center;justify-content:center;background:#1d3a2b;color:#4fc38a;font-size:14px;box-shadow:inset 0 0 0 1px #2f6b4b">▶</div>
+<div style="width:34px;height:32px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:11px;height:11px;border-radius:50%;background:#f0524f"></span></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:#6e727a">Mode</span><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 8px;color:#6e727a">Pattern</span><span style="padding:2px 8px;background:#2a2c32;border-radius:3px;color:#e8e9ec;font-weight:500">Song</span></div></div>
+<div style="display:flex;gap:4px">
+<div style="height:32px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#15323a;border-radius:4px;color:#5ac8d8;box-shadow:inset 0 0 0 1px #24525d"><span>⟳</span><span style="font-weight:500">Loop</span></div>
+<div style="height:32px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#212328;border-radius:4px;color:#e8e9ec"><span style="color:#a3a6ad">♩</span><span>Click</span><span style="color:#6e727a;font-size:11px">rec</span></div>
+<div style="height:32px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#212328;border-radius:4px;color:#e8e9ec"><span>Count-in</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">1 bar</span></div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:0;background:#0b0c0e;border:1px solid #24262b;border-radius:6px;height:44px">
+<div style="padding:0 18px;display:flex;flex-direction:column;justify-content:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:500;color:#e8e9ec;letter-spacing:.02em;line-height:1">6.1.000</span></div>
+<div style="width:1px;height:28px;background:#24262b"></div>
+<div style="padding:0 14px;display:flex;flex-direction:column;gap:1px"><span style="font-size:10px;color:#6e727a">Time</span><span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#a3a6ad">0:13.043</span></div>
+<div style="width:1px;height:28px;background:#24262b"></div>
+<div style="padding:0 14px;display:flex;flex-direction:column;gap:1px"><span style="font-size:10px;color:#6e727a">Tempo</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#e8b84a;font-weight:500">92.00</span></div>
+<div style="padding:0 14px 0 4px;display:flex;flex-direction:column;gap:1px"><span style="font-size:10px;color:#6e727a">Sig</span><span style="font-family:'IBM Plex Mono',monospace;font-size:15px;color:#e8e9ec">4/4</span></div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:10px">
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:#6e727a">MIDI record</span><span style="height:22px;padding:0 8px;display:flex;align-items:center;gap:6px;background:#212328;border-radius:4px">Overdub <span style="color:#6e727a">▾</span></span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:#6e727a">Punch</span><span style="height:22px;padding:0 8px;display:flex;align-items:center;background:#212328;border-radius:4px;color:#a3a6ad">Off</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:#6e727a">Automation</span><span style="height:22px;padding:0 8px;display:flex;align-items:center;gap:6px;background:#212328;border-radius:4px"><span style="width:6px;height:6px;border-radius:50%;background:#c884e8"></span>Read <span style="color:#6e727a">▾</span></span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:10px;color:#6e727a">Follow</span><span style="height:22px;padding:0 8px;display:flex;align-items:center;gap:6px;background:#212328;border-radius:4px">Page <span style="color:#6e727a">▾</span></span></div>
+</div>
+<div style="width:1px;height:32px;background:#24262b"></div>
+<div style="display:flex;flex-direction:column;gap:4px;width:170px">
+<div style="display:flex;justify-content:space-between;font-size:10.5px"><span style="color:#4fc38a">● 48 kHz · 256 · 5.3 ms</span><span style="color:#6e727a">−3.1</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><div style="height:4px;background:#212328;border-radius:2px;overflow:hidden"><div style="width:72%;height:100%;background:linear-gradient(90deg,#4fc38a 0%,#4fc38a 70%,#e8b84a 90%)"></div></div><div style="height:4px;background:#212328;border-radius:2px;overflow:hidden"><div style="width:68%;height:100%;background:linear-gradient(90deg,#4fc38a 0%,#4fc38a 70%,#e8b84a 90%)"></div></div></div>
+</div>
+</div>
+<!-- body -->
+<div style="display:grid;grid-template-columns:248px minmax(0,1fr) 384px;grid-template-rows:minmax(0,1fr) 296px;min-height:0">
+<!-- browser -->
+<div style="grid-row:1;background:#141518;border-right:1px solid #24262b;display:flex;flex-direction:column;min-height:0">
+<div style="display:flex;padding:8px;gap:2px"><div style="flex:1;display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="flex:1;text-align:center;padding:4px 0;background:#2a2c32;border-radius:3px;font-weight:500">Devices</span><span style="flex:1;text-align:center;padding:4px 0;color:#a3a6ad">Files</span><span style="flex:1;text-align:center;padding:4px 0;color:#a3a6ad">Library</span></div></div>
+<div style="margin:0 8px 8px;height:24px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:4px;color:#6e727a"><span>Search devices</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;border:1px solid #2a2c32;padding:0 4px;border-radius:3px">/</span></div>
+<div style="padding:4px 12px;font-size:11.5px;font-weight:600;color:#a3a6ad;display:flex;justify-content:space-between"><span>★ Favorites</span></div>
+<sc-for list="{{ favs }}" as="d" hint-placeholder-count="2"><div style="height:24px;padding:0 12px;display:flex;align-items:center;gap:8px"><span style="width:16px;height:16px;border-radius:3px;background:#212328;display:flex;align-items:center;justify-content:center;font-size:9px;color:#a3a6ad">{{ d.g }}</span><span>{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 12px 4px;font-size:11.5px;font-weight:600;color:#a3a6ad;display:flex;justify-content:space-between"><span>▾ Instruments</span><span style="color:#6e727a;font-weight:400">5</span></div>
+<sc-for list="{{ insts }}" as="d" hint-placeholder-count="5"><div style="height:24px;padding:0 12px;display:flex;align-items:center;gap:8px"><span style="width:16px;height:16px;border-radius:3px;background:#1d2a3d;display:flex;align-items:center;justify-content:center;font-size:9px;color:#7fb4ff">{{ d.g }}</span><span>{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 12px 4px;font-size:11.5px;font-weight:600;color:#a3a6ad;display:flex;justify-content:space-between"><span>▾ Effects</span><span style="color:#6e727a;font-weight:400">8</span></div>
+<sc-for list="{{ fx }}" as="d" hint-placeholder-count="6"><div style="height:24px;padding:0 12px;display:flex;align-items:center;gap:8px"><span style="width:16px;height:16px;border-radius:3px;background:#2a2333;display:flex;align-items:center;justify-content:center;font-size:9px;color:#c884e8">{{ d.g }}</span><span>{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 12px 4px;font-size:11.5px;font-weight:600;color:#a3a6ad;display:flex;justify-content:space-between"><span>▸ Plugins · CLAP / VST3</span><span style="color:#6e727a;font-weight:400">14</span></div>
+<div style="flex:1"></div>
+<div style="border-top:1px solid #24262b;padding:8px 12px;color:#6e727a;font-size:11px">Drag onto a track or the empty lane · <span style="font-family:'IBM Plex Mono',monospace">F6</span></div>
+</div>
+<!-- arrange -->
+<div style="grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:#111215;overflow:hidden">
+<div style="height:30px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#141518;border-bottom:1px solid #24262b">
+<span style="font-weight:600;font-size:12.5px">Arrange</span>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:1px 7px;background:#1d2a3d;color:#7fb4ff;border-radius:3px">Snap</span><span style="padding:1px 7px;color:#a3a6ad;font-family:'IBM Plex Mono',monospace">1/8</span></div>
+<div style="display:flex;gap:2px;color:#a3a6ad"><span style="padding:1px 7px;background:#212328;border-radius:3px;color:#e8e9ec">↖ Select</span><span style="padding:1px 7px">✎ Draw</span><span style="padding:1px 7px">✂ Split</span></div>
+<div style="flex:1"></div>
+<span style="color:#6e727a">Zoom</span><span style="padding:1px 7px;background:#212328;border-radius:3px">Fit</span><span style="padding:1px 7px;background:#212328;border-radius:3px">−</span><span style="padding:1px 7px;background:#212328;border-radius:3px">+</span>
+</div>
+<div style="display:flex;height:62px;border-bottom:1px solid #24262b">
+<div style="width:208px;flex:none;background:#141518;border-right:1px solid #24262b;display:flex;flex-direction:column;justify-content:flex-end;padding:6px 10px;gap:4px;color:#6e727a;font-size:11px"><span>Markers</span><span>Tempo lane ▸</span></div>
+<div style="flex:1;position:relative;display:flex;flex-direction:column">
+<div style="height:14px;background:#0e0f11;position:relative"><div style="position:absolute;left:0;width:100%;top:4px;height:6px;display:flex;gap:1px;opacity:.7"><sc-for list="{{ overview }}" as="o" hint-placeholder-count="0"><div style="position:absolute;left:{{ o.l }}%;width:{{ o.w }}%;top:{{ o.t }}px;height:1px;background:{{ o.cA }}"></div></sc-for></div><div style="position:absolute;left:0;width:100%;top:0;bottom:0;border:1px solid #4c9cf5;border-radius:2px;background:rgba(76,156,245,.08)"></div></div>
+<div style="height:24px;position:relative;background:#141518"><div style="position:absolute;left:25%;width:50%;top:0;height:5px;background:#5ac8d8;opacity:.85"></div><sc-for list="{{ bars }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.l }}%;top:6px;bottom:0;border-left:1px solid #2a2c32;padding-left:4px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ b.n }}</div></sc-for></div>
+<div style="height:24px;position:relative;background:#111215;border-top:1px solid #1f2125"><sc-for list="{{ markers }}" as="m" hint-placeholder-count="3"><div style="position:absolute;left:{{ m.l }}%;top:4px;height:16px;display:flex;align-items:center;gap:5px;padding:0 6px;border-left:2px solid #e8b84a;color:#e8b84a;font-size:11px;font-weight:500"><span>{{ m.n }}</span></div></sc-for></div>
+<div style="position:absolute;left:31.25%;top:14px;width:0;height:2000px;border-left:1px solid #f2f3f5;z-index:5"></div>
+</div>
+</div>
+<div style="flex:1;overflow:hidden;position:relative">
+<sc-for list="{{ tracks }}" as="t" hint-placeholder-count="7">
+<div style="display:flex;height:66px;border-bottom:1px solid #1d1f23">
+<div style="width:208px;flex:none;display:flex;background:{{ t.hdrA }};border-right:1px solid #24262b">
+<div style="width:4px;background:{{ t.cA }}"></div>
+<div style="flex:1;padding:7px 8px 6px 8px;display:flex;flex-direction:column;justify-content:space-between;min-width:0">
+<div style="display:flex;align-items:baseline;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6e727a">{{ t.n }}</span><span style="font-size:13px;font-weight:600">{{ t.name }}</span><sc-if value="{{ t.ai }}" hint-placeholder-val="{{ false }}"><span style="font-size:9.5px;font-weight:600;color:#0b1220;background:#4c9cf5;padding:0 4px;border-radius:2px">AI</span></sc-if><span style="flex:1"></span><span style="font-size:11px;color:#6e727a">{{ t.devGlyph }}</span></div>
+<div style="font-size:11px;color:#a3a6ad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.dev }}</div>
+<div style="display:flex;align-items:center;gap:3px">
+<span style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-size:10.5px;font-weight:600;color:{{ t.mA }}">M</span>
+<span style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">S</span>
+<span style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px"><span style="width:8px;height:8px;border-radius:50%;border:1.5px solid {{ t.armA }}"></span></span>
+<span style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-size:10px;color:#6e727a">⌁</span>
+<span style="flex:1;height:18px;margin-left:3px;position:relative;background:#0e0f11;border-radius:3px;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:{{ t.volPct }}%;background:#2a2c32"></span><span style="position:absolute;right:5px;top:2px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#e8e9ec">{{ t.vol }}</span></span>
+</div>
+</div>
+</div>
+<div style="flex:1;position:relative;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px);background-size:6.25% 100%">
+<sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1">
+<div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:3px;bottom:3px;background:{{ t.tintA }};border-radius:3px;border-left:2px solid {{ t.cA }};box-shadow:inset 0 0 0 1px {{ t.bdA }};overflow:hidden">
+<div style="padding:2px 6px;font-size:10.5px;font-weight:600;color:{{ t.cA }};white-space:nowrap">{{ c.name }}</div>
+<div style="position:absolute;left:4px;right:4px;top:18px;bottom:4px">
+<sc-for list="{{ c.notes }}" as="nt" hint-placeholder-count="0"><div style="position:absolute;left:{{ nt.x }}%;top:{{ nt.y }}%;width:{{ nt.w }}%;height:3px;border-radius:1px;background:{{ t.cA }}"></div></sc-for>
+<sc-if value="{{ t.audio }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;display:flex;align-items:center;gap:1px"><sc-for list="{{ c.wave }}" as="h" hint-placeholder-count="0"><div style="flex:1;height:{{ h }}%;background:{{ t.cA }};opacity:.8;border-radius:1px"></div></sc-for></div></sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+<sc-if value="{{ t.auto }}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;height:40px;border-bottom:1px solid #1d1f23">
+<div style="width:208px;flex:none;background:#141518;border-right:1px solid #24262b;display:flex;align-items:center;gap:6px;padding:0 10px 0 16px;font-size:11px;color:#a3a6ad"><span style="width:6px;height:6px;border-radius:50%;background:#c884e8"></span><span>Filter cutoff</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;color:#c884e8">2.4 kHz</span></div>
+<div style="flex:1;position:relative;background:#121317"><svg viewBox="0 0 100 40" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%"><polyline points="{{ autoPts }}" fill="none" stroke="#c884e8" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline></svg></div>
+</div>
+</sc-if>
+</sc-for>
+<div style="display:flex;gap:6px;padding:10px 10px 10px 18px;color:#a3a6ad"><span style="padding:3px 10px;border:1px dashed #2a2c32;border-radius:4px">+ Instrument</span><span style="padding:3px 10px;border:1px dashed #2a2c32;border-radius:4px">+ Audio</span><span style="padding:3px 10px;border:1px dashed #2a2c32;border-radius:4px">+ Bus</span><span style="padding:3px 10px;border:1px dashed #2a2c32;border-radius:4px">+ Folder</span></div>
+</div>
+</div>
+<!-- AI panel -->
+<div style="grid-row:1 / span 2;grid-column:3;background:#141518;border-left:1px solid #24262b;display:flex;flex-direction:column;min-height:0">
+<div style="height:38px;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid #24262b">
+<span style="padding:4px 10px;background:#212328;border-radius:4px;font-weight:600;font-size:12.5px">Producer</span><span style="padding:4px 10px;color:#a3a6ad;font-size:12.5px">Mix</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6e727a">session $0.042</span><span style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#a3a6ad">⚙</span>
+</div>
+<div style="flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:14px">
+<div style="align-self:flex-end;max-width:85%;background:#1d2a3d;color:#e8e9ec;padding:8px 11px;border-radius:8px 8px 2px 8px;font-size:13px;line-height:1.45">Add a bass line that follows the chords in the verse</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#6e727a"><span style="width:18px;height:18px;border-radius:50%;background:#4c9cf5;color:#0b1220;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10px">C</span><span>Producer · thought for 4 s ▸</span></div>
+<div style="font-size:13px;line-height:1.5;color:#e8e9ec">I'll add a round synth bass that locks to the kick and follows the Keys chords in bars 5–12.</div>
+<div style="background:#0e0f11;border:1px solid #24262b;border-radius:6px;padding:4px 0">
+<div style="display:flex;gap:8px;padding:5px 10px;align-items:center"><span style="color:#4fc38a;width:14px">✓</span><span>Created track <b style="font-weight:600">Bass</b> with Poly Synth</span></div>
+<div style="display:flex;gap:8px;padding:5px 10px;align-items:center"><span style="color:#4fc38a;width:14px">✓</span><span>Wrote 32 notes, bars 5–12</span></div>
+<div style="display:flex;gap:8px;padding:5px 10px;align-items:center"><span style="color:#4fc38a;width:14px">✓</span><span>Set volume −8 dB, low-cut 30 Hz</span></div>
+<div style="display:flex;gap:8px;padding:5px 10px;align-items:flex-start;background:#2a1718"><span style="color:#f0524f;width:14px">✗</span><span style="flex:1;line-height:1.4">Couldn't sidechain to Drums: Compressor has no sidechain input. <span style="color:#7fb4ff">Retry with Gain</span></span></div>
+</div>
+</div>
+<div style="border:1px solid #2c4a73;background:#131c28;border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:12.5px">What changed</span><span style="font-size:11px;color:#a3a6ad">1 undo step</span></div>
+<div style="display:flex;flex-direction:column;gap:3px;font-size:12px;color:#c4c7cd"><span><span style="color:#4fc38a">+</span> Track 2 · Bass (Poly Synth)</span><span><span style="color:#4fc38a">+</span> Clip "Bass · verse", 8 bars</span><span><span style="color:#e8b84a">~</span> Bass volume −8.0 dB</span></div>
+<div style="display:flex;gap:6px;align-items:center"><span style="flex:1;text-align:center;padding:5px 0;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px">Keep</span><span style="flex:1;text-align:center;padding:5px 0;background:#212328;border-radius:4px">↶ Undo <span style="font-family:'IBM Plex Mono',monospace;color:#6e727a;font-size:10.5px">Ctrl Z</span></span><span style="padding:5px 8px;color:#a3a6ad">▶ Audition</span></div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6e727a">done · 6.2 s · $0.0031</div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#6e727a">For selection · Keys, Chords</span><div style="display:flex;flex-wrap:wrap;gap:6px"><span style="padding:4px 9px;border:1px solid #2a2c32;border-radius:12px;color:#c4c7cd">Voice-lead these chords</span><span style="padding:4px 9px;border:1px solid #2a2c32;border-radius:12px;color:#c4c7cd">Add a drum fill at bar 8</span><span style="padding:4px 9px;border:1px solid #2a2c32;border-radius:12px;color:#c4c7cd">Mix the project</span></div></div>
+</div>
+<div style="padding:10px;border-top:1px solid #24262b;display:flex;flex-direction:column;gap:6px">
+<div style="min-height:52px;background:#0e0f11;border:1px solid #2c4a73;border-radius:6px;padding:8px 10px;color:#6e727a;font-size:12.5px;box-shadow:0 0 0 2px rgba(76,156,245,.15)">Ask the producer…</div>
+<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#6e727a"><span>claude-haiku-4.5 ▾</span><span>·</span><span>~$0.003 / request</span><span style="flex:1"></span><span style="padding:3px 12px;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px;font-size:12px">Send ↵</span></div>
+</div>
+</div>
+<!-- mixer -->
+<div style="grid-row:2;grid-column:1 / span 2;background:#141518;border-top:1px solid #24262b;display:flex;flex-direction:column;min-width:0">
+<div style="height:28px;display:flex;align-items:center;gap:10px;padding:0 10px;border-bottom:1px solid #1f2125"><span style="font-weight:600;font-size:12.5px">Mixer</span><span style="color:#6e727a;font-size:11px">F9</span><span style="flex:1"></span><span style="color:#a3a6ad;font-size:11px">Inserts ▾ · Sends ▾ · Meters: Peak + RMS</span></div>
+<div style="flex:1;display:flex;gap:4px;padding:6px;overflow:hidden">
+<sc-for list="{{ strips }}" as="s" hint-placeholder-count="8">
+<div style="width:112px;flex:none;display:flex;flex-direction:column;background:{{ s.bgA }};border-radius:4px;overflow:hidden">
+<div style="height:3px;background:{{ s.cA }}"></div>
+<div style="padding:5px 7px 4px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;font-weight:600">{{ s.name }}</span><span style="font-size:10px;color:#6e727a">{{ s.kind }}</span></div>
+<div style="display:flex;flex-direction:column;gap:2px;padding:0 5px;height:62px"><sc-for list="{{ s.ins }}" as="i" hint-placeholder-count="2"><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#2a2c32;border-radius:3px;font-size:11px"><span style="width:5px;height:5px;border-radius:50%;background:#4fc38a"></span>{{ i }}</div></sc-for><div style="height:16px;padding:0 6px;display:flex;align-items:center;color:#6e727a;font-size:11px;border:1px dashed #2a2c32;border-radius:3px">+ Insert</div></div>
+<div style="display:flex;flex-direction:column;gap:2px;padding:4px 5px;height:22px"><sc-for list="{{ s.sends }}" as="sd" hint-placeholder-count="1"><div style="height:16px;position:relative;background:#0e0f11;border-radius:3px;overflow:hidden;font-size:10.5px"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ sd.p }}%;background:#2c3a4f"></div><span style="position:absolute;left:5px;top:1px;color:#c4c7cd">{{ sd.n }}</span><span style="position:absolute;right:5px;top:1px;font-family:'IBM Plex Mono',monospace;color:#a3a6ad">{{ sd.v }}</span></div></sc-for></div>
+<div style="flex:1;display:flex;gap:6px;padding:4px 7px;align-items:stretch">
+<div style="display:flex;flex-direction:column;align-items:center;gap:4px;width:28px"><div style="width:24px;height:24px;border-radius:50%;background:#2a2c32;position:relative;transform:rotate({{ s.pan }}deg)"><div style="position:absolute;left:11px;top:2px;width:2px;height:8px;background:#e8e9ec;border-radius:1px"></div></div><span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#a3a6ad">{{ s.panL }}</span></div>
+<div style="width:20px;position:relative;display:flex;justify-content:center"><div style="width:3px;height:100%;background:#0e0f11;border-radius:2px"></div><div style="position:absolute;bottom:{{ s.f }}%;left:0;width:20px;height:10px;background:#c4c7cd;border-radius:2px;box-shadow:0 1px 2px rgba(0,0,0,.6)"></div></div>
+<div style="display:flex;gap:2px"><div style="width:5px;height:100%;background:#0e0f11;border-radius:1px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.mL }}%;background:linear-gradient(to top,#4fc38a 70%,#e8b84a 90%,#f0524f)"></div></div><div style="width:5px;height:100%;background:#0e0f11;border-radius:1px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.mR }}%;background:linear-gradient(to top,#4fc38a 70%,#e8b84a 90%,#f0524f)"></div></div></div>
+</div>
+<div style="padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>{{ s.db }}</span><span style="color:#6e727a">{{ s.pk }}</span></div>
+<div style="display:flex;gap:2px;padding:3px 5px 5px"><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#2a2c32;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">M</span><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#2a2c32;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">S</span><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#2a2c32;border-radius:3px;font-size:10px;color:#a3a6ad">→ {{ s.out }}</span></div>
+</div>
+</sc-for>
+<div style="flex:1"></div>
+<div style="width:150px;flex:none;display:flex;flex-direction:column;background:#1d2a3d;border:1px solid #2c4a73;border-radius:4px;padding:6px 8px;gap:6px">
+<div style="display:flex;justify-content:space-between"><span style="font-weight:700;font-size:12.5px">Master</span><span style="font-size:10px;color:#7fb4ff">Main out</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#26354b;border-radius:3px;font-size:11px"><span style="width:5px;height:5px;border-radius:50%;background:#4fc38a"></span>Parametric EQ</div><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#26354b;border-radius:3px;font-size:11px"><span style="width:5px;height:5px;border-radius:50%;background:#4fc38a"></span>Compressor</div><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#26354b;border-radius:3px;font-size:11px"><span style="width:5px;height:5px;border-radius:50%;background:#4fc38a"></span>Limiter</div></div>
+<div style="flex:1;display:flex;gap:8px;justify-content:center"><div style="width:4px;background:#0e0f11;border-radius:2px;position:relative"><div style="position:absolute;bottom:62%;left:-8px;width:20px;height:10px;background:#e8e9ec;border-radius:2px"></div></div><div style="width:9px;background:#0e0f11;border-radius:2px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:74%;background:linear-gradient(to top,#4fc38a 70%,#e8b84a 90%,#f0524f)"></div></div><div style="width:9px;background:#0e0f11;border-radius:2px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:70%;background:linear-gradient(to top,#4fc38a 70%,#e8b84a 90%,#f0524f)"></div></div></div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>0.0</span><span style="color:#e8b84a">−3.1</span></div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#7fb4ff">−11.8 LUFS</div>
+</div>
+</div>
+</div>
+</div>
+<!-- status -->
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;background:#0e0f11;border-top:1px solid #1f2125;font-size:11px;color:#a3a6ad">
+<span style="color:#e8b84a">● Unsaved</span><span>AI: add a bass — one undo step</span><span style="flex:1"></span>
+<span style="display:flex;gap:10px;color:#6e727a;font-family:'IBM Plex Mono',monospace"><span>F6 Browser</span><span>F7 Editor</span><span>F8 Inspector</span><span>F9 Mixer</span><span style="color:#7fb4ff">F10 AI</span></span>
+<span style="color:#6e727a">7 tracks · 11 clips</span>
+</div>
+</div>
+</div>
+
+<!-- ============ 1b EMBER ============ -->
+<div id="1b" style="display:flex;flex-direction:column;gap:32px;width:1920px">
+<div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,0.9fr);gap:56px;padding:40px;background:#1a1714;border-radius:16px;font-family:Manrope,sans-serif;color:#efe9e1">
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="display:flex;align-items:center;gap:14px"><span style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:600;background:#f0a948;color:#1a1208;padding:4px 12px;border-radius:8px">1b</span><span style="font-size:44px;font-weight:800;letter-spacing:-0.02em">Ember</span></div>
+<div style="font-size:22px;line-height:1.5;color:#cdc4b8;text-wrap:pretty">Warm studio at night. Charcoal with a brown undertone, panels as soft rounded cards on a darker desk, amber for focus and AI. Clips are solid pastel slabs with ink-dark notes, like colored tape on a console. Friendlier for non-engineers; the AI reads as a person at the desk.</div>
+<div style="font-size:18px;color:#958b7e;line-height:1.6">Radii 6–8 px · 6 px panel gutters · soft popup shadows · Cadenza blue kept for the wordmark, amber as product accent</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="font-size:16px;color:#958b7e">Surfaces → text → accent &amp; states</div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:64px;background:#0d0c0b;border-radius:6px;border:1px solid #302b26"></div><div style="flex:1;height:64px;background:#151311;border-radius:6px"></div><div style="flex:1;height:64px;background:#1c1916;border-radius:6px"></div><div style="flex:1;height:64px;background:#24201c;border-radius:6px"></div><div style="flex:1;height:64px;background:#2e2924;border-radius:6px"></div><div style="flex:1;height:64px;background:#3b352e;border-radius:6px"></div></div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:40px;background:#efe9e1;border-radius:6px"></div><div style="flex:1;height:40px;background:#b5ab9e;border-radius:6px"></div><div style="flex:1;height:40px;background:#80776b;border-radius:6px"></div><div style="flex:2;height:40px;background:#f0a948;border-radius:6px"></div></div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:28px;background:#8fcf8a;border-radius:6px"></div><div style="flex:1;height:28px;background:#f2645a;border-radius:6px"></div><div style="flex:1;height:28px;background:#e9c15e;border-radius:6px"></div><div style="flex:1;height:28px;background:#7fb0e8;border-radius:6px"></div><div style="flex:1;height:28px;background:#d79be0;border-radius:6px"></div><div style="flex:1;height:28px;background:#6ccbb8;border-radius:6px"></div></div>
+<div style="font-size:14px;color:#80776b;font-family:'JetBrains Mono',monospace">play · record · mute · solo · automation · loop</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px">
+<div style="font-size:16px;color:#958b7e">Type</div>
+<div style="font-size:40px;font-weight:700">Manrope</div>
+<div style="font-size:20px;color:#cdc4b8">UI 12.5 / 13.5 · headings 15 bold</div>
+<div style="font-family:'JetBrains Mono',monospace;font-size:40px;font-weight:500">5.3.120 ◆ ✓ →</div>
+<div style="font-size:20px;color:#cdc4b8">JetBrains Mono for time, values, meters</div>
+</div>
+</div>
+
+<div data-screen-label="1b Ember main window" style="width:1920px;height:1080px;background:#0d0c0b;display:grid;grid-template-rows:30px 60px minmax(0,1fr) 26px;font-family:Manrope,sans-serif;color:#efe9e1;overflow:hidden;font-size:12.5px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:18px;padding:0 14px">
+<span style="font-weight:800;letter-spacing:.16em;color:#5d9bf0;font-size:12px">CADENZA</span>
+<div style="display:flex;gap:16px;color:#b5ab9e;font-size:12.5px;font-weight:500"><span>File</span><span>Edit</span><span>Track</span><span>View</span><span>AI</span><span>Help</span></div>
+<div style="flex:1;text-align:center;color:#b5ab9e">first_light <span style="color:#f0a948">· unsaved</span></div>
+<span style="color:#80776b;font-size:11.5px">? Shortcuts</span>
+</div>
+<div style="display:flex;align-items:center;gap:14px;margin:0 6px;padding:0 12px;background:#1c1916;border-radius:10px">
+<div style="display:flex;gap:4px">
+<div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#2e2924;border-radius:8px;color:#b5ab9e">⏮</div>
+<div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#2e2924;border-radius:8px"><span style="width:11px;height:11px;background:#b5ab9e;border-radius:2px"></span></div>
+<div style="width:48px;height:36px;display:flex;align-items:center;justify-content:center;background:#8fcf8a;border-radius:8px;color:#13200f;font-size:15px">▶</div>
+<div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#2e2924;border-radius:8px"><span style="width:12px;height:12px;border-radius:50%;background:#f2645a"></span></div>
+</div>
+<div style="display:flex;background:#151311;border-radius:8px;padding:3px;gap:2px"><span style="padding:5px 10px;color:#80776b;font-weight:600">Pattern</span><span style="padding:5px 10px;background:#3b352e;border-radius:6px;font-weight:700">Song</span></div>
+<div style="display:flex;gap:4px">
+<span style="height:36px;padding:0 12px;display:flex;align-items:center;gap:6px;background:#203a35;color:#6ccbb8;border-radius:8px;font-weight:600">⟳ Loop 5–12</span>
+<span style="height:36px;padding:0 12px;display:flex;align-items:center;gap:6px;background:#2e2924;border-radius:8px;font-weight:600">♩ Click <span style="color:#80776b;font-weight:500">on rec</span></span>
+<span style="height:36px;padding:0 12px;display:flex;align-items:center;gap:6px;background:#2e2924;border-radius:8px;font-weight:600">Count-in <span style="color:#80776b;font-family:'JetBrains Mono',monospace;font-weight:500">1</span></span>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;align-items:center;gap:22px;padding:0 22px;height:46px;background:#0d0c0b;border-radius:23px">
+<span style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:500;color:#f0a948;line-height:1">6.1.000</span>
+<span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:#b5ab9e">0:13.043</span>
+<span style="display:flex;align-items:baseline;gap:5px"><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:500">92.00</span><span style="font-size:11px;color:#80776b">bpm</span></span>
+<span style="font-family:'JetBrains Mono',monospace;font-size:16px">4/4</span>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;gap:4px;font-weight:600">
+<span style="height:30px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#24201c;border-radius:8px"><span style="color:#80776b;font-weight:500">Rec</span> Overdub</span>
+<span style="height:30px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#24201c;border-radius:8px"><span style="color:#80776b;font-weight:500">Punch</span> Off</span>
+<span style="height:30px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#24201c;border-radius:8px"><span style="width:7px;height:7px;border-radius:50%;background:#d79be0"></span>Read</span>
+<span style="height:30px;padding:0 10px;display:flex;align-items:center;gap:6px;background:#24201c;border-radius:8px"><span style="color:#80776b;font-weight:500">Follow</span> Page</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px;width:160px">
+<div style="font-size:11px;color:#8fcf8a;font-weight:600">● Audio running · 5.3 ms</div>
+<div style="height:5px;background:#151311;border-radius:3px;overflow:hidden"><div style="width:72%;height:100%;background:linear-gradient(90deg,#8fcf8a 70%,#e9c15e 92%)"></div></div><div style="height:5px;background:#151311;border-radius:3px;overflow:hidden"><div style="width:68%;height:100%;background:linear-gradient(90deg,#8fcf8a 70%,#e9c15e 92%)"></div></div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:240px minmax(0,1fr) 392px;grid-template-rows:minmax(0,1fr) 300px;gap:6px;padding:6px;min-height:0">
+<div style="grid-row:1;background:#1c1916;border-radius:10px;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+<div style="display:flex;padding:8px;gap:2px"><span style="flex:1;text-align:center;padding:6px 0;background:#2e2924;border-radius:7px;font-weight:700">Devices</span><span style="flex:1;text-align:center;padding:6px 0;color:#b5ab9e;font-weight:600">Files</span><span style="flex:1;text-align:center;padding:6px 0;color:#b5ab9e;font-weight:600">Library</span></div>
+<div style="margin:0 8px 8px;height:28px;display:flex;align-items:center;padding:0 10px;background:#151311;border-radius:7px;color:#80776b">⌕ Search devices</div>
+<div style="padding:6px 14px 2px;font-size:11.5px;font-weight:700;color:#b5ab9e">Favorites</div>
+<sc-for list="{{ favs }}" as="d" hint-placeholder-count="2"><div style="height:26px;padding:0 14px;display:flex;align-items:center;gap:9px"><span style="width:18px;height:18px;border-radius:5px;background:#3a2e1c;display:flex;align-items:center;justify-content:center;font-size:9.5px;color:#f0a948;font-weight:700">{{ d.g }}</span><span style="font-weight:500">{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 14px 2px;font-size:11.5px;font-weight:700;color:#b5ab9e">Instruments</div>
+<sc-for list="{{ insts }}" as="d" hint-placeholder-count="5"><div style="height:26px;padding:0 14px;display:flex;align-items:center;gap:9px"><span style="width:18px;height:18px;border-radius:5px;background:#24201c;display:flex;align-items:center;justify-content:center;font-size:9.5px;color:#b5ab9e;font-weight:700">{{ d.g }}</span><span style="font-weight:500">{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 14px 2px;font-size:11.5px;font-weight:700;color:#b5ab9e">Effects</div>
+<sc-for list="{{ fx }}" as="d" hint-placeholder-count="6"><div style="height:26px;padding:0 14px;display:flex;align-items:center;gap:9px"><span style="width:18px;height:18px;border-radius:5px;background:#24201c;display:flex;align-items:center;justify-content:center;font-size:9.5px;color:#b5ab9e;font-weight:700">{{ d.g }}</span><span style="font-weight:500">{{ d.n }}</span></div></sc-for>
+</div>
+<div style="grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:#151311;border-radius:10px;overflow:hidden">
+<div style="height:34px;display:flex;align-items:center;gap:10px;padding:0 12px;background:#1c1916">
+<span style="font-weight:700;font-size:13.5px">Arrange</span>
+<span style="padding:3px 9px;background:#3a2e1c;color:#f0a948;border-radius:6px;font-weight:600">Snap 1/8</span>
+<span style="padding:3px 9px;background:#2e2924;border-radius:6px;font-weight:600">Select</span><span style="padding:3px 9px;color:#b5ab9e;font-weight:600">Draw</span><span style="padding:3px 9px;color:#b5ab9e;font-weight:600">Split</span>
+<div style="flex:1"></div><span style="padding:3px 9px;background:#24201c;border-radius:6px">Fit</span><span style="padding:3px 9px;background:#24201c;border-radius:6px">− +</span>
+</div>
+<div style="display:flex;height:52px">
+<div style="width:212px;flex:none;background:#1c1916"></div>
+<div style="flex:1;position:relative;background:#1c1916">
+<div style="height:26px;position:relative"><div style="position:absolute;left:25%;width:50%;top:3px;height:20px;background:#203a35;border-radius:5px"></div><sc-for list="{{ bars }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.l }}%;top:6px;padding-left:5px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#b5ab9e">{{ b.n }}</div></sc-for></div>
+<div style="height:26px;position:relative"><sc-for list="{{ markers }}" as="m" hint-placeholder-count="3"><div style="position:absolute;left:{{ m.l }}%;top:2px;height:20px;padding:0 9px;display:flex;align-items:center;background:#3a3020;color:#e9c15e;border-radius:10px;font-size:11px;font-weight:700;margin-left:2px">{{ m.n }}</div></sc-for></div>
+<div style="position:absolute;left:31.25%;top:0;height:2000px;border-left:2px solid #f0a948;z-index:5"></div>
+</div>
+</div>
+<div style="flex:1;overflow:hidden;display:flex;flex-direction:column;gap:2px;padding-top:2px">
+<sc-for list="{{ tracks }}" as="t" hint-placeholder-count="7">
+<div style="display:flex;height:66px">
+<div style="width:212px;flex:none;display:flex;gap:8px;padding:7px 10px;background:{{ t.hdrB }};align-items:stretch">
+<div style="width:30px;border-radius:7px;background:{{ t.cB }};display:flex;align-items:flex-start;justify-content:center;padding-top:5px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:#1a1612">{{ t.n }}</div>
+<div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;min-width:0">
+<div style="display:flex;align-items:center;gap:6px"><span style="font-size:13.5px;font-weight:700">{{ t.name }}</span><sc-if value="{{ t.ai }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:800;color:#1a1208;background:#f0a948;padding:0 5px;border-radius:4px">AI</span></sc-if></div>
+<div style="font-size:11.5px;color:#b5ab9e;white-space:nowrap;overflow:hidden">{{ t.dev }}</div>
+<div style="display:flex;gap:3px;align-items:center"><span style="width:22px;height:18px;border-radius:5px;background:#2e2924;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:800;color:#b5ab9e">M</span><span style="width:22px;height:18px;border-radius:5px;background:#2e2924;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:800;color:#b5ab9e">S</span><span style="width:22px;height:18px;border-radius:5px;background:#2e2924;display:flex;align-items:center;justify-content:center"><span style="width:8px;height:8px;border-radius:50%;background:{{ t.armB }}"></span></span><span style="flex:1;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;color:#cdc4b8">{{ t.vol }} dB</span></div>
+</div>
+</div>
+<div style="flex:1;position:relative;background-image:linear-gradient(to right,#221f1b 1px,transparent 1px);background-size:6.25% 100%">
+<sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1">
+<div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:4px;bottom:4px;background:{{ t.cB }};border-radius:6px;box-shadow:0 0 0 2px {{ t.bdB }};overflow:hidden;margin-left:1px">
+<div style="padding:3px 8px;font-size:11px;font-weight:800;color:#1a1612;white-space:nowrap">{{ c.name }}</div>
+<div style="position:absolute;left:6px;right:6px;top:20px;bottom:5px">
+<sc-for list="{{ c.notes }}" as="nt" hint-placeholder-count="0"><div style="position:absolute;left:{{ nt.x }}%;top:{{ nt.y }}%;width:{{ nt.w }}%;height:3px;border-radius:2px;background:rgba(26,22,18,.7)"></div></sc-for>
+<sc-if value="{{ t.audio }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;display:flex;align-items:center;gap:1px"><sc-for list="{{ c.wave }}" as="h" hint-placeholder-count="0"><div style="flex:1;height:{{ h }}%;background:rgba(26,22,18,.7);border-radius:1px"></div></sc-for></div></sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+<sc-if value="{{ t.auto }}" hint-placeholder-val="{{ false }}"><div style="display:flex;height:40px"><div style="width:212px;flex:none;background:#1c1916;display:flex;align-items:center;gap:6px;padding:0 12px 0 50px;font-size:11.5px;color:#b5ab9e;font-weight:600"><span style="color:#d79be0">●</span> Filter cutoff<span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace;color:#d79be0;font-weight:500">2.4k</span></div><div style="flex:1;position:relative;background:#18150f"><svg viewBox="0 0 100 40" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%"><polyline points="{{ autoPts }}" fill="none" stroke="#d79be0" stroke-width="2" vector-effect="non-scaling-stroke"></polyline></svg></div></div></sc-if>
+</sc-for>
+<div style="display:flex;gap:6px;padding:10px 12px;font-weight:600;color:#b5ab9e"><span style="padding:5px 12px;background:#1c1916;border-radius:7px">+ Instrument</span><span style="padding:5px 12px;background:#1c1916;border-radius:7px">+ Audio</span><span style="padding:5px 12px;background:#1c1916;border-radius:7px">+ Bus</span><span style="padding:5px 12px;background:#1c1916;border-radius:7px">+ Folder</span></div>
+</div>
+</div>
+<div style="grid-row:1 / span 2;grid-column:3;background:#1c1916;border-radius:10px;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+<div style="height:44px;display:flex;align-items:center;gap:4px;padding:0 10px">
+<span style="padding:6px 12px;background:#2e2924;border-radius:7px;font-weight:700;font-size:13px">Producer</span><span style="padding:6px 12px;color:#b5ab9e;font-weight:600;font-size:13px">Mix</span><span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#80776b">$0.042 today</span>
+</div>
+<div style="flex:1;overflow:hidden;padding:8px 14px;display:flex;flex-direction:column;gap:14px">
+<div style="align-self:flex-end;max-width:85%;background:#2e2924;padding:9px 13px;border-radius:14px 14px 4px 14px;font-size:13.5px;line-height:1.45;font-weight:500">Add a bass line that follows the chords in the verse</div>
+<div style="display:flex;gap:10px">
+<div style="width:28px;height:28px;flex:none;border-radius:50%;background:#f0a948;display:flex;align-items:center;justify-content:center;color:#1a1208;font-weight:800">C</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:10px">
+<div style="font-size:13.5px;line-height:1.55">On it. A round synth bass that sits with the kick and follows the Keys chords, bars 5–12.</div>
+<div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px">
+<div style="display:flex;gap:8px;align-items:center"><span style="width:18px;height:18px;border-radius:50%;background:#253a23;color:#8fcf8a;display:flex;align-items:center;justify-content:center;font-size:10px">✓</span>Created Bass with Poly Synth</div>
+<div style="display:flex;gap:8px;align-items:center"><span style="width:18px;height:18px;border-radius:50%;background:#253a23;color:#8fcf8a;display:flex;align-items:center;justify-content:center;font-size:10px">✓</span>Wrote 32 notes in the verse</div>
+<div style="display:flex;gap:8px;align-items:center"><span style="width:18px;height:18px;border-radius:50%;background:#253a23;color:#8fcf8a;display:flex;align-items:center;justify-content:center;font-size:10px">✓</span>Balanced it at −8 dB</div>
+<div style="display:flex;gap:8px;align-items:flex-start"><span style="width:18px;height:18px;flex:none;border-radius:50%;background:#3d1f1c;color:#f2645a;display:flex;align-items:center;justify-content:center;font-size:10px">✗</span><span style="line-height:1.45">Skipped the sidechain: the Compressor has no sidechain input. <span style="color:#f0a948;font-weight:700">Try another way</span></span></div>
+</div>
+</div>
+</div>
+<div style="background:#2a2118;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between"><span style="font-weight:800;font-size:13px">Changes in your song</span><span style="font-size:11.5px;color:#b5ab9e">1 undo step</span></div>
+<div style="display:flex;flex-wrap:wrap;gap:5px"><span style="padding:3px 8px;background:#3d3328;border-radius:6px;font-size:11.5px">+ Bass track</span><span style="padding:3px 8px;background:#3d3328;border-radius:6px;font-size:11.5px">+ 8-bar clip</span><span style="padding:3px 8px;background:#3d3328;border-radius:6px;font-size:11.5px">Volume −8 dB</span></div>
+<div style="display:flex;gap:6px"><span style="flex:1;text-align:center;padding:7px 0;background:#f0a948;color:#1a1208;font-weight:800;border-radius:8px">Keep it</span><span style="flex:1;text-align:center;padding:7px 0;background:#3d3328;border-radius:8px;font-weight:700">Undo</span><span style="padding:7px 10px;background:#3d3328;border-radius:8px;font-weight:700">▶</span></div>
+<div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#958b7e">6.2 s · $0.0031</div>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:11.5px;color:#958b7e;font-weight:600">Ideas for Keys · Chords</span><div style="display:flex;flex-wrap:wrap;gap:6px;font-weight:600"><span style="padding:6px 11px;background:#24201c;border-radius:16px">Voice-lead these chords</span><span style="padding:6px 11px;background:#24201c;border-radius:16px">Add a fill at bar 8</span><span style="padding:6px 11px;background:#24201c;border-radius:16px">Mix the project</span></div></div>
+</div>
+<div style="padding:12px;display:flex;flex-direction:column;gap:7px">
+<div style="min-height:56px;background:#151311;border-radius:12px;padding:10px 12px;color:#80776b;font-size:13.5px;box-shadow:0 0 0 2px #5a4220">Ask the producer…</div>
+<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#958b7e"><span>claude-haiku-4.5 ▾</span><span>~$0.003</span><span style="flex:1"></span><span style="padding:5px 14px;background:#f0a948;color:#1a1208;font-weight:800;border-radius:8px;font-size:12.5px">Send</span></div>
+</div>
+</div>
+<div style="grid-row:2;grid-column:1 / span 2;background:#1c1916;border-radius:10px;display:flex;flex-direction:column;min-width:0;overflow:hidden">
+<div style="height:32px;display:flex;align-items:center;gap:10px;padding:0 12px"><span style="font-weight:700;font-size:13.5px">Mixer</span><span style="flex:1"></span><span style="color:#958b7e;font-size:11.5px">Inserts · Sends · Meters</span></div>
+<div style="flex:1;display:flex;gap:5px;padding:0 8px 8px;overflow:hidden">
+<sc-for list="{{ strips }}" as="s" hint-placeholder-count="8">
+<div style="width:112px;flex:none;display:flex;flex-direction:column;background:#24201c;border-radius:8px;overflow:hidden">
+<div style="padding:6px 8px;display:flex;justify-content:space-between;align-items:center;background:{{ s.cB }};color:#1a1612"><span style="font-size:12px;font-weight:800">{{ s.name }}</span><span style="font-size:10px;font-weight:700;opacity:.7">{{ s.kind }}</span></div>
+<div style="display:flex;flex-direction:column;gap:2px;padding:5px 5px 0;height:60px"><sc-for list="{{ s.ins }}" as="i" hint-placeholder-count="2"><div style="height:18px;padding:0 7px;display:flex;align-items:center;gap:5px;background:#2e2924;border-radius:5px;font-size:11px;font-weight:600"><span style="width:5px;height:5px;border-radius:50%;background:#8fcf8a"></span>{{ i }}</div></sc-for></div>
+<div style="padding:3px 5px;height:20px"><sc-for list="{{ s.sends }}" as="sd" hint-placeholder-count="1"><div style="height:16px;position:relative;background:#151311;border-radius:5px;overflow:hidden;font-size:10.5px"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ sd.p }}%;background:#3a3020"></div><span style="position:absolute;left:6px;top:1px;font-weight:600">{{ sd.n }}</span><span style="position:absolute;right:6px;top:1px;font-family:'JetBrains Mono',monospace;color:#cdc4b8">{{ sd.v }}</span></div></sc-for></div>
+<div style="flex:1;display:flex;gap:6px;padding:4px 8px;align-items:stretch">
+<div style="display:flex;flex-direction:column;align-items:center;gap:4px;width:28px"><div style="width:26px;height:26px;border-radius:50%;background:#3b352e;position:relative;transform:rotate({{ s.pan }}deg)"><div style="position:absolute;left:12px;top:3px;width:2px;height:8px;background:#f0a948;border-radius:1px"></div></div><span style="font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#b5ab9e">{{ s.panL }}</span></div>
+<div style="width:22px;position:relative;display:flex;justify-content:center"><div style="width:4px;height:100%;background:#151311;border-radius:2px"></div><div style="position:absolute;bottom:{{ s.f }}%;left:0;width:22px;height:12px;background:#cdc4b8;border-radius:4px"></div></div>
+<div style="display:flex;gap:2px"><div style="width:6px;height:100%;background:#151311;border-radius:3px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.mL }}%;background:linear-gradient(to top,#8fcf8a 70%,#e9c15e 90%,#f2645a)"></div></div><div style="width:6px;height:100%;background:#151311;border-radius:3px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.mR }}%;background:linear-gradient(to top,#8fcf8a 70%,#e9c15e 90%,#f2645a)"></div></div></div>
+</div>
+<div style="padding:2px 8px;font-family:'JetBrains Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>{{ s.db }}</span><span style="color:#80776b">{{ s.pk }}</span></div>
+<div style="display:flex;gap:2px;padding:3px 5px 6px"><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#2e2924;border-radius:5px;font-size:10.5px;font-weight:800;color:#b5ab9e">M</span><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#2e2924;border-radius:5px;font-size:10.5px;font-weight:800;color:#b5ab9e">S</span><span style="flex:1.4;height:18px;display:flex;align-items:center;justify-content:center;background:#2e2924;border-radius:5px;font-size:10px;font-weight:600;color:#b5ab9e">{{ s.out }}</span></div>
+</div>
+</sc-for>
+<div style="flex:1"></div>
+<div style="width:150px;flex:none;display:flex;flex-direction:column;background:#2e2924;border-radius:8px;padding:8px;gap:6px">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:13px">Master</span><span style="font-size:10px;color:#f0a948;font-weight:700">MAIN</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><div style="height:18px;padding:0 7px;display:flex;align-items:center;gap:5px;background:#3b352e;border-radius:5px;font-size:11px;font-weight:600"><span style="width:5px;height:5px;border-radius:50%;background:#8fcf8a"></span>Parametric EQ</div><div style="height:18px;padding:0 7px;display:flex;align-items:center;gap:5px;background:#3b352e;border-radius:5px;font-size:11px;font-weight:600"><span style="width:5px;height:5px;border-radius:50%;background:#8fcf8a"></span>Compressor</div><div style="height:18px;padding:0 7px;display:flex;align-items:center;gap:5px;background:#3b352e;border-radius:5px;font-size:11px;font-weight:600"><span style="width:5px;height:5px;border-radius:50%;background:#8fcf8a"></span>Limiter</div></div>
+<div style="flex:1;display:flex;gap:8px;justify-content:center"><div style="width:5px;background:#151311;border-radius:3px;position:relative"><div style="position:absolute;bottom:62%;left:-9px;width:23px;height:12px;background:#f0a948;border-radius:4px"></div></div><div style="width:10px;background:#151311;border-radius:3px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:74%;background:linear-gradient(to top,#8fcf8a 70%,#e9c15e 90%,#f2645a)"></div></div><div style="width:10px;background:#151311;border-radius:3px;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:70%;background:linear-gradient(to top,#8fcf8a 70%,#e9c15e 90%,#f2645a)"></div></div></div>
+<div style="font-family:'JetBrains Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>0.0</span><span style="color:#e9c15e">−3.1</span></div>
+<div style="font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#f0a948">−11.8 LUFS</div>
+</div>
+</div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 14px;font-size:11.5px;color:#b5ab9e;font-weight:500">
+<span style="color:#f0a948">● Unsaved</span><span>AI: add a bass</span><span style="flex:1"></span><span style="font-family:'JetBrains Mono',monospace;color:#80776b">F6 Browser · F7 Editor · F9 Mixer · F10 AI</span><span style="color:#80776b">7 tracks · 11 clips</span>
+</div>
+</div>
+</div>
+
+<!-- ============ 1c SIGNAL ============ -->
+<div id="1c" style="display:flex;flex-direction:column;gap:32px;width:1920px">
+<div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,0.9fr);gap:56px;padding:40px;background:#0f1218;border:1px solid #1d2330;font-family:Geist,sans-serif;color:#f2f5fa">
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="display:flex;align-items:center;gap:14px"><span style="font-family:'Geist Mono',monospace;font-size:20px;font-weight:600;background:#35d0f5;color:#04141a;padding:4px 12px">1c</span><span style="font-size:44px;font-weight:600;letter-spacing:-0.03em">Signal</span></div>
+<div style="font-size:22px;line-height:1.5;color:#b9c2d0;text-wrap:pretty">Hardware-grade contrast. Blue-black, edge-to-edge panels split by hairlines, no gutters. State colors are loud and saturated so play, record, loop and AI activity read from across the room. Clips get a solid colored header bar over a dark tinted body. Densest of the three.</div>
+<div style="font-size:18px;color:#7c8799;line-height:1.6">Radii 2 px · hairline 1 px dividers · active states as filled blocks · electric cyan as brand accent (evolves the blue wordmark)</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px">
+<div style="font-size:16px;color:#7c8799">Surfaces → text → accent &amp; states</div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:64px;background:#07090c;border:1px solid #1d2330"></div><div style="flex:1;height:64px;background:#0c0f14"></div><div style="flex:1;height:64px;background:#11151c"></div><div style="flex:1;height:64px;background:#171c25"></div><div style="flex:1;height:64px;background:#1f2531"></div><div style="flex:1;height:64px;background:#2a3140"></div></div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:40px;background:#f2f5fa"></div><div style="flex:1;height:40px;background:#9aa4b5"></div><div style="flex:1;height:40px;background:#647083"></div><div style="flex:2;height:40px;background:#35d0f5"></div></div>
+<div style="display:flex;gap:6px"><div style="flex:1;height:28px;background:#2ee68a"></div><div style="flex:1;height:28px;background:#ff3d57"></div><div style="flex:1;height:28px;background:#ffc22e"></div><div style="flex:1;height:28px;background:#3d8bff"></div><div style="flex:1;height:28px;background:#c26bff"></div><div style="flex:1;height:28px;background:#35d0f5"></div></div>
+<div style="font-size:14px;color:#647083;font-family:'Geist Mono',monospace">play · record · mute · solo · automation · loop</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px">
+<div style="font-size:16px;color:#7c8799">Type</div>
+<div style="font-size:40px;font-weight:600;letter-spacing:-0.02em">Geist</div>
+<div style="font-size:20px;color:#b9c2d0">UI 12 / 13 · headings 14 semibold</div>
+<div style="font-family:'Geist Mono',monospace;font-size:40px;font-weight:500">5.3.120 ◆ ✓ →</div>
+<div style="font-size:20px;color:#b9c2d0">Geist Mono for time, values, meters (check ◆ coverage; JetBrains Mono fallback)</div>
+</div>
+</div>
+
+<div data-screen-label="1c Signal main window" style="width:1920px;height:1080px;background:#07090c;display:grid;grid-template-rows:26px 58px minmax(0,1fr) 22px;font-family:Geist,sans-serif;color:#f2f5fa;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:16px;padding:0 10px;border-bottom:1px solid #1d2330">
+<span style="font-weight:700;letter-spacing:.18em;color:#35d0f5;font-size:11.5px">CADENZA</span>
+<div style="display:flex;gap:14px;color:#9aa4b5"><span>File</span><span>Edit</span><span>Track</span><span>View</span><span>AI</span><span>Help</span></div>
+<div style="flex:1;text-align:center;color:#9aa4b5">first_light.cadenza <span style="color:#ffc22e">◆ unsaved</span></div>
+<span style="color:#647083">F1</span>
+</div>
+<div style="display:flex;align-items:stretch;background:#0c0f14;border-bottom:1px solid #1d2330">
+<div style="display:flex;align-items:center;gap:1px;padding:0 10px;border-right:1px solid #1d2330">
+<div style="width:38px;height:38px;display:flex;align-items:center;justify-content:center;background:#171c25;color:#9aa4b5">⏮</div>
+<div style="width:38px;height:38px;display:flex;align-items:center;justify-content:center;background:#171c25"><span style="width:11px;height:11px;background:#9aa4b5"></span></div>
+<div style="width:50px;height:38px;display:flex;align-items:center;justify-content:center;background:#2ee68a;color:#03170c;font-size:16px">▶</div>
+<div style="width:38px;height:38px;display:flex;align-items:center;justify-content:center;background:#171c25"><span style="width:12px;height:12px;border-radius:50%;background:#ff3d57"></span></div>
+</div>
+<div style="display:flex;align-items:center;gap:1px;padding:0 10px;border-right:1px solid #1d2330">
+<span style="height:38px;padding:0 10px;display:flex;align-items:center;background:#171c25;color:#647083;font-weight:600;font-size:11px;letter-spacing:.06em">PATTERN</span>
+<span style="height:38px;padding:0 10px;display:flex;align-items:center;background:#f2f5fa;color:#07090c;font-weight:700;font-size:11px;letter-spacing:.06em">SONG</span>
+</div>
+<div style="display:flex;align-items:center;gap:1px;padding:0 10px;border-right:1px solid #1d2330">
+<span style="height:38px;padding:0 12px;display:flex;flex-direction:column;justify-content:center;background:#35d0f5;color:#04141a"><span style="font-weight:700;font-size:12px">⟳ Loop</span><span style="font-family:'Geist Mono',monospace;font-size:10px">5.1 – 13.1</span></span>
+<span style="height:38px;padding:0 12px;display:flex;flex-direction:column;justify-content:center;background:#171c25"><span style="font-weight:600">♩ Click</span><span style="font-size:10px;color:#9aa4b5">on record</span></span>
+<span style="height:38px;padding:0 12px;display:flex;flex-direction:column;justify-content:center;background:#171c25"><span style="font-weight:600">Count-in</span><span style="font-size:10px;color:#9aa4b5;font-family:'Geist Mono',monospace">1 bar</span></span>
+</div>
+<div style="flex:1;display:flex;align-items:center;justify-content:center;gap:28px;background:#07090c">
+<span style="font-family:'Geist Mono',monospace;font-size:34px;font-weight:500;letter-spacing:-0.02em;line-height:1">6<span style="color:#647083">.</span>1<span style="color:#647083">.</span>000</span>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'Geist Mono',monospace;font-size:14px;color:#9aa4b5">0:13.043</span><span style="font-size:10px;color:#647083">min:sec</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'Geist Mono',monospace;font-size:18px;font-weight:500;color:#ffc22e">92.00</span><span style="font-size:10px;color:#647083">bpm</span></div>
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-family:'Geist Mono',monospace;font-size:18px;font-weight:500">4/4</span><span style="font-size:10px;color:#647083">time sig</span></div>
+</div>
+<div style="display:flex;align-items:center;gap:1px;padding:0 10px;border-left:1px solid #1d2330">
+<span style="height:38px;padding:0 10px;display:flex;flex-direction:column;justify-content:center;background:#171c25"><span style="font-size:10px;color:#9aa4b5">MIDI rec</span><span style="font-weight:600">Overdub</span></span>
+<span style="height:38px;padding:0 10px;display:flex;flex-direction:column;justify-content:center;background:#171c25"><span style="font-size:10px;color:#9aa4b5">Punch</span><span style="font-weight:600;color:#647083">Off</span></span>
+<span style="height:38px;padding:0 10px;display:flex;flex-direction:column;justify-content:center;background:#171c25"><span style="font-size:10px;color:#9aa4b5">Automation</span><span style="font-weight:600;color:#c26bff">◆ Read</span></span>
+<span style="height:38px;padding:0 10px;display:flex;flex-direction:column;justify-content:center;background:#171c25"><span style="font-size:10px;color:#9aa4b5">Follow</span><span style="font-weight:600">Page</span></span>
+</div>
+<div style="display:flex;align-items:center;gap:10px;padding:0 12px;border-left:1px solid #1d2330;width:200px">
+<div style="flex:1;display:flex;flex-direction:column;gap:3px"><div style="display:flex;justify-content:space-between;font-size:10.5px"><span style="color:#2ee68a">● 48k · 256</span><span style="font-family:'Geist Mono',monospace;color:#9aa4b5">−3.1</span></div><div style="height:6px;background:#171c25;overflow:hidden"><div style="width:72%;height:100%;background:linear-gradient(90deg,#2ee68a 72%,#ffc22e 92%)"></div></div><div style="height:6px;background:#171c25;overflow:hidden"><div style="width:68%;height:100%;background:linear-gradient(90deg,#2ee68a 72%,#ffc22e 92%)"></div></div></div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:236px minmax(0,1fr) 380px;grid-template-rows:minmax(0,1fr) 292px;min-height:0">
+<div style="grid-row:1;background:#0c0f14;border-right:1px solid #1d2330;display:flex;flex-direction:column;min-height:0">
+<div style="display:flex;border-bottom:1px solid #1d2330"><span style="flex:1;text-align:center;padding:8px 0;font-weight:600;box-shadow:inset 0 -2px 0 #35d0f5">Devices</span><span style="flex:1;text-align:center;padding:8px 0;color:#9aa4b5">Files</span><span style="flex:1;text-align:center;padding:8px 0;color:#9aa4b5">Library</span></div>
+<div style="margin:8px;height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;background:#07090c;border:1px solid #1d2330;color:#647083"><span>Search</span><span style="font-family:'Geist Mono',monospace;font-size:10.5px">/</span></div>
+<div style="padding:4px 10px;font-size:11px;font-weight:600;color:#9aa4b5;display:flex;justify-content:space-between"><span>Favorites</span><span style="color:#647083">2</span></div>
+<sc-for list="{{ favs }}" as="d" hint-placeholder-count="2"><div style="height:24px;padding:0 10px;display:flex;align-items:center;gap:8px"><span style="width:3px;height:14px;background:#ffc22e"></span><span>{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 10px 4px;font-size:11px;font-weight:600;color:#9aa4b5;display:flex;justify-content:space-between"><span>Instruments</span><span style="color:#647083">5</span></div>
+<sc-for list="{{ insts }}" as="d" hint-placeholder-count="5"><div style="height:24px;padding:0 10px;display:flex;align-items:center;gap:8px"><span style="width:3px;height:14px;background:#3d8bff"></span><span>{{ d.n }}</span></div></sc-for>
+<div style="padding:10px 10px 4px;font-size:11px;font-weight:600;color:#9aa4b5;display:flex;justify-content:space-between"><span>Effects</span><span style="color:#647083">8</span></div>
+<sc-for list="{{ fx }}" as="d" hint-placeholder-count="6"><div style="height:24px;padding:0 10px;display:flex;align-items:center;gap:8px"><span style="width:3px;height:14px;background:#c26bff"></span><span>{{ d.n }}</span></div></sc-for>
+</div>
+<div style="grid-row:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden">
+<div style="display:flex;height:50px;border-bottom:1px solid #1d2330">
+<div style="width:204px;flex:none;background:#0c0f14;border-right:1px solid #1d2330;display:flex;align-items:center;gap:1px;padding:0 6px"><span style="padding:3px 7px;background:#35d0f5;color:#04141a;font-weight:600">Snap 1/8</span><span style="padding:3px 7px;background:#171c25">Select</span><span style="padding:3px 7px;background:#171c25;color:#9aa4b5">Draw</span></div>
+<div style="flex:1;position:relative;background:#0c0f14">
+<div style="height:24px;position:relative;border-bottom:1px solid #1d2330"><div style="position:absolute;left:25%;width:50%;top:0;bottom:0;background:rgba(53,208,245,.16);border-left:2px solid #35d0f5;border-right:2px solid #35d0f5"></div><sc-for list="{{ bars }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.l }}%;top:0;bottom:0;border-left:1px solid #2a3140;padding:5px 0 0 4px;font-family:'Geist Mono',monospace;font-size:10.5px;color:#9aa4b5">{{ b.n }}</div></sc-for></div>
+<div style="height:25px;position:relative"><sc-for list="{{ markers }}" as="m" hint-placeholder-count="3"><div style="position:absolute;left:{{ m.l }}%;top:4px;height:17px;padding:0 7px;display:flex;align-items:center;background:#ffc22e;color:#1a1300;font-size:11px;font-weight:700">{{ m.n }}</div></sc-for></div>
+<div style="position:absolute;left:31.25%;top:0;height:2000px;border-left:1px solid #f2f5fa;z-index:5"></div>
+</div>
+</div>
+<div style="flex:1;overflow:hidden">
+<sc-for list="{{ tracks }}" as="t" hint-placeholder-count="7">
+<div style="display:flex;height:64px;border-bottom:1px solid #1d2330">
+<div style="width:204px;flex:none;display:flex;background:{{ t.hdrC }};border-right:1px solid #1d2330">
+<div style="width:6px;background:{{ t.cC }}"></div>
+<div style="flex:1;padding:6px 8px;display:flex;flex-direction:column;justify-content:space-between;min-width:0">
+<div style="display:flex;align-items:center;gap:6px"><span style="font-family:'Geist Mono',monospace;font-size:10.5px;color:#647083">{{ t.n }}</span><span style="font-size:13px;font-weight:600">{{ t.name }}</span><sc-if value="{{ t.ai }}" hint-placeholder-val="{{ false }}"><span style="font-size:9.5px;font-weight:700;color:#04141a;background:#35d0f5;padding:0 4px">AI</span></sc-if><span style="flex:1"></span><span style="font-family:'Geist Mono',monospace;font-size:11px">{{ t.vol }}</span></div>
+<div style="font-size:11px;color:#9aa4b5">{{ t.dev }}</div>
+<div style="display:flex;gap:1px"><span style="width:24px;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531;font-size:10.5px;font-weight:700;color:#9aa4b5">M</span><span style="width:24px;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531;font-size:10.5px;font-weight:700;color:#9aa4b5">S</span><span style="width:24px;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531"><span style="width:8px;height:8px;border-radius:50%;border:1.5px solid {{ t.armC }}"></span></span><span style="width:24px;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531;font-size:10px;color:#9aa4b5">◆</span><span style="flex:1;height:18px;margin-left:4px;background:#07090c;position:relative"><span style="position:absolute;left:0;top:7px;height:4px;width:{{ t.volPct }}%;background:#647083"></span></span></div>
+</div>
+</div>
+<div style="flex:1;position:relative;background-image:linear-gradient(to right,#141922 1px,transparent 1px);background-size:6.25% 100%">
+<sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1">
+<div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:2px;bottom:2px;background:{{ t.tintC }};box-shadow:inset 0 0 0 1px {{ t.bdC }};border-radius:2px;overflow:hidden">
+<div style="height:15px;padding:0 6px;display:flex;align-items:center;background:{{ t.cC }};font-size:10.5px;font-weight:700;color:#07090c;white-space:nowrap">{{ c.name }}</div>
+<div style="position:absolute;left:4px;right:4px;top:19px;bottom:4px">
+<sc-for list="{{ c.notes }}" as="nt" hint-placeholder-count="0"><div style="position:absolute;left:{{ nt.x }}%;top:{{ nt.y }}%;width:{{ nt.w }}%;height:3px;background:{{ t.cC }}"></div></sc-for>
+<sc-if value="{{ t.audio }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;display:flex;align-items:center;gap:1px"><sc-for list="{{ c.wave }}" as="h" hint-placeholder-count="0"><div style="flex:1;height:{{ h }}%;background:{{ t.cC }}"></div></sc-for></div></sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+<sc-if value="{{ t.auto }}" hint-placeholder-val="{{ false }}"><div style="display:flex;height:38px;border-bottom:1px solid #1d2330"><div style="width:204px;flex:none;background:#0c0f14;border-right:1px solid #1d2330;display:flex;align-items:center;gap:6px;padding:0 10px 0 16px;font-size:11px;color:#9aa4b5"><span style="color:#c26bff">◆</span> Filter cutoff<span style="flex:1"></span><span style="font-family:'Geist Mono',monospace;color:#c26bff">2.4 kHz</span></div><div style="flex:1;position:relative;background:#0a0d12"><svg viewBox="0 0 100 40" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%"><polyline points="{{ autoPts }}" fill="none" stroke="#c26bff" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline></svg></div></div></sc-if>
+</sc-for>
+<div style="display:flex;gap:1px;padding:8px 10px;color:#9aa4b5"><span style="padding:4px 10px;background:#11151c">+ Instrument</span><span style="padding:4px 10px;background:#11151c">+ Audio</span><span style="padding:4px 10px;background:#11151c">+ Bus</span><span style="padding:4px 10px;background:#11151c">+ Folder</span></div>
+</div>
+</div>
+<div style="grid-row:1 / span 2;grid-column:3;background:#0c0f14;border-left:1px solid #1d2330;display:flex;flex-direction:column;min-height:0">
+<div style="height:36px;display:flex;align-items:stretch;border-bottom:1px solid #1d2330">
+<span style="padding:0 14px;display:flex;align-items:center;font-weight:600;box-shadow:inset 0 -2px 0 #35d0f5">Producer</span><span style="padding:0 14px;display:flex;align-items:center;color:#9aa4b5">Mix</span><span style="flex:1"></span><span style="display:flex;align-items:center;padding:0 10px;font-family:'Geist Mono',monospace;font-size:11px;color:#9aa4b5">session $0.042</span>
+</div>
+<div style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+<div style="padding:12px 14px;border-bottom:1px solid #1d2330;display:flex;flex-direction:column;gap:4px"><span style="font-size:10.5px;color:#647083">You</span><span style="font-size:13px;line-height:1.45">Add a bass line that follows the chords in the verse</span></div>
+<div style="padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;gap:8px;align-items:center"><span style="font-size:10.5px;color:#35d0f5;font-weight:600">Producer</span><span style="font-size:10.5px;color:#647083">thinking 4 s ▸</span></div>
+<div style="font-size:13px;line-height:1.5">Adding a round synth bass locked to the kick, following Keys in bars 5–12.</div>
+<div style="display:flex;flex-direction:column;border:1px solid #1d2330">
+<div style="display:flex;gap:8px;padding:6px 10px;align-items:center;border-bottom:1px solid #1d2330"><span style="width:16px;height:16px;background:#2ee68a;color:#03170c;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">✓</span>Created track Bass · Poly Synth</div>
+<div style="display:flex;gap:8px;padding:6px 10px;align-items:center;border-bottom:1px solid #1d2330"><span style="width:16px;height:16px;background:#2ee68a;color:#03170c;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">✓</span>Wrote 32 notes, bars 5–12</div>
+<div style="display:flex;gap:8px;padding:6px 10px;align-items:center;border-bottom:1px solid #1d2330"><span style="width:16px;height:16px;background:#2ee68a;color:#03170c;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">✓</span>Volume −8 dB, low-cut 30 Hz</div>
+<div style="display:flex;gap:8px;padding:6px 10px;align-items:flex-start;background:#22101a"><span style="width:16px;height:16px;flex:none;background:#ff3d57;color:#1a0207;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">✗</span><span style="line-height:1.4">Sidechain skipped: Compressor has no sidechain input. <span style="color:#35d0f5">Retry</span></span></div>
+</div>
+</div>
+<div style="margin:0 14px;border:1px solid #35d0f5;display:flex;flex-direction:column">
+<div style="padding:8px 10px;display:flex;justify-content:space-between;background:rgba(53,208,245,.1)"><span style="font-weight:600">Diff · AI: add a bass</span><span style="font-family:'Geist Mono',monospace;font-size:11px;color:#9aa4b5">1 undo step</span></div>
+<div style="padding:8px 10px;font-family:'Geist Mono',monospace;font-size:11.5px;display:flex;flex-direction:column;gap:3px"><span style="color:#2ee68a">+ track 2  Bass (Poly Synth)</span><span style="color:#2ee68a">+ clip    Bass · verse  5.1–13.1</span><span style="color:#ffc22e">~ volume  0.0 → −8.0 dB</span></div>
+<div style="display:flex;gap:1px"><span style="flex:1;text-align:center;padding:7px 0;background:#35d0f5;color:#04141a;font-weight:700">Keep</span><span style="flex:1;text-align:center;padding:7px 0;background:#1f2531;font-weight:600">Undo  <span style="font-family:'Geist Mono',monospace;color:#9aa4b5;font-size:10.5px">⌃Z</span></span><span style="padding:7px 12px;background:#1f2531">▶</span></div>
+</div>
+<div style="padding:6px 14px;font-family:'Geist Mono',monospace;font-size:10.5px;color:#647083">done · 6.2 s · $0.0031</div>
+<div style="flex:1"></div>
+<div style="padding:10px 14px;display:flex;flex-direction:column;gap:6px;border-top:1px solid #1d2330"><span style="font-size:10.5px;color:#647083">Selection · Keys / Chords</span><div style="display:flex;flex-wrap:wrap;gap:4px"><span style="padding:4px 8px;background:#171c25">Voice-lead chords</span><span style="padding:4px 8px;background:#171c25">Drum fill at bar 8</span><span style="padding:4px 8px;background:#171c25">Mix the project</span></div></div>
+</div>
+<div style="border-top:1px solid #1d2330;padding:10px;display:flex;flex-direction:column;gap:6px">
+<div style="min-height:50px;background:#07090c;border:1px solid #35d0f5;padding:8px 10px;color:#647083;font-size:13px">Ask the producer…</div>
+<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#9aa4b5"><span>claude-haiku-4.5 ▾</span><span style="color:#647083">~$0.003/req</span><span style="flex:1"></span><span style="padding:4px 14px;background:#35d0f5;color:#04141a;font-weight:700">Send ↵</span></div>
+</div>
+</div>
+<div style="grid-row:2;grid-column:1 / span 2;background:#0c0f14;border-top:1px solid #1d2330;display:flex;min-width:0">
+<sc-for list="{{ strips }}" as="s" hint-placeholder-count="8">
+<div style="width:108px;flex:none;display:flex;flex-direction:column;border-right:1px solid #1d2330;background:{{ s.bgC }}">
+<div style="height:24px;padding:0 7px;display:flex;align-items:center;justify-content:space-between;background:{{ s.cC }};color:#07090c"><span style="font-size:11.5px;font-weight:700">{{ s.name }}</span><span style="font-size:9.5px;font-weight:600">{{ s.kind }}</span></div>
+<div style="display:flex;flex-direction:column;gap:1px;padding:4px;height:60px"><sc-for list="{{ s.ins }}" as="i" hint-placeholder-count="2"><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#171c25;font-size:11px"><span style="width:4px;height:10px;background:#2ee68a"></span>{{ i }}</div></sc-for></div>
+<div style="padding:2px 4px;height:20px"><sc-for list="{{ s.sends }}" as="sd" hint-placeholder-count="1"><div style="height:16px;position:relative;background:#07090c;overflow:hidden;font-size:10.5px"><div style="position:absolute;left:0;bottom:0;height:2px;width:{{ sd.p }}%;background:#35d0f5"></div><span style="position:absolute;left:5px;top:1px">{{ sd.n }}</span><span style="position:absolute;right:5px;top:1px;font-family:'Geist Mono',monospace;color:#9aa4b5">{{ sd.v }}</span></div></sc-for></div>
+<div style="flex:1;display:flex;gap:6px;padding:4px 7px;align-items:stretch">
+<div style="display:flex;flex-direction:column;align-items:center;gap:4px;width:26px"><div style="width:24px;height:24px;border-radius:50%;border:2px solid #2a3140;position:relative;transform:rotate({{ s.pan }}deg);box-sizing:border-box"><div style="position:absolute;left:9px;top:1px;width:2px;height:8px;background:#35d0f5"></div></div><span style="font-family:'Geist Mono',monospace;font-size:9.5px;color:#9aa4b5">{{ s.panL }}</span></div>
+<div style="width:20px;position:relative;display:flex;justify-content:center"><div style="width:2px;height:100%;background:#2a3140"></div><div style="position:absolute;bottom:{{ s.f }}%;left:0;width:20px;height:8px;background:#f2f5fa"></div></div>
+<div style="display:flex;gap:1px"><div style="width:6px;height:100%;background:#07090c;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.mL }}%;background:linear-gradient(to top,#2ee68a 72%,#ffc22e 90%,#ff3d57)"></div></div><div style="width:6px;height:100%;background:#07090c;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:{{ s.mR }}%;background:linear-gradient(to top,#2ee68a 72%,#ffc22e 90%,#ff3d57)"></div></div></div>
+</div>
+<div style="padding:2px 7px;font-family:'Geist Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>{{ s.db }}</span><span style="color:#647083">{{ s.pk }}</span></div>
+<div style="display:flex;gap:1px;padding:3px 4px 5px"><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531;font-size:10.5px;font-weight:700;color:#9aa4b5">M</span><span style="flex:1;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531;font-size:10.5px;font-weight:700;color:#9aa4b5">S</span><span style="flex:1.4;height:18px;display:flex;align-items:center;justify-content:center;background:#1f2531;font-size:10px;color:#9aa4b5">{{ s.out }}</span></div>
+</div>
+</sc-for>
+<div style="flex:1"></div>
+<div style="width:156px;flex:none;display:flex;flex-direction:column;border-left:1px solid #35d0f5;background:#0f1a22">
+<div style="height:24px;padding:0 8px;display:flex;align-items:center;justify-content:space-between;background:#f2f5fa;color:#07090c"><span style="font-weight:700">MASTER</span><span style="font-size:9.5px;font-weight:600">Main out</span></div>
+<div style="display:flex;flex-direction:column;gap:1px;padding:4px"><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#171c25;font-size:11px"><span style="width:4px;height:10px;background:#2ee68a"></span>Parametric EQ</div><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#171c25;font-size:11px"><span style="width:4px;height:10px;background:#2ee68a"></span>Compressor</div><div style="height:18px;padding:0 6px;display:flex;align-items:center;gap:5px;background:#171c25;font-size:11px"><span style="width:4px;height:10px;background:#2ee68a"></span>Limiter</div></div>
+<div style="flex:1;display:flex;gap:8px;justify-content:center;padding:6px 0"><div style="width:2px;background:#2a3140;position:relative"><div style="position:absolute;bottom:62%;left:-10px;width:22px;height:8px;background:#35d0f5"></div></div><div style="width:12px;background:#07090c;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:74%;background:linear-gradient(to top,#2ee68a 72%,#ffc22e 90%,#ff3d57)"></div></div><div style="width:12px;background:#07090c;position:relative;overflow:hidden"><div style="position:absolute;bottom:0;width:100%;height:70%;background:linear-gradient(to top,#2ee68a 72%,#ffc22e 90%,#ff3d57)"></div></div></div>
+<div style="padding:0 8px 6px;font-family:'Geist Mono',monospace;font-size:11px;display:flex;justify-content:space-between"><span>0.0</span><span style="color:#ffc22e">−3.1</span><span style="color:#35d0f5">−11.8 LU</span></div>
+</div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 10px;border-top:1px solid #1d2330;font-size:11px;color:#9aa4b5;background:#0c0f14">
+<span style="color:#ffc22e">◆ Unsaved</span><span>AI: add a bass</span><span style="flex:1"></span><span style="font-family:'Geist Mono',monospace;color:#647083">F6 Browser  F7 Editor  F9 Mixer  F10 AI</span><span style="color:#647083">7 tracks · 11 clips</span>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    const BARS = 16;
+    let seed = 11;
+    const r = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const pal = {
+      A: ['#e8705f', '#5aa2f5', '#e3b24f', '#a682e8', '#4fc3a1', '#e07fb0', '#8a93a3'],
+      B: ['#e8957a', '#8fb4e0', '#e8c77a', '#bba0dd', '#93cfa3', '#e3a0b6', '#a89d8e'],
+      C: ['#ff6b5e', '#3d8bff', '#ffc22e', '#b77dff', '#2ee6a6', '#ff7ac6', '#7c8799'],
+    };
+    const accent = { A: '#4c9cf5', B: '#f0a948', C: '#35d0f5' };
+    const gen = (kind, len) => {
+      const n = [];
+      if (kind === 'drum') {
+        const st = len * 8, w = 100 / st;
+        for (let s = 0; s < st; s++) {
+          n.push({ x: s * w, y: 8, w: w * 0.5 });
+          if (s % 4 === 0) n.push({ x: s * w, y: 78, w: w * 0.8 });
+          if (s % 8 === 4) n.push({ x: s * w, y: 44, w: w * 0.8 });
+        }
+      } else if (kind === 'bass') {
+        const st = len * 4, w = 100 / st, root = [72, 60, 66, 54];
+        for (let s = 0; s < st; s++) { const b = Math.floor(s / 4) % 4; if (s % 4 === 3 && r() > .5) continue; n.push({ x: s * w, y: root[b] - (s % 4 === 2 ? 14 : 0), w: w * 0.8 }); }
+      } else if (kind === 'chord') {
+        const w = 100 / len, sh = [0, 10, -6, 6];
+        for (let b = 0; b < len; b++) [62, 44, 26].forEach(y => n.push({ x: b * w, y: y + sh[b % 4], w: w * 0.94 }));
+      } else if (kind === 'pad') {
+        const w = 100 / len * 2;
+        for (let b = 0; b < len / 2; b++) [52, 30].forEach((y, i) => n.push({ x: b * w, y: y + (b % 2) * 8 - i * 2, w: w * 0.97 }));
+      } else if (kind === 'lead') {
+        const st = len * 8, w = 100 / st; let y = 40;
+        for (let s = 0; s < st; s++) { if (r() < .35) continue; y = Math.max(5, Math.min(80, y + (r() - .5) * 30)); const l = r() < .3 ? 2 : 1; n.push({ x: s * w, y, w: w * l * 0.9 }); s += l - 1; }
+      }
+      return n;
+    };
+    const wave = (len) => Array.from({ length: Math.round(len * 14) }, (_, i) => Math.round(12 + 80 * Math.abs(Math.sin(i * 0.23) * (0.4 + 0.6 * r()))));
+    const T = [
+      { name: 'Drums', dev: 'Drum Machine', kind: 'drum', vol: '−6.0', clips: [[0, 4, 'Beat A'], [4, 4, 'Beat A'], [8, 8, 'Beat B']] },
+      { name: 'Bass', dev: 'Poly Synth', kind: 'bass', vol: '−8.0', ai: true, clips: [[4, 8, 'Bass · verse']] },
+      { name: 'Keys', dev: 'Electric Piano', kind: 'chord', vol: '−7.0', sel: true, clips: [[0, 4, 'Chords'], [4, 4, 'Chords'], [8, 8, 'Chords']] },
+      { name: 'Pad', dev: 'Poly Synth', kind: 'pad', vol: '−12.0', clips: [[8, 8, 'Pad']] },
+      { name: 'Lead', dev: 'Poly Synth', kind: 'lead', vol: '−9.5', auto: true, clips: [[8, 8, 'Hook']] },
+      { name: 'Vocal', dev: 'Audio · In 1 · Mon auto', kind: 'audio', vol: '−3.0', audio: true, armed: true, clips: [[4, 4, 'Vox take 3'], [8, 7, 'Vox take 3']] },
+      { name: 'Reverb', dev: 'Bus · 2 sends in', kind: 'bus', vol: '0.0', clips: [] },
+    ];
+    const dbToPct = (v) => Math.max(8, 100 + parseFloat(v.replace('−', '-')) * 4);
+    const tracks = T.map((t, i) => {
+      const o = { ...t, n: i + 1, volPct: dbToPct(t.vol), devGlyph: t.audio ? '∿' : t.kind === 'bus' ? '⇢' : '♪' };
+      ['A', 'B', 'C'].forEach(k => {
+        const c = pal[k][i];
+        o['c' + k] = c;
+        o['bd' + k] = t.sel ? (k === 'B' ? '#efe9e1' : '#f2f3f5') : t.ai ? accent[k] : 'transparent';
+        o['arm' + k] = t.armed ? (k === 'B' ? '#f2645a' : k === 'C' ? '#ff3d57' : '#f0524f') : (k === 'B' ? '#80776b' : '#6e727a');
+      });
+      o.tintA = pal.A[i] + '26'; o.tintC = pal.C[i] + '24';
+      o.hdrA = t.sel ? '#1d2027' : '#16171a';
+      o.hdrB = t.sel ? '#2a2620' : '#1c1916';
+      o.hdrC = t.sel ? '#141b26' : '#0c0f14';
+      o.mA = '#a3a6ad';
+      o.clips = t.clips.map(([s, l, name]) => ({ l: s / BARS * 100, w: l / BARS * 100, name, notes: t.audio ? [] : gen(t.kind, l), wave: t.audio ? wave(l) : [] }));
+      return o;
+    });
+    const overview = [];
+    tracks.forEach((t, i) => t.clips.forEach(c => overview.push({ l: c.l, w: c.w - 0.3, t: i % 6, cA: t.cA })));
+    const bars = Array.from({ length: BARS }, (_, i) => ({ n: i + 1, l: i / BARS * 100 }));
+    const markers = [{ n: 'Intro', l: 0 }, { n: 'Verse', l: 25 }, { n: 'Chorus', l: 50 }];
+    const pts = [];
+    for (let x = 0; x <= 100; x += 2) { const y = x < 50 ? 34 : 34 - (x - 50) * 0.5; pts.push(x + ',' + Math.max(6, y + Math.sin(x * 0.4) * 2).toFixed(1)); }
+    const S = [
+      ['Drums', 'Inst', 0, ['Compressor'], [['Reverb', '−22', 30]], 0, 'C', '−6.0', '−9.2', 66, 78, 72],
+      ['Bass', 'Inst', 1, ['Parametric EQ', 'Compressor'], [], 0, 'C', '−8.0', '−11.4', 62, 70, 66],
+      ['Keys', 'Inst', 2, ['Parametric EQ'], [['Reverb', '−14', 52]], -40, 'L15', '−7.0', '−14.0', 64, 52, 48],
+      ['Pad', 'Inst', 3, ['Parametric EQ', 'Chorus'], [['Reverb', '−12', 58]], 0, 'C', '−12.0', '−18.3', 54, 40, 44],
+      ['Lead', 'Inst', 4, ['Chorus'], [['Delay', '−10', 62]], 30, 'R10', '−9.5', '−16.1', 58, 0, 0],
+      ['Vocal', 'Audio', 5, ['Parametric EQ', 'Compressor'], [['Reverb', '−18', 42]], 0, 'C', '−3.0', '−8.8', 76, 58, 60],
+      ['Reverb', 'Bus', 6, ['Reverb'], [], 0, 'C', '0.0', '−20.5', 80, 36, 38],
+      ['Delay', 'Bus', 6, ['Delay'], [], 0, 'C', '0.0', '−24.0', 80, 22, 20],
+    ];
+    const strips = S.map(([name, kind, ci, ins, sends, pan, panL, db, pk, f, mL, mR]) => ({
+      name, kind, ins, sends: sends.map(([n, v, p]) => ({ n, v, p })), pan, panL, db, pk, f, mL, mR, out: 'Master',
+      cA: pal.A[ci], cB: pal.B[ci], cC: pal.C[ci],
+      bgA: kind === 'Bus' ? '#1a1c22' : '#1c1d21', bgC: kind === 'Bus' ? '#0f131a' : '#0c0f14',
+    }));
+    const favs = [{ n: 'Poly Synth', g: 'PS' }, { n: 'Compressor', g: 'CO' }];
+    const insts = [{ n: 'Drum Machine', g: 'DM' }, { n: 'Drum Sampler', g: 'DS' }, { n: 'Electric Piano', g: 'EP' }, { n: 'Poly Synth', g: 'PS' }, { n: 'Sampler', g: 'SA' }];
+    const fx = [{ n: 'Chorus', g: 'CH' }, { n: 'Compressor', g: 'CO' }, { n: 'Delay', g: 'DL' }, { n: 'Gain / Utility', g: 'GA' }, { n: 'Limiter', g: 'LI' }, { n: 'Parametric EQ', g: 'EQ' }, { n: 'Reverb', g: 'RV' }];
+    this._v = { tracks, overview, bars, markers, autoPts: pts.join(' '), strips, favs, insts, fx };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

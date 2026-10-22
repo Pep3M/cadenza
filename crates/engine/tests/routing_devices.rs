@@ -228,7 +228,7 @@ fn unusable_sidechains_are_ignored_with_warnings() {
 	let mut t = synth_track("Pad", &[(60, 0.0, 1.0)], 2.0);
 	t.channel
 		.inserts
-		.push(Device::builtin("eq", "EQ").with_sidechain(kick.id, false));
+		.push(Device::builtin("chorus", "Chorus").with_sidechain(kick.id, false));
 	let p = project(vec![kick, t]);
 	let graph = cadenza_engine::compile(&p, 48_000, 512).unwrap();
 	assert_eq!(graph.warnings().len(), 1, "{:?}", graph.warnings());

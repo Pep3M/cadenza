@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><script src="./device-viz.js"></script></helmet>
+<div ref="{{ rootRef }}" onPointerMove="{{ onMove }}" onPointerLeave="{{ onLeave }}" onDoubleClick="{{ onDbl }}" style="position:relative;width:{{ w }}px;height:{{ h }}px;background:#0b0c0e;border-radius:4px;box-shadow:inset 0 0 0 1px #1d1f23;overflow:hidden;font-family:'IBM Plex Mono',monospace;user-select:none;touch-action:none;cursor:crosshair">
+<svg width="{{ w }}" height="{{ h }}" style="position:absolute;left:0;top:0;display:block">
+<path d="{{ g.minor }}" stroke="#141619" stroke-width="1" fill="none"></path>
+<path d="{{ g.major }}" stroke="#1c1e22" stroke-width="1" fill="none"></path>
+<path d="{{ g.hl }}" stroke="#16181b" stroke-width="1" fill="none"></path>
+<path d="{{ g.zero }}" stroke="#2a2c32" stroke-width="1" fill="none"></path>
+<path d="{{ pre }}" fill="#2b2f37" fill-opacity="{{ preOp }}"></path>
+<path d="{{ postA }}" fill="#8cc8f0" fill-opacity="0.09"></path>
+<path d="{{ postL }}" stroke="#8cc8f0" stroke-opacity="0.32" stroke-width="1" fill="none"></path>
+<sc-for list="{{ shapes }}" as="s" hint-placeholder-count="0">
+<path d="{{ s.d }}" fill="{{ s.c }}" fill-opacity="{{ s.fo }}"></path>
+<path d="{{ s.l }}" stroke="{{ s.c }}" stroke-opacity="{{ s.so }}" stroke-width="1" fill="none"></path>
+</sc-for>
+<path d="{{ qBr }}" stroke="{{ qCol }}" stroke-width="1.5" fill="none" stroke-opacity="0.9"></path>
+<path d="{{ ghost }}" stroke="#a3a6ad" stroke-width="1.25" stroke-dasharray="4 4" fill="none" stroke-opacity="0.7"></path>
+<path d="{{ sum }}" stroke="#ffffff" stroke-opacity="0.05" stroke-width="8" fill="none" stroke-linejoin="round"></path>
+<path d="{{ sum }}" stroke="#ffffff" stroke-opacity="0.12" stroke-width="4" fill="none" stroke-linejoin="round"></path>
+<path d="{{ sum }}" stroke="#f4f5f7" stroke-width="1.6" fill="none" stroke-linejoin="round"></path>
+<path d="{{ hair }}" stroke="#e8e9ec" stroke-opacity="0.28" stroke-width="1" fill="none"></path>
+<rect x="0" y="{{ kY }}" width="{{ w }}" height="{{ kH }}" fill="#17191d"></rect>
+<path d="{{ blackKeys }}" fill="#050506"></path>
+<path d="{{ cMarks }}" stroke="#3a3d44" stroke-width="1"></path>
+<path d="{{ hotKey }}" fill="{{ hotCol }}"></path>
+</svg>
+<sc-for list="{{ fLabels }}" as="l" hint-placeholder-count="0"><span style="position:absolute;left:{{ l.x }}px;top:{{ l.y }}px;transform:translateX(-50%);font-size:{{ lfs }}px;color:#80848c;pointer-events:none">{{ l.t }}</span></sc-for>
+<sc-for list="{{ dLabels }}" as="l" hint-placeholder-count="0"><span style="position:absolute;right:6px;top:{{ l.y }}px;transform:translateY(-50%);font-size:{{ lfs }}px;color:#80848c;pointer-events:none">{{ l.t }}</span></sc-for>
+<span style="position:absolute;left:8px;top:6px;font-size:10.5px;color:#80848c;display:{{ legendD }};gap:10px;pointer-events:none;font-family:'IBM Plex Sans',sans-serif"><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:6px;background:#2b2f37"></span>Pre</span><span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:6px;background:#8cc8f0;opacity:.5"></span>Post</span></span>
+<sc-for list="{{ nodes }}" as="n" hint-placeholder-count="0">
+<div onPointerDown="{{ n.down }}" onWheel="{{ n.wheel }}" onDoubleClick="{{ n.dbl }}" style="position:absolute;left:{{ n.x }}px;top:{{ n.y }}px;width:{{ ns }}px;height:{{ ns }}px;margin-left:{{ nm }}px;margin-top:{{ nm }}px;border-radius:50%;background:{{ n.bg }};box-shadow:{{ n.ring }};display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Sans',sans-serif;font-size:{{ nfs }}px;font-weight:700;color:{{ n.fg }};cursor:grab;letter-spacing:-0.02em">{{ n.id }}</div>
+</sc-for>
+<sc-for list="{{ deltas }}" as="d" hint-placeholder-count="0"><span style="position:absolute;left:{{ d.x }}px;top:{{ d.y }}px;transform:translate(-50%,-100%);padding:2px 6px;border-radius:3px;background:#1d2a3d;box-shadow:inset 0 0 0 1px #2c4a73;color:#7fb4ff;font-size:11px;white-space:nowrap;pointer-events:none">{{ d.t }}</span></sc-for>
+<div style="position:absolute;left:{{ pill.x }}px;bottom:{{ pillB }}px;transform:translateX(-50%);display:{{ pill.d }};padding:2px 7px;background:#212328;border-radius:3px;font-size:11px;color:#e8e9ec;white-space:nowrap;pointer-events:none;box-shadow:inset 0 0 0 1px #363940">{{ pill.t }}</div>
+<div style="position:absolute;left:{{ bub.x }}px;top:{{ bub.y }}px;display:{{ bub.d }};flex-direction:column;gap:3px;padding:7px 10px;background:#1c1d21;border-radius:6px;box-shadow:inset 0 0 0 1px #363940,0 8px 24px rgba(0,0,0,.6);white-space:nowrap;pointer-events:none;z-index:3">
+<span style="display:flex;align-items:center;gap:6px;font-family:'IBM Plex Sans',sans-serif;font-size:11.5px;font-weight:600;color:{{ bub.c }}">{{ bub.name }}<span style="color:#80848c;font-weight:400">{{ bub.hint }}</span></span>
+<span style="display:flex;gap:12px;font-size:13px;color:#f4f5f7"><span>{{ bub.f }}</span><span>{{ bub.g }}</span><span style="color:#a3a6ad">{{ bub.q }}</span></span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1200,&quot;height&quot;:300},&quot;bands&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;Band[]&quot;},&quot;w&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1200,&quot;tsType&quot;:&quot;number&quot;},&quot;h&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:300,&quot;tsType&quot;:&quot;number&quot;},&quot;range&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[6,12,24],&quot;default&quot;:12,&quot;tsType&quot;:&quot;number&quot;},&quot;sel&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:3,&quot;tsType&quot;:&quot;number&quot;},&quot;compact&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;analyzer&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;demo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;noHover&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;ghost&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;Band[] | null&quot;},&quot;changed&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;number[]&quot;},&quot;deltaTags&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{i:number,t:string}[]&quot;},&quot;out&quot;:{&quot;editor&quot;:null,&quot;default&quot;:0,&quot;tsType&quot;:&quot;number&quot;},&quot;onChange&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(bands: Band[]) =&gt; void&quot;},&quot;onSelect&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(i: number) =&gt; void&quot;}}">
+class Component extends DCLogic {
+  state = { drag: null, hoverX: null, demo: true };
+  componentDidMount() { if (!window.DV) { const t = setInterval(() => { if (window.DV) { clearInterval(t); this.forceUpdate(); } }, 30); } }
+  isOn(b) { return b.type === 'hp' || b.type === 'lp' ? !!b.slope : !!b.g; }
+  emit(bands) { this.props.onChange && this.props.onChange(bands); }
+  local(e) { const r = this.el.getBoundingClientRect(); const sc = this.W / r.width; return [(e.clientX - r.left) * sc, (e.clientY - r.top) * sc, sc]; }
+  down(i, e) {
+    if (!this.props.onChange) return;
+    e.preventDefault(); e.stopPropagation();
+    const b = this.props.bands[i], [, , sc] = this.local(e);
+    const d = { x0: e.clientX, y0: e.clientY, f0: b.f, g0: b.g || 0 };
+    this.props.onSelect && this.props.onSelect(i);
+    this.setState({ drag: i, demo: false });
+    const mv = ev => {
+      const k = ev.shiftKey ? 0.1 : 1, W = this.W, H = this.H, R = this.R;
+      const dx = (ev.clientX - d.x0) * sc * k, dy = (ev.clientY - d.y0) * sc * k;
+      const f = Math.max(b.fmin, Math.min(b.fmax, DV.xf(DV.fx(d.f0, W) + dx, W)));
+      const patch = { f };
+      if (b.type !== 'hp' && b.type !== 'lp') patch.g = Math.round(Math.max(-24, Math.min(24, d.g0 - dy / (H / 2) * R)) * 10) / 10;
+      this.emit(this.props.bands.map((bb, j) => j === i ? { ...bb, ...patch } : bb));
+    };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); this.setState({ drag: null }); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  }
+  wheel(i, e) {
+    if (!this.props.onChange) return;
+    const b = this.props.bands[i], upw = e.deltaY < 0; let patch = null;
+    if (b.type === 'peak') patch = { q: Math.round(Math.max(0.1, Math.min(18, b.q * (upw ? 1.12 : 1 / 1.12))) * 100) / 100 };
+    if (b.type === 'hp' || b.type === 'lp') { const S = [0, 12, 24, 48], k = S.indexOf(b.slope || 0); patch = { slope: S[Math.max(0, Math.min(3, k + (upw ? 1 : -1)))] }; }
+    if (patch) this.emit(this.props.bands.map((bb, j) => j === i ? { ...bb, ...patch } : bb));
+    this.props.onSelect && this.props.onSelect(i);
+  }
+  dblNode(i, e) {
+    e.stopPropagation(); if (!this.props.onChange) return;
+    const b = this.props.bands[i];
+    const patch = b.type === 'hp' || b.type === 'lp' ? { slope: b.slope ? 0 : 24 } : { g: 0, q: b.type === 'peak' ? 1 : b.q };
+    this.emit(this.props.bands.map((bb, j) => j === i ? { ...bb, ...patch } : bb));
+  }
+  dblEmpty(e) {
+    if (!this.props.onChange) return;
+    const [x, y] = this.local(e), f = DV.xf(x, this.W), g = Math.round((this.H / 2 - y) / (this.H / 2) * this.R * 10) / 10;
+    let best = -1, bd = 1e9;
+    this.props.bands.forEach((b, j) => { if ((b.type === 'peak' || b.type === 'ls' || b.type === 'hs') && !b.g && f >= b.fmin && f <= b.fmax) { const dd = Math.abs(Math.log(f / b.f)); if (dd < bd) { bd = dd; best = j; } } });
+    if (best < 0) return;
+    this.emit(this.props.bands.map((bb, j) => j === best ? { ...bb, f, g } : bb));
+    this.props.onSelect && this.props.onSelect(best);
+  }
+  renderVals() {
+    const p = this.props, W = Number(p.w ?? 1200), H = Number(p.h ?? 300), R = Number(p.range ?? 12);
+    this.W = W; this.H = H; this.R = R;
+    const base = { w: W, h: H, rootRef: el => { this.el = el; }, pill: { d: 'none' }, bub: { d: 'none' } };
+    if (!window.DV || !p.bands) return base;
+    const bands = p.bands, sel = p.sel ?? -1, compact = !!p.compact, r1 = n => Math.round(n * 10) / 10;
+    const kH = compact ? 6 : 9, kY = H - kH, PH = H - kH;
+    const gr = DV.grid(W, PH, R, R / 4);
+    const g = {
+      minor: gr.v.filter(v => !v.major).map(v => `M${v.x} 0 V${PH}`).join(' '),
+      major: gr.v.filter(v => v.major).map(v => `M${v.x} 0 V${PH}`).join(' '),
+      hl: gr.h.filter(h => !h.zero).map(h => `M0 ${h.y} H${W}`).join(' '),
+      zero: `M0 ${PH / 2} H${W}`,
+    };
+    const sumFn = f => DV.sumDb(bands, f, p.out || 0);
+    const n = compact ? 140 : 240;
+    const sumPts = DV.pts(sumFn, W, PH, R, n);
+    const preP = DV.spectrum(11, W, PH, { n: compact ? 90 : 150 });
+    const postP = DV.spectrum(11, W, PH, { n: compact ? 90 : 150, shape: sumFn });
+    const showAn = p.analyzer !== false;
+    const active = this.state.drag ?? (this.state.demo && p.demo ? sel : null);
+    const shapes = bands.map((b, i) => {
+      if (!this.isOn(b)) return { d: '', l: '', c: b.c, fo: 0, so: 0 };
+      const pts = DV.pts(f => DV.bandDb(b, f), W, PH, R, compact ? 80 : 120);
+      return { d: DV.area(pts, PH / 2), l: DV.line(pts), c: b.c, fo: i === sel ? 0.2 : 0.07, so: i === sel ? 0.85 : 0.4 };
+    });
+    const ns = compact ? 16 : 20;
+    const changed = p.changed || [];
+    const nodes = bands.map((b, i) => {
+      const on = this.isOn(b), x = DV.fx(b.f, W);
+      let y = b.type === 'hp' || b.type === 'lp' ? DV.fy(on ? sumFn(b.f) : 0, PH, R) : DV.fy(b.g || 0, PH, R);
+      y = Math.max(ns / 2 + 2, Math.min(PH - ns / 2 - 2, y));
+      const isSel = i === sel, isAi = changed.includes(i);
+      const rings = ['0 0 0 1.5px #0b0c0e'];
+      if (isSel) rings.push('0 0 0 3px #f4f5f7', `0 0 0 9px ${b.c}33`);
+      if (isAi) rings.push('0 0 0 3.5px #4c9cf5', '0 0 0 10px rgba(76,156,245,.18)');
+      if (b.auto) rings.push('0 0 0 4.5px #c884e8');
+      return {
+        id: b.id, x: r1(x), y: r1(y), bg: on ? b.c : '#0b0c0e', fg: on ? '#101114' : b.c,
+        ring: on ? rings.join(',') : `inset 0 0 0 1.5px ${b.c}99${isSel ? ',0 0 0 2px #f4f5f7' : ''}`,
+        down: e => this.down(i, e), wheel: e => this.wheel(i, e), dbl: e => this.dblNode(i, e),
+      };
+    });
+    let qBr = '', qCol = 'none';
+    const sb = bands[sel];
+    if (sb && sb.type === 'peak' && sb.g && !compact) {
+      const bw = 2 / Math.LN2 * Math.asinh(1 / (2 * sb.q)), f1 = sb.f / Math.pow(2, bw / 2), f2 = sb.f * Math.pow(2, bw / 2);
+      const y = r1(DV.fy(sb.g / 2, PH, R)), x1 = r1(DV.fx(f1, W)), x2 = r1(DV.fx(f2, W));
+      qBr = `M${x1} ${y - 4} V${y + 4} M${x1} ${y} H${x2} M${x2} ${y - 4} V${y + 4}`; qCol = sb.c;
+    }
+    const fLabels = gr.v.filter(v => v.label && v.label !== '20' && v.label !== '20k').filter(v => !compact || ['100', '1k', '10k'].includes(v.label)).map(v => ({ x: v.x, y: PH - (compact ? 15 : 18), t: v.label }));
+    const dLabels = gr.h.filter(h => h.label !== String(R) && h.label !== '−' + R && (!compact || h.zero || Math.abs(Number(h.label.replace('−', '-'))) === R / 2)).map(h => ({ y: h.y, t: h.label }));
+    let black = '', cm = '';
+    for (let m = 16; m <= 135; m++) {
+      const fa = 440 * Math.pow(2, (m - 69.5) / 12), fb = 440 * Math.pow(2, (m - 68.5) / 12);
+      const xa = r1(DV.fx(fa, W)), xb = r1(DV.fx(fb, W));
+      if ([1, 3, 6, 8, 10].includes(m % 12)) black += `M${xa} ${kY} H${xb} V${kY + kH * 0.62} H${xa} Z`;
+      if (m % 12 === 0) cm += `M${xa} ${kY} V${H}`;
+    }
+    let hx = null;
+    if (active != null && bands[active]) hx = DV.fx(bands[active].f, W);
+    else if (this.state.hoverX != null) hx = this.state.hoverX;
+    let pill = { d: 'none', x: 0, t: '' }, hair = '', hotKey = '', hotCol = 'none';
+    if (hx != null && !p.noHover) {
+      const f = DV.xf(hx, W), m = Math.round(69 + 12 * Math.log2(f / 440));
+      const xa = r1(DV.fx(440 * Math.pow(2, (m - 69.5) / 12), W)), xb = r1(DV.fx(440 * Math.pow(2, (m - 68.5) / 12), W));
+      hotKey = `M${xa} ${kY} H${Math.max(xb, xa + 2)} V${H} H${xa} Z`; hotCol = active != null ? bands[active].c : '#e8e9ec';
+      hair = `M${r1(hx)} 0 V${kY}`;
+      pill = { d: 'block', x: r1(Math.max(50, Math.min(W - 50, hx))), t: DV.hz(f) + ' · ' + DV.note(f) };
+    }
+    let bub = { d: 'none' };
+    if (active != null && bands[active] && !compact) {
+      const b = bands[active], nd = nodes[active], hasG = b.type !== 'hp' && b.type !== 'lp';
+      const left = nd.x > W - 260;
+      bub = {
+        d: 'flex', x: left ? nd.x - 214 : nd.x + 20, y: Math.max(8, Math.min(PH - 70, nd.y - 64)), c: b.c, name: b.name,
+        hint: this.state.drag != null ? 'Shift fine · wheel ' + (b.type === 'peak' ? 'Q' : hasG ? '' : 'slope') : 'dragging',
+        f: DV.hz(b.f), g: hasG ? DV.db(b.g || 0) : (b.slope ? b.slope + ' dB/oct' : 'Off'), q: b.type === 'peak' ? 'Q ' + b.q.toFixed(2) : '',
+      };
+    }
+    const deltas = (p.deltaTags || []).map(d => ({ x: nodes[d.i].x, y: nodes[d.i].y - 16, t: d.t }));
+    let ghost = '';
+    if (p.ghost) ghost = DV.line(DV.pts(f => DV.sumDb(p.ghost, f, 0), W, PH, R, n));
+    return {
+      ...base, g, kY, kH, blackKeys: black, cMarks: cm, hotKey, hotCol,
+      pre: showAn ? DV.area(preP, PH) : '', preOp: 0.75,
+      postA: showAn ? DV.area(postP, PH) : '', postL: showAn ? DV.line(postP) : '',
+      shapes, sum: DV.line(sumPts), ghost, qBr, qCol, nodes, ns, nm: -ns / 2, nfs: compact ? 8.5 : 9.5,
+      fLabels, dLabels, lfs: compact ? 9.5 : 10.5, legendD: compact || !showAn ? 'none' : 'flex',
+      hair, pill, pillB: kH + 3, bub, deltas,
+      onMove: e => { if (this.state.drag == null && this.el && !p.noHover) { const [x] = this.local(e); this.setState({ hoverX: x }); } },
+      onLeave: () => this.setState({ hoverX: null }),
+      onDbl: e => this.dblEmpty(e),
+    };
+  }
+}
+</script>
+</body>
+</html>

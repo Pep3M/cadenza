@@ -1,0 +1,168 @@
+CADENZA · DEVICES 17 · Instruments Live: drag the Poly Synth ADSR nodes and the filter node, click drum voices and pads, drag sampler zones. Instruments read left to right as signal flow.
+17a · Poly Synth · signal flow OSC → FILTER → AMP
+OSC 1 + OSC 2 + NOISE Osc 1 Sine
+Saw
+Square
+Triangle
+Osc 2 Sine
+Saw
+Square
+Triangle
++7 st Semi
+−6 ct Cents
+1 2 3 4
+Unison voices
+→
+FILTER · LOW-PASS
+12 dB 24 dB
+1.8 kHz · res 45 % ⇔ cutoff · ⇕ resonance · dashed = env peak +24 st
+→
+AMP ENVELOPE drag nodes · double-click resets
+Attack 350 ms
+Decay 1.20 s
+Sustain 70 %
+Release 2.40 s
+FILTER ENVELOPE drives cutoff by env amount
+Attack 20 ms
+Decay 800 ms
+Sustain 30 %
+Release 1.50 s
+→
+OUTPUT Scope · C3 E3 G3
+− C3 +
+C3
+C4
+C5
+Click keys or use A–K on the computer keyboard · Z / X octave
+▸ Expert: filter velocity, osc phase reset, voice steal
+17b · Electric Piano · instrument face, three big controls
+Tone · partials of a held C4
+Mellow
+Bright
+Bell lifts the 7th–9th partials (pale bars): the tine “ping” on hard hits.
+Electric Piano tine · 1974 suitcase voicing
+Tremolo · one note over 3 s · line = LFO 4.5 Hz · 40 %
+C3
+C4
+C5
+Tremolo depth is automated: the ring and the LFO line follow playback.
+17c · Drum Machine · one strip per voice, selected voice large
+C1 · 36
+Kick
+Tune −2 st Punch 70 %
+D1 · 38
+Snare
+Tune +1 st Snappy 55 %
+D♯1 · 39
+Clap
+Level −6.0 dB
+F♯1 · 42/46
+Hats
+Closed 30 % Open 65 %
+A1 · 41–50
+Toms
+Tune +3 st Decay 50 %
+C♯2 · 49–59
+Cymbals
+Decay 80 %
+60–81
+Percussion
+Tune 0 st Decay 120 %
+Kick C1 · 36
+Click a pad to audition · ⌘-click to select without playing
+Output Amp envelope Pitch sweep 600 ms
+KIT
+Strip shows the voice's own envelope from its current settings. Pads flash in the voice colour when the engine triggers them.
+17d · Drum Sampler · kit controls | 16 pads | selected pad (replaces today's editor, see 02)
+KIT · ALL PADS
+Drop a folder here to map a whole kit onto pads by name.
+Hi tom
+C2
+Drop to replace
+Crash
+C♯2
+Drop to replace C2
+Hi tom 2
+D2
+Drop to replace
+Ride
+D♯2
+Drop to replace
+Pedal hat
+G♯1
+Drop to replace C1
+Mid tom
+A1
+Drop to replace
+Open hat
+A♯1
+Drop to replace C1
+Empty
+B1
+Drop sample
+Snare 2
+E1
+Drop to replace
+Low tom
+F1
+Drop to replace
+Closed hat
+F♯1
+Drop to replace C1 RR2
+Floor tom
+G1
+Drop to replace
+Kick
+C1
+Drop to replace →1 L2
+Side stick
+C♯1
+Drop to replace
+Snare
+D1
+Drop to replace →2 L3 RR3
+Clap
+D♯1
+Drop to replace
+Snare D1 snare_brush_04.wav ▾
+Velocity layers 1 2 3 +
+Round-robin ×3 ⇆ Reverse
+Start 4 ms End 412 ms A 1 ms D 260 ms
+Choke group None
+▾
+Output Extra out 2
+▾
+Pad tags: C1 choke group · →3 extra output · L3 RR3 layers and round-robin. Blue dashed pad = file being dragged over it.
+17e · Sampler · zone map | selected zone | globals (replaces today's editor, see 03)
+ZONE MAP x = key · y = velocity · drag to move, edges to resize, drop files to add
+C0–B0 0–79
+C0–B0 80–127
+C1–B1 0–79
+C1–B1 80–127
+C2–B2 0–79
+C2–B2 80–127
+C3–B3 0–79
+C3–B3 80–127
+C4–B4 0–79
+C4–B4 80–127
+C5–B5 0–79
+C5–B5 80–127
+127 96 64 32
+C0
+C1
+C2
+C3
+C4
+C5
+Felt upright F♯3 hard.wav C3–B3 · vel 80–127
+Off Forward Ping-pong
+⇆ Rev
+Loop 1.42 – 2.36 s · xfade 120 ms
+F♯3 Root key
+GLOBAL · ALL ZONES Amp envelope
+A 2 ms · D 1.2 s · S 80 % · R 900 ms
+Filter
+Off LP HP BP
+4.2 kHz · res 20 % · env +12 st
+Trigger Gate One-shot Polyphony 24 Transpose 0 st Glide 0 ms Legato off Velocity 80 % · curve soft ▾ Key track 100 %
+▸ Filter envelope

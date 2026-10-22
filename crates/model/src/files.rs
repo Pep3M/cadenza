@@ -3,7 +3,7 @@
 //! A portable project lives in its own folder:
 //!
 //! ```text
-//! <Name>/<Name>.cadenza.json
+//! <Name>/<Name>.cdz
 //! <Name>/Audio/      recordings, imported and processed audio
 //! <Name>/Samples/    sampler / drum sampler content
 //! <Name>/Renders/    exports
@@ -33,8 +33,17 @@ pub const RENDERS_DIR: &str = "Renders";
 pub const CACHE_DIR: &str = ".cadenza";
 /// Autosaves inside [`CACHE_DIR`].
 pub const AUTOSAVE_DIR: &str = "autosave";
-/// Project file suffix.
-pub const PROJECT_SUFFIX: &str = ".cadenza.json";
+/// Project file extension: a project is `<Name>.cdz` (JSON text).
+pub const PROJECT_EXTENSION: &str = "cdz";
+/// [`PROJECT_EXTENSION`] with its dot.
+pub const PROJECT_SUFFIX: &str = ".cdz";
+/// Project archive extension (a zip of the project folder, see `pack_project`).
+pub const ARCHIVE_EXTENSION: &str = "cdzpack";
+/// [`ARCHIVE_EXTENSION`] with its dot.
+pub const ARCHIVE_SUFFIX: &str = ".cdzpack";
+/// Project file suffix before 0.2; only looked for inside old archives, which unpack it
+/// as a `.cdz`.
+pub const LEGACY_PROJECT_SUFFIX: &str = ".cadenza.json";
 
 /// The folders of a project saved at `file`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +62,7 @@ impl ProjectLayout {
 		Self { file, root }
 	}
 
-	/// `<parent>/<name>/<name>.cadenza.json` for a new project folder.
+	/// `<parent>/<name>/<name>.cdz` for a new project folder.
 	pub fn in_new_folder(parent: &Path, name: &str) -> Self {
 		let name = sanitize_file_name(name);
 		Self::new(parent.join(&name).join(format!("{name}{PROJECT_SUFFIX}")))
@@ -79,7 +88,7 @@ impl ProjectLayout {
 		self.cache_dir().join(AUTOSAVE_DIR)
 	}
 
-	/// The file name without `.cadenza.json` ("Song" for "Song.cadenza.json").
+	/// The file name without `.cdz` ("Song" for "Song.cdz").
 	pub fn stem(&self) -> String {
 		project_stem(&self.file)
 	}
@@ -90,14 +99,14 @@ impl ProjectLayout {
 	}
 }
 
-/// "Song" for ".../Song.cadenza.json" (or any other extension).
+/// "Song" for ".../Song.cdz" (or any other extension).
 pub fn project_stem(file: &Path) -> String {
 	let name = file
 		.file_name()
 		.map(|n| n.to_string_lossy().into_owned())
 		.unwrap_or_default();
 	name.strip_suffix(PROJECT_SUFFIX)
-		.or_else(|| name.strip_suffix(".json"))
+		.or_else(|| name.strip_suffix(LEGACY_PROJECT_SUFFIX))
 		.map(str::to_owned)
 		.unwrap_or_else(|| {
 			Path::new(&name)
@@ -105,6 +114,12 @@ pub fn project_stem(file: &Path) -> String {
 				.map(|s| s.to_string_lossy().into_owned())
 				.unwrap_or(name.clone())
 		})
+}
+
+/// Whether `path` names a project file (`.cdz`, any case).
+pub fn is_project_file(path: &Path) -> bool {
+	path.extension()
+		.is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXTENSION))
 }
 
 /// `name` made safe as a single file name (separators and control characters replaced).
@@ -370,7 +385,7 @@ mod tests {
 	fn paths_inside_the_folder_are_stored_relative_and_survive_a_move() {
 		let tmp = tempfile::tempdir().unwrap();
 		let root = tmp.path().join("Song");
-		let file = root.join("Song.cadenza.json");
+		let file = root.join("Song.cdz");
 		let inside = root.join("Audio").join("take 1.wav");
 		let outside = tmp.path().join("elsewhere").join("loop.wav");
 		let sample = root.join("Samples").join("piano C4.wav");
@@ -386,7 +401,7 @@ mod tests {
 
 		let moved = tmp.path().join("Moved");
 		std::fs::rename(&root, &moved).unwrap();
-		let loaded = Project::load_json(moved.join("Song.cadenza.json")).unwrap();
+		let loaded = Project::load_json(moved.join("Song.cdz")).unwrap();
 		assert_eq!(
 			audio_files(&loaded),
 			vec![
@@ -400,7 +415,7 @@ mod tests {
 	#[test]
 	fn old_absolute_projects_still_load() {
 		let tmp = tempfile::tempdir().unwrap();
-		let file = tmp.path().join("old.cadenza.json");
+		let file = tmp.path().join("old.cdz");
 		let a = tmp.path().join("a.wav");
 		let p = project(&a, &a, &a);
 		std::fs::write(&file, p.to_json_string().unwrap()).unwrap();
@@ -408,19 +423,42 @@ mod tests {
 	}
 
 	#[test]
+	fn only_cdz_files_are_projects() {
+		let tmp = tempfile::tempdir().unwrap();
+		let json = tmp.path().join("Song.cadenza.json");
+		let p = Project::new("Song");
+		std::fs::write(&json, p.to_json_string().unwrap()).unwrap();
+		for err in [
+			Project::load_json(&json).unwrap_err(),
+			p.save_json(tmp.path().join("Song.json")).unwrap_err(),
+			p.save_json_absolute(tmp.path().join("Song")).unwrap_err(),
+		] {
+			assert!(
+				matches!(err, crate::ModelError::NotAProjectFile { .. }),
+				"{err}"
+			);
+			assert!(err.to_string().contains(".cdz"), "{err}");
+		}
+		assert!(!tmp.path().join("Song.json").exists());
+		let cdz = tmp.path().join("Song.CDZ");
+		p.save_json(&cdz).unwrap();
+		assert_eq!(Project::load_json(&cdz).unwrap(), p);
+		assert_eq!(project_stem(&cdz), "Song");
+		assert_eq!(project_stem(&json), "Song");
+	}
+
+	#[test]
 	fn saves_are_atomic_and_keep_a_backup() {
 		let tmp = tempfile::tempdir().unwrap();
-		let file = tmp.path().join("nested").join("Song.cadenza.json");
+		let file = tmp.path().join("nested").join("Song.cdz");
 		let mut p = Project::new("First");
 		p.save_json(&file).unwrap();
 		assert!(!backup_path(&file).exists(), "nothing to back up yet");
 		p.name = "Second".into();
 		p.save_json(&file).unwrap();
 		assert_eq!(Project::load_json(&file).unwrap().name, "Second");
-		assert_eq!(
-			Project::load_json(backup_path(&file)).unwrap().name,
-			"First"
-		);
+		let backup = std::fs::read_to_string(backup_path(&file)).unwrap();
+		assert_eq!(Project::from_json_str(&backup).unwrap().name, "First");
 		let leftovers: Vec<_> = std::fs::read_dir(file.parent().unwrap())
 			.unwrap()
 			.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -462,10 +500,7 @@ mod tests {
 	#[test]
 	fn layout_and_names() {
 		let l = ProjectLayout::in_new_folder(Path::new("/music"), "My: Song");
-		assert_eq!(
-			l.file,
-			PathBuf::from("/music/My_ Song/My_ Song.cadenza.json")
-		);
+		assert_eq!(l.file, PathBuf::from("/music/My_ Song/My_ Song.cdz"));
 		assert_eq!(l.audio_dir(), PathBuf::from("/music/My_ Song/Audio"));
 		assert_eq!(l.stem(), "My_ Song");
 		// Absolute on every OS (`/a` has no drive on Windows).

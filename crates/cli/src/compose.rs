@@ -36,7 +36,7 @@ pub fn presets_help() -> String {
 pub struct ComposeArgs {
 	/// Creative brief, e.g. "lo-fi ballad, 3 minutes, sad, piano and strings"
 	pub brief: String,
-	/// Output folder: receives <slug>.cadenza.json, <slug>.wav and session.jsonl
+	/// Output folder: receives <slug>.cdz, <slug>.wav and session.jsonl
 	#[arg(short, long, default_value = ".")]
 	pub out: PathBuf,
 	/// Base file name (default: derived from the brief)

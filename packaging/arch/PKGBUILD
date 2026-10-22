@@ -1,0 +1,38 @@
+# Maintainer: Pep3 Marquez <pp.marquez16@gmail.com>
+pkgname=cadenza-bin
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Open-source DAW and audio editor with an AI arranger and sound engineer"
+arch=('x86_64')
+url="https://github.com/Pep3M/cadenza"
+license=('GPL-3.0-or-later')
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'libxkbcommon' 'vulkan-icd-loader' 'wayland')
+optdepends=(
+	'vulkan-driver: GPU rendering of the interface'
+	'libx11: X11 sessions and plugin editor windows (XWayland)'
+	'libxcursor: cursors on X11 sessions'
+	'libxi: input on X11 sessions'
+	'xdg-desktop-portal: native file dialogs'
+	'gnome-keyring: store the AI provider key in the Secret Service'
+)
+provides=('cadenza')
+conflicts=('cadenza')
+options=('!strip' '!debug')
+source=("$url/releases/download/v$pkgver/cadenza-$pkgver-linux-x86_64.tar.gz")
+sha256sums=('ab02f8d5f8f4417d6f887967338ab758e798ae7f9407af9cb70fad69ddf682ad')
+
+package() {
+	cd "cadenza-$pkgver-linux-x86_64"
+	# The binaries find their helpers (plugin scanner and sandbox, cadenza-app) next to
+	# their resolved path, so they stay together in /opt and /usr/bin gets symlinks.
+	install -d "$pkgdir/opt/cadenza" "$pkgdir/usr/bin"
+	for bin in cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner; do
+		install -Dm755 "$bin" "$pkgdir/opt/cadenza/$bin"
+	done
+	ln -s /opt/cadenza/cadenza "$pkgdir/usr/bin/cadenza"
+	ln -s /opt/cadenza/cadenza-app "$pkgdir/usr/bin/cadenza-app"
+	install -Dm644 cadenza.desktop "$pkgdir/usr/share/applications/cadenza.desktop"
+	install -Dm644 cadenza.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/cadenza.svg"
+	install -Dm644 README.md "$pkgdir/usr/share/doc/cadenza/README.md"
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

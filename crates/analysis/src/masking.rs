@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::roles::Role;
-use crate::spectrum::OCTAVE_HZ;
+use crate::spectrum::{OCTAVE_HZ, THIRD_OCTAVE_HZ};
 
 /// Octave bands checked (63 Hz .. 8 kHz) and how much a collision there matters.
 const BANDS: [(usize, f32); 8] = [
@@ -37,6 +37,9 @@ pub struct MaskInput<'a> {
 	pub frames: &'a [[f32; 10]],
 	/// Mean octave levels ([`crate::spectrum::Spectrum::octave_db`]).
 	pub octave_db: &'a [f32],
+	/// Mean third-octave levels ([`crate::spectrum::Spectrum::third_octave_db`]); only
+	/// [`collisions_for`] reads it (the center of a collision), empty is fine.
+	pub third_octave_db: &'a [f32],
 }
 
 /// Two tracks colliding in one band. `a`/`b` index the inputs; `cut` is the one that should
@@ -66,62 +69,24 @@ pub fn masking(tracks: &[MaskInput<'_>]) -> Vec<MaskingPair> {
 	if tracks.len() < 2 || frames == 0 {
 		return Vec::new();
 	}
-	// Total power of all inputs per (frame, band).
-	let mut total = vec![[0.0f64; 10]; frames];
-	for t in tracks {
-		for (sum, row) in total.iter_mut().zip(t.frames) {
-			for (s, v) in sum.iter_mut().zip(row) {
-				*s += 10f64.powf(f64::from(*v) / 10.0);
-			}
-		}
-	}
-	let total_db: Vec<[f32; 10]> = total
-		.iter()
-		.map(|row| {
-			row.map(|p| {
-				if p > 0.0 {
-					(10.0 * p.log10()) as f32
-				} else {
-					-144.0
-				}
-			})
-		})
-		.collect();
+	let total_db = total_db(tracks, frames);
 	let mut pairs = Vec::new();
 	for a in 0..tracks.len() {
 		for b in a + 1..tracks.len() {
 			let mut best: Option<MaskingPair> = None;
 			for (band, weight) in BANDS {
-				let (mut both, mut hits, mut diff) = (0u32, 0u32, 0.0f32);
-				for ((fa, fb), total) in
-					tracks[a].frames.iter().zip(tracks[b].frames).zip(&total_db)
-				{
-					let (la, lb) = (fa[band], fb[band]);
-					if la < PRESENT_DB || lb < PRESENT_DB {
-						continue;
-					}
-					both += 1;
-					let floor = total[band] - CONTRIBUTOR_DB;
-					if la >= floor && lb >= floor && (la - lb).abs() <= CLOSE_DB {
-						hits += 1;
-						diff += la - lb;
-					}
-				}
-				if hits == 0 {
+				let Some(hit) = band_hit(&tracks[a], &tracks[b], &total_db, band, weight) else {
 					continue;
-				}
-				let overlap = hits as f32 / both as f32;
-				let presence = (both as f32 / frames as f32).sqrt();
-				let score = overlap * presence * weight;
-				if best.as_ref().is_none_or(|p| score > p.score) {
+				};
+				if best.as_ref().is_none_or(|p| hit.score > p.score) {
 					let cut = cut_candidate(&tracks[a], &tracks[b], band, a, b);
 					best = Some(MaskingPair {
 						a,
 						b,
 						band_hz: OCTAVE_HZ[band],
-						overlap,
-						level_diff_db: diff / hits as f32,
-						score,
+						overlap: hit.overlap,
+						level_diff_db: hit.level_a - hit.level_b,
+						score: hit.score,
 						cut,
 					});
 				}
@@ -133,6 +98,158 @@ pub fn masking(tracks: &[MaskInput<'_>]) -> Vec<MaskingPair> {
 	}
 	pairs.sort_by(|x, y| y.score.total_cmp(&x.score));
 	pairs
+}
+
+/// Total level of all inputs per (frame, octave band), dB.
+fn total_db(tracks: &[MaskInput<'_>], frames: usize) -> Vec<[f32; 10]> {
+	let mut total = vec![[0.0f64; 10]; frames];
+	for t in tracks {
+		for (sum, row) in total.iter_mut().zip(t.frames) {
+			for (s, v) in sum.iter_mut().zip(row) {
+				*s += 10f64.powf(f64::from(*v) / 10.0);
+			}
+		}
+	}
+	total
+		.iter()
+		.map(|row| {
+			row.map(|p| {
+				if p > 0.0 {
+					(10.0 * p.log10()) as f32
+				} else {
+					-144.0
+				}
+			})
+		})
+		.collect()
+}
+
+/// How two tracks collide in one octave band.
+#[derive(Debug, Clone, Copy)]
+struct BandHit {
+	overlap: f32,
+	score: f32,
+	/// Mean levels while colliding, dB.
+	level_a: f32,
+	level_b: f32,
+}
+
+fn band_hit(
+	ta: &MaskInput<'_>,
+	tb: &MaskInput<'_>,
+	total_db: &[[f32; 10]],
+	band: usize,
+	weight: f32,
+) -> Option<BandHit> {
+	let (mut both, mut hits, mut sum_a, mut sum_b) = (0u32, 0u32, 0.0f32, 0.0f32);
+	for ((fa, fb), total) in ta.frames.iter().zip(tb.frames).zip(total_db) {
+		let (la, lb) = (fa[band], fb[band]);
+		if la < PRESENT_DB || lb < PRESENT_DB {
+			continue;
+		}
+		both += 1;
+		let floor = total[band] - CONTRIBUTOR_DB;
+		if la >= floor && lb >= floor && (la - lb).abs() <= CLOSE_DB {
+			hits += 1;
+			sum_a += la;
+			sum_b += lb;
+		}
+	}
+	if hits == 0 {
+		return None;
+	}
+	let overlap = hits as f32 / both as f32;
+	let presence = (both as f32 / total_db.len() as f32).sqrt();
+	Some(BandHit {
+		overlap,
+		score: overlap * presence * weight,
+		level_a: sum_a / hits as f32,
+		level_b: sum_b / hits as f32,
+	})
+}
+
+/// The bell cut a masking fix proposes: deeper for pairs that collide most of the time.
+pub fn cut_gain_db(score: f32) -> f32 {
+	if score > 0.5 { -4.0 } else { -3.0 }
+}
+
+/// The Q of that bell (about one octave wide).
+pub const CUT_Q: f32 = 1.4;
+
+/// One other track colliding with the target in one octave band ([`collisions_for`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Collision {
+	/// Index of the other track in the inputs.
+	pub other: usize,
+	/// Octave band index ([`OCTAVE_HZ`]).
+	pub band: usize,
+	pub band_hz: f32,
+	/// The third-octave inside the band where both are loudest together (`band_hz`
+	/// without third-octave levels): where a cut goes.
+	pub center_hz: f32,
+	pub overlap: f32,
+	pub score: f32,
+	/// Mean level of the target / the other track in the band while colliding, dBFS.
+	pub level_db: f32,
+	pub other_level_db: f32,
+	/// The masking rule's choice: the target is the one to make room (else the other).
+	pub cut_here: bool,
+	/// Suggested bell gain ([`cut_gain_db`]).
+	pub cut_db: f32,
+}
+
+/// Every band where another track collides with `target` (same rule as [`masking`], but
+/// per band instead of only each pair's worst one), strongest first; scores below
+/// [`MIN_SCORE`] are left out.
+pub fn collisions_for(target: usize, tracks: &[MaskInput<'_>]) -> Vec<Collision> {
+	let frames = tracks.iter().map(|t| t.frames.len()).min().unwrap_or(0);
+	if target >= tracks.len() || tracks.len() < 2 || frames == 0 {
+		return Vec::new();
+	}
+	let total_db = total_db(tracks, frames);
+	let t = &tracks[target];
+	let mut out = Vec::new();
+	for (other, o) in tracks.iter().enumerate() {
+		if other == target {
+			continue;
+		}
+		for (band, weight) in BANDS {
+			let Some(hit) = band_hit(t, o, &total_db, band, weight) else {
+				continue;
+			};
+			if hit.score < MIN_SCORE {
+				continue;
+			}
+			let cut = cut_candidate(t, o, band, target, other);
+			out.push(Collision {
+				other,
+				band,
+				band_hz: OCTAVE_HZ[band],
+				center_hz: center_of(t, o, band),
+				overlap: hit.overlap,
+				score: hit.score,
+				level_db: hit.level_a,
+				other_level_db: hit.level_b,
+				cut_here: cut == target,
+				cut_db: cut_gain_db(hit.score),
+			});
+		}
+	}
+	out.sort_by(|x, y| y.score.total_cmp(&x.score));
+	out
+}
+
+/// The third-octave of `band` where the quieter of the two is loudest.
+fn center_of(a: &MaskInput<'_>, b: &MaskInput<'_>, band: usize) -> f32 {
+	(band * 3 + 1..=band * 3 + 3)
+		.filter(|&i| i < THIRD_OCTAVE_HZ.len())
+		.filter_map(|i| {
+			let la = *a.third_octave_db.get(i)?;
+			let lb = *b.third_octave_db.get(i)?;
+			Some((i, la.min(lb)))
+		})
+		.max_by(|x, y| x.1.total_cmp(&y.1))
+		.map_or(OCTAVE_HZ[band], |(i, _)| THIRD_OCTAVE_HZ[i])
 }
 
 fn cut_candidate(ta: &MaskInput<'_>, tb: &MaskInput<'_>, band: usize, a: usize, b: usize) -> usize {
@@ -175,16 +292,19 @@ mod tests {
 				role: Role::Kick,
 				frames: &k,
 				octave_db: &kick,
+				third_octave_db: &[],
 			},
 			MaskInput {
 				role: Role::Bass,
 				frames: &b,
 				octave_db: &bass,
+				third_octave_db: &[],
 			},
 			MaskInput {
 				role: Role::Drums,
 				frames: &h,
 				octave_db: &hats,
+				third_octave_db: &[],
 			},
 		];
 		let pairs = masking(&inputs);
@@ -212,16 +332,19 @@ mod tests {
 				role: Role::Vocal,
 				frames: &v,
 				octave_db: &vox,
+				third_octave_db: &[],
 			},
 			MaskInput {
 				role: Role::Keys,
 				frames: &k,
 				octave_db: &keys,
+				third_octave_db: &[],
 			},
 			MaskInput {
 				role: Role::Pad,
 				frames: &q,
 				octave_db: &quiet,
+				third_octave_db: &[],
 			},
 		]);
 		assert_eq!(pairs.len(), 1, "{pairs:?}");
@@ -242,11 +365,13 @@ mod tests {
 				role: Role::Keys,
 				frames: &a,
 				octave_db: &on,
+				third_octave_db: &[],
 			},
 			MaskInput {
 				role: Role::Guitar,
 				frames: &b,
 				octave_db: &on,
+				third_octave_db: &[],
 			},
 		]);
 		assert!(pairs.is_empty());

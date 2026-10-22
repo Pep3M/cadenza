@@ -16,6 +16,7 @@ pub mod issues;
 pub mod levels;
 pub mod loudness;
 pub mod masking;
+pub mod match_eq;
 pub mod moves;
 pub mod reference;
 pub mod roles;

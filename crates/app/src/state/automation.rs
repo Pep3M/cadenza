@@ -3,6 +3,7 @@
 //! delete, reshape points; tempo points). The view in `ui::automation` only hit-tests
 //! and previews; every gesture ends in one `SetAutomation` (or one tempo command).
 
+use crate::i18n::{tr, trf};
 use std::collections::HashMap;
 
 use cadenza_core::{ParamAddress, ParamTarget, TempoPoint, Tick, TrackId};
@@ -222,7 +223,7 @@ impl ParamMeta {
 	/// Value in real units for tooltips: `-6.0 dB`, `L30`, `1.20 kHz`, `45 %`.
 	pub fn format(&self, v: f32) -> String {
 		match self.scale {
-			Scale::Fader if v <= DB_MIN + 0.05 => "-inf dB".into(),
+			Scale::Fader if v <= DB_MIN + 0.05 => tr("-inf dB").into(),
 			Scale::Fader => format!("{v:+.1} dB"),
 			Scale::Pan => {
 				let p = (v * 100.0).round() as i32;
@@ -278,7 +279,7 @@ pub fn device_params(
 						(
 							p.id.to_owned(),
 							ParamMeta {
-								name: p.name.to_owned(),
+								name: crate::i18n::tr_str(p.name).to_owned(),
 								min: p.min,
 								max: p.max,
 								default: p.default,
@@ -329,9 +330,9 @@ pub fn meta(
 ) -> Option<ParamMeta> {
 	let channel = project.channel(address.track)?;
 	match &address.target {
-		ParamTarget::Volume => Some(ParamMeta::db("Volume", 0.0)),
+		ParamTarget::Volume => Some(ParamMeta::db(tr("Volume"), 0.0)),
 		ParamTarget::Pan => Some(ParamMeta {
-			name: "Pan".into(),
+			name: tr("Pan").into(),
 			min: -1.0,
 			max: 1.0,
 			default: 0.0,
@@ -342,7 +343,7 @@ pub fn meta(
 		ParamTarget::Send { send } => {
 			let s = channel.sends.iter().find(|s| s.id == *send)?;
 			let bus = project.track(s.target).map_or("?", |t| t.name.as_str());
-			Some(ParamMeta::db(format!("Send → {bus}"), -12.0))
+			Some(ParamMeta::db(trf("Send → {bus}", &[("bus", &bus)]), -12.0))
 		}
 		ParamTarget::Device { device, param } => {
 			let d = project.device(address.track, *device)?;
@@ -367,7 +368,7 @@ pub fn choices(
 	let Some(channel) = project.channel(owner) else {
 		return Vec::new();
 	};
-	let mix = "Mixer".to_owned();
+	let mix = tr("Mixer").to_owned();
 	let mut out = vec![
 		Choice {
 			address: ParamAddress {
@@ -375,7 +376,7 @@ pub fn choices(
 				target: ParamTarget::Volume,
 			},
 			group: mix.clone(),
-			name: "Volume".into(),
+			name: tr("Volume").into(),
 		},
 		Choice {
 			address: ParamAddress {
@@ -383,7 +384,7 @@ pub fn choices(
 				target: ParamTarget::Pan,
 			},
 			group: mix.clone(),
-			name: "Pan".into(),
+			name: tr("Pan").into(),
 		},
 	];
 	if let Some(t) = owner {
@@ -392,7 +393,7 @@ pub fn choices(
 			out.push(Choice {
 				address: ParamAddress::send(t, s.id),
 				group: mix.clone(),
-				name: format!("Send → {bus}"),
+				name: trf("Send → {bus}", &[("bus", &bus)]),
 			});
 		}
 	}

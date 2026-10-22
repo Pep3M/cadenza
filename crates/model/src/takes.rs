@@ -77,6 +77,19 @@ pub fn split_clip(
 		return None;
 	}
 	let left_len = at - c.start;
+	// A linked copy leaves its group first (see `links::unique_commands`), losing the
+	// shared notes past its end: split what it keeps.
+	let trimmed;
+	let c = if c.link.is_some() {
+		let mut t = c.clone();
+		if let ClipContent::Midi { notes, .. } = &mut t.content {
+			notes.retain(|n| n.start < c.length);
+		}
+		trimmed = t;
+		&trimmed
+	} else {
+		c
+	};
 	let mut right = Clip {
 		id: right_id,
 		name: c.name.clone(),
@@ -84,9 +97,12 @@ pub fn split_clip(
 		length: c.end() - at,
 		content: c.content.clone(),
 		take: right_take,
+		muted: c.muted,
+		link: None,
 	};
 	// Note and fade edits first, so the left clip never holds notes past its new end.
-	let mut commands = Vec::new();
+	// A linked clip leaves its group first: cutting one copy must not cut the others.
+	let mut commands = crate::links::unique_commands(project, clip);
 	match (&c.content, &mut right.content) {
 		(
 			ClipContent::Midi {

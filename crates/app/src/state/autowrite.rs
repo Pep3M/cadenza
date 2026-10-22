@@ -8,6 +8,7 @@
 //! undo step ("Write automation"). While a lane is being written its playback is suspended
 //! so the moving control is what is heard.
 
+use crate::i18n::tr;
 use cadenza_core::{ParamAddress, ParamTarget, TempoMap, Tick};
 use cadenza_model::{AutomationPoint, Command, Project, automation_value};
 use serde::{Deserialize, Serialize};
@@ -25,9 +26,9 @@ pub enum WriteMode {
 impl WriteMode {
 	pub fn name(self) -> &'static str {
 		match self {
-			WriteMode::Off => "Read",
-			WriteMode::Touch => "Touch",
-			WriteMode::Latch => "Latch",
+			WriteMode::Off => tr("Read"),
+			WriteMode::Touch => tr("Touch"),
+			WriteMode::Latch => tr("Latch"),
 		}
 	}
 }

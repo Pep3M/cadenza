@@ -82,7 +82,7 @@ pub fn pack(project: &Path, output: Option<PathBuf>, include_renders: bool) -> R
 	let session = open(project)?;
 	let output = output.unwrap_or_else(|| {
 		let stem = cadenza_model::files::project_stem(project);
-		project.with_file_name(format!("{stem}.cadenza.zip"))
+		project.with_file_name(format!("{stem}.cdzpack"))
 	});
 	let out = portable::pack_current(
 		&session,
@@ -110,7 +110,7 @@ pub fn pack(project: &Path, output: Option<PathBuf>, include_renders: bool) -> R
 pub fn unpack(archive: &Path, dest: &Path) -> Result<()> {
 	if !portable::is_archive(archive) {
 		bail!(
-			"'{}' is not a project archive (.cadenza.zip or .cadenzapack)",
+			"'{}' is not a project archive (.cdzpack)",
 			archive.display()
 		);
 	}

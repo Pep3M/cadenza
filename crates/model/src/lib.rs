@@ -10,6 +10,9 @@ pub mod document;
 pub mod error;
 pub mod files;
 mod freeze;
+pub mod links;
+pub mod midi_map;
+pub mod modulation;
 mod persist;
 pub mod project;
 pub mod sample;
@@ -24,6 +27,8 @@ pub use controller::{Controller, ControllerLane, ControllerPoint};
 pub use document::Document;
 pub use error::ModelError;
 pub use files::{FileRef, FileUse, ProjectLayout};
+pub use midi_map::{MapMode, MidiMapping, Takeover};
+pub use modulation::{EnvelopeSource, LfoShape, ModTarget, Modulator, ModulatorKind, Retrigger};
 pub use persist::{backup_path, write_atomic};
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,

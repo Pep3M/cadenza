@@ -1,4 +1,4 @@
-//! `cadenza-app [project.cadenza.json]`: the Cadenza desktop application.
+//! `cadenza-app [project.cdz]`: the Cadenza desktop application.
 
 // Release builds on Windows start without a console window (`cadenza gui` from a
 // terminal still shows the CLI's output).
@@ -13,7 +13,7 @@ fn main() -> ExitCode {
 	if let Some(p) = &project
 		&& (p == "-h" || p == "--help")
 	{
-		println!("usage: cadenza-app [PROJECT.cadenza.json]");
+		println!("usage: cadenza-app [PROJECT.cdz]");
 		return ExitCode::SUCCESS;
 	}
 	match cadenza_app::run(project) {

@@ -71,7 +71,8 @@ fn clip_events(clips: &[&Clip], origin: Tick) -> Vec<(i64, RawEvent)> {
 	let mut events = Vec::new();
 	for clip in clips {
 		let base = clip.start - origin;
-		for note in clip.notes() {
+		// Linked clips share content that may reach past a shorter copy: export what plays.
+		for note in clip.notes().iter().filter(|n| n.start < clip.length) {
 			let start = (base + note.start).0;
 			let end = start + note.length.0.max(1);
 			let velocity = ((note.velocity * 127.0).round() as i32).clamp(1, 127) as u8;
@@ -227,7 +228,7 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>> {
 			let clips: Vec<&Clip> = track
 				.clips
 				.iter()
-				.filter(|c| c.is_midi() && c.plays())
+				.filter(|c| c.is_midi() && c.sounds())
 				.collect();
 			clip_events(&clips, Tick::ZERO)
 		})

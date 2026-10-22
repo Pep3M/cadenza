@@ -38,6 +38,23 @@ use crate::types::{AssistantTurn, Message, ToolResult, ToolSpec};
 pub const DEFAULT_SESSION_MAX_COST_USD: f64 = 0.25;
 /// Undo step of a [`SessionAgent::run_engineer_pass`].
 pub const ENGINEER_UNDO_LABEL: &str = "AI mix pass";
+/// The only tools a read-only request ([`SessionAgent::run_explain`]) may call.
+pub const EXPLAIN_TOOLS: &[&str] = &[
+	"get_project",
+	"get_device_info",
+	"list_devices",
+	"list_presets",
+	"get_clip_notes",
+	"get_controller_events",
+	"history",
+	"scale_info",
+	"analyze_mix",
+	"analyze_track",
+	"mix_targets",
+	"get_audio_info",
+	"library_search",
+	"library_get",
+];
 pub const DEFAULT_SESSION_MAX_TURNS: u32 = 40;
 /// Condense the conversation once a request's input reaches this many tokens.
 pub const DEFAULT_SESSION_COMPACT_AT: u64 = 60_000;
@@ -158,7 +175,7 @@ impl SessionAgent {
 			.map(Path::to_path_buf)
 			.unwrap_or_else(std::env::temp_dir);
 		std::fs::create_dir_all(&root).map_err(|e| AgentError::io(&root, e))?;
-		let policy = PathPolicy::new(&root, "project.cadenza.json", "mix.wav")
+		let policy = PathPolicy::new(&root, "project.cdz", "mix.wav")
 			.map_err(|e| AgentError::io(&root, e))?;
 		Ok(ToolBridge::with_hidden(
 			CadenzaServer::with_shared_session(session.clone()),
@@ -275,11 +292,10 @@ impl SessionAgent {
 			.map(|f| f.to_string_lossy().into_owned())
 			.unwrap_or_else(|| {
 				let name = lock(&self.session).document().project().name.clone();
-				format!("{}.cadenza.json", crate::config::slugify(&name))
+				format!("{}.cdz", crate::config::slugify(&name))
 			});
 		let stem = project_file
-			.strip_suffix(".cadenza.json")
-			.or_else(|| project_file.strip_suffix(".json"))
+			.strip_suffix(".cdz")
 			.unwrap_or(&project_file)
 			.to_owned();
 		let mut policy = PathPolicy::new(&root, &project_file, &format!("{stem}.wav"))
@@ -302,7 +318,23 @@ impl SessionAgent {
 		cancel: &CancelToken,
 	) -> Result<RequestOutcome, AgentError> {
 		let label = format!("AI: {}", clip(request.trim(), 60));
-		self.run_labeled(request, label, context, observer, cancel)
+		self.run_labeled(request, label, false, context, observer, cancel)
+			.await
+	}
+
+	/// A read-only request ("Explain this device"): the model may only read the project
+	/// ([`EXPLAIN_TOOLS`]); any other tool call is refused, and whatever changed anyway is
+	/// reverted, so the request leaves no undo step. `request` is usually
+	/// [`prompt::explain_request`].
+	pub async fn run_explain(
+		&mut self,
+		request: &str,
+		context: &AppContext,
+		observer: &dyn AgentObserver,
+		cancel: &CancelToken,
+	) -> Result<RequestOutcome, AgentError> {
+		let label = format!("AI: {}", clip(request.trim(), 60));
+		self.run_labeled(request, label, true, context, observer, cancel)
 			.await
 	}
 
@@ -320,6 +352,7 @@ impl SessionAgent {
 		self.run_labeled(
 			&request,
 			ENGINEER_UNDO_LABEL.to_owned(),
+			false,
 			context,
 			observer,
 			cancel,
@@ -331,6 +364,7 @@ impl SessionAgent {
 		&mut self,
 		request: &str,
 		undo_label: String,
+		read_only: bool,
 		context: &AppContext,
 		observer: &dyn AgentObserver,
 		cancel: &CancelToken,
@@ -339,16 +373,26 @@ impl SessionAgent {
 		self.transcript()?;
 		let transcript = self.transcript.take().expect("created above");
 		let result = self
-			.run_request_inner(request, undo_label, context, observer, cancel, &transcript)
+			.run_request_inner(
+				request,
+				undo_label,
+				read_only,
+				context,
+				observer,
+				cancel,
+				&transcript,
+			)
 			.await;
 		self.transcript = Some(transcript);
 		Ok(result)
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	async fn run_request_inner(
 		&mut self,
 		request: &str,
 		undo_label: String,
+		read_only: bool,
 		context: &AppContext,
 		observer: &dyn AgentObserver,
 		cancel: &CancelToken,
@@ -547,7 +591,14 @@ impl SessionAgent {
 					name: &call.name,
 					args: &call.arguments,
 				});
-				let outcome = self.tools.call(call).await;
+				let outcome = if read_only && !EXPLAIN_TOOLS.contains(&call.name.as_str()) {
+					self.tools.refusal(format!(
+						"`{}` is not available: this is a read-only explain request. Do not change the project; answer from what get_project / get_device_info show, and describe any suggestion in words instead of applying it.",
+						call.name
+					))
+				} else {
+					self.tools.call(call).await
+				};
 				tee.on_event(&AgentEvent::ToolResult {
 					name: &call.name,
 					ok: !outcome.is_error,
@@ -568,7 +619,13 @@ impl SessionAgent {
 
 		let edited = {
 			let mut session = lock(&self.session);
-			let edited = session.document_mut().end_group();
+			let edited = if read_only {
+				// Nothing a read-only request did may stay (nor leave an undo step).
+				let _ = session.document_mut().abort_group();
+				false
+			} else {
+				session.document_mut().end_group()
+			};
 			self.seen = Some(session.change_key());
 			edited
 		};

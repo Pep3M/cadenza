@@ -8,6 +8,7 @@
 //!   `cadenza_model::Command` through `AppState::apply`.
 
 pub mod audio;
+pub mod i18n;
 pub mod jobs;
 pub mod state;
 pub mod theme;
@@ -28,6 +29,8 @@ const WINDOW_ICON: &[u8] = include_bytes!("../../../packaging/icons/cadenza-256.
 
 /// Opens the main window (optionally with a project) and runs until it is closed.
 pub fn run(project: Option<PathBuf>) -> Result<(), AppError> {
+	#[cfg(target_os = "macos")]
+	disable_touch_bar();
 	let mut viewport = egui::ViewportBuilder::default()
 		.with_title("Cadenza")
 		.with_app_id("cadenza")
@@ -47,6 +50,23 @@ pub fn run(project: Option<PathBuf>) -> Result<(), AppError> {
 		Box::new(move |cc| Ok(Box::new(CadenzaApp::new(&cc.egui_ctx, cc.storage, project)))),
 	)
 	.map_err(|e| AppError::Window(e.to_string()))
+}
+
+/// Turns AppKit's Touch Bar support off for this process. The app shows nothing on the
+/// Touch Bar, and AppKit's Touch Bar finder can throw while the window is torn down
+/// (`_NSTouchBarFinderObservation invalidate`: KVO observer removal), aborting on quit.
+/// Must run before the `NSApplication` finishes launching; the registration domain is
+/// not persisted.
+#[cfg(target_os = "macos")]
+fn disable_touch_bar() {
+	use objc2::runtime::AnyObject;
+	use objc2_foundation::{NSDictionary, NSNumber, NSString, NSUserDefaults, ns_string};
+
+	let off = NSNumber::new_bool(false);
+	let defaults: objc2::rc::Retained<NSDictionary<NSString, AnyObject>> =
+		NSDictionary::from_slices(&[ns_string!("NSFunctionBarAPIEnabled")], &[&**off]);
+	// SAFETY: a dictionary of property-list values, as `registerDefaults:` requires.
+	unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&defaults) };
 }
 
 #[cfg(test)]

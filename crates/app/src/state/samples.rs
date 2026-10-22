@@ -27,7 +27,8 @@ pub fn kind(device: &Device) -> Option<SampleKind> {
 	}
 }
 
-/// View state of the instrument editor (not part of the project).
+/// View state of the device editor (not part of the project): its device and the
+/// sampler / drum sampler selection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstrumentView {
 	/// The device shown.
@@ -36,6 +37,15 @@ pub struct InstrumentView {
 	pub zone: usize,
 	/// Selected drum pad (note).
 	pub pad: u8,
+	/// Selected layer of the drum pad (chip order, `drum_sampler_editor::pad_layers`).
+	pub layer: usize,
+	/// The pad (note; 0 = the whole kit) a sample / folder dialog is open for.
+	pub dialog: Option<(DeviceRef, u8)>,
+	/// The browser should show its Files tab (a pad's "Locate file").
+	pub files_tab: bool,
+	/// The sample file loaded into a sampler last (a double-click on an empty spot of
+	/// the zone map makes a zone of it).
+	pub last_sample: Option<std::path::PathBuf>,
 }
 
 impl Default for InstrumentView {
@@ -44,15 +54,19 @@ impl Default for InstrumentView {
 			device: None,
 			zone: 0,
 			pad: PADS[0].0,
+			layer: 0,
+			dialog: None,
+			files_tab: false,
+			last_sample: None,
 		}
 	}
 }
 
 impl InstrumentView {
-	/// Forgets a device that no longer exists (or is no longer a sampler).
+	/// Forgets a device that no longer exists (or is no longer a built-in).
 	pub fn prune(&mut self, project: &Project) {
 		if let Some(r) = self.device {
-			let alive = device(project, r).is_some_and(|d| kind(d).is_some());
+			let alive = device(project, r).is_some_and(|d| d.builtin_id().is_some());
 			if !alive {
 				self.device = None;
 			}
@@ -182,6 +196,9 @@ pub enum SampleSlot {
 	Zone(usize),
 	/// The whole keyboard at the sample's root (replaces every zone).
 	Keyboard,
+	/// A new sampler zone filling the empty spot of the zone map at this key and
+	/// velocity (0..=127).
+	Area { key: u8, vel: u8 },
 }
 
 /// The arguments of the shared MCP `load_sample` tool for a drop.
@@ -194,7 +211,11 @@ pub fn load_args(
 	let (pad, zone) = match slot {
 		SampleSlot::Pad(n) => (Some(n.to_string()), None),
 		SampleSlot::Zone(i) => (None, Some(i)),
-		SampleSlot::Keyboard => (None, None),
+		SampleSlot::Keyboard | SampleSlot::Area { .. } => (None, None),
+	};
+	let keys = match slot {
+		SampleSlot::Area { key, .. } => Some(key.to_string()),
+		_ => None,
 	};
 	cadenza_mcp::tools::samples::LoadSampleArgs {
 		track_id: track,
@@ -203,7 +224,7 @@ pub fn load_args(
 		pad,
 		layer: false,
 		zone,
-		keys: None,
+		keys,
 		root: None,
 	}
 }

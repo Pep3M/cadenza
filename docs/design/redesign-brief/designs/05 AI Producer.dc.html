@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+
+<!-- A: running, full window -->
+<div style="display:flex;flex-direction:column;gap:14px;flex:none">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">05a · mid-request</div>
+<div data-screen-label="05a AI running" style="width:1920px;height:1080px;background:#0e0f11;display:grid;grid-template-rows:44px minmax(0,1fr) 24px;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:14px;padding:0 12px;background:#15161a;border-bottom:1px solid #24262b">
+<span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5">CADENZA</span>
+<div style="display:flex;gap:2px"><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">⏮</div><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328"><span style="width:9px;height:9px;background:#a3a6ad;border-radius:1px"></span></div><div style="width:38px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;color:#a3a6ad">▶</div><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:10px;height:10px;border-radius:50%;background:#f0524f"></span></div></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 8px;color:#a3a6ad">Pattern</span><span style="padding:2px 8px;background:#2a2c32;border-radius:3px;font-weight:500">Song</span></div>
+<div style="flex:1"></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:500">5.1.000</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">0:10.434</span><span style="font-family:'IBM Plex Mono',monospace">92.00 · 4/4</span>
+<div style="flex:1"></div>
+<span style="display:flex;align-items:center;gap:6px;height:24px;padding:0 10px;background:#1d2a3d;color:#7fb4ff;border-radius:12px;box-shadow:inset 0 0 0 1px #2c4a73"><span style="width:6px;height:6px;border-radius:50%;background:#4c9cf5"></span>Producer working · Esc to stop</span>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 460px;min-height:0">
+<div style="display:flex;flex-direction:column;min-width:0;background:#111215;overflow:hidden">
+<div style="height:28px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#15161a;border-bottom:1px solid #24262b"><span style="font-weight:600;font-size:13px">Arrange</span><span style="flex:1"></span><span style="color:#80848c">Edits are queued while the producer works</span></div>
+<div style="display:flex;height:48px;border-bottom:1px solid #24262b">
+<div style="width:212px;flex:none;background:#15161a;border-right:1px solid #24262b"></div>
+<div style="flex:1;position:relative;display:flex;flex-direction:column;background:#15161a">
+<div style="height:24px;position:relative"><sc-for list="{{ bars }}" as="b" hint-placeholder-count="16"><div style="position:absolute;left:{{ b.l }}%;top:6px;bottom:0;border-left:1px solid #2a2c32;padding-left:4px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ b.n }}</div></sc-for></div>
+<div style="height:24px;position:relative;border-top:1px solid #1d1f23;background:#111215"><sc-for list="{{ markers }}" as="m" hint-placeholder-count="3"><div style="position:absolute;left:{{ m.l }}%;top:4px;height:16px;display:flex;align-items:center;padding:0 6px;border-left:2px solid #e8b84a;color:#e8b84a;font-size:11px;font-weight:500">{{ m.n }}</div></sc-for></div>
+</div>
+</div>
+<div style="flex:1;position:relative">
+<sc-for list="{{ tracks }}" as="t" hint-placeholder-count="7">
+<div style="display:flex;height:72px;border-bottom:1px solid #1d1f23;box-shadow:{{ t.ring }};position:relative;background:{{ t.rowBg }}">
+<div style="width:212px;flex:none;display:flex;background:{{ t.hdr }};border-right:1px solid #24262b">
+<div style="width:4px;background:{{ t.c }}"></div>
+<div style="flex:1;padding:8px;display:flex;flex-direction:column;justify-content:space-between;min-width:0">
+<div style="display:flex;align-items:center;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">{{ t.n }}</span><span style="font-size:13px;font-weight:600">{{ t.name }}</span><sc-if value="{{ t.ai }}" hint-placeholder-val="{{ false }}"><span style="font-size:9.5px;font-weight:600;color:#0b1220;background:#4c9cf5;padding:0 4px;border-radius:2px">AI · new</span></sc-if></div>
+<div style="font-size:11px;color:#a3a6ad">{{ t.dev }}</div>
+<div style="display:flex;gap:3px"><span style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">M</span><span style="width:20px;height:18px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-size:10.5px;font-weight:600;color:#a3a6ad">S</span><span style="flex:1;height:18px;margin-left:3px;background:#0e0f11;border-radius:3px;position:relative"><span style="position:absolute;right:5px;top:2px;font-family:'IBM Plex Mono',monospace;font-size:10.5px">{{ t.vol }}</span></span></div>
+</div>
+</div>
+<div style="flex:1;position:relative;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px);background-size:6.25% 100%">
+<sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1">
+<div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:4px;bottom:4px;background:{{ c.fill }};border-radius:3px;border-left:2px solid {{ t.c }};box-shadow:{{ c.bd }};overflow:hidden">
+<div style="padding:2px 6px;font-size:10.5px;font-weight:600;color:{{ c.tc }};white-space:nowrap">{{ c.name }}</div>
+<div style="position:absolute;left:4px;right:4px;top:18px;bottom:4px"><sc-for list="{{ c.notes }}" as="nt" hint-placeholder-count="0"><div style="position:absolute;left:{{ nt.x }}%;top:{{ nt.y }}%;width:{{ nt.w }}%;height:3px;border-radius:1px;background:{{ t.c }}"></div></sc-for></div>
+</div>
+</sc-for>
+<sc-if value="{{ t.ai }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;left:25%;width:50%;top:4px;bottom:4px;border:1.5px dashed #4c9cf5;border-radius:3px;background:rgba(76,156,245,.08)">
+<div style="padding:2px 6px;font-size:10.5px;font-weight:600;color:#7fb4ff">Bass · verse <span style="color:#a3a6ad;font-weight:400">writing 18 / 32</span></div>
+<div style="position:absolute;left:4px;right:4px;top:18px;bottom:4px"><sc-for list="{{ aiNotes }}" as="nt" hint-placeholder-count="0"><div style="position:absolute;left:{{ nt.x }}%;top:{{ nt.y }}%;width:{{ nt.w }}%;height:3px;border-radius:1px;background:#5aa2f5"></div></sc-for></div>
+<div style="position:absolute;left:56%;top:0;bottom:0;width:2px;background:#4c9cf5"></div>
+</div>
+</sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+<!-- AI panel running -->
+<div style="background:#15161a;border-left:1px solid #24262b;display:flex;flex-direction:column;min-height:0">
+<div style="height:38px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid #24262b"><span style="padding:4px 10px;background:#212328;border-radius:4px;font-weight:600;font-size:13px">Producer</span><span style="padding:4px 10px;color:#a3a6ad;font-size:13px">Mix</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">session $0.039</span><span style="width:24px;text-align:center;color:#a3a6ad">⚙</span></div>
+<div style="flex:1;padding:14px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#111215;border-radius:4px;color:#a3a6ad;font-size:11.5px"><span style="color:#4fc38a">✓</span>Earlier: “Add drums” · kept · $0.0024<span style="flex:1"></span><span style="color:#80848c">▸</span></div>
+<div style="align-self:flex-end;max-width:85%;background:#1d2a3d;padding:9px 12px;border-radius:8px 8px 2px 8px;font-size:13px;line-height:1.45">Add a bass line that follows the chords in the verse. Keep it simple and round.</div>
+<div style="display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#a3a6ad"><span style="width:20px;height:20px;border-radius:50%;background:#4c9cf5;color:#0b1220;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10.5px">C</span><span style="font-weight:600;color:#e8e9ec">Producer</span><span>·</span><span>thinking 3 s ▸</span></div>
+<div style="font-size:13px;line-height:1.55">I’ll use Poly Synth with a round sub preset, play roots on the kick with a passing note into each chord change, bars 5–12<span style="display:inline-block;width:7px;height:14px;background:#4c9cf5;vertical-align:-2px;margin-left:2px"></span></div>
+<div style="background:#111215;border:1px solid #24262b;border-radius:6px;display:flex;flex-direction:column">
+<sc-for list="{{ runSteps }}" as="s" hint-placeholder-count="5"><div style="display:flex;gap:10px;padding:8px 12px;align-items:flex-start;border-bottom:1px solid #1d1f23;background:{{ s.bg }}"><span style="width:16px;height:16px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:{{ s.ib }};color:{{ s.ic }};box-shadow:{{ s.ir }}">{{ s.i }}</span><div style="flex:1;display:flex;flex-direction:column;gap:3px"><span style="color:{{ s.fg }}">{{ s.t }}</span><sc-if value="{{ s.prog }}" hint-placeholder-val="{{ false }}"><div style="height:3px;background:#212328;border-radius:2px;overflow:hidden"><div style="width:56%;height:100%;background:#4c9cf5"></div></div></sc-if></div><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">{{ s.d }}</span></div></sc-for>
+</div>
+</div>
+<div style="flex:1"></div>
+</div>
+<div style="padding:10px;border-top:1px solid #24262b;display:flex;flex-direction:column;gap:8px">
+<div style="min-height:44px;background:#0e0f11;border:1px solid #24262b;border-radius:6px;padding:8px 10px;color:#80848c;font-size:13px">Type your next request; it runs after this one</div>
+<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#a3a6ad"><span style="font-family:'IBM Plex Mono',monospace">running · 4.1 s · $0.0019 so far</span><span style="flex:1"></span><span style="height:26px;padding:0 12px;display:flex;align-items:center;gap:7px;background:#3a1a1b;color:#f0524f;border-radius:4px;font-weight:600;font-size:12px;box-shadow:inset 0 0 0 1px #6b2a2a"><span style="width:8px;height:8px;background:#f0524f;border-radius:1px"></span>Stop <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad;font-weight:400">Esc</span></span></div>
+</div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid #1d1f23;font-size:11px;color:#a3a6ad"><span style="color:#f2a944">● Unsaved</span><span style="color:#7fb4ff">AI: add a bass · in progress</span><span style="flex:1"></span><span style="color:#80848c">8 tracks</span></div>
+</div>
+</div>
+
+<!-- B: after -->
+<div style="display:flex;flex-direction:column;gap:14px;flex:none">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">05b · after</div>
+<div data-screen-label="05b AI done" style="width:460px;height:1080px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-left:1px solid #24262b">
+<div style="height:38px;flex:none;display:flex;align-items:center;gap:4px;padding:0 10px;border-bottom:1px solid #24262b"><span style="padding:4px 10px;background:#212328;border-radius:4px;font-weight:600;font-size:13px">Producer</span><span style="padding:4px 10px;color:#a3a6ad;font-size:13px">Mix</span><span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#80848c">session $0.042</span><span style="width:24px;text-align:center;color:#a3a6ad">⚙</span></div>
+<div style="flex:1;padding:14px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="align-self:flex-end;max-width:85%;background:#1d2a3d;padding:9px 12px;border-radius:8px 8px 2px 8px;font-size:13px;line-height:1.45">Add a bass line that follows the chords in the verse. Keep it simple and round.</div>
+<div style="display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#a3a6ad"><span style="width:20px;height:20px;border-radius:50%;background:#4c9cf5;color:#0b1220;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:10.5px">C</span><span style="font-weight:600;color:#e8e9ec">Producer</span><span>·</span><span>thought 4 s ▸</span></div>
+<div style="font-size:13px;line-height:1.6;display:flex;flex-direction:column;gap:6px">
+<span>Done. The bass plays roots on the kick with a passing note into each chord change.</span>
+<span style="display:flex;gap:8px"><span style="color:#80848c">•</span><span>New track <span style="padding:0 6px;background:#1d2a3d;color:#7fb4ff;border-radius:3px">2 · Bass</span> with Poly Synth “Round Sub”</span></span>
+<span style="display:flex;gap:8px"><span style="color:#80848c">•</span><span>32 notes in <span style="padding:0 6px;background:#212328;border-radius:3px">Verse</span>, C1–G2</span></span>
+<span style="display:flex;gap:8px"><span style="color:#80848c">•</span><span>Set to −8 dB with a 30 Hz low cut</span></span>
+<span style="color:#a3a6ad">I couldn’t sidechain it to the kick (see below).</span>
+</div>
+<div style="background:#111215;border:1px solid #24262b;border-radius:6px;display:flex;flex-direction:column">
+<div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid #1d1f23;color:#a3a6ad"><span>5 steps</span><span style="color:#4fc38a">✓ 4</span><span style="color:#f0524f">✗ 1</span><span style="flex:1"></span><span>▾</span></div>
+<sc-for list="{{ doneSteps }}" as="s" hint-placeholder-count="5"><div style="display:flex;gap:10px;padding:6px 12px;align-items:flex-start;background:{{ s.bg }}"><span style="width:14px;flex:none;color:{{ s.ic }};font-weight:700">{{ s.i }}</span><div style="flex:1;display:flex;flex-direction:column;gap:6px;line-height:1.4"><span style="color:{{ s.fg }}">{{ s.t }}</span><sc-if value="{{ s.err }}" hint-placeholder-val="{{ false }}"><span style="color:#a3a6ad">Compressor has no sidechain input. Gain / Utility with ducking can do the same job.</span><div style="display:flex;gap:6px"><span style="padding:2px 9px;background:#212328;border-radius:4px;font-weight:500">Try with Gain / Utility</span><span style="padding:2px 9px;color:#a3a6ad">Details</span></div></sc-if></div></div></sc-for>
+</div>
+</div>
+<div style="border:1px solid #2c4a73;background:#131c28;border-radius:6px;padding:12px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:13px">What changed</span><span style="font-size:11px;color:#a3a6ad">1 undo step · “AI: add a bass”</span></div>
+<div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+<sc-for list="{{ diff }}" as="d" hint-placeholder-count="4"><div style="display:flex;gap:8px;align-items:center"><span style="width:14px;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ d.c }}">{{ d.s }}</span><span style="flex:1;color:#c4c7cd">{{ d.t }}</span><span style="color:#7fb4ff;font-size:11px">Show</span></div></sc-for>
+</div>
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:#a3a6ad">Listen</span><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:2px 10px;color:#a3a6ad">Before</span><span style="padding:2px 10px;background:#2a2c32;border-radius:3px;font-weight:500">After</span></div><span style="font-size:11px;color:#80848c">plays the Verse, loops</span></div>
+<div style="display:flex;gap:6px"><span style="flex:1;text-align:center;padding:6px 0;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px">Keep</span><span style="flex:1;text-align:center;padding:6px 0;background:#212328;border-radius:4px;font-weight:500">↶ Undo <span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:10.5px">Ctrl Z</span></span></div>
+</div>
+<div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c;display:flex;flex-wrap:wrap;gap:4px 10px"><span style="color:#4fc38a">done</span><span>6.2 s</span><span>1,840 tok</span><span style="color:#a3a6ad">$0.0031</span><span>session $0.042 of $5.00</span></div>
+<div style="flex:1"></div>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#80848c">Next, for Bass · verse</span><div style="display:flex;flex-wrap:wrap;gap:6px"><span style="padding:4px 10px;border:1px solid #363940;border-radius:12px;color:#c4c7cd">Make it busier in the chorus</span><span style="padding:4px 10px;border:1px solid #363940;border-radius:12px;color:#c4c7cd">Copy to the chorus</span><span style="padding:4px 10px;border:1px solid #363940;border-radius:12px;color:#c4c7cd">Try a darker preset</span></div></div>
+</div>
+<div style="padding:10px;border-top:1px solid #24262b;display:flex;flex-direction:column;gap:8px">
+<div style="min-height:52px;background:#0e0f11;border:1px solid #2c4a73;border-radius:6px;padding:8px 10px;color:#80848c;font-size:13px;box-shadow:0 0 0 2px rgba(76,156,245,.15)">Ask the producer…  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px">@ to mention a track</span></div>
+<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#80848c"><span>claude-haiku-4.5 ▾</span><span>·</span><span>effort low</span><span>·</span><span>~$0.003</span><span style="flex:1"></span><span style="padding:4px 12px;background:#4c9cf5;color:#0b1220;font-weight:600;border-radius:4px;font-size:12px">Send ↵</span></div>
+</div>
+</div>
+</div>
+
+<!-- C: settings -->
+<div style="display:flex;flex-direction:column;gap:14px;flex:none">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">05c · producer settings (⚙)</div>
+<div data-screen-label="05c AI settings" style="width:460px;height:1080px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-left:1px solid #24262b">
+<div style="height:38px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #24262b"><span style="color:#a3a6ad">←</span><span style="font-weight:600;font-size:13px">Producer settings</span></div>
+<div style="flex:1;padding:16px;display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:column;gap:8px"><span style="font-weight:600;font-size:13px">Model</span>
+<div style="display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px;align-items:center">
+<span style="color:#a3a6ad">Provider</span><span style="height:24px;display:flex;align-items:center;padding:0 8px;background:#212328;border-radius:4px">Anthropic <span style="flex:1"></span><span style="color:#80848c">▾</span></span>
+<span style="color:#a3a6ad">Model</span><span style="height:24px;display:flex;align-items:center;padding:0 8px;background:#212328;border-radius:4px">claude-haiku-4.5 <span style="flex:1"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c">~$0.003 / req ▾</span></span>
+<span style="color:#a3a6ad">Reasoning</span><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="flex:1;text-align:center;padding:2px 0;background:#2a2c32;border-radius:3px;font-weight:500">Low</span><span style="flex:1;text-align:center;padding:2px 0;color:#a3a6ad">Medium</span><span style="flex:1;text-align:center;padding:2px 0;color:#a3a6ad">High</span></div>
+</div>
+<span style="font-size:11px;color:#80848c;line-height:1.5">Higher reasoning writes better arrangements but costs about 3× and takes longer.</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><span style="font-weight:600;font-size:13px">API key</span>
+<div style="display:flex;gap:6px"><span style="flex:1;height:24px;display:flex;align-items:center;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#a3a6ad">sk-ant-••••••••••••••3f9a</span><span style="height:24px;display:flex;align-items:center;padding:0 10px;background:#212328;border-radius:4px;font-weight:500">Test</span></div>
+<span style="font-size:11px;color:#4fc38a">✓ Connected · stored in the system keyring</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><span style="font-weight:600;font-size:13px">Budget</span>
+<div style="display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px;align-items:center">
+<span style="color:#a3a6ad">Per session</span><span style="height:22px;display:flex;align-items:center;justify-content:flex-end;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">$5.00</span>
+<span style="color:#a3a6ad">Per request</span><span style="height:22px;display:flex;align-items:center;justify-content:flex-end;padding:0 8px;background:#0e0f11;border:1px solid #24262b;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">$0.25</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px"><div style="height:6px;background:#0e0f11;border-radius:3px;overflow:hidden"><div style="width:0.84%;min-width:3px;height:100%;background:#4c9cf5"></div></div><div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#80848c"><span>$0.042 used</span><span>warn at 80 %</span></div></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px"><span style="font-weight:600;font-size:13px">Behavior</span>
+<sc-for list="{{ toggles }}" as="t" hint-placeholder-count="3"><div style="display:flex;gap:10px;align-items:flex-start"><span style="width:28px;height:16px;flex:none;border-radius:8px;background:{{ t.bg }};position:relative;margin-top:1px"><span style="position:absolute;top:2px;left:{{ t.x }}px;width:12px;height:12px;border-radius:50%;background:#e8e9ec"></span></span><div style="display:flex;flex-direction:column;gap:2px"><span>{{ t.n }}</span><span style="font-size:11px;color:#80848c;line-height:1.45">{{ t.d }}</span></div></div></sc-for>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px;padding:12px;background:#111215;border-radius:6px"><span style="font-weight:600">What is sent</span><span style="font-size:11.5px;color:#a3a6ad;line-height:1.5">Track names, devices and parameters, clip notes, markers, tempo and your message. Audio is never uploaded; mix analysis sends only measured numbers.</span></div>
+</div>
+</div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd;padding-top:36px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 05</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">AI producer</span><span style="color:#a3a6ad">During a request (full window), after it (panel), and settings.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    const BARS = 16; let seed = 3;
+    const r = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const gen = (kind, len) => {
+      const n = [];
+      if (kind === 'drum') { const st = len * 8, w = 100 / st; for (let s = 0; s < st; s++) { n.push({ x: s * w, y: 8, w: w * .5 }); if (s % 4 === 0) n.push({ x: s * w, y: 78, w: w * .8 }); if (s % 8 === 4) n.push({ x: s * w, y: 44, w: w * .8 }); } }
+      else if (kind === 'chord') { const w = 100 / len, sh = [0, 10, -6, 6]; for (let b = 0; b < len; b++) [62, 44, 26].forEach(y => n.push({ x: b * w, y: y + sh[b % 4], w: w * .94 })); }
+      else if (kind === 'pad') { const w = 100 / len * 2; for (let b = 0; b < len / 2; b++) [52, 30].forEach((y, i) => n.push({ x: b * w, y: y + (b % 2) * 8 - i * 2, w: w * .97 })); }
+      else if (kind === 'lead') { const st = len * 8, w = 100 / st; let y = 40; for (let s = 0; s < st; s++) { if (r() < .35) continue; y = Math.max(5, Math.min(80, y + (r() - .5) * 30)); n.push({ x: s * w, y, w: w * .9 }); } }
+      return n;
+    };
+    const T = [
+      ['Drums', 'Drum Machine', '#e8705f', 'drum', '−6.0', [[0, 4, 'Beat A'], [4, 4, 'Beat A'], [8, 8, 'Beat B']]],
+      ['Bass', 'Poly Synth · Round Sub', '#5aa2f5', 'ai', '−8.0', [], 1],
+      ['Keys', 'Electric Piano', '#e3b24f', 'chord', '−7.0', [[0, 4, 'Chords'], [4, 4, 'Chords'], [8, 8, 'Chords']]],
+      ['Pad', 'Poly Synth', '#9a82ec', 'pad', '−12.0', [[8, 8, 'Pad']]],
+      ['Lead', 'Poly Synth', '#4fc3a1', 'lead', '−9.5', [[8, 8, 'Hook']]],
+      ['Reverb', 'Bus', '#8a93a3', 'bus', '0.0', []],
+    ];
+    const tracks = T.map(([name, dev, c, kind, vol, cl, ai], i) => ({
+      n: i + 1, name, dev, c, vol, ai: !!ai,
+      hdr: ai ? '#18202c' : '#15161a', rowBg: ai ? 'rgba(76,156,245,.04)' : 'transparent', ring: ai ? 'inset 0 0 0 1px #2c4a73' : 'none',
+      clips: cl.map(([s, l, name]) => ({ l: s / BARS * 100, w: l / BARS * 100, name, fill: c + '26', bd: 'none', tc: c, notes: gen(kind, l) })),
+    }));
+    const root = [72, 60, 66, 54], aiNotes = [];
+    for (let s = 0; s < 18; s++) { const b = Math.floor(s / 4) % 4; aiNotes.push({ x: s / 32 * 100, y: root[b] - (s % 4 === 2 ? 14 : 0), w: 100 / 32 * .8 }); }
+    const step = (state, t, d) => {
+      const m = { done: ['✓', '#1d3a2b', '#4fc38a', 'none', '#e8e9ec'], run: ['', 'transparent', '#4c9cf5', 'inset 0 0 0 2px #4c9cf5', '#e8e9ec'], wait: ['', 'transparent', '#80848c', 'inset 0 0 0 1.5px #363940', '#80848c'] }[state];
+      return { i: m[0], ib: m[1], ic: m[2], ir: m[3], fg: m[4], t, d, prog: state === 'run', bg: state === 'run' ? '#131c28' : 'transparent' };
+    };
+    const runSteps = [step('done', 'Read the arrangement: 7 tracks, Verse is bars 5–12', '0.4 s'), step('done', 'Created track Bass with Poly Synth', '0.2 s'), step('done', 'Loaded preset “Round Sub”', '0.1 s'), step('run', 'Writing notes in the Verse · 18 of 32', ''), step('wait', 'Set level and low cut', '')];
+    const ds = (ok, t, err) => ({ i: ok ? '✓' : '✗', ic: ok ? '#4fc38a' : '#f0524f', fg: ok ? '#c4c7cd' : '#e8e9ec', t, err: !!err, bg: err ? '#2a1718' : 'transparent' });
+    const doneSteps = [ds(1, 'Read the arrangement'), ds(1, 'Created track Bass with Poly Synth'), ds(1, 'Wrote 32 notes in the Verse'), ds(1, 'Set volume −8 dB, low cut 30 Hz'), ds(0, 'Sidechain Bass to Drums', 1)];
+    const diff = [['+', '#4fc38a', 'Track 2 · Bass (Poly Synth, Round Sub)'], ['+', '#4fc38a', 'Clip “Bass · verse”, 5.1 – 13.1, 32 notes'], ['~', '#f2a944', 'Bass volume 0.0 → −8.0 dB'], ['~', '#f2a944', 'Bass EQ: low cut 30 Hz']].map(([s, c, t]) => ({ s, c, t }));
+    const toggles = [['Preview before applying', 0, 'Show the change card first; nothing is written until you press Apply.'], ['Suggest next steps', 1, 'Chips based on the current selection after each answer.'], ['Show thinking', 0, 'Expand the model’s reasoning by default.']].map(([n, on, d]) => ({ n, d, bg: on ? '#4c9cf5' : '#363940', x: on ? 14 : 2 }));
+    const ux = [
+      { h: 'What changed and why', items: [
+        'The AI is shown working in the project, not only in the panel: the target track gets an accent outline and an "AI · new" badge, the clip being written is dashed with its own write cursor, and the transport shows a "Producer working · Esc to stop" pill.',
+        'Tool calls are rewritten as plain-language steps with a state icon (✓ done, ring = running with progress, gray = queued) and a duration. The raw tool name and arguments sit under "Details" for power users.',
+        'Errors are steps, not red log lines: the failed step expands with the reason in plain words and one recovery action ("Try with Gain / Utility").',
+        'The result card is the main object: a diff list (+ added, ~ changed, − removed) with Show links that select and scroll to each change, a Before/After audition toggle, and Keep / Undo as the two largest buttons. Keep only closes the card; the change is already one undo step either way.',
+        'Cost is never hidden: a live "so far" while running, a per-request footer (time, tokens, $) after, the session total in the header, and the budget bar in settings.',
+        'Suggestions come from the current selection ("Next, for Bass · verse") and are outlined pills, so they read as offers rather than buttons.',
+      ]},
+      { h: 'Interaction', items: [
+        'Enter sends, Shift+Enter adds a new line, @ mentions a track or clip (autocomplete), ↑ in an empty composer recalls the last prompt. Typing during a run queues the next request.',
+        'Esc or Stop cancels: steps already done stay as one undo step labelled "AI: add a bass (stopped)", and the card says what was kept.',
+        'Clicking a track chip in the answer selects it in the arrange. Hovering a diff row highlights that object in the arrange.',
+        'Ctrl+Z after an AI request undoes the whole request. History shows it as a single badged step.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'No API key: the panel shows a short setup card (provider, key, Test) and two example prompts; the composer is disabled until the test passes.',
+        'Budget reached: the composer shows "Session budget reached ($5.00)" with "Raise budget" and the Send button disabled. At 80 % a quiet amber note appears in the footer.',
+        'Network or provider error: an inline card with the error in plain words, "Retry" and "Switch model". Nothing is written to the project.',
+        'First open: three starter prompts built from the project ("Write a chorus for this verse", "Mix the project", "Add drums").',
+      ]},
+    ];
+    this._v = { bars: Array.from({ length: BARS }, (_, i) => ({ n: i + 1, l: i / BARS * 100 })), markers: [{ n: 'Intro', l: 0 }, { n: 'Verse', l: 25 }, { n: 'Chorus', l: 50 }], tracks, aiNotes, runSteps, doneSteps, diff, toggles, ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

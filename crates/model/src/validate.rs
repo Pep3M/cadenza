@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use cadenza_core::{
-	ClipId, DeviceId, ParamAddress, ParamTarget, TempoMap, Tick, TimeSignature, TrackId,
+	ClipId, DeviceId, LinkId, ParamAddress, ParamTarget, TempoMap, Tick, TimeSignature, TrackId,
 };
 
 use crate::error::ModelError;
@@ -211,7 +211,16 @@ pub(crate) fn device(device: &Device) -> Result<(), ModelError> {
 			"only the built-in sampler and drum_sampler play sample zones",
 		));
 	}
-	crate::sample::validate_zones(&device.zones)
+	crate::sample::validate_zones(&device.zones)?;
+	if !device.modulators.is_empty() && device.is_plugin() {
+		return Err(ModelError::invalid(
+			format!("modulators of device {}", device.id),
+			format!("{} modulators", device.modulators.len()),
+			"only built-in devices can be modulated; automate plugin parameters instead",
+		));
+	}
+	// A sidechain removed later leaves an envelope follower silent, not the project invalid.
+	crate::modulation::validate_modulators(device.id, &device.modulators, true)
 }
 
 /// Explicit parameter values of device `id`.
@@ -239,18 +248,59 @@ pub(crate) fn params(
 	Ok(())
 }
 
-pub(crate) fn note(clip: &Clip, note: &Note) -> Result<(), ModelError> {
+/// Checks a note against `span`: the clip's length, or for linked clips the longest
+/// linked copy (the content is shared, a shorter copy just stops earlier).
+pub(crate) fn note_within(clip: ClipId, span: Tick, note: &Note) -> Result<(), ModelError> {
 	pitch(note.pitch)?;
 	velocity(note.velocity)?;
 	length("note", note.length)?;
 	start("note", note.start)?;
-	if note.start >= clip.length {
+	if note.start >= span {
 		return Err(ModelError::NoteOutsideClip {
-			clip: clip.id,
+			clip,
 			note: note.id,
 			start: note.start.0,
-			clip_length: clip.length.0,
+			clip_length: span.0,
 		});
+	}
+	Ok(())
+}
+
+/// The span notes of `clip` must start in: its length, or the longest linked copy.
+pub(crate) fn content_span(project: &Project, clip: &Clip) -> Tick {
+	match clip.link {
+		Some(link) => project.link_span(link).max(clip.length),
+		None => clip.length,
+	}
+}
+
+/// Checks that `clip` may join `link`: it is MIDI and holds exactly the content of the
+/// clips already in the group (`except` = its own id, ignored in the group).
+pub(crate) fn link_member(
+	project: &Project,
+	clip: &Clip,
+	link: LinkId,
+	except: ClipId,
+) -> Result<(), ModelError> {
+	if !clip.is_midi() {
+		return Err(ModelError::invalid(
+			"clip link",
+			clip.name.clone(),
+			"only MIDI clips can be linked; audio clips are always independent",
+		));
+	}
+	if let Some(other) = project.linked_clips(link).find(|c| c.id != except)
+		&& !other.same_midi_content(clip)
+	{
+		return Err(ModelError::invalid(
+			"clip link",
+			clip.name.clone(),
+			format!(
+				"linked clips share their notes and controller lanes, but this clip's content \
+				 differs from linked clip {} ('{}'); copy that clip's content or leave link unset",
+				other.id, other.name
+			),
+		));
 	}
 	Ok(())
 }
@@ -303,6 +353,11 @@ pub(crate) fn track_input(
 }
 
 pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
+	clip_within(clip, clip.length)
+}
+
+/// [`clip`] with notes checked against `span` (see [`content_span`]).
+pub(crate) fn clip_within(clip: &Clip, span: Tick) -> Result<(), ModelError> {
 	start("clip", clip.start)?;
 	length("clip", clip.length)?;
 	if let Some(t) = &clip.take {
@@ -318,7 +373,7 @@ pub(crate) fn clip(clip: &Clip) -> Result<(), ModelError> {
 						note: n.id,
 					});
 				}
-				note(clip, n)?;
+				note_within(clip.id, span, n)?;
 			}
 			for (i, lane) in controllers.iter().enumerate() {
 				controller_points(lane.controller, &lane.points)?;
@@ -767,7 +822,29 @@ pub(crate) fn track(project: &Project, track: &Track) -> Result<(), ModelError> 
 	}
 	for c in &track.clips {
 		clip_on_track(track, c)?;
-		self::clip(c)?;
+		// Shared content may reach past a linked copy (another copy plays it, or did
+		// before it was removed); commands bound it by the longest copy.
+		let span = if c.link.is_some() {
+			Tick(i64::MAX)
+		} else {
+			c.length
+		};
+		clip_within(c, span)?;
+		if let Some(link) = c.link {
+			link_member(project, c, link, c.id)?;
+			if let Some(other) = track
+				.clips
+				.iter()
+				.find(|o| o.link == Some(link) && o.id != c.id)
+				&& !other.same_midi_content(c)
+			{
+				return Err(ModelError::invalid(
+					"clip link",
+					c.name.clone(),
+					"linked clips must hold the same notes and controller lanes",
+				));
+			}
+		}
 	}
 	channel_values(&track.channel)?;
 	for target in targets(&track.channel) {
@@ -995,6 +1072,7 @@ pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 			));
 		}
 	}
+	crate::midi_map::validate_loaded(project)?;
 	for d in &project.master.inserts {
 		device_links(project, None, d, false)?;
 	}

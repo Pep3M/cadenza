@@ -120,6 +120,9 @@ pub struct DeviceSummary {
 	/// Sample zones (sampler / drum_sampler), by index.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub zones: Vec<ZoneSummary>,
+	/// Modulators in order ("LFO sine 1/8 -> cutoff +0.30"); `set_modulators` replaces them.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub modulators: Vec<String>,
 }
 
 /// One sample zone, compactly: `keys` is a note ("C1 (36)") for drum pads, a range
@@ -168,6 +171,13 @@ pub struct ClipSummary {
 	/// One of several alternative takes of a region; only the active take plays.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub take: Option<Take>,
+	/// The clip is muted: it stays on the track but is not heard.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub muted: bool,
+	/// Linked copies (same notes and controllers; editing one edits all): the ids of the
+	/// other clips sharing this clip's content. Absent = an independent clip.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub link: Option<Vec<ClipId>>,
 	/// MIDI controller lanes, e.g. "cc1 (12 events, 0.00..1.00)", "pitch_bend (8 events,
 	/// -1.00..0.50)".
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -262,7 +272,7 @@ impl Project {
 					pre_fader: s.pre_fader,
 				})
 				.collect(),
-			clips: track.clips.iter().map(clip_summary).collect(),
+			clips: track.clips.iter().map(|c| clip_summary(self, c)).collect(),
 			automation: self.automation_addresses(Some(track.id)),
 			input: track.input,
 			folder: track.folder,
@@ -297,6 +307,7 @@ fn device_summary(device: &Device) -> DeviceSummary {
 		sidechain: device.sidechain,
 		aux_outputs: device.aux_outputs.clone(),
 		zones: zone_summaries(&device.zones),
+		modulators: device.modulators.iter().map(|m| m.describe()).collect(),
 	}
 }
 
@@ -360,7 +371,7 @@ fn zone_summary(index: usize, z: &SampleZone) -> ZoneSummary {
 	}
 }
 
-fn clip_summary(clip: &Clip) -> ClipSummary {
+fn clip_summary(project: &crate::Project, clip: &Clip) -> ClipSummary {
 	let (kind, note_count, pitch_range, file) = match &clip.content {
 		ClipContent::Midi { notes, .. } => {
 			let low = notes.iter().map(|n| n.pitch).min();
@@ -400,6 +411,14 @@ fn clip_summary(clip: &Clip) -> ClipSummary {
 		file,
 		fades,
 		take: clip.take,
+		muted: clip.muted,
+		link: clip.link.map(|l| {
+			project
+				.linked_clips(l)
+				.filter(|c| c.id != clip.id)
+				.map(|c| c.id)
+				.collect()
+		}),
 		controllers: clip
 			.controllers()
 			.iter()

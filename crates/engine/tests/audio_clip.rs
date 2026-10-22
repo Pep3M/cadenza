@@ -248,3 +248,28 @@ fn only_the_active_take_of_a_group_plays() {
 		peak(&out.left[..24_000])
 	);
 }
+
+#[test]
+fn muted_clips_are_silent() {
+	let loud = write_sine_wav(
+		"muted-loud.wav",
+		48_000,
+		1,
+		(SampleFormat::Float, 32),
+		220.0,
+		0.8,
+		1.0,
+	);
+	let mut t = Track::new("audio", TrackKind::Audio);
+	let mut c = Clip::audio("muted", beats(0.0), beats(1.0), &loud);
+	c.muted = true;
+	t.clips.push(c);
+	let mut synth = synth_track("keys", &[(60, 0.0, 1.0)], 1.0);
+	synth.clips[0].muted = true;
+	let out = render_offline(&project(vec![t, synth]), &opts(1.0)).unwrap();
+	assert!(
+		peak(&out.left) < 1e-6,
+		"muted clips sound: {}",
+		peak(&out.left)
+	);
+}

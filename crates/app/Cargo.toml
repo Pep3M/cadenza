@@ -29,6 +29,7 @@ cadenza-theory.workspace = true
 cadenza-agent.workspace = true
 cadenza-library.workspace = true
 cadenza-analysis.workspace = true
+realfft.workspace = true
 eframe.workspace = true
 egui.workspace = true
 rfd.workspace = true
@@ -37,12 +38,18 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 keyring.workspace = true
+sys-locale.workspace = true
+skrifa.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
 
 [build-dependencies]
 winresource.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 tempfile.workspace = true
-skrifa.workspace = true
 hound.workspace = true

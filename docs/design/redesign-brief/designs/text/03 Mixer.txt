@@ -1,0 +1,14 @@
+Maximized with F11. Shows a folder VCA, a frozen track, an armed audio track, buses, the master, an insert being reordered and the output routing menu open.
+Row labels live once in a left gutter (Input, Inserts, Sends, Output, Pan, plus the dB scale), so strips don’t repeat "INSERTS / SENDS" and every pixel inside a strip is content.
+Strips are 124 px (76 px in Narrow). Insert names fit in full ("Parametric EQ"), with a status dot: green active, gray + strikethrough bypassed, ice blue frozen, red ⚠ crashed.
+Sends are horizontal mini-faders with name, value and an amber PRE tag. Drag to set the level, click the name to open the target bus.
+Real pan knob with an L/R readout and a long fader (about 580 px at 1080p) with dB ticks. The meter is a dim peak bar with a bright RMS core and a 1 px peak hold; the numeric peak sits under it and turns amber above −3 dB.
+Strip types read differently: tracks have a color bar and arm button; buses are cooler gray, sit after a BUSES divider and have no arm; folder strips are outlined VCA strips with only a fader and M/S; the master is accent-tinted, wider, with LUFS M/S/I, true peak, Mono and Dim.
+The selected strip gets an accent outline and a brighter fader cap. Armed strips get a red outline so you can find them while recording.
+Inserts: hover shows bypass ⏻ and remove ✕. Drag to reorder (blue insertion line plus a ghost slot), Alt+drag copies to another strip, double-click opens the plugin window. Drag a device from the browser onto a slot to insert it there.
+Output and sidechain routing share one menu: outputs on top, sidechain targets below, then "New bus from this track", which creates a bus and routes to it in one undo step.
+Fader: drag, Shift fine, double-click to type, Ctrl+click 0 dB. Click a meter to reset its peak hold; Reset peaks on the master clears all.
+Selecting a strip selects its track in the arrange and the inspector, and the other way round. Arrow keys move between strips when the mixer has focus.
+Plugin crash: the slot turns red with ⚠, audio passes through, and a toast offers Reload or Bypass. The slot keeps the ⚠ until you resolve it.
+Frozen track: inserts are grayed with ice dots and can’t be edited; the fader, pan, sends and M/S still work. Clicking an insert offers "Unfreeze to edit".
+No buses: the BUSES divider is replaced by a "+ Bus" ghost strip.

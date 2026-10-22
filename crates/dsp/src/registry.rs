@@ -30,6 +30,12 @@ pub fn device_info(id: &str) -> Option<&'static DeviceInfo> {
 	REGISTRY.iter().copied().find(|d| d.id == id)
 }
 
+/// Whether changing this built-in param changes the device's `latency()`: hosts
+/// must recompile (PDC) instead of sending the value live.
+pub fn param_changes_latency(device: &str, param: &str) -> bool {
+	matches!((device, param), ("limiter", "oversample"))
+}
+
 /// Instantiates a built-in device by id. Call `prepare` before `process`.
 pub fn create(id: &str) -> Option<Box<dyn Processor>> {
 	Some(match id {

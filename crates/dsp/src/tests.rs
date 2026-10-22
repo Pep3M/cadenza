@@ -471,3 +471,203 @@ fn pitch_bend_and_mod_wheel_move_the_pitch() {
 		);
 	}
 }
+
+#[test]
+fn instruments_publish_held_keys_and_voices() {
+	use crate::instruments::voice_readings::{HeldNotes, decode_voices};
+	use crate::readings::MAX;
+	for id in ["poly_synth", "electric_piano", "sampler", "drum_sampler"] {
+		let drum = id == "drum_sampler";
+		let note = if drum { 38 } else { 60 };
+		let mut p = prepared(id, SR, 256);
+		let mut out = [0.0; MAX];
+		let on = [MidiEvent::NoteOn {
+			offset: 0,
+			pitch: note,
+			velocity: 0.9,
+		}];
+		// 0.1 s held.
+		render(p.as_mut(), 4800, 256, &on);
+		let n = p.readings(&mut out);
+		assert_eq!(n, crate::readings::VOICES_END, "{id}");
+		let held = HeldNotes::decode(&out[..n]);
+		assert_eq!(held.iter().collect::<Vec<_>>(), vec![note], "{id}");
+		let voices: Vec<_> = decode_voices(&out[..n]).collect();
+		assert_eq!(voices.len(), 1, "{id}: {voices:?}");
+		let v = voices[0];
+		assert_eq!(v.note, note, "{id}");
+		assert!(!v.released, "{id}");
+		assert!((v.elapsed_ms - 100.0).abs() < 1.0, "{id}: {}", v.elapsed_ms);
+		assert!(v.level > 0.0, "{id}");
+		if id == "sampler" {
+			// Root A3 played at C4: the file runs 3 semitones fast.
+			let expected = 0.1 * 2.0_f32.powf(3.0 / 12.0);
+			assert_eq!(v.zone, Some(0));
+			assert!((v.position.unwrap() - expected).abs() < 0.002, "{v:?}");
+		} else if drum {
+			assert_eq!(v.zone, Some(usize::from(note)));
+			assert!((v.position.unwrap() - 0.1).abs() < 0.002, "{v:?}");
+		} else {
+			assert_eq!((v.zone, v.position), (None, None), "{id}");
+		}
+		// Key up, 20 ms later.
+		let off = [MidiEvent::NoteOff {
+			offset: 0,
+			pitch: note,
+		}];
+		render(p.as_mut(), 960, 256, &off);
+		let n = p.readings(&mut out);
+		assert!(!HeldNotes::decode(&out[..n]).any(), "{id}");
+		let v = decode_voices(&out[..n]).next().expect(id);
+		if drum {
+			// One-shot pads ignore the key: still counting from the hit.
+			assert!(!v.released && v.elapsed_ms > 115.0, "{v:?}");
+		} else {
+			assert!(v.released, "{id}");
+			assert!((v.elapsed_ms - 20.0).abs() < 1.0, "{id}: {}", v.elapsed_ms);
+		}
+		p.reset();
+		assert_eq!(decode_voices(&out[..0]).count(), 0);
+	}
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+/// FNV-1a over the output bits of `id` with `settings` on deterministic noise bursts:
+/// a fingerprint of the exact sound, so new params appended at their defaults can be
+/// proven to leave existing projects bit-identical.
+fn fingerprint(id: &str, settings: &[(&str, f32)]) -> u64 {
+	let mut p = create(id).unwrap();
+	p.prepare(SR, 256);
+	let info = p.info();
+	for &(param, v) in settings {
+		p.set_param(info.param_index(param).unwrap(), v);
+	}
+	p.reset();
+	let mut rng = Rng::new(11);
+	let n = 96_000;
+	let mut l: Vec<f32> = (0..n)
+		.map(|i| {
+			let burst = if (i / 6_000) % 3 == 0 { 1.2 } else { 0.0 };
+			let tone = (i as f32 * 0.071).sin() * 0.6;
+			(tone + rng.bipolar() * 0.4) * burst
+		})
+		.collect();
+	let mut r: Vec<f32> = l.iter().map(|x| x * -0.7).collect();
+	let transport = Transport::default();
+	for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+		p.process(a, b, &[], &transport);
+	}
+	let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+	for x in l.iter().chain(&r) {
+		for byte in x.to_bits().to_le_bytes() {
+			h = (h ^ byte as u64).wrapping_mul(0x0100_0000_01b3);
+		}
+	}
+	h
+}
+
+// Exact float bits depend on the platform's libm (sin/exp/pow), so the hashes are
+// pinned on the CI's Linux x86_64 only.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn new_params_at_their_defaults_keep_the_sound_bit_identical() {
+	// Hashes recorded with the code before these params existed (T34: reverb duck,
+	// delay taps, limiter oversample).
+	type Case<'a> = (&'a str, &'a [(&'a str, f32)], u64);
+	let cases: [Case; 4] = [
+		(
+			"reverb",
+			&[("mix", 60.0), ("decay", 1.2)],
+			0x39e4_4e97_710f_878f,
+		),
+		(
+			"delay",
+			&[
+				("sync", 0.0),
+				("time", 90.0),
+				("feedback", 45.0),
+				("mix", 50.0),
+			],
+			0xa65e_8d0f_aa63_285b,
+		),
+		(
+			"delay",
+			&[("ping_pong", 1.0), ("mix", 70.0)],
+			0xbbe8_8e57_b1af_56cf,
+		),
+		(
+			"limiter",
+			&[("input_gain", 9.0), ("ceiling", -2.0)],
+			0x09f5_ce3f_19f7_529b,
+		),
+	];
+	let got: Vec<u64> = cases.iter().map(|(id, s, _)| fingerprint(id, s)).collect();
+	for ((id, settings, want), got) in cases.iter().zip(got) {
+		assert_eq!(got, *want, "{id} {settings:?}: {got:#x}");
+	}
+}
+
+/// [`fingerprint`] for an instrument: a chord, a high note and releases.
+fn note_fingerprint(id: &str, settings: &[(&str, f32)]) -> u64 {
+	let mut p = create(id).unwrap();
+	p.prepare(SR, 256);
+	let info = p.info();
+	for &(param, v) in settings {
+		p.set_param(info.param_index(param).unwrap(), v);
+	}
+	p.reset();
+	let transport = Transport::default();
+	let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+	for block in 0..300usize {
+		let events: Vec<MidiEvent> = match block {
+			0 => [48u8, 55, 64, 96]
+				.iter()
+				.map(|&pitch| MidiEvent::NoteOn {
+					offset: 17,
+					pitch,
+					velocity: 0.8,
+				})
+				.collect(),
+			150 => [48u8, 55, 64, 96]
+				.iter()
+				.map(|&pitch| MidiEvent::NoteOff { offset: 5, pitch })
+				.collect(),
+			_ => Vec::new(),
+		};
+		let mut l = [0.0f32; 256];
+		let mut r = [0.0f32; 256];
+		p.process(&mut l, &mut r, &events, &transport);
+		for x in l.iter().chain(&r) {
+			for byte in x.to_bits().to_le_bytes() {
+				h = (h ^ byte as u64).wrapping_mul(0x0100_0000_01b3);
+			}
+		}
+	}
+	h
+}
+
+#[test]
+fn wavetable_params_leave_the_classic_waves_bit_identical() {
+	// The table and position params must not touch an oscillator that is not
+	// on Wavetable. Compared on the same machine: hashes pinned on one machine
+	// do not survive another libm (the CI's glibc differs from a dev box's).
+	let cases: [&[(&str, f32)]; 3] = [
+		&[],
+		&[("unison", 3.0), ("osc2_wave", 2.0), ("osc1_wave", 0.0)],
+		&[("osc1_wave", 3.0), ("noise", 20.0), ("filter_slope", 0.0)],
+	];
+	let moved = [
+		("osc1_table", 3.0),
+		("osc1_position", 0.7),
+		("osc2_table", 2.0),
+		("osc2_position", 0.4),
+	];
+	for settings in cases {
+		let with_moved: Vec<(&str, f32)> = settings.iter().copied().chain(moved).collect();
+		assert_eq!(
+			note_fingerprint("poly_synth", settings),
+			note_fingerprint("poly_synth", &with_moved),
+			"{settings:?}"
+		);
+	}
+}

@@ -9,6 +9,7 @@
 //! `.cadenza/session.lock` (or `session.lock` in the untitled folder) holds the pid of the
 //! app editing the project; it is removed when the project is closed normally.
 
+use crate::i18n::{tr, trf, trn};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -151,7 +152,7 @@ pub fn autosaves(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
 		.flatten()
 		.filter(|e| {
 			let n = e.file_name().to_string_lossy().into_owned();
-			n.starts_with(AUTOSAVE_PREFIX) && n.ends_with(".json")
+			n.starts_with(AUTOSAVE_PREFIX) && n.ends_with(cadenza_model::files::PROJECT_SUFFIX)
 		})
 		.filter_map(|e| {
 			let modified = e.metadata().ok()?.modified().ok()?;
@@ -173,7 +174,7 @@ pub fn write_autosave(
 	let millis = now
 		.duration_since(SystemTime::UNIX_EPOCH)
 		.map_or(0, |d| d.as_millis());
-	let path = dir.join(format!("{AUTOSAVE_PREFIX}{millis:015}.cadenza.json"));
+	let path = dir.join(format!("{AUTOSAVE_PREFIX}{millis:015}.cdz"));
 	project
 		.save_json_absolute(&path)
 		.map_err(|e| e.to_string())?;
@@ -283,11 +284,11 @@ pub fn push_recent(recent: &mut Vec<PathBuf>, path: &Path) {
 pub fn age(modified: SystemTime, now: SystemTime) -> String {
 	let secs = now.duration_since(modified).map_or(0, |d| d.as_secs());
 	match secs {
-		0..60 => "just now".into(),
-		60..3600 => format!("{} min ago", secs / 60),
-		3600..86_400 => format!("{} h ago", secs / 3600),
-		86_400..172_800 => "yesterday".into(),
-		_ => format!("{} days ago", secs / 86_400),
+		0..60 => tr("just now").into(),
+		60..3600 => trf("{n} min ago", &[("n", &(secs / 60))]),
+		3600..86_400 => trf("{n} h ago", &[("n", &(secs / 3600))]),
+		86_400..172_800 => tr("yesterday").into(),
+		_ => trn("{n} day ago", "{n} days ago", secs / 86_400),
 	}
 }
 
@@ -325,7 +326,7 @@ mod tests {
 	#[test]
 	fn autosaves_rotate_and_recovery_needs_a_newer_autosave() {
 		let tmp = tempfile::tempdir().unwrap();
-		let file = tmp.path().join("Song").join("Song.cadenza.json");
+		let file = tmp.path().join("Song").join("Song.cdz");
 		let mut p = Project::new("Song");
 		p.save_json(&file).unwrap();
 		let base = SystemTime::now() - Duration::from_secs(3600);
@@ -388,19 +389,13 @@ mod tests {
 	fn recent_projects_are_deduplicated_and_bounded() {
 		let mut recent = Vec::new();
 		for i in 0..12 {
-			push_recent(&mut recent, Path::new(&format!("/p/{i}.cadenza.json")));
+			push_recent(&mut recent, Path::new(&format!("/p/{i}.cdz")));
 		}
-		push_recent(&mut recent, Path::new("/p/5.cadenza.json"));
+		push_recent(&mut recent, Path::new("/p/5.cdz"));
 		assert_eq!(recent.len(), RECENT_MAX);
 		// Made absolute (on Windows that adds the current drive).
-		assert_eq!(recent[0], std::path::absolute("/p/5.cadenza.json").unwrap());
-		assert_eq!(
-			recent
-				.iter()
-				.filter(|p| p.ends_with("5.cadenza.json"))
-				.count(),
-			1
-		);
+		assert_eq!(recent[0], std::path::absolute("/p/5.cdz").unwrap());
+		assert_eq!(recent.iter().filter(|p| p.ends_with("5.cdz")).count(), 1);
 		let now = SystemTime::now();
 		assert_eq!(age(now - Duration::from_secs(150), now), "2 min ago");
 	}

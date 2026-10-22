@@ -10,6 +10,7 @@ pub mod instruments;
 mod presets;
 mod processor;
 mod registry;
+pub mod response;
 pub mod sample;
 pub mod util;
 
@@ -24,9 +25,10 @@ pub mod factory_samples {
 	};
 }
 pub use processor::{
-	DeviceInfo, DeviceRole, MidiEvent, ParamInfo, PresetInfo, Processor, Transport, cc,
+	DeviceInfo, DeviceRole, Listen, MidiEvent, ParamInfo, PresetInfo, Processor, Transport, cc,
+	readings,
 };
-pub use registry::{create, device_info, registry};
+pub use registry::{create, device_info, param_changes_latency, registry};
 pub use sample::{LoopMode, SampleBuffer, SampleData, Zone, uses_samples};
 
 #[cfg(test)]

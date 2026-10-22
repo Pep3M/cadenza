@@ -548,3 +548,63 @@ async fn an_engineer_pass_mixes_as_one_undo_step() {
 	assert!(message.contains("target_lufs -13.0"), "{message}");
 	assert!(message.contains("Reference track:"), "{message}");
 }
+
+#[tokio::test]
+async fn an_explain_request_is_read_only_and_leaves_no_undo_step() {
+	let server = MockServer::start(|_, index| match index {
+		0 => streamed(
+			None,
+			None,
+			&[
+				("c1", "get_project", "{}"),
+				("c2", "create_track", r#"{"name":"Sneaky","kind":"audio"}"#),
+			],
+			"tool_calls",
+			usage(2000, 40, 0, 0.001),
+		),
+		_ => streamed(
+			None,
+			Some("The compressor evens out the keys; try a slower attack."),
+			&[],
+			"stop",
+			usage(2100, 30, 1900, 0.001),
+		),
+	})
+	.await;
+	let mut f = fixture(&server, |_| {});
+	let before = f.session.lock().unwrap().document().project().clone();
+	let request = cadenza_agent::prompt::explain_request("Compressor \"Comp\" on track \"Keys\"");
+	let outcome = f
+		.agent
+		.run_explain(
+			&request,
+			&context(&f),
+			&Recorder::default(),
+			&CancelToken::new(),
+		)
+		.await
+		.unwrap();
+	assert_eq!(outcome.status, RequestStatus::Completed);
+	assert!(!outcome.edited);
+	assert!(outcome.final_message.unwrap().contains("slower attack"));
+	{
+		let session = f.session.lock().unwrap();
+		let doc = session.document();
+		assert!(doc.history_labels().is_empty(), "no undo step");
+		assert_eq!(doc.project(), &before, "nothing changed");
+	}
+	// The editing call was refused with an actionable message; the read went through.
+	let second = &server.requests()[1];
+	let results: Vec<&serde_json::Value> = second.body["messages"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.filter(|m| m["role"] == "tool")
+		.collect();
+	assert_eq!(results.len(), 2);
+	let refused = results[1]["content"].to_string();
+	assert!(refused.contains("read-only explain request"), "{refused}");
+	assert!(cadenza_agent::EXPLAIN_TOOLS.contains(&"get_device_info"));
+	let message = first_user_text(&server.requests()[0]);
+	assert!(message.contains("Explain this device"), "{message}");
+}

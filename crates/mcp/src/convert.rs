@@ -379,6 +379,7 @@ pub fn build_device(
 		sidechain: None,
 		aux_outputs: Vec::new(),
 		zones,
+		modulators: Vec::new(),
 	})
 }
 

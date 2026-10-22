@@ -12,6 +12,7 @@
 //! copy of the track (FL Studio overdub: you hear what you just played on the next pass)
 //! without touching the document until the stop.
 
+use crate::i18n::{tr, trf};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -62,7 +63,7 @@ impl InputQuantize {
 
 	pub fn name(self) -> &'static str {
 		match self {
-			Self::Off => "Off",
+			Self::Off => tr("Off"),
 			Self::Quarter => "1/4",
 			Self::Eighth => "1/8",
 			Self::Sixteenth => "1/16",
@@ -214,14 +215,15 @@ impl AppState {
 	pub fn toggle_arm(&mut self, track: TrackId) {
 		if self.is_recording() {
 			self.notices
-				.info("Stop recording before arming or disarming tracks");
+				.info(tr("Stop recording before arming or disarming tracks"));
 			return;
 		}
 		let Some(t) = self.project().track(track) else {
 			return;
 		};
 		if !matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
-			self.notices.info("Only audio and instrument tracks record");
+			self.notices
+				.info(tr("Only audio and instrument tracks record"));
 			return;
 		}
 		let mut armed = self.project().armed.clone();
@@ -280,7 +282,7 @@ impl AppState {
 	pub fn cycle_monitor(&mut self, track: TrackId) {
 		let Some(input) = self.project().track(track).and_then(|t| t.input) else {
 			self.notices
-				.info("Choose an input for the track first (its In button)");
+				.info(tr("Choose an input for the track first (its In button)"));
 			return;
 		};
 		let monitor = match input.monitor {
@@ -295,7 +297,7 @@ impl AppState {
 	pub fn toggle_monitor(&mut self, track: TrackId) {
 		let Some(input) = self.project().track(track).and_then(|t| t.input) else {
 			self.notices
-				.info("Choose an input for the track first (its In button)");
+				.info(tr("Choose an input for the track first (its In button)"));
 			return;
 		};
 		let mode = if input.monitor == MonitorMode::Off {
@@ -379,10 +381,10 @@ impl AppState {
 			})
 			.collect();
 		if tracks.is_empty() {
-			return Err(
-				"Arm a track to record (the ● button on an audio or instrument track header)"
-					.into(),
-			);
+			return Err(tr(
+				"Arm a track to record (the ● button on an audio or instrument track header)",
+			)
+			.into());
 		}
 		let (config, _) = self.transport_config();
 		let pos = self.position();
@@ -446,8 +448,9 @@ impl AppState {
 			}
 		};
 		if self.audio.is_none() || self.clock.is_none() {
-			self.notices
-				.warn("No audio device: recording is unavailable (see the audio settings)");
+			self.notices.warn(tr(
+				"No audio device: recording is unavailable (see the audio settings)",
+			));
 			return;
 		}
 		if self.reload_since.is_some() {
@@ -505,7 +508,7 @@ impl AppState {
 			pattern_clip: self.record.pattern.take(),
 		};
 		let Some(cmd) = record_commands(self.project(), rec, &options) else {
-			self.notices.info("Nothing was recorded");
+			self.notices.info(tr("Nothing was recorded"));
 			// The player may still play merged passes: give it the project back.
 			self.schedule_reload();
 			return false;
@@ -514,9 +517,12 @@ impl AppState {
 		if ok {
 			let takes = rec.passes.len().max(1);
 			self.notices.info(if takes > 1 {
-				format!("Recorded {takes} takes — one undo step (Ctrl+Z)")
+				trf(
+					"Recorded {takes} takes — one undo step (Ctrl+Z)",
+					&[("takes", &takes)],
+				)
 			} else {
-				"Recorded — one undo step (Ctrl+Z)".to_owned()
+				tr("Recorded — one undo step (Ctrl+Z)").to_owned()
 			});
 		}
 		// Merged MIDI passes were only in the player.
@@ -535,7 +541,7 @@ impl AppState {
 			RecordEvent::Failed(e) => {
 				self.record.phase = Phase::Idle;
 				self.play_intent = false;
-				self.notices.error(format!("Recording: {e}"));
+				self.notices.error(trf("Recording: {e}", &[("e", &e)]));
 			}
 			RecordEvent::Done(rec) => {
 				self.finish_recording(&rec);
@@ -576,7 +582,7 @@ impl AppState {
 	pub fn apply_audio_settings(&mut self, prefs: AudioPrefs) {
 		if self.is_recording() {
 			self.notices
-				.info("Stop recording before changing the audio settings");
+				.info(tr("Stop recording before changing the audio settings"));
 			return;
 		}
 		let old = std::mem::replace(&mut self.record.audio, prefs);
@@ -760,10 +766,10 @@ impl AppState {
 		}
 		let s = &self.record.settings;
 		let click = match (s.metronome.on_record, s.metronome.on_play) {
-			(true, true) => "metronome always on",
-			(true, false) => "metronome on while recording",
-			(false, true) => "metronome on while playing",
-			(false, false) => "metronome off",
+			(true, true) => tr("metronome always on"),
+			(true, false) => tr("metronome on while recording"),
+			(false, true) => tr("metronome on while playing"),
+			(false, false) => tr("metronome off"),
 		};
 		Some(format!(
 			"armed: {}; {click}; count-in {} bar(s){}{}",

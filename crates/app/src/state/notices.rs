@@ -81,9 +81,64 @@ impl Notices {
 	}
 }
 
+/// `text` with every absolute path shortened to its file name: notices name files, the
+/// full path stays available on hover.
+pub fn short_paths(text: &str) -> String {
+	let sep = |c: char| c == '/' || c == '\\';
+	let opening = |c: char| matches!(c, '"' | '\'' | '(');
+	let starts_path = |w: &str| {
+		let w = w.trim_start_matches(opening);
+		(w.starts_with('/') || w.get(1..3) == Some(":\\")) && w[1..].contains(sep)
+	};
+	let words: Vec<&str> = text.split(' ').collect();
+	let mut out: Vec<String> = Vec::new();
+	let mut i = 0;
+	while i < words.len() {
+		let w = words[i];
+		if !starts_path(w) {
+			out.push(w.to_owned());
+			i += 1;
+			continue;
+		}
+		// A path with spaces goes on while the next words still hold separators.
+		let mut last = w;
+		while i + 1 < words.len() && words[i + 1].contains(sep) && !starts_path(words[i + 1]) {
+			i += 1;
+			last = words[i];
+		}
+		let body = w.trim_start_matches(opening);
+		let head = &w[..w.len() - body.len()];
+		let name = last.rsplit(sep).next().unwrap_or(last);
+		out.push(format!("{head}{name}"));
+		i += 1;
+	}
+	out.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn short_paths_keep_file_names() {
+		assert_eq!(
+			short_paths("Opened /home/me/Songs/first_light.cdz"),
+			"Opened first_light.cdz"
+		);
+		assert_eq!(
+			short_paths("Saved \"/tmp/a b/x.wav\". Done"),
+			"Saved \"x.wav\". Done"
+		);
+		assert_eq!(
+			short_paths("Wrote (/tmp/out/mix.flac)."),
+			"Wrote (mix.flac)."
+		);
+		assert_eq!(short_paths(r"Saved C:\Music\song.wav"), "Saved song.wav");
+		assert_eq!(
+			short_paths("Moved clip 1/2 to bar 5"),
+			"Moved clip 1/2 to bar 5"
+		);
+	}
 
 	#[test]
 	fn toasts_expire_by_level() {

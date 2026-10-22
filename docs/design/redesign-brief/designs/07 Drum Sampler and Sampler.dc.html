@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div style="display:flex;flex-direction:column;gap:56px;flex:none">
+
+<!-- DRUM SAMPLER -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">07a · Drum sampler · editor dock at 1920 × 540</div>
+<div data-screen-label="07a Drum sampler" style="width:1920px;height:540px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<div style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid #24262b">
+<span style="font-weight:600;font-size:13px">Drum sampler</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="width:9px;height:9px;border-radius:2px;background:#e8705f"></span>on Drums</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="color:#80848c">Kit</span>909 Kit ▾</span>
+<span style="color:#80848c">14 of 16 pads loaded</span>
+<div style="flex:1"></div>
+<span style="color:#80848c">Click a pad to hear it · drop audio on a pad · Ctrl drag to copy a pad</span>
+<span style="height:22px;display:flex;align-items:center;padding:0 9px;background:#212328;border-radius:4px;font-weight:500">Piano roll <span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:10.5px;margin-left:6px">Tab</span></span>
+</div>
+<div style="flex:1;display:flex;min-height:0">
+<!-- pads -->
+<div style="width:500px;flex:none;padding:10px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);gap:6px;border-right:1px solid #24262b">
+<sc-for list="{{ pads }}" as="p" hint-placeholder-count="16">
+<div style="position:relative;border-radius:4px;background:{{ p.bg }};box-shadow:{{ p.ring }};border:{{ p.bd }};box-sizing:border-box;padding:6px 8px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden">
+<div style="display:flex;align-items:flex-start;gap:4px"><span style="font-weight:600;font-size:12.5px;line-height:1.2;color:{{ p.fg }}">{{ p.n }}</span><span style="flex:1"></span><sc-if value="{{ p.choke }}" hint-placeholder-val="{{ false }}"><span style="font-size:9px;font-weight:600;color:#a3a6ad;background:#212328;padding:0 4px;border-radius:2px">CH 1</span></sc-if></div>
+<div style="height:18px;display:flex;align-items:center;gap:1px"><sc-for list="{{ p.wave }}" as="h" hint-placeholder-count="0"><div style="flex:1;height:{{ h }}%;background:{{ p.c }};opacity:.7;border-radius:1px"></div></sc-for></div>
+<div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c"><span>{{ p.note }}</span><span>{{ p.key }}</span></div>
+</div>
+</sc-for>
+</div>
+<!-- pad detail -->
+<div style="flex:1;display:flex;flex-direction:column;min-width:0">
+<div style="height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px">
+<span style="width:10px;height:10px;border-radius:2px;background:#4fbfd1"></span><span style="font-weight:600;font-size:15px">Open Hat</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">A♯2 · 46</span><span style="color:#80848c">open_hat.wav · 0.51 s · 44.1 kHz</span>
+<div style="flex:1"></div>
+<span style="padding:2px 9px;background:#212328;border-radius:4px">Replace…</span><span style="padding:2px 9px;background:#212328;border-radius:4px">⇄ Reverse</span><span style="padding:2px 9px;color:#a3a6ad">Clear pad</span>
+</div>
+<div style="height:200px;flex:none;margin:0 14px;position:relative;background:#111215;border-radius:4px;overflow:hidden">
+<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:#1d1f23"></div>
+<div style="position:absolute;left:2%;right:28%;top:0;bottom:0;display:flex;align-items:center;gap:1px"><sc-for list="{{ hatWave }}" as="h" hint-placeholder-count="0"><div style="flex:1;height:{{ h }}%;background:#4fbfd1;border-radius:1px"></div></sc-for></div>
+<div style="position:absolute;left:0;width:2%;top:0;bottom:0;background:rgba(14,15,17,.6)"></div>
+<div style="position:absolute;left:72%;right:0;top:0;bottom:0;background:rgba(14,15,17,.6)"></div>
+<div style="position:absolute;left:2%;top:0;bottom:0;width:2px;background:#4fc38a"></div><div style="position:absolute;left:2%;top:0;padding:1px 5px;background:#4fc38a;color:#101114;font-size:10px;font-weight:600;border-radius:0 0 3px 0">S</div>
+<div style="position:absolute;left:72%;top:0;bottom:0;width:2px;background:#f0524f;margin-left:-2px"></div><div style="position:absolute;left:72%;top:0;padding:1px 5px;background:#f0524f;color:#101114;font-size:10px;font-weight:600;border-radius:0 0 0 3px;transform:translateX(-100%)">E</div>
+<div style="position:absolute;left:30%;top:0;bottom:0;width:1px;background:#f2f3f5"></div>
+<div style="position:absolute;left:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">0.004 s – 0.368 s of 0.510 s</div>
+</div>
+<div style="flex:1;display:flex;gap:10px;padding:12px 14px">
+<sc-for list="{{ padGroups }}" as="g" hint-placeholder-count="4">
+<div style="display:flex;flex-direction:column;gap:8px;padding:8px 10px;background:#1c1d21;border-radius:4px">
+<span style="font-size:11px;font-weight:600;color:#a3a6ad">{{ g.n }}</span>
+<div style="display:flex;gap:12px">
+<sc-for list="{{ g.k }}" as="k" hint-placeholder-count="2"><div style="display:flex;flex-direction:column;align-items:center;gap:3px;width:46px"><div style="width:34px;height:34px;border-radius:50%;background:conic-gradient(from 225deg,{{ k.arc }} 0 {{ k.a }}deg,#2a2c32 {{ k.a }}deg 270deg,transparent 270deg);display:flex;align-items:center;justify-content:center"><div style="width:26px;height:26px;border-radius:50%;background:#212328;position:relative;transform:rotate({{ k.r }}deg)"><div style="position:absolute;left:12px;top:2px;width:2px;height:8px;background:#e8e9ec;border-radius:1px"></div></div></div><span style="font-size:11px;color:#c4c7cd">{{ k.n }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ k.v }}</span></div></sc-for>
+</div>
+</div>
+</sc-for>
+<div style="display:flex;flex-direction:column;gap:8px;padding:8px 10px;background:#1c1d21;border-radius:4px">
+<span style="font-size:11px;font-weight:600;color:#a3a6ad">Choke</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px">Group 1 · Hats ▾</span>
+<span style="font-size:11px;color:#80848c;line-height:1.4;width:130px">Closed and Pedal Hat cut this pad off</span>
+</div>
+</div>
+</div>
+<!-- kit -->
+<div style="width:260px;flex:none;background:#111215;border-left:1px solid #24262b;padding:12px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:600;font-size:13px">Whole kit</span><span style="font-size:11px;color:#80848c">Applies to all 16 pads</span></div>
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px 8px">
+<sc-for list="{{ kitKnobs }}" as="k" hint-placeholder-count="4"><div style="display:flex;flex-direction:column;align-items:center;gap:3px"><div style="width:34px;height:34px;border-radius:50%;background:conic-gradient(from 225deg,#8a93a3 0 {{ k.a }}deg,#2a2c32 {{ k.a }}deg 270deg,transparent 270deg);display:flex;align-items:center;justify-content:center"><div style="width:26px;height:26px;border-radius:50%;background:#212328;position:relative;transform:rotate({{ k.r }}deg)"><div style="position:absolute;left:12px;top:2px;width:2px;height:8px;background:#e8e9ec;border-radius:1px"></div></div></div><span style="font-size:11px;color:#c4c7cd">{{ k.n }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ k.v }}</span></div></sc-for>
+</div>
+<div style="flex:1"></div>
+<div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:11px;color:#80848c">Pad outputs</span><div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="flex:1;text-align:center;padding:2px 0;background:#2a2c32;border-radius:3px">Stereo mix</span><span style="flex:1;text-align:center;padding:2px 0;color:#a3a6ad">Per pad</span></div></div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- SAMPLER -->
+<div style="display:flex;flex-direction:column;gap:14px">
+<div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#a3a6ad">07b · Sampler · editor dock at 1920 × 540</div>
+<div data-screen-label="07b Sampler" style="width:1920px;height:540px;background:#15161a;display:flex;flex-direction:column;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:1px solid #24262b">
+<div style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid #24262b">
+<span style="font-weight:600;font-size:13px">Sampler</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="width:9px;height:9px;border-radius:2px;background:#b97be0"></span>on Strings</span>
+<span style="height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;background:#212328;border-radius:4px"><span style="color:#80848c">Preset</span>Sine Pad ▾</span>
+<span style="color:#80848c">5 zones</span>
+<div style="flex:1"></div>
+<span style="color:#80848c">Drop audio on a zone to replace it, on the keyboard to map across it · keys audition</span>
+<span style="height:22px;display:flex;align-items:center;padding:0 9px;background:#212328;border-radius:4px;font-weight:500">Piano roll <span style="font-family:'IBM Plex Mono',monospace;color:#80848c;font-size:10.5px;margin-left:6px">Tab</span></span>
+</div>
+<div style="flex:1;display:flex;min-height:0">
+<div style="flex:1;display:flex;flex-direction:column;min-width:0;padding:10px 14px;gap:8px">
+<!-- zone map -->
+<div style="display:flex;gap:8px">
+<div style="width:40px;flex:none;display:flex;flex-direction:column;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c;text-align:right;padding:2px 0 26px"><span>vel 127</span><span>64</span><span>0</span></div>
+<div style="flex:1;display:flex;flex-direction:column">
+<div style="height:120px;position:relative;background:#111215;border-radius:4px 4px 0 0;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px);background-size:calc(100% / 11) 100%">
+<sc-for list="{{ zones }}" as="z" hint-placeholder-count="5"><div style="position:absolute;left:{{ z.l }}%;width:{{ z.w }}%;top:{{ z.t }}%;height:{{ z.h }}%;background:{{ z.bg }};box-shadow:{{ z.bd }};border-radius:3px;padding:3px 6px;box-sizing:border-box;overflow:hidden"><div style="font-size:11px;font-weight:600;color:{{ z.fg }};white-space:nowrap">{{ z.n }}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#a3a6ad;white-space:nowrap">{{ z.r }}</div></div></sc-for>
+</div>
+<div style="height:26px;position:relative;display:flex;background:#e8e9ec;border-radius:0 0 3px 3px;overflow:hidden">
+<sc-for list="{{ whiteKeys }}" as="w" hint-placeholder-count="66"><div style="flex:1;border-right:1px solid #a3a6ad;background:{{ w }}"></div></sc-for>
+<sc-for list="{{ blackKeys }}" as="b" hint-placeholder-count="0"><div style="position:absolute;left:{{ b }}%;top:0;width:0.9%;height:15px;background:#1c1d21;border-radius:0 0 1px 1px"></div></sc-for>
+</div>
+<div style="height:14px;position:relative"><sc-for list="{{ octs }}" as="o" hint-placeholder-count="11"><span style="position:absolute;left:{{ o.l }}%;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#80848c;padding-left:2px">{{ o.n }}</span></sc-for></div>
+</div>
+</div>
+<!-- waveform -->
+<div style="display:flex;align-items:center;gap:10px">
+<span style="width:10px;height:10px;border-radius:2px;background:#b97be0"></span><span style="font-weight:600;font-size:13px">Sine Pad C3</span><span style="font-family:'IBM Plex Mono',monospace;color:#a3a6ad">root C3 · C3–B3 · vel 0–127</span><span style="color:#80848c">sine_pad_c3.wav · 3.00 s</span>
+<div style="flex:1"></div>
+<div style="display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="padding:1px 8px;color:#a3a6ad">No loop</span><span style="padding:1px 8px;color:#a3a6ad">Forward</span><span style="padding:1px 8px;background:#1d2a3d;color:#7fb4ff;border-radius:3px">Ping-pong</span></div>
+<span style="padding:1px 8px;background:#212328;border-radius:3px">⇄ Reverse</span><span style="padding:1px 8px;color:#a3a6ad">Remove zone</span>
+</div>
+<div style="flex:1;position:relative;background:#111215;border-radius:4px;overflow:hidden;min-height:0">
+<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:#1d1f23"></div>
+<div style="position:absolute;left:0;right:0;top:6px;bottom:6px;display:flex;align-items:center;gap:1px;padding:0 4px"><sc-for list="{{ padWave }}" as="h" hint-placeholder-count="0"><div style="flex:1;height:{{ h }}%;background:#b97be0;opacity:.85;border-radius:1px"></div></sc-for></div>
+<div style="position:absolute;left:18%;width:64%;top:0;height:6px;background:#5ac8d8"></div>
+<div style="position:absolute;left:18%;width:64%;top:0;bottom:0;background:rgba(90,200,216,.06);border-left:1px solid #5ac8d8;border-right:1px solid #5ac8d8"></div>
+<div style="position:absolute;left:18%;top:6px;padding:0 4px;background:#5ac8d8;color:#101114;font-size:10px;font-weight:600">L</div><div style="position:absolute;left:82%;top:6px;padding:0 4px;background:#5ac8d8;color:#101114;font-size:10px;font-weight:600;transform:translateX(-100%)">L</div>
+<div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:#4fc38a"></div><div style="position:absolute;right:0;top:0;bottom:0;width:2px;background:#f0524f"></div>
+<div style="position:absolute;left:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">loop 0.54 s – 2.46 s · x-fade 40 ms</div>
+</div>
+</div>
+<!-- params -->
+<div style="width:760px;flex:none;border-left:1px solid #24262b;padding:10px 12px;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:min-content;gap:8px;align-content:start">
+<sc-for list="{{ sGroups }}" as="g" hint-placeholder-count="4">
+<div style="display:flex;flex-direction:column;gap:8px;padding:8px 10px;background:#1c1d21;border-radius:4px">
+<div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:11px;font-weight:600;color:#a3a6ad">{{ g.n }}</span><span style="font-size:10.5px;color:#80848c">{{ g.s }}</span></div>
+<sc-if value="{{ g.env }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 300 36" preserveAspectRatio="none" style="width:100%;height:36px;background:#111215;border-radius:3px"><path d="M4 34 L60 4 L120 12 L230 12 L296 34" fill="rgba(76,156,245,.12)" stroke="#4c9cf5" stroke-width="1.5" vector-effect="non-scaling-stroke"></path></svg></sc-if>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<sc-for list="{{ g.k }}" as="k" hint-placeholder-count="4"><div style="display:flex;flex-direction:column;align-items:center;gap:2px;width:52px"><div style="width:30px;height:30px;border-radius:50%;background:conic-gradient(from 225deg,{{ k.arc }} 0 {{ k.a }}deg,#2a2c32 {{ k.a }}deg 270deg,transparent 270deg);display:flex;align-items:center;justify-content:center"><div style="width:23px;height:23px;border-radius:50%;background:#212328;position:relative;transform:rotate({{ k.r }}deg)"><div style="position:absolute;left:10.5px;top:2px;width:2px;height:7px;background:#e8e9ec;border-radius:1px"></div></div></div><span style="font-size:10.5px;color:#c4c7cd;white-space:nowrap">{{ k.n }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#a3a6ad;white-space:nowrap">{{ k.v }}</span></div></sc-for>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd;padding-top:36px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 07</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Drum sampler and sampler</span><span style="color:#a3a6ad">Both live in the bottom editor dock (F7). Tab switches between the device editor and the piano roll for the same track.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    let seed = 9; const r = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const NM = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+    const key = n => NM[n % 12] + (Math.floor(n / 12) - 2);
+    const CAT = { kick: '#e8705f', snare: '#e3b24f', hat: '#4fbfd1', tom: '#9a82ec', cym: '#5aa2f5', perc: '#e07fb0' };
+    const decay = (len, k) => Array.from({ length: len }, (_, i) => Math.max(4, Math.round(95 * Math.exp(-i / k) * (.6 + .4 * r()))));
+    const P = [
+      ['Kick 2', 35, 'kick'], ['Snare 2', 40, 'snare'], ['Tambourine', 54, 'perc', 'empty'], ['Cowbell', 56, 'perc', 'empty'],
+      ['Low Tom', 41, 'tom'], ['Mid Tom', 45, 'tom'], ['High Tom', 48, 'tom'], ['Ride', 51, 'cym'],
+      ['Clap', 39, 'snare'], ['Rim', 37, 'perc'], ['Pedal Hat', 44, 'hat', 0, 1], ['Crash', 49, 'cym', 'playing'],
+      ['Kick', 36, 'kick'], ['Snare', 38, 'snare'], ['Closed Hat', 42, 'hat', 0, 1], ['Open Hat', 46, 'hat', 'sel', 1],
+    ];
+    const pads = P.map(([n, note, cat, st, choke]) => {
+      const c = CAT[cat], empty = st === 'empty', sel = st === 'sel', play = st === 'playing';
+      return {
+        n: empty ? 'Drop sample' : n, note: key(note), key: String(note), c, choke: !!choke,
+        bg: empty ? 'transparent' : play ? c + '55' : sel ? c + '33' : c + '1f',
+        bd: empty ? '1px dashed #363940' : 'none', ring: sel ? 'inset 0 0 0 2px ' + c + ', 0 0 0 1px #15161a' : 'none',
+        fg: empty ? '#80848c' : '#e8e9ec', wave: empty ? [] : decay(24, cat === 'cym' ? 14 : cat === 'hat' ? 5 : 7),
+      };
+    });
+    const knob = (n, v, f, arc = '#4c9cf5') => ({ n, v, a: Math.round(f * 270), r: Math.round(-135 + f * 270), arc });
+    const padGroups = [
+      { n: 'Pitch', k: [knob('Tune', '+2 st', .58), knob('Fine', '−8 c', .46)] },
+      { n: 'Amp', k: [knob('Gain', '−1.5 dB', .7), knob('Pan', 'R12', .6), knob('Attack', '0 ms', 0), knob('Decay', '420 ms', .45)] },
+      { n: 'Velocity', k: [knob('→ Amp', '80 %', .8), knob('→ Pitch', '0', 0)] },
+    ];
+    const kitKnobs = [knob('Kit gain', '0.0 dB', .75), knob('Vel sens', '80 %', .8), knob('Polyphony', '32', .5), knob('Kit tune', '0 st', .5)];
+    const hatWave = decay(150, 34);
+    // sampler
+    const LO = 0, HI = 132, span = HI - LO; // C-2..C9
+    const kp = n => (n - LO) / span * 100;
+    const Z = [['Sine Pad C2', 24, 48, 0, 127, 36], ['Sine Pad C3', 48, 60, 0, 127, 60, 'sel'], ['Sine Pad C4 soft', 60, 72, 0, 80, 72], ['Sine Pad C4 hard', 60, 72, 81, 127, 72], ['Sine Pad C5', 72, 120, 0, 127, 84]];
+    const zones = Z.map(([n, lo, hi, vl, vh, root, st]) => ({ n, r: `${key(lo)}–${key(hi - 1)} · v${vl}–${vh}`, l: kp(lo), w: kp(hi) - kp(lo) - .2, t: (127 - vh) / 127 * 100 + 2, h: (vh - vl) / 127 * 100 - 4, bg: st ? 'rgba(185,123,224,.38)' : 'rgba(185,123,224,.16)', bd: st ? 'inset 0 0 0 1px #f2f3f5' : 'inset 0 0 0 1px rgba(185,123,224,.5)', fg: st ? '#e8e9ec' : '#b97be0' }));
+    const roots = [36, 60, 72, 84], whiteKeys = [], blackKeys = [];
+    const WH = [0, 2, 4, 5, 7, 9, 11];
+    let wi = 0; const nW = Math.round(span / 12 * 7);
+    for (let n = LO; n < HI; n++) { const pc = n % 12; if (WH.includes(pc)) { whiteKeys.push(n === 60 ? '#b97be0' : roots.includes(n) ? '#d9c2ee' : (n >= 48 && n < 60 ? '#f2eaf8' : '#e8e9ec')); wi++; } else blackKeys.push((wi / nW) * 100 - .45); }
+    const octs = Array.from({ length: 11 }, (_, i) => ({ n: 'C' + (i - 2), l: kp(i * 12) }));
+    const padWave = Array.from({ length: 220 }, (_, i) => Math.round(30 + 55 * Math.min(1, i / 20) * (i > 200 ? (220 - i) / 20 : 1) * (.85 + .15 * Math.sin(i * .5))));
+    const sGroups = [
+      { n: 'Zone', s: 'Sine Pad C3', k: [knob('Root', 'C3', .45, '#b97be0'), knob('Tune', '0 c', .5, '#b97be0'), knob('Gain', '−4 dB', .62, '#b97be0'), knob('Pan', 'C', .5, '#b97be0'), knob('X-fade', '40 ms', .2, '#b97be0'), knob('Rnd robin', 'Off', 0, '#b97be0')] },
+      { n: 'Amp envelope', s: 'all zones', env: true, k: [knob('Attack', '350 ms', .35), knob('Decay', '1.0 s', .45), knob('Sustain', '100 %', 1), knob('Release', '1.2 s', .5)] },
+      { n: 'Filter', s: 'Low-pass 12', k: [knob('Cutoff', '8.2 kHz', .78), knob('Reso', '0.20', .2), knob('Env amt', '+24 %', .62), knob('Key trk', '50 %', .5)] },
+      { n: 'Voice', s: 'all zones', k: [knob('Polyphony', '16', .4), knob('Glide', '0 ms', 0), knob('Velocity', '70 %', .7), knob('Vel curve', 'Linear', .5), knob('Transpose', '0 st', .5)] },
+    ];
+    const ux = [
+      { h: 'What changed and why', items: [
+        'Pads show the full name (up to two lines), the note and MIDI number, and a mini waveform. Their color comes from the category (kick, snare, hats, toms, cymbals, percussion), so the kit reads at a glance and the repeated label under the name is gone.',
+        'States: selected = 2 px outline in the pad color; playing = brighter fill for 120 ms on each hit; empty = dashed "Drop sample"; choke group = a "CH 1" tag.',
+        'Pad and kit controls are separate blocks: Pitch / Amp / Velocity / Choke groups for the selected pad, and a darker "Whole kit" column on the right. Kit knobs have a gray value arc instead of blue, so "Gain" and "Kit gain" can\u2019t be confused.',
+        'The sample view puts start (S, green) and end (E, red) handles on the waveform, dims everything outside them and prints the range in seconds.',
+        'Sampler: the zone map is a key × velocity grid over a real keyboard. Velocity layers stack vertically (C4 soft / hard), root keys are tinted on the keyboard, and the selected zone is outlined in white.',
+        'Sampler controls are split into Zone (per zone, purple arcs) and Amp envelope / Filter / Voice (whole instrument, blue arcs), with a drawn ADSR shape so the 22 flat sliders are no longer one long list.',
+      ]},
+      { h: 'Interaction', items: [
+        'Click a pad to audition and select it; Shift+click selects without playing. Drag a pad onto another to swap, Ctrl+drag to copy. Number keys 1–16 select pads when the dock has focus.',
+        'Drop one file on a pad to load it; drop several on the grid to fill pads in order from the drop point.',
+        'Zone map: drag a zone body to move it, its edges to change the key or velocity range, and double-click a key to set the root. Dropping several files on the keyboard maps them by their detected pitch.',
+        'Loop: drag the L handles or the cyan bar; Alt+drag snaps to zero crossings.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'New drum sampler: 16 dashed pads, "Drop samples or choose a kit", and a kit dropdown pre-opened with the built-in kits.',
+        'Missing sample: the pad turns hatched gray with ⚠ and "Locate…". The kit still plays the other pads.',
+        'Sampler with no zones: the keyboard becomes one large drop target, "Drop audio to map it from its root key".',
+      ]},
+    ];
+    this._v = { pads, padGroups, kitKnobs, hatWave, zones, whiteKeys, blackKeys, octs, padWave, sGroups, ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

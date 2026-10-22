@@ -53,7 +53,7 @@ fn session_with_external_files(root: &Path) -> (Session, PathBuf, Vec<PathBuf>) 
 	sampler.zones = vec![SampleZone::full_keyboard(&s, 60)];
 	p.tracks
 		.push(Track::new("Keys", TrackKind::Instrument).with_instrument(sampler));
-	let file = root.join("Song").join("Song.cadenza.json");
+	let file = root.join("Song").join("Song.cdz");
 	p.save_json(&file).unwrap();
 	let mut session = Session::with_plugin_cache(root.join("plugins.json"));
 	session.reset(Document::new(p), Some(file.clone()));
@@ -123,7 +123,7 @@ fn collect_copies_once_per_content_rewrites_in_one_undo_step_and_survives_a_move
 	std::fs::remove_dir_all(tmp.path().join("external")).unwrap();
 	let moved = tmp.path().join("Moved Song");
 	std::fs::rename(&root, &moved).unwrap();
-	let (doc, missing) = portable::open_document(&moved.join("Song.cadenza.json")).unwrap();
+	let (doc, missing) = portable::open_document(&moved.join("Song.cdz")).unwrap();
 	assert!(missing.is_empty(), "{missing:?}");
 	assert!(paths(doc.project()).iter().all(|p| p.starts_with(&moved)));
 
@@ -220,7 +220,7 @@ fn archives_round_trip_with_unsaved_state_and_refuse_overwrites() {
 		})
 		.unwrap();
 
-	let archive = tmp.path().join("share").join("Song.cadenza.zip");
+	let archive = tmp.path().join("share").join("Song.cdzpack");
 	let packed = portable::pack_current(
 		&session,
 		portable::PackProjectArgs {
@@ -234,7 +234,7 @@ fn archives_round_trip_with_unsaved_state_and_refuse_overwrites() {
 
 	let dest = tmp.path().join("unpacked");
 	let opened = portable::unpack_project(&archive, &dest).unwrap();
-	assert_eq!(opened, dest.join("Song").join("Song.cadenza.json"));
+	assert_eq!(opened, dest.join("Song").join("Song.cdz"));
 	assert!(
 		!dest.join("Song/.cadenza").exists(),
 		"caches are not packed"
@@ -254,7 +254,36 @@ fn archives_round_trip_with_unsaved_state_and_refuse_overwrites() {
 		},
 	)
 	.unwrap_err();
-	assert!(err.to_string().contains(".cadenza.zip"));
+	assert!(err.to_string().contains(".cdzpack"));
+}
+
+#[test]
+fn archives_from_before_cdz_unpack_their_project_as_cdz() {
+	use std::io::Write;
+	let tmp = tempfile::tempdir().unwrap();
+	let archive = tmp.path().join("Old.cadenzapack");
+	let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+	let options = zip::write::SimpleFileOptions::default();
+	zip.start_file("Old/Old.cadenza.json", options).unwrap();
+	zip.write_all(
+		cadenza_model::Project::new("Old")
+			.to_json_string()
+			.unwrap()
+			.as_bytes(),
+	)
+	.unwrap();
+	zip.start_file("Old/Audio/a.txt", options).unwrap();
+	zip.write_all(b"x").unwrap();
+	zip.finish().unwrap();
+
+	assert!(portable::is_archive(&archive));
+	let dest = tmp.path().join("out");
+	let opened = portable::unpack_project(&archive, &dest).unwrap();
+	assert_eq!(opened, dest.join("Old").join("Old.cdz"));
+	assert!(!dest.join("Old").join("Old.cadenza.json").exists());
+	assert!(dest.join("Old/Audio/a.txt").is_file());
+	let (doc, _) = portable::open_document(&opened).unwrap();
+	assert_eq!(doc.project().name, "Old");
 }
 
 #[test]

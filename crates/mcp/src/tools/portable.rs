@@ -9,7 +9,9 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use cadenza_model::files::{AUDIO_DIR, CACHE_DIR, PROJECT_SUFFIX, SAMPLES_DIR};
+use cadenza_model::files::{
+	ARCHIVE_SUFFIX, AUDIO_DIR, CACHE_DIR, LEGACY_PROJECT_SUFFIX, PROJECT_SUFFIX, SAMPLES_DIR,
+};
 use cadenza_model::{Command, Document, FileRef, Project, ProjectLayout};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,8 +20,9 @@ use sha2::{Digest, Sha256};
 use crate::error::McpError;
 use crate::session::Session;
 
-/// Extensions of project archives (`.cadenza.zip` is written; both are read).
-pub const ARCHIVE_EXTENSIONS: &[&str] = &["cadenza.zip", "cadenzapack"];
+/// Extensions of project archives: `.cdzpack` is written; archives made before 0.2
+/// (`.cadenzapack`, `.cadenza.zip`) and plain `.zip` files are still read.
+pub const ARCHIVE_EXTENSIONS: &[&str] = &["cdzpack", "cadenzapack", "zip"];
 
 /// Label of the undo step written by [`collect_files`].
 pub const COLLECT_LABEL: &str = "Collect project files";
@@ -515,13 +518,21 @@ pub fn open_document(path: &Path) -> Result<(Document, Vec<FileRef>), McpError> 
 
 // --- archives ----------------------------------------------------------------------------
 
-/// Whether `path` names a project archive (`.cadenza.zip`, `.cadenzapack`, or `.zip`).
+/// Whether `path` names a project archive (see [`ARCHIVE_EXTENSIONS`]).
 pub fn is_archive(path: &Path) -> bool {
 	let name = path
 		.file_name()
 		.map(|n| n.to_string_lossy().to_lowercase())
 		.unwrap_or_default();
-	name.ends_with(".zip") || name.ends_with(".cadenzapack")
+	ARCHIVE_EXTENSIONS
+		.iter()
+		.any(|ext| name.ends_with(&format!(".{ext}")))
+}
+
+/// Whether `path` ends in `.cdzpack`, the only extension new archives are written with.
+pub fn has_archive_suffix(path: &Path) -> bool {
+	path.file_name()
+		.is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(ARCHIVE_SUFFIX))
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -641,8 +652,9 @@ pub fn pack_project(
 	})
 }
 
-/// Extracts an archive made by [`pack_project`] (or any zip holding a `.cadenza.json`)
-/// into `dest_dir` and returns the project file. Entries that would land outside
+/// Extracts an archive made by [`pack_project`] (or any zip holding a `.cdz`)
+/// into `dest_dir` and returns the project file. The project file of an archive made
+/// before 0.2 (`<Name>.cadenza.json`) is extracted as `<Name>.cdz`. Entries that would land outside
 /// `dest_dir` are rejected; existing files are never overwritten.
 pub fn unpack_project(archive: &Path, dest_dir: &Path) -> Result<PathBuf, McpError> {
 	let file = File::open(archive).map_err(|e| io(archive, e))?;
@@ -667,21 +679,39 @@ pub fn unpack_project(archive: &Path, dest_dir: &Path) -> Result<PathBuf, McpErr
 		}
 		targets.push((i, dest, entry.is_dir()));
 	}
-	let project = targets
-		.iter()
-		.filter(|(_, p, dir)| {
-			!dir && p
-				.file_name()
-				.is_some_and(|n| n.to_string_lossy().ends_with(PROJECT_SUFFIX))
-		})
-		.min_by_key(|(_, p, _)| p.components().count())
-		.map(|(_, p, _)| p.clone())
-		.ok_or_else(|| {
-			McpError::Invalid(format!(
-				"'{}' holds no {PROJECT_SUFFIX} project file",
-				archive.display()
-			))
-		})?;
+	let shallowest = |suffix: &str| {
+		targets
+			.iter()
+			.enumerate()
+			.filter(|(_, (_, p, dir))| {
+				!dir && p
+					.file_name()
+					.is_some_and(|n| n.to_string_lossy().ends_with(suffix))
+			})
+			.min_by_key(|(_, (_, p, _))| p.components().count())
+			.map(|(k, _)| k)
+	};
+	let project = if let Some(k) = shallowest(PROJECT_SUFFIX) {
+		targets[k].1.clone()
+	} else if let Some(k) = shallowest(LEGACY_PROJECT_SUFFIX) {
+		let old = &targets[k].1;
+		let name = file_name(old);
+		let stem = name.strip_suffix(LEGACY_PROJECT_SUFFIX).unwrap_or(&name);
+		let renamed = old.with_file_name(format!("{stem}{PROJECT_SUFFIX}"));
+		if renamed.exists() {
+			return Err(McpError::Invalid(format!(
+				"'{}' already exists; extract the archive into an empty folder",
+				renamed.display()
+			)));
+		}
+		targets[k].1 = renamed.clone();
+		renamed
+	} else {
+		return Err(McpError::Invalid(format!(
+			"'{}' holds no {PROJECT_SUFFIX} project file",
+			archive.display()
+		)));
+	};
 	std::fs::create_dir_all(dest_dir).map_err(|e| io(dest_dir, e))?;
 	for (i, dest, dir) in targets {
 		if dir {
@@ -700,7 +730,7 @@ pub fn unpack_project(archive: &Path, dest_dir: &Path) -> Result<PathBuf, McpErr
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PackProjectArgs {
-	/// Archive to write; ends in .cadenza.zip (or .cadenzapack).
+	/// Archive to write; ends in .cdzpack.
 	pub path: String,
 	/// Also pack the Renders/ folder (default false).
 	#[serde(default)]
@@ -715,9 +745,9 @@ pub fn pack_current(session: &Session, args: PackProjectArgs) -> Result<PackOutp
 		)
 	})?;
 	let out = PathBuf::from(args.path.trim());
-	if !is_archive(&out) {
+	if !has_archive_suffix(&out) {
 		return Err(McpError::Invalid(format!(
-			"archive path '{}' must end in .cadenza.zip or .cadenzapack",
+			"archive path '{}' must end in {ARCHIVE_SUFFIX} (e.g. 'Song{ARCHIVE_SUFFIX}')",
 			out.display()
 		)));
 	}

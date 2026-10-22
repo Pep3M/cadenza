@@ -91,7 +91,7 @@ impl MidiSchedule {
 		let mut events = Vec::new();
 		let mut spans = Vec::new();
 		let mut controls: Vec<ControlLane> = Vec::new();
-		for clip in clips.iter().filter(|c| c.plays()) {
+		for clip in clips.iter().filter(|c| c.sounds()) {
 			let ClipContent::Midi { notes, controllers } = &clip.content else {
 				continue;
 			};

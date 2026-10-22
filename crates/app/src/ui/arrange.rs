@@ -4,6 +4,7 @@
 //! Gestures are previewed locally (ghost clips, insertion line, drop highlight) and
 //! become one command through [`AppState::apply`] when the mouse is released.
 
+use crate::i18n::{tr, trf, trn};
 use cadenza_core::{ClipId, MeterMap, PPQ, Tick, TrackId};
 use cadenza_model::{
 	ChannelPatch, Clip, ClipContent, Command, Marker, Project, Track, TrackKind, TrackPatch,
@@ -14,6 +15,7 @@ use egui::{
 };
 
 use crate::jobs::Peaks;
+use crate::state::arrange_tool::{self, ArrangeTool};
 use crate::state::automation::LANE_HEIGHT;
 use crate::state::dnd::{DropTarget, Payload};
 use crate::state::edits::{self, TRACK_PALETTE};
@@ -22,16 +24,22 @@ use crate::state::layout::FollowMode;
 use crate::state::rows::{RowKind, Rows};
 use crate::state::selection::DeviceRef;
 use crate::state::timeline::{self, LineKind, Overview, Timeline};
-use crate::state::{AppState, MAX_TRACK_HEIGHT, MIN_TRACK_HEIGHT};
+use crate::state::{AppState, playlist};
 use crate::theme;
 use crate::ui::dnd;
 use crate::ui::widgets::{self, Gesture};
 
 /// Width of the clip edge that resizes instead of moving.
 const RESIZE_HANDLE: f32 = 7.0;
-const CLIP_HEADER: f32 = 14.0;
+/// Grab height of a track header's bottom edge (track resize).
+const RESIZE_EDGE: f32 = 4.0;
+const CLIP_HEADER: f32 = 16.0;
+/// Track headers at least this tall get a third row (buttons + volume).
+const TALL_HEADER: f32 = 62.0;
 /// Room below the last track (add buttons and the "new track" drop zone).
 const BELOW_TRACKS: f32 = 72.0;
+/// The arrange toolbar row (title, snap, tools, lane toggles, zoom).
+pub const TOOLBAR_HEIGHT: f32 = 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DragKind {
@@ -56,6 +64,29 @@ struct ClipDrag {
 	target: Option<TrackId>,
 	/// Ctrl held: the clips are copied, not moved.
 	copy: bool,
+	/// Shift held on a MIDI clip's right edge: the content stretches with it.
+	stretch: bool,
+}
+
+/// A Paint / knife / sweep gesture of the arrange tools.
+#[derive(Debug, Clone)]
+enum ToolGesture {
+	/// Paint: repeats `template` on `track` at every cell (of its length, from `first`)
+	/// between the press and the pointer.
+	Paint {
+		track: TrackId,
+		template: ClipId,
+		first: Tick,
+		press: Tick,
+	},
+	/// Split tool drag: a cut line from the press (screen); a drag once it moved.
+	Knife { press: Pos2, active: bool },
+	/// Right-drag (Draw / Paint) deletes, the Mute tool toggles every clip swept over.
+	Sweep {
+		mute: bool,
+		hits: Vec<ClipId>,
+		last: Pos2,
+	},
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +114,15 @@ pub struct ArrangeUi {
 	xfade_drag: Option<(edits::Crossfade, Tick)>,
 	/// Overview viewport drag: beats between the grab point and the view start.
 	overview_grab: Option<f64>,
+	/// Draw tool gesture: the track, the song position and screen x of the press, and
+	/// whether the pointer moved far enough to be a drag.
+	draw: Option<(TrackId, Tick, f32, bool)>,
+	/// Split tool: the cut line under the pointer this frame (x, clip rect).
+	split_hover: Option<(f32, Rect)>,
+	/// Paint / knife / sweep gesture in progress.
+	tool: Option<ToolGesture>,
+	/// Clip rects drawn this frame (tool gestures hit-test them).
+	clip_rects: Vec<(ClipId, Rect)>,
 	/// Loop region drag on the ruler: the song position where it started.
 	loop_drag: Option<Tick>,
 	/// Size of the lanes area in the last frame (keyboard navigation, zoom to fit).
@@ -95,6 +135,8 @@ pub struct ArrangeUi {
 	pub auto: super::automation::AutoUi,
 	/// Alt held this frame (an audio file dropped below the tracks becomes a sampler).
 	alt: bool,
+	/// The empty project's "Or ask the producer" request.
+	ask: String,
 }
 
 /// Header indentation per folder level.
@@ -130,7 +172,9 @@ impl ArrangeUi {
 		let x0 = full.left() + theme::HEADER_WIDTH;
 		let right = full.right() - theme::SCROLLBAR;
 		let bottom = full.bottom() - theme::SCROLLBAR;
-		let ov_bottom = full.top() + theme::OVERVIEW_HEIGHT;
+		let toolbar = Rect::from_min_size(full.min, vec2(full.width(), TOOLBAR_HEIGHT));
+		let ov_top = toolbar.bottom();
+		let ov_bottom = ov_top + theme::OVERVIEW_HEIGHT;
 		let ruler_bottom = ov_bottom + theme::RULER_HEIGHT;
 		let markers_bottom = ruler_bottom + theme::MARKER_LANE_HEIGHT;
 		let (tempo_h, sig_h) = if state.view.automation.tempo {
@@ -143,7 +187,7 @@ impl ArrangeUi {
 		let layout = Layout {
 			header: Rect::from_min_max(pos2(full.left(), top), pos2(x0, bottom)),
 			lanes: Rect::from_min_max(pos2(x0, top), pos2(right, bottom)),
-			overview: Rect::from_min_max(pos2(x0, full.top()), pos2(right, ov_bottom)),
+			overview: Rect::from_min_max(pos2(x0, ov_top), pos2(right, ov_bottom)),
 			ruler: Rect::from_min_max(pos2(x0, ov_bottom), pos2(right, ruler_bottom)),
 			markers: Rect::from_min_max(pos2(x0, ruler_bottom), pos2(right, markers_bottom)),
 			signature: (sig_h > 0.0).then(|| {
@@ -184,7 +228,8 @@ impl ArrangeUi {
 
 		self.lanes(ui, state, &layout);
 		self.headers(ui, state, &layout);
-		self.corner(ui, state, full);
+		self.corner(ui, &layout);
+		self.toolbar(ui, state, toolbar);
 		self.overview(ui, state, &layout);
 		ruler(ui, state, &layout, &mut self.loop_drag);
 		markers(ui, state, &layout);
@@ -198,6 +243,9 @@ impl ArrangeUi {
 		}
 		scrollbars(ui, state, &layout, full);
 		self.drop_zone(ui, state, &layout);
+		if state.project().tracks.is_empty() {
+			self.empty_state(ui, state, &layout);
+		}
 
 		loop_overlay(ui, state, &layout);
 		// Playhead over everything in the timeline.
@@ -207,21 +255,12 @@ impl ArrangeUi {
 				pos2(layout.lanes.left(), layout.ruler.top()),
 				pos2(layout.lanes.right(), layout.lanes.bottom()),
 			));
-			p.vline(
+			paint_playhead(
+				&p,
 				x,
 				layout.ruler.top()..=layout.lanes.bottom(),
-				Stroke::new(1.5, theme::PLAYHEAD),
+				layout.ruler.bottom(),
 			);
-			let tip = layout.ruler.bottom();
-			p.add(Shape::convex_polygon(
-				vec![
-					pos2(x - 6.0, tip - 9.0),
-					pos2(x + 6.0, tip - 9.0),
-					pos2(x, tip),
-				],
-				theme::PLAYHEAD,
-				Stroke::NONE,
-			));
 		}
 		self.last = Some(layout);
 	}
@@ -245,10 +284,10 @@ impl ArrangeUi {
 		if alt && scroll.y != 0.0 {
 			// Keep the track under the pointer in place.
 			let anchor = pointer.y - layout.body_top;
-			let rows = (anchor + view.scroll_y) / view.track_height;
-			view.track_height =
-				(view.track_height + scroll.y * 0.25).clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
-			view.scroll_y = (rows * view.track_height - anchor).max(0.0);
+			let old = view.track_height;
+			view.scale_track_heights(old + scroll.y * 0.25);
+			let ratio = view.track_height / old.max(1.0);
+			view.scroll_y = ((anchor + view.scroll_y) * ratio - anchor).max(0.0);
 			return;
 		}
 		if scroll.x != 0.0 {
@@ -318,98 +357,341 @@ impl ArrangeUi {
 	}
 
 	/// Top-left corner above the headers: zoom buttons, snap and grid.
-	fn corner(&self, ui: &mut Ui, state: &mut AppState, full: Rect) {
-		let rect = Rect::from_min_size(
-			full.min,
-			vec2(
-				theme::HEADER_WIDTH,
-				theme::OVERVIEW_HEIGHT + theme::RULER_HEIGHT + theme::MARKER_LANE_HEIGHT,
-			),
-		);
-		ui.painter().rect_filled(rect, 0.0, theme::BG_PANEL);
-		ui.painter().hline(
+	/// The toolbar row: title, snap + grid, the Select / Draw / Split tools, the tempo lane
+	/// toggle and the zoom buttons. Folded to the width actually available (see
+	/// [`ArrangeFold`]), not a window-size tier, so any language's labels fit.
+	fn toolbar(&self, ui: &mut Ui, state: &mut AppState, rect: Rect) {
+		let p = ui.painter();
+		p.rect_filled(rect, 0.0, theme::BG_PANEL);
+		p.hline(
 			rect.x_range(),
 			rect.bottom() - 0.5,
 			Stroke::new(1.0, theme::BORDER),
-		);
-		ui.painter().vline(
-			rect.right() - 0.5,
-			rect.y_range(),
-			Stroke::new(1.0, theme::BORDER_STRONG),
 		);
 		let grid = state
 			.view
 			.timeline
 			.grid_at(state.position(), state.project().meter());
-		let row1 = Rect::from_min_size(
-			rect.min + vec2(8.0, 2.0),
-			vec2(rect.width() - 16.0, theme::OVERVIEW_HEIGHT),
-		);
-		let row2 = Rect::from_min_size(
-			pos2(rect.left() + 8.0, row1.bottom() + 2.0),
-			vec2(rect.width() - 16.0, theme::RULER_HEIGHT),
-		);
-		let mut top = ui.new_child(
+		let mut bar = ui.new_child(
 			egui::UiBuilder::new()
-				.max_rect(row1)
+				.max_rect(rect.shrink2(vec2(8.0, 0.0)))
 				.layout(egui::Layout::left_to_right(egui::Align::Center)),
 		);
-		top.label(
-			egui::RichText::new("ARRANGE")
-				.font(theme::small())
-				.color(theme::TEXT_FAINT),
+		bar.set_clip_rect(rect);
+		bar.spacing_mut().item_spacing.x = 4.0;
+		widgets::panel_title(&mut bar, tr("Arrange"), Some("F5"));
+		bar.add_space(10.0);
+		let fold = arrange_fold(&bar, grid, state);
+		self.toolbar_rest(&mut bar, state, grid, fold);
+	}
+
+	/// Everything after the title: snap + grid, tools, tempo toggle and the zoom group, at
+	/// `fold` (picked by [`arrange_fold`]).
+	fn toolbar_rest(
+		&self,
+		ui: &mut Ui,
+		state: &mut AppState,
+		grid: timeline::Grid,
+		fold: ArrangeFold,
+	) {
+		let snap = state.view.snap;
+		if toolbar_chip(
+			ui,
+			snap,
+			tr("Snap"),
+			None,
+			theme::ACCENT_DIM,
+			theme::ACCENT_TEXT,
+		)
+		.on_hover_text(tr(
+			"Snap clips and notes to the grid (Alt while dragging: free)",
+		))
+		.clicked()
+		{
+			state.view.snap = !snap;
+		}
+		ui.label(
+			egui::RichText::new(grid_name(grid.step, grid.bar))
+				.font(theme::mono(11.0))
+				.color(theme::TEXT_DIM),
 		);
-		top.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+		toolbar_divider(ui);
+		for tool in ArrangeTool::ALL {
+			let on = state.view.arrange_tool == tool;
+			let (label, key) = fold
+				.tools
+				.label_and_key(tool.glyph(), tool.name(), tool.key());
+			if toolbar_chip(ui, on, &label, key, theme::BG_WIDGET, theme::TEXT)
+				.on_hover_text(format!("{} ({})", tool.hint(), tool.key()))
+				.clicked()
+			{
+				state.view.arrange_tool = tool;
+			}
+		}
+		toolbar_divider(ui);
+		let tempo = state.view.automation.tempo;
+		let tempo_label = if tempo { tr("✔ Tempo") } else { tr("Tempo") };
+		if toolbar_chip(
+			ui,
+			tempo,
+			tempo_label,
+			None,
+			theme::TEMPO.gamma_multiply(0.18),
+			theme::TEMPO,
+		)
+		.on_hover_text(tr("Show the time signature and tempo lanes"))
+		.clicked()
+		{
+			state.view.automation.tempo = !tempo;
+		}
+		let (lanes_width, lanes_height) = (self.lanes_width, self.lanes_height);
+		ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 			if ui
 				.small_button("−")
-				.on_hover_text("Zoom out (Ctrl+wheel)")
+				.on_hover_text(tr("Zoom out (Ctrl+wheel)"))
 				.clicked()
 			{
 				state.view.timeline.zoom_around(1.0 / 1.5, 0.0);
 			}
 			if ui
 				.small_button("+")
-				.on_hover_text("Zoom in (Ctrl+wheel)")
+				.on_hover_text(tr("Zoom in (Ctrl+wheel)"))
 				.clicked()
 			{
 				state.view.timeline.zoom_around(1.5, 0.0);
 			}
-			if ui
-				.small_button("Sel")
-				.on_hover_text("Zoom to the selected clips (Z)")
-				.clicked()
-			{
-				zoom_to_selection(state, self.lanes_width, self.lanes_height);
-			}
-			if ui
-				.small_button("Fit")
-				.on_hover_text("Zoom to the whole song (Shift+Z)")
-				.clicked()
-			{
-				zoom_to_fit(state, self.lanes_width);
+			if fold.overflow {
+				ui.menu_button(tr("⋯"), |ui| {
+					if ui.button(tr("Zoom to the selected clips (Z)")).clicked() {
+						zoom_to_selection(state, lanes_width, lanes_height);
+						ui.close();
+					}
+					if ui.button(tr("Zoom to the whole song (Shift+Z)")).clicked() {
+						zoom_to_fit(state, lanes_width);
+						ui.close();
+					}
+				});
+			} else {
+				if ui
+					.small_button(tr("Sel"))
+					.on_hover_text(tr("Zoom to the selected clips (Z)"))
+					.clicked()
+				{
+					zoom_to_selection(state, lanes_width, lanes_height);
+				}
+				if ui
+					.small_button(tr("Fit"))
+					.on_hover_text(tr("Zoom to the whole song (Shift+Z)"))
+					.clicked()
+				{
+					zoom_to_fit(state, lanes_width);
+				}
 			}
 		});
+	}
+
+	/// The header column next to the overview, ruler and markers: row names.
+	fn corner(&self, ui: &mut Ui, layout: &Layout) {
+		let rect = Rect::from_min_max(
+			pos2(layout.header.left(), layout.overview.top()),
+			pos2(layout.header.right(), layout.markers.bottom()),
+		);
+		let p = ui.painter();
+		p.rect_filled(rect, 0.0, theme::BG_PANEL);
+		p.rect_filled(
+			Rect::from_min_max(rect.min, pos2(rect.right(), layout.overview.bottom())),
+			0.0,
+			theme::BG_DEEP,
+		);
+		for (r, name, hint) in [
+			(layout.ruler, tr("Bars"), ""),
+			(layout.markers, tr("Markers"), tr("dbl-click adds")),
+		] {
+			let y = r.center().y;
+			p.text(
+				pos2(rect.left() + 10.0, y),
+				Align2::LEFT_CENTER,
+				name,
+				theme::small(),
+				theme::TEXT_FAINT,
+			);
+			if !hint.is_empty() {
+				p.text(
+					pos2(rect.right() - 10.0, y),
+					Align2::RIGHT_CENTER,
+					hint,
+					theme::small(),
+					theme::TEXT_FAINT.gamma_multiply(0.7),
+				);
+			}
+			p.hline(
+				rect.x_range(),
+				r.bottom() - 0.5,
+				Stroke::new(1.0, theme::BORDER),
+			);
+		}
+		p.vline(
+			rect.right() - 0.5,
+			rect.y_range(),
+			Stroke::new(1.0, theme::BORDER_STRONG),
+		);
+	}
+
+	/// No tracks yet: one centered drop target with the add buttons, and the producer.
+	fn empty_state(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
+		let lanes = layout.lanes;
+		let w = 640.0f32.min(lanes.width() - 32.0);
+		if w < 280.0 || lanes.height() < 260.0 {
+			return;
+		}
+		let top = lanes.center().y - 150.0;
+		let target = Rect::from_min_size(pos2(lanes.center().x - w / 2.0, top), vec2(w, 156.0));
+		let p = ui.painter_at(lanes);
+		p.rect_filled(
+			target,
+			CornerRadius::same(theme::RADIUS_LG),
+			theme::BG_PANEL,
+		);
+		dashed_rect(&p, target.shrink(0.5), theme::BORDER_STRONG);
+		p.text(
+			pos2(target.center().x, target.top() + 38.0),
+			Align2::CENTER_CENTER,
+			tr("Add your first track"),
+			theme::semibold(15.0),
+			theme::TEXT,
+		);
+		p.text(
+			pos2(target.center().x, target.top() + 66.0),
+			Align2::CENTER_CENTER,
+			tr(
+				"Drop a device, audio or MIDI file, or a library pattern here, or start with one \
+			 of these.",
+			),
+			theme::small(),
+			theme::TEXT_DIM,
+		);
+		let buttons = [
+			(tr("+ Instrument"), "I", TrackKind::Instrument),
+			(tr("+ Audio"), "", TrackKind::Audio),
+			(tr("+ Bus"), "", TrackKind::Bus),
+			(tr("+ Folder"), "", TrackKind::Folder),
+		];
+		let row =
+			Rect::from_center_size(pos2(target.center().x, target.top() + 108.0), vec2(w, 30.0));
 		let mut child = ui.new_child(
 			egui::UiBuilder::new()
-				.max_rect(row2)
+				.max_rect(row)
 				.layout(egui::Layout::left_to_right(egui::Align::Center)),
 		);
-		let snap = state.view.snap;
-		if child
-			.selectable_label(snap, "Snap")
-			.on_hover_text("Snap clips and notes to the grid (Alt while dragging: free)")
-			.clicked()
-		{
-			state.view.snap = !snap;
+		// Center the row: measure once with a fixed width per button.
+		let bw = [118.0, 82.0, 66.0, 82.0];
+		let total: f32 = bw.iter().sum::<f32>() + 8.0 * 3.0;
+		child.add_space(((w - total) / 2.0).max(0.0));
+		child.spacing_mut().item_spacing.x = 8.0;
+		for (i, (label, key, kind)) in buttons.into_iter().enumerate() {
+			let primary = i == 0;
+			let mut button =
+				egui::Button::new(egui::RichText::new(label).font(theme::medium(12.0)).color(
+					if primary {
+						theme::TEXT_ON_ACCENT
+					} else {
+						theme::TEXT
+					},
+				))
+				.min_size(vec2(bw[i], 28.0));
+			if primary {
+				button = button.fill(theme::ACCENT);
+			}
+			if !key.is_empty() {
+				button = button.right_text(
+					egui::RichText::new(key)
+						.font(theme::mono(10.5))
+						.color(theme::TEXT_ON_ACCENT.gamma_multiply(0.7)),
+				);
+			}
+			if child.add(button).clicked() {
+				add_track(state, kind);
+			}
 		}
-		child.label(
-			egui::RichText::new(grid_name(grid.step, grid.bar))
-				.font(theme::small())
-				.color(theme::TEXT_DIM),
+
+		// The producer, right under it.
+		let ask = Rect::from_min_size(pos2(target.left(), target.bottom() + 14.0), vec2(w, 116.0));
+		p.rect_filled(
+			ask,
+			CornerRadius::same(theme::RADIUS_LG),
+			theme::mix(theme::BG_PANEL, theme::ACCENT, 0.06),
 		);
-		child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-			follow_menu(ui, state);
+		p.rect_stroke(
+			ask,
+			CornerRadius::same(theme::RADIUS_LG),
+			Stroke::new(1.0, theme::ACCENT_BORDER),
+			StrokeKind::Inside,
+		);
+		let mut inner = ui.new_child(
+			egui::UiBuilder::new()
+				.max_rect(ask.shrink(14.0))
+				.layout(egui::Layout::top_down(egui::Align::Min)),
+		);
+		inner.horizontal(|ui| {
+			super::start::avatar(ui);
+			ui.label(
+				egui::RichText::new(tr("Or ask the producer"))
+					.font(theme::semibold(12.5))
+					.color(theme::TEXT),
+			);
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				ui.label(
+					egui::RichText::new("F10")
+						.font(theme::mono(10.5))
+						.color(theme::TEXT_FAINT),
+				);
+			});
 		});
+		let id = Id::new("empty-project-ask");
+		let focused = inner.memory(|m| m.has_focus(id));
+		let enter =
+			focused && inner.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+		inner.add(
+			egui::TextEdit::singleline(&mut self.ask)
+				.id(id)
+				.desired_width(f32::INFINITY)
+				.margin(egui::Margin::symmetric(8, 6))
+				.hint_text(tr("Make a 16-bar house groove with a bassline and chords")),
+		);
+		let mut request = None;
+		if enter && !self.ask.trim().is_empty() {
+			request = Some(std::mem::take(&mut self.ask));
+		}
+		inner.horizontal_wrapped(|ui| {
+			ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+			for chip in [
+				tr("Add drums at 120 bpm"),
+				tr("Start from a house groove"),
+				tr("Write chords in A minor"),
+			] {
+				let b = egui::Button::new(
+					egui::RichText::new(chip)
+						.font(theme::small())
+						.color(theme::ACCENT_TEXT),
+				)
+				.fill(theme::BG_PANEL)
+				.stroke(Stroke::new(1.0, theme::ACCENT_BORDER))
+				.corner_radius(99);
+				if ui.add(b).clicked() {
+					request = Some(chip.to_owned());
+				}
+			}
+		});
+		if let Some(request) = request
+			&& !state.ai.busy()
+		{
+			state
+				.view
+				.panels
+				.set(crate::state::layout::PanelKind::Chat, true);
+			state.mix.open = false;
+			state.send_ai(request.trim());
+		}
 	}
 
 	/// The whole song in a strip above the ruler; the visible part is a draggable box.
@@ -462,7 +744,9 @@ impl ArrangeUi {
 		);
 		let resp = ui
 			.interact(r, Id::new("arrange-overview"), Sense::click_and_drag())
-			.on_hover_text("Song overview: drag the box to scroll, double-click to fit");
+			.on_hover_text(tr(
+				"Song overview: drag the box to scroll, double-click to fit",
+			));
 		let active = resp.dragged() || resp.hovered();
 		p.rect_filled(
 			view,
@@ -516,6 +800,13 @@ impl ArrangeUi {
 	/// Screen y of the top of track `index`'s group (`tracks.len()`: after the last).
 	fn top(&self, layout: &Layout, index: usize, scroll: f32) -> f32 {
 		layout.body_top + self.rows.track_top(index) - scroll
+	}
+
+	/// Height of track `index`'s clip row this frame.
+	fn track_h(&self, state: &AppState, index: usize) -> f32 {
+		self.rows
+			.track(index)
+			.map_or(state.view.track_height, |r| r.height)
 	}
 
 	/// Content y (before scrolling) of screen y.
@@ -620,7 +911,7 @@ impl ArrangeUi {
 			let y = self.top(layout, i, scroll);
 			Rect::from_min_max(
 				pos2(layout.header.left(), y),
-				pos2(layout.lanes.right(), y + h),
+				pos2(layout.lanes.right(), y + self.track_h(state, i)),
 			)
 		};
 		let (zone, ghost_row) = match target {
@@ -656,9 +947,9 @@ impl ArrangeUi {
 				pos2(layout.header.center().x, zone.top() + h * 0.5),
 				Align2::CENTER_CENTER,
 				if matches!(target, DropTarget::BelowSampler { .. }) {
-					"+ new sampler track"
+					tr("+ new sampler track")
 				} else {
-					"+ new track (Alt: sampler)"
+					tr("+ new track (Alt: sampler)")
 				},
 				theme::small(),
 				theme::ACCENT,
@@ -776,7 +1067,7 @@ impl ArrangeUi {
 		}
 		// Add-track buttons under the last track.
 		let below = layout.body_top + self.rows.height - scroll + 8.0;
-		if below + 24.0 < clip.bottom() && below > clip.top() - 24.0 {
+		if !tracks.is_empty() && below + 24.0 < clip.bottom() && below > clip.top() - 24.0 {
 			let rect = Rect::from_min_size(
 				pos2(clip.left() + 8.0, below),
 				vec2(clip.width() - 16.0, 22.0),
@@ -788,11 +1079,11 @@ impl ArrangeUi {
 			);
 			child.set_clip_rect(clip);
 			add_track_buttons(&mut child, state);
-			if tracks.is_empty() || below + 52.0 < clip.bottom() {
+			if below + 52.0 < clip.bottom() {
 				ui.painter_at(clip).text(
 					pos2(clip.left() + 12.0, below + 36.0),
 					Align2::LEFT_CENTER,
-					"or drop a device or file here",
+					tr("or drop a device or file here"),
 					theme::small(),
 					theme::TEXT_FAINT,
 				);
@@ -822,13 +1113,13 @@ impl ArrangeUi {
 			rect,
 			0.0,
 			if selected {
-				theme::LANE_SELECTED
+				theme::BG_RAISED
 			} else {
 				theme::BG_PANEL
 			},
 		);
 		p.rect_filled(
-			Rect::from_min_size(rect.min, vec2(5.0, rect.height())),
+			Rect::from_min_size(rect.min, vec2(4.0, rect.height())),
 			0.0,
 			color,
 		);
@@ -858,19 +1149,39 @@ impl ArrangeUi {
 		let left = rect.left() + 12.0 + folders.len() as f32 * FOLDER_INDENT;
 		let meter_w = 8.0;
 		let right = rect.right() - meter_w - 10.0;
-		// Row 1: number, name, mute, solo.
+		// Tall headers (the default): name, device, then one row of buttons and the volume
+		// field. Short ones keep the buttons next to the name.
+		let tall = rect.height() >= TALL_HEADER;
 		let row1 = rect.top() + 6.0;
 		p.text(
 			pos2(left, row1 + 8.0),
 			Align2::LEFT_CENTER,
 			format!("{}", index + 1),
-			theme::small(),
+			theme::mono(10.5),
 			theme::TEXT_FAINT,
 		);
-		let solo_rect = Rect::from_min_size(pos2(right - 18.0, row1), vec2(18.0, 16.0));
-		let mute_rect = solo_rect.translate(vec2(-21.0, 0.0));
-		let auto_rect = mute_rect.translate(vec2(-21.0, 0.0));
-		let record_left = super::record::header_buttons(ui, state, track, id, auto_rect);
+		// `record::header_buttons` puts arm and takes left of the automation toggle, 21 px
+		// apart: tall rows read M S arm T A.
+		let button = vec2(18.0, 18.0);
+		let pitch = 21.0;
+		let (auto_rect, mute_rect, solo_rect) = if tall {
+			let extra = usize::from(matches!(
+				track.kind,
+				TrackKind::Audio | TrackKind::Instrument
+			)) + usize::from(crate::state::rows::take_lanes(track) > 0);
+			let m = Rect::from_min_size(pos2(left, rect.top() + 42.0), button);
+			let a = m.translate(vec2((2 + extra) as f32 * pitch, 0.0));
+			(a, m, m.translate(vec2(pitch, 0.0)))
+		} else {
+			let s = Rect::from_min_size(pos2(right - button.x, row1 - 1.0), button);
+			(
+				s.translate(vec2(-2.0 * pitch, 0.0)),
+				s.translate(vec2(-pitch, 0.0)),
+				s,
+			)
+		};
+		let buttons_left = super::record::header_buttons(ui, state, track, id, auto_rect);
+		let record_left = if tall { right } else { buttons_left };
 		let mut name_left = left + 16.0;
 		if track.kind == TrackKind::Folder {
 			// Collapse / expand toggle before the name.
@@ -878,7 +1189,7 @@ impl ArrangeUi {
 			let r = Rect::from_min_size(pos2(name_left - 2.0, row1), vec2(16.0, 16.0));
 			let resp = ui.interact(r, id.with("fold"), Sense::click());
 			resp.widget_info(|| {
-				egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, open, "Fold")
+				egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, open, tr("Fold"))
 			});
 			widgets::paint_disclosure(
 				&p,
@@ -890,7 +1201,10 @@ impl ArrangeUi {
 					theme::TEXT_DIM
 				},
 			);
-			if resp.on_hover_text("Collapse / expand the folder").clicked() {
+			if resp
+				.on_hover_text(tr("Collapse / expand the folder"))
+				.clicked()
+			{
 				state.toggle_folder(track.id);
 			}
 			name_left += 16.0;
@@ -901,7 +1215,7 @@ impl ArrangeUi {
 			Some((t, text)) if *t == track.id => {
 				let edit = ui.put(
 					name_rect,
-					egui::TextEdit::singleline(text).font(FontId::proportional(12.5)),
+					egui::TextEdit::singleline(text).font(theme::heading()),
 				);
 				if !edit.has_focus() && !edit.lost_focus() {
 					edit.request_focus();
@@ -928,7 +1242,7 @@ impl ArrangeUi {
 					pos2(name_rect.left(), name_rect.center().y),
 					Align2::LEFT_CENTER,
 					&track.name,
-					FontId::proportional(12.5),
+					theme::heading(),
 					if selected {
 						Color32::WHITE
 					} else {
@@ -947,7 +1261,7 @@ impl ArrangeUi {
 			let open = state.view.automation.is_open(Some(track.id));
 			let a = ui.interact(auto_rect, id.with("auto"), Sense::click());
 			widgets::paint_toggle(&p, auto_rect, open, "A", theme::AUTOMATION, a.hovered());
-			if a.on_hover_text("Show / hide automation lanes (A)")
+			if a.on_hover_text(tr("Show / hide automation lanes (A)"))
 				.clicked()
 			{
 				let project = state.project().clone();
@@ -955,7 +1269,7 @@ impl ArrangeUi {
 			}
 			let m = ui.interact(mute_rect, id.with("mute"), Sense::click());
 			widgets::paint_toggle(&p, mute_rect, ch.mute, "M", theme::MUTE, m.hovered());
-			if m.on_hover_text("Mute").clicked() {
+			if m.on_hover_text(tr("Mute")).clicked() {
 				set_channel(
 					state,
 					track.id,
@@ -967,7 +1281,7 @@ impl ArrangeUi {
 			}
 			let s = ui.interact(solo_rect, id.with("solo"), Sense::click());
 			widgets::paint_toggle(&p, solo_rect, ch.solo, "S", theme::SOLO, s.hovered());
-			if s.on_hover_text("Solo").clicked() {
+			if s.on_hover_text(tr("Solo")).clicked() {
 				set_channel(
 					state,
 					track.id,
@@ -981,21 +1295,23 @@ impl ArrangeUi {
 
 		// Row 2: instrument / kind and volume.
 		if rect.height() >= 46.0 {
-			let row2 = row1 + 22.0;
+			let row2 = row1 + 20.0;
 			let what = match track.kind {
 				TrackKind::Instrument => track
 					.instrument
 					.as_ref()
-					.map_or("No instrument".to_owned(), |d| d.name.clone()),
-				TrackKind::Audio => "Audio".to_owned(),
-				TrackKind::Bus => "Bus".to_owned(),
+					.map_or(tr("No instrument").to_owned(), |d| d.name.clone()),
+				TrackKind::Audio => tr("Audio").to_owned(),
+				TrackKind::Bus => tr("Bus").to_owned(),
 				TrackKind::Folder => {
 					let n = state.project().folder_contents(track.id).len();
-					format!("Folder · {n} track{}", if n == 1 { "" } else { "s" })
+					trn("Folder · {n} track", "Folder · {n} tracks", n)
 				}
 			};
-			let instrument_rect =
-				Rect::from_min_max(pos2(left, row2), pos2(right - 62.0, row2 + 14.0));
+			let instrument_rect = Rect::from_min_max(
+				pos2(left, row2),
+				pos2(if tall { right } else { right - 62.0 }, row2 + 14.0),
+			);
 			let ir = ui.interact(instrument_rect, id.with("instrument"), Sense::click());
 			if track.kind == TrackKind::Audio {
 				super::record::input_controls(ui, state, track, id, instrument_rect);
@@ -1003,7 +1319,7 @@ impl ArrangeUi {
 				ui.painter_at(instrument_rect).text(
 					pos2(left, row2 + 7.0),
 					Align2::LEFT_CENTER,
-					format!("{} {what}", kind_glyph(track.kind)),
+					what,
 					theme::small(),
 					if ir.hovered() {
 						theme::TEXT
@@ -1020,24 +1336,34 @@ impl ArrangeUi {
 					device: d.id,
 				});
 			}
-			// Double-click the instrument: its editor window (plugins) or the piano roll.
+			// Double-click the instrument: its editor window (plugins), the device editor
+			// (built-ins) or the piano roll.
 			if ir.double_clicked() {
-				let sampler = track.instrument.as_ref().map(|d| DeviceRef {
-					track: Some(track.id),
-					device: d.id,
-				});
-				match &track.instrument {
-					Some(d) if state.is_plugin(d.id) => state.toggle_plugin_editor(d.id),
-					Some(_) if sampler.is_some_and(|r| state.is_sample_device(r)) => {
-						state.toggle_instrument_editor(sampler.expect("checked"));
-					}
+				let builtin = track
+					.instrument
+					.as_ref()
+					.map(|d| DeviceRef {
+						track: Some(track.id),
+						device: d.id,
+					})
+					.filter(|r| state.has_device_editor(*r));
+				match (&track.instrument, builtin) {
+					(Some(d), _) if state.is_plugin(d.id) => state.toggle_plugin_editor(d.id),
+					(Some(_), Some(r)) => state.toggle_device_editor(r),
 					_ if track.kind == TrackKind::Instrument => {
 						state.open_track_in_piano_roll(track.id);
 					}
 					_ => {}
 				}
 			}
-			let vol_rect = Rect::from_min_size(pos2(right - 58.0, row2), vec2(58.0, 14.0));
+			let vol_rect = if tall {
+				Rect::from_min_max(
+					pos2(auto_rect.right() + 6.0, solo_rect.top()),
+					pos2(right, solo_rect.bottom()),
+				)
+			} else {
+				Rect::from_min_size(pos2(right - 58.0, row2), vec2(58.0, 14.0))
+			};
 			let (gesture, vol) = widgets::volume_slider(
 				ui,
 				id.with("volume"),
@@ -1054,7 +1380,7 @@ impl ArrangeUi {
 			if state.is_automated(&vol_addr) {
 				super::automation::automated_badge(ui, vol_rect);
 			}
-			vol.on_hover_text("Volume: drag (Shift: fine), double-click: 0 dB")
+			vol.on_hover_text(tr("Volume: drag (Shift: fine), double-click: 0 dB"))
 				.context_menu(|ui| super::automation::automate_item(ui, state, vol_addr));
 		}
 		// Meter along the right edge.
@@ -1064,10 +1390,16 @@ impl ArrangeUi {
 		);
 		widgets::paint_meter(&p, meter, state.meters.get(Some(track.id)));
 
-		// Click selects, double-click renames, drag reorders.
+		// Click selects (Ctrl: every clip on the track too), double-click renames, drag
+		// reorders.
 		if response.clicked() {
 			state.selection.select_track(track.id);
 			state.selection.clear_clips();
+			if ui.input(|i| i.modifiers.command) {
+				state.selection.clips = playlist::track_clips(state.project(), track.id)
+					.into_iter()
+					.collect();
+			}
 		}
 		// Double-click: the name renames, the rest of an instrument header opens the
 		// piano roll (creating a clip when the track has none to edit).
@@ -1111,16 +1443,17 @@ impl ArrangeUi {
 			}
 		}
 		response.context_menu(|ui| track_menu(ui, state, track, &mut self.rename));
+		resize_edge(ui, state, track.id, rect);
 	}
 
 	fn lanes(&mut self, ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 		let area = layout.lanes;
-		let h = state.view.track_height;
 		let scroll = state.view.scroll_y;
 		let tl = state.view.timeline;
 		let meter = MeterMap::new(state.project().meter());
 		let painter = ui.painter_at(area);
 		let tracks: Vec<Track> = state.project().tracks.clone();
+		let tool = state.view.arrange_tool;
 
 		// Row backgrounds: clip lanes alternate, automation lanes are a step darker.
 		for row in &self.rows.rows {
@@ -1194,24 +1527,39 @@ impl ArrangeUi {
 		// Lane clicks: select / create clips.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
+			let h = self.track_h(state, i);
 			let r =
 				Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), h)).intersect(area);
 			if r.height() <= 0.0 {
 				continue;
 			}
 			let resp = ui.interact(r, Id::new(("lane", t.id)), Sense::click_and_drag());
+			let draws = tool == ArrangeTool::Draw && t.kind == TrackKind::Instrument;
+			if draws && resp.hovered() && !self.pan {
+				ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+			}
 			if resp.drag_started_by(PointerButton::Primary)
 				&& let Some(press) = ui.input(|i| i.pointer.press_origin())
 			{
-				let add = ui.input(|i| i.modifiers.shift);
-				self.band = Some((press, press, add));
+				if draws {
+					self.draw = Some((t.id, tl.x_to_tick(press.x - area.left()), press.x, false));
+				} else if matches!(tool, ArrangeTool::Select | ArrangeTool::Draw) {
+					let add = ui.input(|i| i.modifiers.shift);
+					self.band = Some((press, press, add));
+				}
 			}
 			if resp.clicked() {
 				state.selection.select_track(t.id);
-				state.selection.clear_clips();
+				if tool != ArrangeTool::Paint {
+					state.selection.clear_clips();
+				}
+				if draws && let Some(pos) = resp.interact_pointer_pos() {
+					let at = tl.x_to_tick(pos.x - area.left());
+					self.finish_draw(ui, state, t.id, at, at);
+				}
 			}
 			if resp.double_clicked()
-				&& t.kind == TrackKind::Instrument
+				&& !draws && t.kind == TrackKind::Instrument
 				&& let Some(pos) = resp.interact_pointer_pos()
 			{
 				let tick = tl.x_to_tick(pos.x - area.left());
@@ -1229,6 +1577,7 @@ impl ArrangeUi {
 		// handle); clips nested in another just sum (marked with an X).
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
+			let h = self.track_h(state, i);
 			if y > area.bottom() || y + h < area.top() {
 				continue;
 			}
@@ -1255,6 +1604,7 @@ impl ArrangeUi {
 				continue;
 			}
 			let y = self.top(layout, i, scroll);
+			let h = self.track_h(state, i);
 			if y > area.bottom() || y + h < area.top() {
 				continue;
 			}
@@ -1293,6 +1643,7 @@ impl ArrangeUi {
 		// Clips.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
+			let h = self.track_h(state, i);
 			if (y > area.bottom() || y + h < area.top()) && self.drag.is_none() {
 				// Clips scrolled out of view still process an in-flight drag.
 				continue;
@@ -1320,9 +1671,25 @@ impl ArrangeUi {
 			painter.line_segment([r.left_top(), r.right_bottom()], stroke);
 		}
 		self.crossfades(ui, state, &painter, area);
+		self.draw_gesture(ui, state, layout, &painter);
+		self.tool_gesture(ui, state, layout, &painter);
+		self.clip_rects.clear();
+		if let Some((x, r)) = self.split_hover.take() {
+			painter.vline(x, r.y_range(), Stroke::new(1.5, theme::TEXT));
+			painter.add(Shape::convex_polygon(
+				vec![
+					pos2(x - 4.0, r.top()),
+					pos2(x + 4.0, r.top()),
+					pos2(x, r.top() + 5.0),
+				],
+				theme::TEXT,
+				Stroke::NONE,
+			));
+		}
 		// The clip being recorded, and take badges.
 		for (i, t) in tracks.iter().enumerate() {
 			let y = self.top(layout, i, scroll);
+			let h = self.track_h(state, i);
 			if y > area.bottom() || y + h < area.top() {
 				continue;
 			}
@@ -1378,7 +1745,9 @@ impl ArrangeUi {
 			let resp = ui
 				.interact(handle.expand(2.0), id, Sense::click_and_drag())
 				.on_hover_cursor(CursorIcon::ResizeHorizontal)
-				.on_hover_text("Crossfade length (drag; double-click: the whole overlap)");
+				.on_hover_text(tr(
+					"Crossfade length (drag; double-click: the whole overlap)",
+				));
 			painter.rect_filled(
 				handle,
 				CornerRadius::same(2),
@@ -1414,6 +1783,328 @@ impl ArrangeUi {
 	}
 
 	/// Rubber band over empty lane area: selects the clips it touches (Shift adds).
+	/// Paint, knife and sweep gestures: started by a press on a track lane (anywhere,
+	/// clips included), previewed while held, one command on release.
+	fn tool_gesture(&mut self, ui: &Ui, state: &mut AppState, layout: &Layout, painter: &Painter) {
+		let area = layout.lanes;
+		let tl = state.view.timeline;
+		let (primary, secondary, released, pos) = ui.input(|i| {
+			(
+				i.pointer.button_pressed(PointerButton::Primary),
+				i.pointer.button_pressed(PointerButton::Secondary),
+				i.pointer.any_released(),
+				i.pointer.latest_pos(),
+			)
+		});
+		let Some(pos) = pos else {
+			return;
+		};
+		let tool = state.view.arrange_tool;
+		let alt = ui.input(|i| i.modifiers.alt);
+		let snap = state.view.snap && !alt;
+		let meter = MeterMap::new(state.project().meter());
+		let tick_at = |x: f32| {
+			let t = tl.x_to_tick(x - area.left());
+			if snap {
+				tl.snap(t, meter.view())
+			} else {
+				Tick(t.0.max(0))
+			}
+		};
+		if self.tool.is_none()
+			&& (primary || secondary)
+			&& area.contains(pos)
+			&& ui.rect_contains_pointer(area)
+			&& self.drag.is_none()
+			&& self.band.is_none()
+			&& self.draw.is_none()
+			&& !self.pan
+			&& self.xfade_drag.is_none()
+			&& let Some((track, _)) = self.rows.track_at(Self::content_y(layout, state, pos.y))
+		{
+			let on_clip = self
+				.clip_rects
+				.iter()
+				.find(|(_, r)| r.contains(pos))
+				.map(|(c, _)| *c);
+			self.tool = match (tool, primary) {
+				(ArrangeTool::Paint, true) => {
+					let selection: Vec<ClipId> = state.selection.clips.iter().copied().collect();
+					let source = playlist::paint_source(
+						state.project(),
+						track,
+						on_clip,
+						&selection,
+						state.view.paint_source,
+					);
+					match source {
+						Some(template) => {
+							state.view.paint_source = Some(template);
+							// Cells continue the template's own grid (its start, every
+							// length), so repeats line up with it; Alt paints from the
+							// press.
+							let raw = Tick(tl.x_to_tick(pos.x - area.left()).0.max(0));
+							let first = match state.project().find_clip(template) {
+								Some((_, c)) if snap => c.start,
+								_ => raw,
+							};
+							Some(ToolGesture::Paint {
+								track,
+								template,
+								first,
+								press: raw,
+							})
+						}
+						None => {
+							state
+								.notices
+								.info(tr("Paint: click a clip (or select one) to repeat it"));
+							None
+						}
+					}
+				}
+				(ArrangeTool::Split, true) => Some(ToolGesture::Knife {
+					press: pos,
+					active: false,
+				}),
+				(ArrangeTool::Mute, true) => Some(ToolGesture::Sweep {
+					mute: true,
+					hits: Vec::new(),
+					last: pos,
+				}),
+				(ArrangeTool::Draw | ArrangeTool::Paint, false) => Some(ToolGesture::Sweep {
+					mute: false,
+					hits: Vec::new(),
+					last: pos,
+				}),
+				_ => None,
+			};
+		}
+		let Some(gesture) = self.tool.as_mut() else {
+			return;
+		};
+		match gesture {
+			ToolGesture::Paint {
+				track,
+				template,
+				first,
+				press,
+			} => {
+				let (track, template, first, press) = (*track, *template, *first, *press);
+				let Some((_, clip)) = state.project().find_clip(template) else {
+					self.tool = None;
+					return;
+				};
+				let now = tl.x_to_tick(pos.x - area.left());
+				let starts = playlist::paint_starts(first, clip.length, press, now);
+				let linked = !ui.input(|i| i.modifiers.shift);
+				if released {
+					self.tool = None;
+					if let Some((cmd, _)) =
+						playlist::paint_clips(state.project(), template, track, &starts, linked)
+					{
+						state.apply(cmd);
+					}
+					return;
+				}
+				let Some(index) = state.project().track_index(track) else {
+					return;
+				};
+				let y = self.top(layout, index, state.view.scroll_y);
+				let h = self.track_h(state, index);
+				let color = state
+					.project()
+					.track(track)
+					.map_or(theme::ACCENT, |t| theme::track_color(t.color.as_deref()));
+				let free = playlist::paint_clips(state.project(), template, track, &starts, linked)
+					.map(|(cmd, _)| cmd);
+				let mut cells = Vec::new();
+				collect_added(free.as_ref(), &mut cells);
+				for (start, length) in cells {
+					let r = Rect::from_min_max(
+						pos2(area.left() + tl.tick_to_x(start), y + 1.0),
+						pos2(area.left() + tl.tick_to_x(start + length), y + h - 1.0),
+					);
+					painter.rect_filled(
+						r,
+						CornerRadius::same(theme::RADIUS),
+						color.gamma_multiply(0.25),
+					);
+					dashed_rect(painter, r, color);
+				}
+			}
+			ToolGesture::Knife { press, active } => {
+				*active |= press.distance(pos) >= 4.0;
+				let (press, active) = (*press, *active);
+				let rows: Vec<(TrackId, f32, f32)> = self
+					.rows
+					.rows
+					.iter()
+					.filter_map(|r| match r.kind {
+						RowKind::Track { id, .. } => Some((id, r.top, r.bottom())),
+						_ => None,
+					})
+					.collect();
+				let cy = |y: f32| Self::content_y(layout, state, y);
+				let cuts: Vec<(TrackId, Tick)> =
+					playlist::knife_rows(&rows, (press.x, cy(press.y)), (pos.x, cy(pos.y)))
+						.into_iter()
+						.map(|(t, x)| (t, tick_at(x)))
+						.collect();
+				if released {
+					self.tool = None;
+					if !active {
+						return;
+					}
+					match playlist::slice(state.project(), &cuts) {
+						Some(cmd) => {
+							state.apply(cmd);
+						}
+						None => state.notices.info(tr("The cut line crosses no clip")),
+					}
+					return;
+				}
+				if active {
+					// Each crossed track is cut at its own (snapped) x: draw the line and
+					// mark the cuts.
+					for (track, at) in &cuts {
+						let Some(row) = rows.iter().find(|r| r.0 == *track) else {
+							continue;
+						};
+						let x = area.left() + tl.tick_to_x(*at);
+						let top = layout.body_top + row.1 - state.view.scroll_y;
+						let bottom = layout.body_top + row.2 - state.view.scroll_y;
+						painter.vline(x, top..=bottom, Stroke::new(1.5, theme::ACCENT));
+					}
+					painter.line_segment([press, pos], Stroke::new(1.5, theme::TEXT));
+					painter.circle_filled(press, 2.5, theme::TEXT);
+					ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+				}
+			}
+			ToolGesture::Sweep { mute, hits, last } => {
+				let rects: Vec<(ClipId, [f32; 4])> = self
+					.clip_rects
+					.iter()
+					.map(|(c, r)| (*c, [r.left(), r.top(), r.right(), r.bottom()]))
+					.collect();
+				for hit in playlist::sweep_hits(&rects, (last.x, last.y), (pos.x, pos.y)) {
+					if !hits.contains(&hit) {
+						hits.push(hit);
+					}
+				}
+				*last = pos;
+				let mute = *mute;
+				if released {
+					let hits = std::mem::take(hits);
+					self.tool = None;
+					let cmd = if mute {
+						playlist::toggle_mute(state.project(), &hits)
+					} else {
+						edits::delete_clips(&hits)
+					};
+					if let Some(cmd) = cmd {
+						state.apply(cmd);
+					}
+					return;
+				}
+				for (c, r) in &self.clip_rects {
+					if !hits.contains(c) {
+						continue;
+					}
+					if mute {
+						painter.rect_filled(*r, 0.0, Color32::from_black_alpha(110));
+					} else {
+						painter.rect_filled(*r, 0.0, theme::ERROR.gamma_multiply(0.35));
+						let stroke = Stroke::new(1.5, theme::ERROR);
+						painter.line_segment([r.left_top(), r.right_bottom()], stroke);
+						painter.line_segment([r.left_bottom(), r.right_top()], stroke);
+					}
+				}
+			}
+		}
+	}
+
+	/// Draw tool: the ghost of the clip being drawn; on release, the clip (one step).
+	fn draw_gesture(&mut self, ui: &Ui, state: &mut AppState, layout: &Layout, painter: &Painter) {
+		let Some((track, press, press_x, mut moved)) = self.draw else {
+			return;
+		};
+		let Some(pos) = ui.input(|i| i.pointer.latest_pos()) else {
+			return;
+		};
+		let tl = state.view.timeline;
+		// A press that barely moved is a click (one bar).
+		moved |= (pos.x - press_x).abs() >= 4.0;
+		self.draw = Some((track, press, press_x, moved));
+		let now = if moved {
+			tl.x_to_tick(pos.x - layout.lanes.left())
+		} else {
+			press
+		};
+		if ui.input(|i| i.pointer.any_released()) {
+			self.draw = None;
+			self.finish_draw(ui, state, track, press, now);
+			return;
+		}
+		let (start, end) = self.draw_span(ui, state, press, now);
+		let Some(index) = state.project().track_index(track) else {
+			self.draw = None;
+			return;
+		};
+		let y = self.top(layout, index, state.view.scroll_y);
+		let h = self.track_h(state, index);
+		let r = Rect::from_min_max(
+			pos2(layout.lanes.left() + tl.tick_to_x(start), y + 1.0),
+			pos2(layout.lanes.left() + tl.tick_to_x(end), y + h - 1.0),
+		);
+		let color = state
+			.project()
+			.track(track)
+			.map_or(theme::ACCENT, |t| theme::track_color(t.color.as_deref()));
+		painter.rect_filled(
+			r,
+			CornerRadius::same(theme::RADIUS),
+			color.gamma_multiply(0.25),
+		);
+		painter.rect_stroke(
+			r,
+			CornerRadius::same(theme::RADIUS),
+			Stroke::new(1.0, color),
+			StrokeKind::Inside,
+		);
+		let meter = state.project().meter();
+		painter.text(
+			r.left_top() + vec2(5.0, 2.0),
+			Align2::LEFT_TOP,
+			format!(
+				"{} · {}",
+				timeline::format_bbt(start, meter),
+				crate::state::inspector::format_length(end - start, meter.signature_at(start))
+			),
+			theme::small(),
+			theme::TEXT,
+		);
+	}
+
+	/// The span of a Draw gesture: grid-snapped (unless Alt), a click is one bar.
+	fn draw_span(&self, ui: &Ui, state: &AppState, press: Tick, now: Tick) -> (Tick, Tick) {
+		let meter = state.project().meter();
+		let alt = ui.input(|i| i.modifiers.alt);
+		let step =
+			(state.view.snap && !alt).then(|| state.view.timeline.grid_at(press, meter).step);
+		let bar = meter.bar_at(Tick(press.0.max(0))).length;
+		arrange_tool::draw_span(press, now, step, bar)
+	}
+
+	fn finish_draw(&self, ui: &Ui, state: &mut AppState, track: TrackId, press: Tick, now: Tick) {
+		let span = self.draw_span(ui, state, press, now);
+		if let Some((cmd, id)) = arrange_tool::draw_clip(state.project(), track, span)
+			&& state.apply(cmd)
+		{
+			state.selection.click_clip(track, id, false);
+		}
+	}
+
 	fn rubber_band(&mut self, ui: &Ui, state: &mut AppState, layout: &Layout) {
 		let Some((start, _, add)) = self.band else {
 			return;
@@ -1467,7 +2158,7 @@ impl ArrangeUi {
 		xfs: &[edits::Crossfade],
 	) {
 		let area = layout.lanes;
-		let h = state.view.track_height;
+		let h = self.track_h(state, index);
 		let tl = state.view.timeline;
 		let meter = MeterMap::new(state.project().meter());
 		let y = self.top(layout, index, state.view.scroll_y);
@@ -1477,12 +2168,65 @@ impl ArrangeUi {
 		let id = Id::new(("clip", clip.id));
 		let visible = rect.intersects(area);
 		let response = if visible {
+			self.clip_rects.push((clip.id, rect.intersect(area)));
 			Some(ui.interact(rect.intersect(area), id, Sense::click_and_drag()))
 		} else {
 			None
 		};
+		let tool = state.view.arrange_tool;
 
-		if let Some(r) = &response {
+		if state.view.arrange_tool == ArrangeTool::Split
+			&& let Some(r) = &response
+		{
+			let alt = ui.input(|i| i.modifiers.alt);
+			let at_x = |x: f32| {
+				let tick = tl.x_to_tick(x - area.left());
+				if state.view.snap && !alt {
+					tl.snap(tick, meter.view())
+				} else {
+					tick
+				}
+			};
+			if let Some(pos) = r.hover_pos()
+				&& self.drag.is_none()
+			{
+				let at = at_x(pos.x);
+				if at > clip.start && at < clip.end() {
+					ui.ctx().set_cursor_icon(CursorIcon::Text);
+					self.split_hover = Some((area.left() + tl.tick_to_x(at), rect));
+				}
+			}
+			if r.clicked()
+				&& let Some(pos) = r.interact_pointer_pos()
+			{
+				let selection: Vec<ClipId> = state.selection.clips.iter().copied().collect();
+				let targets = arrange_tool::split_targets(clip.id, &selection);
+				match arrange_tool::split_at(state.project(), &targets, at_x(pos.x)) {
+					Some(cmd) => {
+						state.apply(cmd);
+					}
+					None => state
+						.notices
+						.info(tr("Too close to the clip edge to split here")),
+				}
+			}
+			r.context_menu(|ui| clip_menu(ui, state, track.id, clip));
+		} else if matches!(tool, ArrangeTool::Paint | ArrangeTool::Mute)
+			&& let Some(r) = &response
+		{
+			// The press itself is the tool gesture (paint / mute sweep); a Paint click
+			// also picks the clip to repeat.
+			if r.hovered() && !self.pan {
+				ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+			}
+			if tool == ArrangeTool::Paint && r.clicked() {
+				state.selection.click_clip(track.id, clip.id, false);
+				state.view.paint_source = Some(clip.id);
+			}
+			if tool == ArrangeTool::Mute {
+				r.context_menu(|ui| clip_menu(ui, state, track.id, clip));
+			}
+		} else if let Some(r) = &response {
 			let near_edge = r.hover_pos().is_some_and(|p| {
 				p.x > rect.right() - RESIZE_HANDLE || p.x < rect.left() + RESIZE_HANDLE
 			});
@@ -1509,9 +2253,14 @@ impl ArrangeUi {
 				state
 					.selection
 					.click_clip(track.id, clip.id, add && !drag_started);
+				state.view.paint_source = Some(clip.id);
 			}
 			if r.double_clicked() {
-				state.open_editor(clip.id);
+				if ui.input(|i| i.modifiers.alt) {
+					state.open_clip_window(clip.id);
+				} else {
+					state.open_editor(clip.id);
+				}
 			}
 			if drag_started
 				&& let Some(press) = ui
@@ -1544,9 +2293,13 @@ impl ArrangeUi {
 					delta: Tick::ZERO,
 					target: None,
 					copy: false,
+					stretch: false,
 				});
 			}
-			r.context_menu(|ui| clip_menu(ui, state, track.id, clip));
+			// Draw: the right button deletes (sweep), as in FL Studio.
+			if tool != ArrangeTool::Draw {
+				r.context_menu(|ui| clip_menu(ui, state, track.id, clip));
+			}
 		}
 
 		// Update an active drag anchored on this clip.
@@ -1564,6 +2317,12 @@ impl ArrangeUi {
 				};
 				d.delta = snapped - d.origin;
 				d.copy = d.kind == DragKind::Move && ctrl;
+				d.stretch = d.kind == DragKind::Resize
+					&& ui.input(|i| i.modifiers.shift)
+					&& state
+						.project()
+						.find_clip(d.anchor)
+						.is_some_and(|(_, c)| c.is_midi());
 				if d.kind == DragKind::Move {
 					let y = Self::content_y(layout, state, pos.y);
 					let tracks = &state.project().tracks;
@@ -1581,8 +2340,9 @@ impl ArrangeUi {
 				let d = self.drag.take().expect("clip drag");
 				match d.kind {
 					DragKind::Move if d.copy => {
+						let linked = !ui.input(|i| i.modifiers.shift);
 						if let Some((cmd, ids)) =
-							edits::copy_clips(state.project(), &d.clips, d.delta, d.target)
+							edits::copy_clips(state.project(), &d.clips, d.delta, d.target, linked)
 							&& state.apply(cmd)
 						{
 							state.selection.clips = ids.into_iter().collect();
@@ -1596,9 +2356,16 @@ impl ArrangeUi {
 						}
 					}
 					DragKind::Resize => {
-						if let Some(cmd) =
-							edits::resize_clip(state.project(), d.anchor, d.origin + d.delta)
-						{
+						let end = d.origin + d.delta;
+						let start = state.project().find_clip(d.anchor).map(|(_, c)| c.start);
+						let cmd = match start {
+							// Shift (FL): stretch the content with the clip.
+							Some(start) if d.stretch => {
+								playlist::stretch(state.project(), d.anchor, end - start)
+							}
+							_ => playlist::resize_repeating(state.project(), d.anchor, end),
+						};
+						if let Some(cmd) = cmd {
 							state.apply(cmd);
 						}
 					}
@@ -1697,6 +2464,79 @@ impl ArrangeUi {
 	}
 }
 
+/// `(start, length)` of every clip a command adds (the Paint preview).
+fn collect_added(cmd: Option<&cadenza_model::Command>, out: &mut Vec<(Tick, Tick)>) {
+	match cmd {
+		Some(cadenza_model::Command::AddClip { clip, .. }) => out.push((clip.start, clip.length)),
+		Some(cadenza_model::Command::Batch { commands, .. }) => {
+			for c in commands {
+				collect_added(Some(c), out);
+			}
+		}
+		_ => {}
+	}
+}
+
+/// The linked-clip mark: two interlocked chain links centred on `c`.
+fn link_glyph(p: &Painter, c: Pos2, color: Color32) {
+	let stroke = Stroke::new(1.2, color);
+	for dx in [-2.2, 2.2] {
+		p.rect_stroke(
+			Rect::from_center_size(c + vec2(dx, 0.0), vec2(6.0, 4.0)),
+			CornerRadius::same(2),
+			stroke,
+			StrokeKind::Middle,
+		);
+	}
+}
+
+/// A muted clip: dimmed and hatched, with a ⊘ in its header.
+fn paint_muted(p: &Painter, rect: Rect, header: Rect) {
+	p.rect_filled(
+		rect,
+		CornerRadius::same(theme::RADIUS),
+		Color32::from_black_alpha(120),
+	);
+	let hatch = p.with_clip_rect(p.clip_rect().intersect(rect));
+	let stroke = Stroke::new(1.0, Color32::from_white_alpha(28));
+	let h = rect.height();
+	let mut x = rect.left() - h;
+	while x < rect.right() {
+		hatch.line_segment([pos2(x, rect.bottom()), pos2(x + h, rect.top())], stroke);
+		x += 8.0;
+	}
+	p.text(
+		pos2(rect.right() - 5.0, header.center().y + 1.0),
+		Align2::RIGHT_CENTER,
+		"⊘",
+		FontId::proportional(10.0),
+		theme::TEXT_DIM,
+	);
+}
+
+/// The bottom edge of a track header: drag resizes that track, double-click resets it.
+fn resize_edge(ui: &mut Ui, state: &mut AppState, track: TrackId, rect: Rect) {
+	let edge = Rect::from_min_max(
+		pos2(rect.left(), rect.bottom() - RESIZE_EDGE),
+		pos2(rect.right(), rect.bottom() + 1.0),
+	);
+	let r = ui.interact(
+		edge,
+		Id::new(("track-resize", track)),
+		Sense::click_and_drag(),
+	);
+	if r.hovered() || r.dragged() {
+		ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+	}
+	if r.dragged() {
+		let h = state.view.height_of(track) + r.drag_delta().y;
+		state.view.set_track_height(track, h);
+	}
+	if r.double_clicked() {
+		state.view.track_heights.remove(&track);
+	}
+}
+
 /// The FRZ badge of a frozen track (header and mixer strip). Out of date (the clips or
 /// devices changed after freezing) it turns amber and a click freezes the track again.
 pub(super) fn freeze_badge(
@@ -1719,9 +2559,9 @@ pub(super) fn freeze_badge(
 		},
 	);
 	let label = if stale {
-		format!("Refreeze {}", track.name)
+		trf("Refreeze {name}", &[("name", &track.name)])
 	} else {
-		format!("{} is frozen", track.name)
+		trf("{name} is frozen", &[("name", &track.name)])
 	};
 	resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, &label));
 	let fill = if stale { theme::WARNING } else { theme::FROZEN };
@@ -1737,24 +2577,24 @@ pub(super) fn freeze_badge(
 	p.text(
 		badge.center(),
 		Align2::CENTER_CENTER,
-		if stale { "FRZ!" } else { "FRZ" },
+		if stale { "FRZ!" } else { tr("FRZ") },
 		FontId::monospace(8.5),
 		theme::BG_DEEP,
 	);
 	if stale {
 		if resp
-			.on_hover_text(
+			.on_hover_text(tr(
 				"Frozen render out of date: the clips or devices changed after freezing. \
 				 Click to refreeze (track menu: Unfreeze)",
-			)
+			))
 			.clicked()
 		{
 			state.freeze_track(track.id);
 		}
 	} else {
-		resp.on_hover_text(
+		resp.on_hover_text(tr(
 			"Frozen: the track plays its render; its devices are unloaded (track menu: Unfreeze)",
-		);
+		));
 	}
 }
 
@@ -1791,7 +2631,9 @@ pub fn zoom_to_selection(state: &mut AppState, width: f32, height: f32) {
 		.view
 		.timeline
 		.zoom_to_range(start.beats(), end.beats(), width);
-	let h = state.view.track_height;
+	let h = rows
+		.track(row)
+		.map_or(state.view.track_height, |r| r.height);
 	let top = rows.track_top(row);
 	if top < state.view.scroll_y || top + h > state.view.scroll_y + height {
 		state.view.scroll_y = (top - h * 0.5).max(0.0);
@@ -1840,13 +2682,11 @@ pub fn follow_menu(ui: &mut Ui, state: &mut AppState) {
 	egui::ComboBox::from_id_salt("follow-mode")
 		.width(78.0)
 		.selected_text(
-			egui::RichText::new(format!("Follow: {}", mode.name()))
-				.font(theme::small())
-				.color(if mode == FollowMode::Off {
-					theme::TEXT_FAINT
-				} else {
-					theme::TEXT_DIM
-				}),
+			egui::RichText::new(mode.name()).color(if mode == FollowMode::Off {
+				theme::TEXT_FAINT
+			} else {
+				theme::TEXT_DIM
+			}),
 		)
 		.show_ui(ui, |ui| {
 			for m in [FollowMode::Off, FollowMode::Page, FollowMode::Continuous] {
@@ -1854,29 +2694,22 @@ pub fn follow_menu(ui: &mut Ui, state: &mut AppState) {
 			}
 		})
 		.response
-		.on_hover_text("Follow the playhead while playing: off, page by page, or continuously");
+		.on_hover_text(tr(
+			"Follow the playhead while playing: off, page by page, or continuously",
+		));
 }
 
 pub(crate) fn grid_name(step: Tick, bar: Tick) -> String {
 	if step.0 >= bar.0 {
 		let bars = step.0 / bar.0.max(1);
 		return if bars == 1 {
-			"Grid 1 bar".into()
+			tr("Grid 1 bar").into()
 		} else {
-			format!("Grid {bars} bars")
+			trf("Grid {bars} bars", &[("bars", &bars)])
 		};
 	}
 	let denom = (PPQ * 4) / step.0.max(1);
-	format!("Grid 1/{denom}")
-}
-
-fn kind_glyph(kind: TrackKind) -> &'static str {
-	match kind {
-		TrackKind::Instrument => "♪",
-		TrackKind::Audio => "~",
-		TrackKind::Bus => "»",
-		TrackKind::Folder => "",
-	}
+	trf("Grid 1/{denom}", &[("denom", &denom)])
 }
 
 fn set_channel(state: &mut AppState, track: TrackId, patch: ChannelPatch) {
@@ -1888,10 +2721,10 @@ fn set_channel(state: &mut AppState, track: TrackId, patch: ChannelPatch) {
 
 pub fn add_track_buttons(ui: &mut Ui, state: &mut AppState) {
 	for (label, kind) in [
-		("+ Instrument", TrackKind::Instrument),
-		("+ Audio", TrackKind::Audio),
-		("+ Bus", TrackKind::Bus),
-		("+ Folder", TrackKind::Folder),
+		(tr("+ Instrument"), TrackKind::Instrument),
+		(tr("+ Audio"), TrackKind::Audio),
+		(tr("+ Bus"), TrackKind::Bus),
+		(tr("+ Folder"), TrackKind::Folder),
 	] {
 		if ui.small_button(label).clicked() {
 			add_track(state, kind);
@@ -1918,21 +2751,39 @@ fn track_menu(
 ) {
 	if track.kind == TrackKind::Instrument {
 		if ui
-			.add(egui::Button::new("Open in piano roll").shortcut_text("F7"))
+			.add(egui::Button::new(tr("Open in piano roll")).shortcut_text("F7"))
 			.clicked()
 		{
 			state.open_track_in_piano_roll(track.id);
 			ui.close();
 		}
-		if ui.button("New clip in piano roll").clicked() {
+		if ui.button(tr("New clip in piano roll")).clicked() {
 			let at = state.position();
 			state.new_clip_in_piano_roll(track.id, at);
 			ui.close();
 		}
 		ui.separator();
 	}
-	if ui.button("Rename").clicked() {
+	if ui.button(tr("Rename")).clicked() {
 		*rename = Some((track.id, track.name.clone()));
+		ui.close();
+	}
+	if ui
+		.add(egui::Button::new(tr("Select all clips")).shortcut_text("Ctrl+click"))
+		.clicked()
+	{
+		state.selection.select_track(track.id);
+		state.selection.clips = playlist::track_clips(state.project(), track.id)
+			.into_iter()
+			.collect();
+		ui.close();
+	}
+	if state.view.track_heights.contains_key(&track.id) && ui.button(tr("Reset height")).clicked() {
+		state.view.track_heights.remove(&track.id);
+		ui.close();
+	}
+	if ui.button(tr("Track properties…")).clicked() {
+		state.open_track_window(Some(track.id));
 		ui.close();
 	}
 	if crate::state::bounce::can_freeze(track) {
@@ -1940,26 +2791,34 @@ fn track_menu(
 		if track.freeze.is_some() {
 			if state.document().freeze_stale(track.id)
 				&& ui
-					.add_enabled(!busy, egui::Button::new("Refreeze (render is out of date)"))
+					.add_enabled(
+						!busy,
+						egui::Button::new(tr("Refreeze (render is out of date)")),
+					)
 					.clicked()
 			{
 				state.freeze_track(track.id);
 				ui.close();
 			}
-			if ui.button("Unfreeze").clicked() {
+			if ui.button(tr("Unfreeze")).clicked() {
 				state.unfreeze_track(track.id);
 				ui.close();
 			}
 		} else if ui
-			.add_enabled(!busy, egui::Button::new("Freeze (render, unload devices)"))
+			.add_enabled(
+				!busy,
+				egui::Button::new(tr("Freeze (render, unload devices)")),
+			)
 			.clicked()
 		{
 			state.freeze_track(track.id);
 			ui.close();
 		}
 		if ui
-			.add_enabled(!busy, egui::Button::new("Bounce in place"))
-			.on_hover_text("Render the track to a new audio track and mute this one")
+			.add_enabled(!busy, egui::Button::new(tr("Bounce in place")))
+			.on_hover_text(tr(
+				"Render the track to a new audio track and mute this one",
+			))
 			.clicked()
 		{
 			state.bounce_in_place(track.id);
@@ -1967,11 +2826,11 @@ fn track_menu(
 		}
 		ui.separator();
 	}
-	if ui.button("Group into new folder").clicked() {
+	if ui.button(tr("Group into new folder")).clicked() {
 		state.group_into_folder(&[track.id]);
 		ui.close();
 	}
-	if track.folder.is_some() && ui.button("Take out of folder").clicked() {
+	if track.folder.is_some() && ui.button(tr("Take out of folder")).clicked() {
 		state.take_out_of_folder(track.id);
 		ui.close();
 	}
@@ -2007,9 +2866,9 @@ fn track_menu(
 	if ui
 		.add(
 			egui::Button::new(if open {
-				"Hide automation"
+				tr("Hide automation")
 			} else {
-				"Show automation"
+				tr("Show automation")
 			})
 			.shortcut_text("A"),
 		)
@@ -2019,7 +2878,7 @@ fn track_menu(
 		state.view.automation.toggle(&project, Some(track.id));
 		ui.close();
 	}
-	ui.menu_button("Automate", |ui| {
+	ui.menu_button(tr("Automate"), |ui| {
 		let choices = state.lane_choices(Some(track.id));
 		egui::ScrollArea::vertical()
 			.max_height(360.0)
@@ -2033,20 +2892,20 @@ fn track_menu(
 			});
 	});
 	ui.separator();
-	if ui.button("Move up").clicked() {
+	if ui.button(tr("Move up")).clicked() {
 		if let Some(cmd) = edits::move_track(state.project(), track.id, -1) {
 			state.apply(cmd);
 		}
 		ui.close();
 	}
-	if ui.button("Move down").clicked() {
+	if ui.button(tr("Move down")).clicked() {
 		if let Some(cmd) = edits::move_track(state.project(), track.id, 1) {
 			state.apply(cmd);
 		}
 		ui.close();
 	}
 	ui.separator();
-	if ui.button("Delete track").clicked() {
+	if ui.button(tr("Delete track")).clicked() {
 		state.apply(Command::RemoveTrack { track: track.id });
 		ui.close();
 	}
@@ -2058,7 +2917,7 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 	}
 	if clip.is_midi() {
 		if ui
-			.add(egui::Button::new("Open in piano roll").shortcut_text("Double-click"))
+			.add(egui::Button::new(tr("Open in piano roll")).shortcut_text(tr("Double-click")))
 			.clicked()
 		{
 			state.open_piano_roll(clip.id);
@@ -2067,7 +2926,7 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 		ui.separator();
 	} else {
 		if ui
-			.add(egui::Button::new("Open in audio editor").shortcut_text("Double-click"))
+			.add(egui::Button::new(tr("Open in audio editor")).shortcut_text(tr("Double-click")))
 			.clicked()
 		{
 			state.open_audio_editor(clip.id);
@@ -2075,26 +2934,92 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 		}
 		ui.separator();
 	}
-	if ui.button("Duplicate      Ctrl+D").clicked() {
-		super::duplicate_selection(state);
+	if ui
+		.add(egui::Button::new(tr("Clip properties…")).shortcut_text(tr("Alt+double-click")))
+		.clicked()
+	{
+		state.open_clip_window(clip.id);
 		ui.close();
 	}
-	if ui.button("Split at playhead   S").clicked() {
+	if ui.button(tr("Duplicate      Ctrl+D")).clicked() {
+		super::duplicate_selection(state, true);
+		ui.close();
+	}
+	if ui
+		.add(egui::Button::new(tr("Clone after itself")).shortcut_text("Ctrl+B"))
+		.clicked()
+	{
+		super::clone_selection(state, true);
+		ui.close();
+	}
+	if clip.is_midi() {
+		if ui
+			.add(egui::Button::new(tr("Clone as unique copy")).shortcut_text("Ctrl+Shift+B"))
+			.clicked()
+		{
+			super::clone_selection(state, false);
+			ui.close();
+		}
+		let copies = cadenza_model::links::link_count(state.project(), clip.id);
+		if ui
+			.add_enabled(
+				copies > 1,
+				egui::Button::new(if copies > 1 {
+					trf("Make unique  ({copies} linked)", &[("copies", &copies)])
+				} else {
+					tr("Make unique").to_owned()
+				}),
+			)
+			.on_disabled_hover_text(tr("This clip shares its notes with no other clip"))
+			.clicked()
+		{
+			super::make_clips_unique(state, clip.id);
+			ui.close();
+		}
+	}
+	ui.menu_button(tr("Chop into…"), |ui| {
+		for (chop, label) in playlist::Chop::MENU {
+			if ui.button(crate::i18n::tr_str(label)).clicked() {
+				super::chop_clip(state, clip.id, chop);
+				ui.close();
+			}
+		}
+	});
+	if ui.button(tr("Split at playhead   S")).clicked() {
 		super::split_at_playhead(state);
+		ui.close();
+	}
+	let mute = if clip.muted {
+		tr("Unmute clip")
+	} else {
+		tr("Mute clip")
+	};
+	if ui
+		.add(egui::Button::new(mute).shortcut_text("T tool"))
+		.clicked()
+	{
+		super::toggle_mute_clips(state, clip.id);
+		ui.close();
+	}
+	if ui
+		.add(egui::Button::new(tr("Quantize start to grid")).shortcut_text("Q"))
+		.clicked()
+	{
+		super::quantize_clip_starts(state);
 		ui.close();
 	}
 	if ui
 		.add_enabled(
 			state.selection.clips.len() > 1,
-			egui::Button::new("Consolidate selected clips"),
+			egui::Button::new(tr("Glue (consolidate) selected clips")).shortcut_text("Ctrl+G"),
 		)
-		.on_disabled_hover_text("Select two or more clips of one track")
+		.on_disabled_hover_text(tr("Select two or more clips of one track"))
 		.clicked()
 	{
 		state.consolidate_selection();
 		ui.close();
 	}
-	if ui.button("Delete            Del").clicked() {
+	if ui.button(tr("Delete            Del")).clicked() {
 		super::delete_selection(state);
 		ui.close();
 	}
@@ -2122,7 +3047,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Opt
 	let tl = state.view.timeline;
 	let meter = MeterMap::new(state.project().meter());
 	let p = ui.painter_at(r);
-	p.rect_filled(r, 0.0, theme::BG_RAISED);
+	p.rect_filled(r, 0.0, theme::BG_PANEL);
 	// Bar numbers: every bar unless too dense (then every 2^n bars).
 	let (from, to) = (tl.x_to_tick(0.0), tl.x_to_tick(r.width()));
 	let shortest = meter
@@ -2133,37 +3058,44 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Opt
 		.unwrap_or(Tick(PPQ * 4));
 	let every =
 		((48.0 / tl.ticks_to_px(shortest)).ceil().max(1.0) as u64).next_power_of_two() as i64;
+	// Beat ticks only when they are far enough apart to read as a scale.
+	let beat_px = tl.ticks_to_px(Tick(PPQ));
 	for line in tl.grid_lines(meter.view(), from, to, None) {
-		let x = r.left() + tl.tick_to_x(line.tick);
+		let x = (r.left() + tl.tick_to_x(line.tick)).round() + 0.5;
 		match line.kind {
 			LineKind::Bar(index) => {
-				p.vline(
-					x,
-					r.top() + 10.0..=r.bottom(),
-					Stroke::new(1.0, theme::TEXT_FAINT),
-				);
-				if index % every == 0 {
+				let numbered = index % every == 0;
+				let top = if numbered {
+					r.top() + 7.0
+				} else {
+					r.bottom() - 9.0
+				};
+				p.vline(x, top..=r.bottom(), Stroke::new(1.0, theme::BORDER_STRONG));
+				if numbered {
 					p.text(
-						pos2(x + 4.0, r.top() + 3.0),
+						pos2(x + 4.0, r.top() + 8.0),
 						Align2::LEFT_TOP,
 						format!("{}", index + 1),
-						theme::mono(10.5),
+						theme::mono_medium(11.0),
 						theme::TEXT_DIM,
 					);
 				}
 			}
-			LineKind::Beat | LineKind::Step => {
-				let h = if line.kind == LineKind::Beat {
-					5.0
-				} else {
-					3.0
-				};
+			LineKind::Beat if beat_px >= 10.0 => {
 				p.vline(
 					x,
-					r.bottom() - h..=r.bottom(),
-					Stroke::new(1.0, theme::GRID_BAR),
+					r.bottom() - 5.0..=r.bottom(),
+					Stroke::new(1.0, theme::BORDER_STRONG),
 				);
 			}
+			LineKind::Step if beat_px >= 48.0 => {
+				p.vline(
+					x,
+					r.bottom() - 3.0..=r.bottom(),
+					Stroke::new(1.0, theme::BORDER),
+				);
+			}
+			_ => {}
 		}
 	}
 	// Time signature changes: a small tag at their bar line.
@@ -2243,19 +3175,18 @@ fn paint_loop_band(p: &Painter, state: &AppState, r: Rect, tl: &Timeline) {
 		let on = state.view.transport.loop_on;
 		let x0 = r.left() + tl.tick_to_x(s);
 		let x1 = r.left() + tl.tick_to_x(e);
-		let band = Rect::from_min_max(pos2(x0, r.top() + 1.0), pos2(x1, r.center().y));
 		let color = if on {
 			theme::LOOP
 		} else {
 			theme::LOOP.gamma_multiply(0.35)
 		};
-		p.rect_filled(band, CornerRadius::same(2), color.gamma_multiply(0.45));
-		p.rect_stroke(
-			band,
-			CornerRadius::same(2),
-			Stroke::new(1.0, color),
-			StrokeKind::Inside,
-		);
+		// A bar along the ruler top with taller brackets at both ends.
+		let bar = Rect::from_min_max(pos2(x0, r.top()), pos2(x1, r.top() + 5.0));
+		p.rect_filled(bar, CornerRadius::ZERO, color);
+		for (x, dir) in [(x0, 1.0), (x1, -1.0)] {
+			let tab = Rect::from_two_pos(pos2(x, r.top()), pos2(x + dir * 4.0, r.top() + 11.0));
+			p.rect_filled(tab, CornerRadius::same(1), color);
+		}
 	}
 	let config = state.transport_config().0;
 	if let (Some(_), Some((s, e))) = (config.pattern, config.loop_range) {
@@ -2320,22 +3251,26 @@ fn markers(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 		if next < r.left() || x > r.right() {
 			continue;
 		}
-		let flag = Rect::from_min_max(
-			pos2(x, r.top() + 2.0),
-			pos2(next.min(x + 160.0) - 2.0, r.bottom() - 2.0),
-		);
+		let font = theme::semibold(11.0);
+		let galley = ui
+			.painter()
+			.layout_no_wrap(m.name.clone(), font, theme::MARKER);
+		let width = (galley.size().x + 14.0).min((next - x - 3.0).max(12.0));
+		let flag = Rect::from_min_size(pos2(x, r.top() + 2.0), vec2(width, r.height() - 4.0));
 		p.rect_filled(
 			flag,
 			CornerRadius::same(2),
-			theme::MARKER.gamma_multiply(0.25),
+			theme::MARKER.gamma_multiply(0.16),
 		);
-		p.vline(x, r.y_range(), Stroke::new(2.0, theme::MARKER));
-		p.with_clip_rect(flag.intersect(r)).text(
-			pos2(x + 5.0, r.center().y),
-			Align2::LEFT_CENTER,
-			&m.name,
-			theme::small(),
-			theme::TEXT,
+		p.rect_filled(
+			Rect::from_min_size(flag.min, vec2(2.0, flag.height())),
+			CornerRadius::same(1),
+			theme::MARKER,
+		);
+		p.with_clip_rect(flag.intersect(r)).galley(
+			pos2(x + 7.0, flag.center().y - galley.size().y / 2.0),
+			galley,
+			theme::MARKER,
 		);
 		let mr = ui.interact(
 			flag.intersect(r),
@@ -2346,7 +3281,7 @@ fn markers(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 			state.seek(m.tick);
 		}
 		mr.context_menu(|ui| {
-			if ui.button("Remove marker").clicked() {
+			if ui.button(tr("Remove marker")).clicked() {
 				state.apply(Command::RemoveMarker { tick: m.tick });
 				ui.close();
 			}
@@ -2356,12 +3291,12 @@ fn markers(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 		&& let Some(pos) = resp.interact_pointer_pos()
 	{
 		let tick = tl.snap(tl.x_to_tick(pos.x - r.left()), state.project().meter());
-		let name = format!("Marker {}", list.len() + 1);
+		let name = trf("Marker {n}", &[("n", &(list.len() + 1))]);
 		state.apply(Command::AddMarker {
 			marker: Marker::new(tick, name),
 		});
 	}
-	resp.on_hover_text("Double-click to add a marker");
+	resp.on_hover_text(tr("Double-click to add a marker"));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2377,28 +3312,59 @@ fn paint_clip(
 	xfs: &[edits::Crossfade],
 ) {
 	let color = theme::track_color(track.color.as_deref());
-	let body = theme::mix(color, theme::BG_DEEP, 0.62);
+	// Graphite clips: a tint of the track color with a 2 px color edge; the notes and the
+	// waveform carry the full color. Selected = a stronger tint, white outline and name.
+	let tint = if selected {
+		theme::CLIP_FILL_ALPHA_SELECTED
+	} else {
+		theme::CLIP_FILL_ALPHA
+	};
+	let body = theme::mix(theme::LANE, color, tint);
 	let r = CornerRadius::same(theme::RADIUS);
 	let p = p.with_clip_rect(area.intersect(rect.expand(1.0)));
 	p.rect_filled(rect, r, body);
 	let header = Rect::from_min_size(rect.min, vec2(rect.width(), CLIP_HEADER.min(rect.height())));
-	p.rect_filled(
-		header,
-		CornerRadius {
-			nw: theme::RADIUS,
-			ne: theme::RADIUS,
-			sw: 0,
-			se: 0,
-		},
-		theme::mix(color, theme::BG_DEEP, 0.15),
-	);
-	let text_x = rect.left().max(area.left()) + 4.0;
+	let mut text_x = rect.left().max(area.left()) + 6.0;
+	let project = state.project();
+	let linked = clip
+		.link
+		.filter(|l| project.linked_clips(*l).nth(1).is_some());
+	if let Some(link) = linked {
+		let glyph = if selected {
+			Color32::WHITE
+		} else {
+			theme::mix(color, Color32::WHITE, 0.35)
+		};
+		link_glyph(&p, pos2(text_x + 4.0, header.center().y + 0.5), glyph);
+		text_x += 13.0;
+		// Selecting one copy marks its siblings faintly.
+		let sibling_selected = !selected
+			&& state.selection.clips.iter().any(|id| {
+				*id != clip.id
+					&& project
+						.find_clip(*id)
+						.is_some_and(|(_, c)| c.link == Some(link))
+			});
+		if sibling_selected {
+			p.rect_filled(rect, r, Color32::from_white_alpha(10));
+			p.rect_stroke(
+				rect.shrink(0.5),
+				r,
+				Stroke::new(1.0, Color32::from_white_alpha(90)),
+				StrokeKind::Inside,
+			);
+		}
+	}
 	p.with_clip_rect(header.intersect(area)).text(
-		pos2(text_x, header.center().y),
+		pos2(text_x, header.center().y + 1.0),
 		Align2::LEFT_CENTER,
 		&clip.name,
-		FontId::proportional(10.5),
-		theme::text_on(color),
+		theme::semibold(10.5),
+		if selected {
+			Color32::WHITE
+		} else {
+			theme::mix(color, Color32::WHITE, 0.15)
+		},
 	);
 	let content = Rect::from_min_max(
 		pos2(rect.left(), header.bottom() + 1.0),
@@ -2501,20 +3467,33 @@ fn paint_clip(
 		rect,
 		r,
 		if selected {
-			Stroke::new(1.5, Color32::WHITE)
+			Stroke::new(1.0, Color32::WHITE)
 		} else {
-			Stroke::new(1.0, theme::mix(color, theme::BG_DEEP, 0.35))
+			Stroke::new(1.0, theme::mix(theme::LANE, color, 0.3))
 		},
 		StrokeKind::Inside,
 	);
-	if editing {
+	p.rect_filled(
+		Rect::from_min_max(rect.min, pos2(rect.left() + 2.0, rect.bottom())),
+		CornerRadius {
+			nw: theme::RADIUS,
+			sw: theme::RADIUS,
+			ne: 0,
+			se: 0,
+		},
+		color,
+	);
+	if clip.muted {
+		paint_muted(&p, rect, header);
+	}
+	if editing && !clip.muted {
 		// Open in the piano roll: a small pencil badge in the header.
 		p.text(
-			pos2(rect.right() - 5.0, header.center().y),
+			pos2(rect.right() - 5.0, header.center().y + 1.0),
 			Align2::RIGHT_CENTER,
 			"✏",
 			FontId::proportional(10.0),
-			theme::text_on(color),
+			color,
 		);
 	}
 }
@@ -2538,7 +3517,7 @@ fn paint_notes(
 	let pad = 3.0;
 	let usable = content.height() - 2.0 * pad;
 	let row = (usable / (span + 1.0)).clamp(1.0, 6.0);
-	let note_color = theme::mix(color, Color32::WHITE, 0.35);
+	let note_color = color;
 	let left = area.left() - content.left();
 	for n in notes {
 		let x0 = content.left() + tl.ticks_to_px(n.start);
@@ -2559,7 +3538,7 @@ fn paint_notes(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_waveform(
+pub(crate) fn paint_waveform(
 	p: &Painter,
 	project: &Project,
 	clip: &Clip,
@@ -2577,7 +3556,7 @@ fn paint_waveform(
 			p.text(
 				content.center(),
 				Align2::CENTER_CENTER,
-				"loading waveform…",
+				tr("loading waveform…"),
 				theme::small(),
 				theme::TEXT_FAINT,
 			);
@@ -2653,7 +3632,7 @@ fn paint_waveform(
 	);
 }
 
-fn paint_fades(
+pub(crate) fn paint_fades(
 	p: &Painter,
 	project: &Project,
 	clip: &Clip,
@@ -2683,4 +3662,216 @@ fn paint_fades(
 		p.add(Shape::convex_polygon(tri, shade, Stroke::NONE));
 		p.line_segment([pos2(x, rect.top()), rect.right_bottom()], stroke);
 	}
+}
+
+/// A 1 px dashed outline (drop targets).
+fn dashed_rect(p: &Painter, r: Rect, color: Color32) {
+	let stroke = Stroke::new(1.0, color);
+	let corners = [
+		r.left_top(),
+		r.right_top(),
+		r.right_bottom(),
+		r.left_bottom(),
+		r.left_top(),
+	];
+	for pair in corners.windows(2) {
+		p.add(Shape::dashed_line(pair, stroke, 5.0, 4.0));
+	}
+}
+
+/// The playhead: a line over `span` with a small flag on the ruler whose tip is at `tip`
+/// (the ruler's bottom), pointing down at the line. Shared with the piano roll.
+pub(crate) fn paint_playhead(p: &Painter, x: f32, span: std::ops::RangeInclusive<f32>, tip: f32) {
+	p.vline(x, span, Stroke::new(1.5, theme::PLAYHEAD));
+	p.add(Shape::convex_polygon(
+		vec![
+			pos2(x - 5.5, tip - 13.0),
+			pos2(x + 5.5, tip - 13.0),
+			pos2(x + 5.5, tip - 6.0),
+			pos2(x, tip - 1.0),
+			pos2(x - 5.5, tip - 6.0),
+		],
+		theme::PLAYHEAD,
+		Stroke::new(1.0, theme::BG_DEEP),
+	));
+}
+
+/// How a toolbar's tool chips label themselves, picked by the width actually available
+/// (not a window-size tier, so any language's labels fit): [`Full`](ToolFold::Full) draws
+/// "glyph name" with the shortcut key, [`NoKey`](ToolFold::NoKey) drops the key,
+/// [`Glyph`](ToolFold::Glyph) drops the name too (the key still shows in the hover tip).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolFold {
+	Full,
+	NoKey,
+	Glyph,
+}
+
+impl ToolFold {
+	/// The chip's label and key at this fold level.
+	pub(crate) fn label_and_key<'a>(
+		self,
+		glyph: &str,
+		name: &str,
+		key: &'a str,
+	) -> (String, Option<&'a str>) {
+		match self {
+			ToolFold::Full => (format!("{glyph} {name}"), Some(key)),
+			ToolFold::NoKey => (format!("{glyph} {name}"), None),
+			ToolFold::Glyph => (glyph.to_string(), None),
+		}
+	}
+}
+
+/// The arrange toolbar's fold: the tool chips' [`ToolFold`], and whether the Sel/Fit zoom
+/// buttons moved into a "⋯" menu to make room. Picked by [`arrange_fold`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ArrangeFold {
+	tools: ToolFold,
+	overflow: bool,
+}
+
+/// The width of `s` at `font`, with no widget created: safe to call as often as needed (a
+/// toolbar can try several folds) without the probed text ever reaching the accessibility
+/// tree, unlike drawing a real (even invisible) widget twice would.
+fn text_width(ui: &Ui, s: &str, font: FontId) -> f32 {
+	ui.fonts_mut(|f| f.layout_no_wrap(s.into(), font, Color32::WHITE).size().x)
+}
+
+/// The width [`toolbar_chip`] draws `label`/`key` at, without drawing it.
+pub(crate) fn chip_width(ui: &Ui, label: &str, key: Option<&str>) -> f32 {
+	let text_w = text_width(ui, label, theme::medium(12.0));
+	let key_w = key.map_or(0.0, |k| text_width(ui, k, theme::mono(10.5)) + 5.0);
+	text_w + key_w + 14.0
+}
+
+/// The width a small icon/text button (`ui.small_button`) draws `label` at, without
+/// drawing it: close enough to egui's own padding that a toolbar folds at the right width
+/// (a few px of slack only shifts the fold boundary by a hair, never the direction of it).
+fn button_width(ui: &Ui, label: &str) -> f32 {
+	text_width(ui, label, theme::medium(12.0)) + 18.0
+}
+
+/// Picks the arrange toolbar's fold from the width actually left after the title (not a
+/// window-size tier): progressively drops each tool's key, then its name, then moves
+/// Sel/Fit into a "⋯" menu. Pure text measurement (see [`text_width`]) — nothing here is
+/// drawn, so trying a fold never touches the accessibility tree.
+fn arrange_fold(ui: &Ui, grid: timeline::Grid, state: &AppState) -> ArrangeFold {
+	let available = ui.available_width();
+	let spacing = ui.spacing().item_spacing.x;
+	let snap_w = chip_width(ui, tr("Snap"), None) + spacing;
+	let grid_w = text_width(ui, &grid_name(grid.step, grid.bar), theme::mono(11.0)) + spacing;
+	let divider_w = 9.0 + spacing;
+	let tempo = state.view.automation.tempo;
+	let tempo_label = if tempo { tr("✔ Tempo") } else { tr("Tempo") };
+	let tempo_w = chip_width(ui, tempo_label, None) + spacing;
+	let zoom_w = button_width(ui, "−") + spacing + button_width(ui, "+") + spacing;
+	let sel_fit_w = button_width(ui, tr("Sel")) + spacing + button_width(ui, tr("Fit")) + spacing;
+	let overflow_w = button_width(ui, tr("⋯")) + spacing;
+	let tools: [(&str, &str, &str); 5] = ArrangeTool::ALL.map(|t| (t.glyph(), t.name(), t.key()));
+	let fixed = snap_w + grid_w + divider_w * 2.0 + tempo_w + zoom_w;
+	for tools_fold in [ToolFold::Full, ToolFold::NoKey, ToolFold::Glyph] {
+		let tools_w: f32 = tools
+			.iter()
+			.map(|&(g, n, k)| {
+				let (label, key) = tools_fold.label_and_key(g, n, k);
+				chip_width(ui, &label, key) + spacing
+			})
+			.sum();
+		if fixed + tools_w + sel_fit_w <= available {
+			return ArrangeFold {
+				tools: tools_fold,
+				overflow: false,
+			};
+		}
+		if fixed + tools_w + overflow_w <= available {
+			return ArrangeFold {
+				tools: tools_fold,
+				overflow: true,
+			};
+		}
+	}
+	ArrangeFold {
+		tools: ToolFold::Glyph,
+		overflow: true,
+	}
+}
+
+/// A toolbar toggle chip: label (+ a faint key), filled with `on_fill` / `on_text` when on.
+pub(crate) fn toolbar_chip(
+	ui: &mut Ui,
+	on: bool,
+	label: &str,
+	key: Option<&str>,
+	on_fill: Color32,
+	on_text: Color32,
+) -> egui::Response {
+	let font = theme::medium(12.0);
+	let key_font = theme::mono(10.5);
+	let text_w = ui.fonts_mut(|f| {
+		f.layout_no_wrap(label.into(), font.clone(), Color32::WHITE)
+			.size()
+			.x
+	});
+	let key_w = key.map_or(0.0, |k| {
+		ui.fonts_mut(|f| {
+			f.layout_no_wrap(k.into(), key_font.clone(), Color32::WHITE)
+				.size()
+				.x
+		}) + 5.0
+	});
+	let (rect, resp) = ui.allocate_exact_size(vec2(text_w + key_w + 14.0, 22.0), Sense::click());
+	let p = ui.painter();
+	let fill = if on {
+		on_fill
+	} else if resp.hovered() {
+		theme::BG_HOVER
+	} else {
+		Color32::TRANSPARENT
+	};
+	p.rect_filled(rect, CornerRadius::same(4), fill);
+	if on && on_fill == theme::BG_WIDGET {
+		p.rect_stroke(
+			rect,
+			CornerRadius::same(4),
+			Stroke::new(1.0, theme::BORDER_STRONG),
+			StrokeKind::Inside,
+		);
+	}
+	let color = if on {
+		on_text
+	} else if resp.hovered() {
+		theme::TEXT
+	} else {
+		theme::TEXT_DIM
+	};
+	p.text(
+		pos2(rect.left() + 7.0, rect.center().y),
+		Align2::LEFT_CENTER,
+		label,
+		font,
+		color,
+	);
+	if let Some(k) = key {
+		p.text(
+			pos2(rect.right() - 7.0, rect.center().y),
+			Align2::RIGHT_CENTER,
+			k,
+			key_font,
+			theme::TEXT_FAINT,
+		);
+	}
+	resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
+	resp
+}
+
+pub(crate) fn toolbar_divider(ui: &mut Ui) {
+	ui.add_space(4.0);
+	let (r, _) = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover());
+	ui.painter().vline(
+		r.center().x,
+		r.y_range(),
+		Stroke::new(1.0, theme::BORDER_STRONG),
+	);
+	ui.add_space(4.0);
 }

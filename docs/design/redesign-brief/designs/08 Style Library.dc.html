@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#2a2b2e;-webkit-font-smoothing:antialiased}a{color:#7fb4ff}a:hover{color:#b3d2ff}</style>
+</helmet>
+<section style="padding:64px;display:flex;gap:48px;align-items:flex-start;font-family:'IBM Plex Sans',sans-serif;color:#e8e9ec">
+<div data-screen-label="08 Style library" style="width:1920px;height:1080px;flex:none;background:#0e0f11;display:grid;grid-template-rows:44px minmax(0,1fr) 24px;overflow:hidden;font-size:12px;box-shadow:0 30px 80px rgba(0,0,0,.5)">
+<div style="display:flex;align-items:center;gap:14px;padding:0 12px;background:#15161a;border-bottom:1px solid #24262b">
+<span style="font-weight:700;letter-spacing:.14em;color:#4c9cf5">CADENZA</span>
+<div style="display:flex;gap:2px"><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:4px 0 0 4px;color:#a3a6ad">⏮</div><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328"><span style="width:9px;height:9px;background:#a3a6ad;border-radius:1px"></span></div><div style="width:38px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;color:#a3a6ad">▶</div><div style="width:30px;height:28px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:0 4px 4px 0"><span style="width:10px;height:10px;border-radius:50%;background:#f0524f"></span></div></div>
+<div style="flex:1"></div>
+<span style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:500">5.1.000</span><span style="font-family:'IBM Plex Mono',monospace">92.00 · 4/4 · C minor</span>
+<div style="flex:1"></div>
+<span style="color:#4fc3a1;display:flex;align-items:center;gap:6px">▶ Auditioning “Dembow minimal” at 92 bpm</span>
+</div>
+<div style="display:grid;grid-template-columns:220px 470px 440px minmax(0,1fr);min-height:0">
+<!-- filters -->
+<div style="background:#15161a;border-right:1px solid #1d1f23;display:flex;flex-direction:column;min-height:0">
+<div style="display:flex;padding:8px"><div style="flex:1;display:flex;background:#0e0f11;border-radius:4px;padding:2px;gap:2px"><span style="flex:1;text-align:center;padding:4px 0;color:#a3a6ad">Devices</span><span style="flex:1;text-align:center;padding:4px 0;color:#a3a6ad">Files</span><span style="flex:1;text-align:center;padding:4px 0;background:#2a2c32;border-radius:3px;font-weight:500">Library</span></div></div>
+<div style="padding:4px 12px 12px;display:flex;flex-direction:column;gap:14px">
+<sc-for list="{{ filters }}" as="f" hint-placeholder-count="4">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;font-weight:600;color:#a3a6ad">{{ f.n }}</span><div style="display:flex;flex-wrap:wrap;gap:4px"><sc-for list="{{ f.o }}" as="o" hint-placeholder-count="4"><span style="padding:1px 8px;border-radius:10px;background:{{ o.bg }};color:{{ o.fg }};box-shadow:{{ o.bd }}">{{ o.n }}</span></sc-for></div></div>
+</sc-for>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;font-weight:600;color:#a3a6ad">Energy</span><div style="display:flex;gap:2px"><sc-for list="{{ energy }}" as="e" hint-placeholder-count="5"><span style="flex:1;height:20px;display:flex;align-items:center;justify-content:center;border-radius:3px;background:{{ e.bg }};color:{{ e.fg }};font-family:'IBM Plex Mono',monospace;font-size:11px">{{ e.n }}</span></sc-for></div></div>
+<div style="display:flex;gap:8px;align-items:flex-start"><span style="width:28px;height:16px;flex:none;border-radius:8px;background:#4c9cf5;position:relative"><span style="position:absolute;top:2px;left:14px;width:12px;height:12px;border-radius:50%;background:#e8e9ec"></span></span><div style="display:flex;flex-direction:column;gap:2px"><span>Fits this project</span><span style="font-size:11px;color:#80848c">88–102 bpm, minor keys</span></div></div>
+</div>
+<div style="flex:1"></div>
+<div style="border-top:1px solid #1d1f23;padding:10px 12px;display:flex;flex-direction:column;gap:4px;font-size:11px;color:#80848c"><span style="font-weight:600;color:#a3a6ad">Packs</span><span>core · 6 styles · CC0-1.0</span><span>latin_pop · 2 styles · CC0-1.0</span><span style="color:#7fb4ff">Credits and licenses</span></div>
+</div>
+<!-- results -->
+<div style="background:#15161a;border-right:1px solid #24262b;display:flex;flex-direction:column;min-height:0">
+<div style="padding:8px 10px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid #1d1f23">
+<div style="height:28px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#0e0f11;border:1px solid #4c9cf5;border-radius:4px;box-shadow:0 0 0 2px rgba(76,156,245,.15)"><span style="color:#80848c">⌕</span><span>dembow</span><span style="width:1px;height:14px;background:#e8e9ec"></span><span style="flex:1"></span><span style="color:#80848c">✕</span></div>
+<div style="display:flex;gap:2px;background:#0e0f11;border-radius:4px;padding:2px"><sc-for list="{{ kinds }}" as="k" hint-placeholder-count="6"><span style="flex:1;text-align:center;padding:3px 0;border-radius:3px;background:{{ k.bg }};color:{{ k.fg }};white-space:nowrap">{{ k.n }} <span style="color:#80848c;font-size:10.5px">{{ k.c }}</span></span></sc-for></div>
+</div>
+<div style="padding:8px 10px 4px;display:flex;align-items:center;color:#80848c;font-size:11px"><span>14 results · sorted by fit</span><span style="flex:1"></span><span>Space = audition · drag to arrange</span></div>
+<div style="flex:1;padding:4px 10px 10px;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:150px;gap:8px;overflow:hidden">
+<sc-for list="{{ cards }}" as="c" hint-placeholder-count="8">
+<div style="position:relative;display:flex;flex-direction:column;gap:6px;padding:8px 10px;background:{{ c.bg }};border-radius:4px;box-shadow:{{ c.ring }};overflow:hidden">
+<div style="display:flex;align-items:center;gap:6px"><span style="font-size:9.5px;font-weight:600;padding:0 5px;border-radius:2px;background:{{ c.kbg }};color:{{ c.kfg }}">{{ c.kind }}</span><span style="flex:1"></span><span style="color:{{ c.starC }}">★</span></div>
+<div style="display:flex;flex-direction:column;gap:1px"><span style="font-weight:600;font-size:13px">{{ c.n }}</span><span style="font-size:11px;color:#80848c">{{ c.pack }}</span></div>
+<div style="flex:1;position:relative;background:#111215;border-radius:3px;overflow:hidden"><sc-for list="{{ c.notes }}" as="nt" hint-placeholder-count="0"><div style="position:absolute;left:{{ nt.x }}%;top:{{ nt.y }}%;width:{{ nt.w }}%;height:3px;border-radius:1px;background:{{ c.col }}"></div></sc-for><sc-for list="{{ c.chords }}" as="ch" hint-placeholder-count="0"><div style="position:absolute;left:{{ ch.x }}%;width:{{ ch.w }}%;top:4px;bottom:4px;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#e8e9ec;border-right:1px solid #24262b">{{ ch.n }}</div></sc-for><sc-if value="{{ c.playing }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:0;top:0;bottom:0;width:38%;background:rgba(79,195,161,.12);border-right:1px solid #4fc3a1"></div></sc-if></div>
+<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#a3a6ad"><span style="width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:{{ c.pbg }};color:{{ c.pfg }};font-size:9px">{{ c.pi }}</span><span>{{ c.meta }}</span><span style="flex:1"></span><span style="display:flex;gap:2px"><sc-for list="{{ c.en }}" as="e" hint-placeholder-count="5"><span style="width:5px;height:5px;border-radius:50%;background:{{ e }}"></span></sc-for></span></div>
+</div>
+</sc-for>
+</div>
+</div>
+<!-- style doc -->
+<div style="background:#15161a;border-right:1px solid #24262b;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+<div style="padding:12px 14px 10px;display:flex;flex-direction:column;gap:4px;border-bottom:1px solid #1d1f23">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:9.5px;font-weight:600;padding:0 5px;border-radius:2px;background:#24234a;color:#8f8cf5">STYLE</span><span style="color:#80848c;font-size:11px">core/latin_pop · CC0-1.0</span><span style="flex:1"></span><span style="color:#e8b84a">★</span><span style="color:#80848c">✕</span></div>
+<span style="font-size:17px;font-weight:600">Latin pop <span style="color:#a3a6ad;font-weight:400">(reggaeton-pop)</span></span>
+<span style="color:#c4c7cd;line-height:1.5;text-wrap:pretty">Mid-tempo dembow pop: minor keys, 4-chord loops, nylon guitar and plucks over an 808 tresillo bass.</span>
+<div style="display:flex;gap:6px;padding-top:6px"><span style="height:24px;display:flex;align-items:center;padding:0 12px;background:#4c9cf5;color:#0b1220;border-radius:4px;font-weight:600">Start a song in this style</span><span style="height:24px;display:flex;align-items:center;padding:0 10px;background:#212328;border-radius:4px;font-weight:500">Ask producer…</span></div>
+</div>
+<div style="flex:1;overflow:hidden;padding:12px 14px;display:flex;flex-direction:column;gap:16px">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-weight:600;font-size:12.5px">Feel</span>
+<div style="display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 10px;font-size:12px"><span style="color:#a3a6ad">Tempo</span><span><span style="font-family:'IBM Plex Mono',monospace">88–102</span> bpm, typical <span style="font-family:'IBM Plex Mono',monospace">94</span> <span style="color:#4fc38a;font-size:11px">✓ project 92</span></span><span style="color:#a3a6ad">Groove</span><span>Straight · 4/4</span><span style="color:#a3a6ad">Keys</span><span>Minor (most): A, B, C♯, F♯ · major for brighter songs</span></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-weight:600;font-size:12.5px">Harmony</span>
+<sc-for list="{{ progs }}" as="p" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:6px"><div style="display:flex;gap:2px;flex:1"><sc-for list="{{ p.c }}" as="ch" hint-placeholder-count="4"><span style="flex:1;height:24px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:12px">{{ ch }}</span></sc-for></div><span style="font-size:11px;color:#80848c;width:44px">{{ p.m }}</span><span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;background:#212328;border-radius:3px;font-size:9px;color:#a3a6ad">▶</span></div></sc-for>
+<span style="font-size:11.5px;color:#a3a6ad;line-height:1.5">One loop for the whole song is idiomatic; contrast comes from arrangement. The bridge may switch to a iv- or VI-led loop.</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:8px"><span style="font-weight:600;font-size:12.5px">Forms</span>
+<sc-for list="{{ forms }}" as="fm" hint-placeholder-count="2"><div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;align-items:center"><span>{{ fm.n }}</span><span style="color:#80848c;font-size:11px;margin-left:6px">{{ fm.len }}</span><span style="flex:1"></span><span style="padding:1px 9px;background:#212328;border-radius:3px;font-weight:500">Apply</span></div><div style="display:flex;gap:1px;height:16px"><sc-for list="{{ fm.s }}" as="s" hint-placeholder-count="5"><span style="flex:{{ s.b }};background:{{ s.c }};border-radius:2px;font-size:9.5px;color:#101114;font-weight:600;display:flex;align-items:center;padding-left:3px;overflow:hidden;white-space:nowrap">{{ s.n }}</span></sc-for></div></div></sc-for>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-weight:600;font-size:12.5px">Roles</span>
+<sc-for list="{{ roles }}" as="ro" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px;align-items:center"><span style="color:#a3a6ad">{{ ro.n }}</span><div style="display:flex;flex-wrap:wrap;gap:4px"><sc-for list="{{ ro.p }}" as="x" hint-placeholder-count="2"><span style="padding:1px 8px;background:#212328;border-radius:3px;box-shadow:inset 2px 0 0 {{ ro.c }}">{{ x }}</span></sc-for></div></div></sc-for>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-weight:600;font-size:12.5px">Mix targets</span>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px"><sc-for list="{{ targets }}" as="t" hint-placeholder-count="3"><div style="padding:6px 8px;background:#1c1d21;border-radius:4px;display:flex;flex-direction:column;gap:1px"><span style="font-size:11px;color:#a3a6ad">{{ t.n }}</span><span style="font-family:'IBM Plex Mono',monospace">{{ t.v }}</span></div></sc-for></div>
+<span style="font-size:11px;color:#7fb4ff">Use as Mix assistant target</span>
+</div>
+</div>
+</div>
+<!-- arrange target -->
+<div style="display:flex;flex-direction:column;min-width:0;background:#111215;overflow:hidden">
+<div style="height:28px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#15161a;border-bottom:1px solid #24262b"><span style="font-weight:600;font-size:13px">Arrange</span></div>
+<div style="height:24px;display:flex;border-bottom:1px solid #24262b"><div style="width:150px;flex:none;background:#15161a;border-right:1px solid #24262b"></div><div style="flex:1;position:relative;background:#15161a"><sc-for list="{{ bars }}" as="b" hint-placeholder-count="8"><div style="position:absolute;left:{{ b.l }}%;top:5px;bottom:0;border-left:1px solid #2a2c32;padding-left:4px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#a3a6ad">{{ b.n }}</div></sc-for></div></div>
+<sc-for list="{{ tracks }}" as="t" hint-placeholder-count="4">
+<div style="display:flex;height:64px;border-bottom:1px solid #1d1f23">
+<div style="width:150px;flex:none;display:flex;background:{{ t.hdr }};border-right:1px solid #24262b"><div style="width:4px;background:{{ t.c }}"></div><div style="padding:8px;display:flex;flex-direction:column;gap:2px"><span style="font-weight:600;font-size:13px">{{ t.n }}</span><span style="font-size:11px;color:#a3a6ad">{{ t.d }}</span></div></div>
+<div style="flex:1;position:relative;background-image:linear-gradient(to right,#1d1f23 1px,transparent 1px);background-size:12.5% 100%">
+<sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="1"><div style="position:absolute;left:{{ c.l }}%;width:{{ c.w }}%;top:3px;bottom:3px;background:{{ t.tint }};border-left:2px solid {{ t.c }};border-radius:3px;padding:2px 6px;font-size:10.5px;font-weight:600;color:{{ t.c }}">{{ c.n }}</div></sc-for>
+<sc-if value="{{ t.drop }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;left:50%;width:50%;top:3px;bottom:3px;border:1.5px dashed #4c9cf5;border-radius:3px;background:rgba(76,156,245,.10);padding:3px 7px;display:flex;flex-direction:column;justify-content:space-between"><span style="font-size:11px;font-weight:600;color:#7fb4ff">Dembow minimal</span><span style="font-size:11px;color:#a3a6ad">4 bars at 5.1 · mapped to Drum Machine</span></div></sc-if>
+</div>
+</div>
+</sc-for>
+<div style="margin:8px 10px;padding:6px 10px;background:#2a2c32;border:1px solid #363940;border-radius:6px;box-shadow:0 8px 20px rgba(0,0,0,.5);align-self:flex-start;font-size:11.5px;line-height:1.45;max-width:340px">Drop writes a clip on Drums (one undo step). Drop below the last track to create a new Drum Machine track.</div>
+</div>
+</div>
+<div style="display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid #1d1f23;font-size:11px;color:#a3a6ad"><span style="color:#4fc38a">● Saved</span><span>Library · 8 styles · 296 items</span><span style="flex:1"></span><span style="color:#80848c;font-family:'IBM Plex Mono',monospace">F6 Browser</span></div>
+</div>
+
+<div style="width:620px;flex:none;display:flex;flex-direction:column;gap:28px;font-size:16px;line-height:1.55;color:#c4c7cd">
+<div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#80848c">Screen 08</span><span style="font-size:34px;font-weight:600;color:#e8e9ec;letter-spacing:-0.01em">Style library</span><span style="color:#a3a6ad">The browser in Library mode widens into three columns (filters, results, document). A pattern is being auditioned and dragged onto Drums.</span></div>
+<sc-for list="{{ ux }}" as="g" hint-placeholder-count="3">
+<div style="display:flex;flex-direction:column;gap:10px">
+<span style="font-size:19px;font-weight:600;color:#e8e9ec">{{ g.h }}</span>
+<sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4"><div style="display:flex;gap:12px"><span style="color:#4c9cf5;flex:none">—</span><span style="text-wrap:pretty">{{ it }}</span></div></sc-for>
+</div>
+</sc-for>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    if (this._v) return this._v;
+    let seed = 21; const r = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const chip = (n, on) => ({ n, bg: on ? '#1d2a3d' : '#212328', fg: on ? '#7fb4ff' : '#a3a6ad', bd: on ? 'inset 0 0 0 1px #2c4a73' : 'none' });
+    const filters = [
+      { n: 'Genre', o: [chip('Latin pop', 1), chip('Reggaeton'), chip('Lo-fi'), chip('House'), chip('Pop')] },
+      { n: 'Role', o: [chip('Drums', 1), chip('Bass'), chip('Keys'), chip('Lead'), chip('Pad'), chip('Perc')] },
+      { n: 'Section', o: [chip('Intro'), chip('Verse', 1), chip('Pre'), chip('Chorus'), chip('Bridge'), chip('Outro')] },
+    ];
+    const energy = [1, 2, 3, 4, 5].map(n => ({ n, bg: n >= 2 && n <= 3 ? '#1d2a3d' : '#212328', fg: n >= 2 && n <= 3 ? '#7fb4ff' : '#a3a6ad' }));
+    const kinds = [['All', '14', 0], ['Styles', '1'], ['Forms', '0'], ['Progr.', '0'], ['Grooves', '3'], ['Patterns', '10', 1]].map(([n, c, on]) => ({ n, c, bg: on ? '#2a2c32' : 'transparent', fg: on ? '#e8e9ec' : '#a3a6ad' }));
+    const drum = (dense) => { const n = []; const st = 32, w = 100 / st; for (let s = 0; s < st; s++) { if (s % 2 === 0) n.push({ x: s * w, y: 10, w: w * .5 }); if ([0, 6, 8, 14, 16, 22, 24, 30].includes(s) && (s % 8 !== 6 || 1)) n.push({ x: s * w, y: 72, w: w * .8 }); if ([3, 6, 11, 14, 19, 22, 27, 30].includes(s)) n.push({ x: s * w, y: 42, w: w * .8 }); if (dense && r() > .6) n.push({ x: s * w, y: 26, w: w * .5 }); } return n; };
+    const bassN = () => { const n = []; [0, 3, 6, 8, 11, 14].forEach((s, i) => n.push({ x: s / 16 * 100, y: [70, 70, 52, 62, 62, 46][i], w: 100 / 16 * 2.5 })); [16, 19, 22, 24, 27, 30].forEach((s, i) => n.push({ x: s / 32 * 100, y: [58, 58, 40, 66, 66, 50][i], w: 100 / 32 * 2.5 })); return n; };
+    const en = n => [1, 2, 3, 4, 5].map(i => i <= n ? '#e8e9ec' : '#363940');
+    const K = { pattern: ['#3a1f1c', '#e8705f'], groove: ['#15323a', '#5ac8d8'], prog: ['#33291a', '#e3b24f'], style: ['#24234a', '#8f8cf5'] };
+    const C = [
+      ['Dembow minimal', 'latin_pop · drums · verse', 'PATTERN', 'pattern', '#e8705f', drum(0), [], '4 bars · 94', 2, 'playing', 1],
+      ['Dembow full', 'latin_pop · drums · chorus', 'PATTERN', 'pattern', '#e8705f', drum(1), [], '4 bars · 94', 4],
+      ['808 tresillo', 'latin_pop · bass · verse', 'PATTERN', 'pattern', '#5aa2f5', bassN(), [], '2 bars · 94', 3, 0, 1],
+      ['Dembow groove', 'latin_pop · swing 0 %', 'GROOVE', 'groove', '#5ac8d8', drum(0).filter((_, i) => i % 3 === 0), [], '1 bar', 2],
+      ['i VI III VII', 'latin_pop · minor loop', 'PROGRESSION', 'prog', '#e3b24f', [], [['i', 0], ['VI', 25], ['III', 50], ['VII', 75]], '4 bars', 3],
+      ['Dembow perc', 'latin_pop · perc · chorus', 'PATTERN', 'pattern', '#e07fb0', drum(1).filter((_, i) => i % 2), [], '2 bars · 94', 4],
+      ['Latin pop', 'core · style document', 'STYLE', 'style', '#8f8cf5', [], [], '5 forms · 3 progr.', 3, 'sel'],
+      ['Pluck stabs', 'latin_pop · keys · verse', 'PATTERN', 'pattern', '#e3b24f', bassN().map(n => ({ ...n, y: n.y - 30, w: n.w * .5 })), [], '2 bars · 94', 2],
+    ];
+    const cards = C.map(([n, pack, kind, kk, col, notes, chords, meta, e, st, fav]) => ({
+      n, pack, kind, col, notes, chords: chords.map(([cn, x]) => ({ n: cn, x, w: 25 })), meta, en: en(e),
+      kbg: K[kk][0], kfg: K[kk][1], playing: st === 'playing',
+      bg: st === 'playing' ? '#17201f' : '#1c1d21', ring: st === 'playing' ? 'inset 0 0 0 1px #4fc3a1' : st === 'sel' ? 'inset 0 0 0 1px #4c9cf5' : 'none',
+      pbg: st === 'playing' ? '#4fc3a1' : '#2a2c32', pfg: st === 'playing' ? '#101114' : '#a3a6ad', pi: st === 'playing' ? '■' : '▶',
+      starC: fav ? '#e8b84a' : '#363940',
+    }));
+    const progs = [[['i', 'VI', 'III', 'VII'], 'minor'], [['vi', 'IV', 'I', 'V'], 'major'], [['i', 'iv', 'VII', 'III'], 'minor']].map(([c, m]) => ({ c, m }));
+    const SC = { Intro: '#8a93a3', Verse: '#5aa2f5', Pre: '#9a82ec', Chorus: '#e3b24f', Bridge: '#4fc3a1', Outro: '#8a93a3' };
+    const form = (n, len, parts) => ({ n, len, s: parts.map(([p, b]) => ({ n: p, b, c: SC[p] })) });
+    const forms = [form('Radio form', '72 bars · 3:04', [['Intro', 4], ['Verse', 8], ['Pre', 4], ['Chorus', 8], ['Verse', 8], ['Pre', 4], ['Chorus', 8], ['Bridge', 8], ['Chorus', 16], ['Outro', 4]]), form('Short form', '40 bars · 1:42', [['Intro', 4], ['Verse', 8], ['Chorus', 8], ['Verse', 8], ['Chorus', 8], ['Outro', 4]])];
+    const roles = [['Drums', '#e8705f', ['Dembow minimal', 'Dembow full']], ['Bass', '#5aa2f5', ['808 tresillo']], ['Keys', '#e3b24f', ['Pluck stabs', 'Nylon guitar']], ['Perc', '#e07fb0', ['Dembow perc']]].map(([n, c, p]) => ({ n, c, p }));
+    const targets = [['Master', '−9 LUFS'], ['Kick vs bass', '+1 dB'], ['Vocal', '−1 LU']].map(([n, v]) => ({ n, v }));
+    const tracks = [
+      { n: 'Drums', d: 'Drum Machine', c: '#e8705f', clips: [{ l: 0, w: 50, n: 'Beat A' }], drop: true },
+      { n: 'Bass', d: 'Poly Synth', c: '#5aa2f5', clips: [{ l: 50, w: 50, n: 'Bass · verse' }] },
+      { n: 'Keys', d: 'Electric Piano', c: '#e3b24f', clips: [{ l: 0, w: 50, n: 'Chords' }, { l: 50, w: 50, n: 'Chords' }] },
+      { n: 'Vocal', d: 'Audio · In 1', c: '#e07fb0', clips: [{ l: 50, w: 50, n: 'Vox take 3' }] },
+    ].map(t => ({ ...t, tint: t.c + '26', hdr: t.drop ? '#18202c' : '#15161a', drop: !!t.drop }));
+    const ux = [
+      { h: 'What changed and why', items: [
+        'Library is a mode of the browser that widens to three columns when you open it, and shrinks back to the narrow browser when you switch to Devices or Files. Filters, results and the open document are visible together, with the arrange still in view as the drop target.',
+        'Kinds (Styles, Forms, Progressions, Grooves, Patterns) are one segmented control with live counts. Genre, role and section are chips; energy is a 1–5 range. "Fits this project" filters by the project\u2019s tempo and key and is on by default.',
+        'Cards replace the flat list: kind badge in its own color, name, pack and role line, a real preview (notes, chord names or groove hits), length and tempo, energy dots and a favorite star.',
+        'The style document is laid out as sections you act on: Feel (with a check against the project tempo), Harmony (chord chips with ▶ to audition), Forms (a colored section bar plus Apply), Roles (the patterns for each role, drag them straight in), Mix targets (one click to use them in the Mix assistant).',
+        'Credits and licenses sit in the filter footer per pack, so every item can be traced back to its source.',
+      ]},
+      { h: 'Interaction', items: [
+        'Click a card to audition it in sync with the transport at the project tempo and key; Space toggles audition; ↑ / ↓ move and audition the next one. The playing card gets a teal outline and a progress wash.',
+        'Drag a pattern onto a track: a dashed ghost clip shows the length and the instrument it maps to. Drop below the last track to create a new track with a suitable device.',
+        'Apply on a form writes markers and empty sections (one undo step). "Start a song in this style" creates tracks for each role, sets tempo and key, and applies the radio form.',
+        '"Ask producer…" opens the AI panel with the style attached as context.',
+      ]},
+      { h: 'Empty and error states', items: [
+        'No results: "Nothing matches dembow with these filters" with one-click chips to remove the most restrictive filter.',
+        'Library pack failed to load: the pack row shows ⚠ with the file and line, and the rest of the library keeps working.',
+      ]},
+    ];
+    this._v = { filters, energy, kinds, cards, progs, forms, roles, targets, tracks, bars: Array.from({ length: 8 }, (_, i) => ({ n: i + 1, l: i * 12.5 })), ux };
+    return this._v;
+  }
+}
+</script>
+</body>
+</html>

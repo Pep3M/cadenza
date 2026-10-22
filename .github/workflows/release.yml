@@ -1,4 +1,5 @@
-# Release artifacts per platform: Linux tar.gz + AppImage, Windows zip, macOS universal
+# Release artifacts per platform: Linux tar.gz + AppImage, Windows setup.exe (Inno
+# Setup, packaging/windows/cadenza.iss) + zip, macOS universal
 # .app in a dmg (unsigned), plus SHA256SUMS and the install scripts (install.sh,
 # install.ps1), which download from `releases/latest`. Tags `v*` publish a GitHub
 # Release (a prerelease when the version has a suffix such as `-beta.1`); manual runs
@@ -106,6 +107,8 @@ jobs:
     timeout-minutes: 75
     env:
       NAME: cadenza-${{ needs.version.outputs.version }}-windows-x86_64
+      # Static CRT: the binaries run on a fresh Windows without the VC++ redistributable.
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -126,10 +129,36 @@ jobs:
           }
           Copy-Item LICENSE, README.md "dist/$env:NAME/"
           Compress-Archive -Path "dist/$env:NAME" -DestinationPath "dist/$env:NAME.zip"
+      - name: installer
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          # Simplified Chinese is bundled only with newer Inno Setup releases; else fetch it
+          # (without it the installer just lacks that language).
+          $zh = Join-Path (Split-Path $iscc) 'Languages\ChineseSimplified.isl'
+          try {
+            if (-not (Test-Path $zh)) {
+              Invoke-WebRequest -UseBasicParsing -OutFile packaging/windows/ChineseSimplified.isl `
+                https://raw.githubusercontent.com/jrsoftware/issrc/is-6_4_3/Files/Languages/Unofficial/ChineseSimplified.isl
+            }
+          } catch {
+            Write-Warning "ChineseSimplified.isl not downloaded: $_"
+          }
+          $numeric = ($env:VERSION -split '-')[0]
+          & $iscc "/DAppVersion=$env:VERSION" "/DNumericVersion=$numeric" `
+            "/DDist=$PWD\dist\$env:NAME" "/DOutputDir=$PWD\dist" packaging\windows\cadenza.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
   macos:

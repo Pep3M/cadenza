@@ -53,7 +53,11 @@ fn baseline_is_exact_on_steady_notes_and_mixes_notes_across_glides() {
 		assert!(s.center.p95_cents < 5.0, "{name}: {s:?}");
 	}
 	let glides = case("legato_glide_long");
-	assert!(glides.mixed_rate >= 0.3, "{glides:?}");
+	// It glues glide-joined notes into regions that span two or more of them.
+	assert!(
+		glides.mixed_rate >= 0.15 && glides.conpoff.f < 0.7,
+		"{glides:?}"
+	);
 	assert!(glides.center.median_cents > 50.0, "{glides:?}");
 	// Scoops pull the plain mean below the sung pitch.
 	assert!(case("scoops_falls").center.median_cents > 20.0);

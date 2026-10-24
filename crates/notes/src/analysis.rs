@@ -12,7 +12,7 @@ use crate::features::spectral_frames;
 use crate::pyin::{self, Candidate, PyinOptions};
 
 /// Bumped whenever the analysis output changes: older cache entries are ignored.
-pub const ANALYSIS_VERSION: u32 = 1;
+pub const ANALYSIS_VERSION: u32 = 2;
 /// Candidates kept per frame (the chosen one first when voiced).
 pub const KEPT_CANDIDATES: usize = 3;
 

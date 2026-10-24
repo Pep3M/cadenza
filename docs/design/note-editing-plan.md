@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 and NE-1 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0, NE-1 and NE-2 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -159,6 +159,62 @@ Implements research §5 and §6:
 Acceptance (synthetic set): mixed-region rate < 1 %, COnPOff F ≥ 0.90, median center error
 < 3 cents, 95th percentile < 8 cents; on the real set: clearly better than the NE-0
 baseline, every remaining mixed region flagged with low confidence.
+
+**Shipped (NE-2).** `segment::segment(&Analysis, &SegmentOptions, splits) -> Segmentation {
+notes: [SegmentedNote { onset, offset, core_start, core_end, center, drift (c/s), vibrato:
+Option<{rate_hz, depth_cents}>, confidence, flags: [MaybeTwoNotes {at, cents} | ShortCore |
+WeakVoicing] }], sibilants }`; `Segmenter` is the `segment` detector. CLI `cadenza notes
+segment <file> [--sensitivity] [--split <s>]... [--json]`. Pipeline per voiced run (gaps
+≤ 25 ms with continuous pitch and no attack are bridged; forced splits cut runs; reverb tails
+are cut out first):
+
+1. `vibrato::detect`: per frame, a detrended ±0.25 s window is fitted by a sinusoid at
+   4–8.5 Hz; vibrato when it explains ≥ 60 % of the residual, depth 12–200 c, the residual
+   crosses zero ≥ 0.75 x as often as the sine, the sine fits at least twice better than a
+   staircase of up to three notes, and the window both rises and falls by the minimum depth
+   (a run of rising notes is not vibrato). Regions ≥ 0.35 s are replaced by their mean over
+   one period: vibrato never splits a note and centers are its mean.
+2. `partition`: exact DP over core / transition frames; a core is a line with |slope| ≤ 150
+   c/s, priced by its squared error plus `note_cost` (10 000 c², / sensitivity); a transition
+   frame costs 300 where the pitch moves (> 300 c/s over 30 ms) and 4 000 where it holds, so
+   plateaus are notes and glides are not.
+3. Cores closer than 35 c across a glitch ≤ 60 ms merge; a short (< 100 ms) core at a run
+   edge joined by a glide (or itself at the slope limit) is absorbed: the bottom of a fall
+   (≥ 10 dB quieter, or going down and ≥ 3 dB quieter), the start of a scoop (median level ≥
+   12 dB lower; a grace note reaches full level), or the swing of a vibrato the analysis
+   cannot see in the run's last half window.
+4. Boundaries between legato notes sit where the glide crosses halfway between the two
+   centers; centers come from the cores only; `self_check` prices the best split of each core
+   (confidence, `MaybeTwoNotes` when it would gain over half a note's price and the parts are
+   > 50 c apart).
+5. Reverb tails: a level fall of 12 dB within 100 ms that does not come back within 8 dB for
+   ≥ 60 ms is cut from the run (the dry offset is the note's end).
+
+The pYIN stage gained a rule found on noisy vowels with a strong second harmonic: a dip below
+the threshold whose aperiodicity is above 0.1 is passed over for a later one 4 x deeper (an
+octave-up dip at half the period is shallow, a true period's subharmonics are not), and the
+YIN window is ~46 ms at every rate (a power of two made it 64 ms at 16 kHz).
+
+Synthetic corpus (22.05 kHz, 246 notes in 20 cases):
+
+| | COnPOff | mixed | split | merge | octave | center median | p95 |
+|---|---|---|---|---|---|---|---|
+| baseline (NE-0) | 68.9 % | 41.8 % | 15.9 % | 15.9 % | 0 % | 2.9 c | 211 c |
+| **segment** | **99.6 %** | **0 %** | **0 %** | **0 %** | **0 %** | **0.4 c** | **3 c** |
+
+Every case is exact but `reverb` (one onset off). At 16 / 44.1 / 48 kHz: COnPOff 97.6 / 97.2 /
+98.4 %, no mixed region but one at 16 kHz (0.8 %); the misses are short fragments at the
+edges of notes in noise (falls into consonants and scoops whose level the noise floor hides)
+and one octave-wrong note at 16 kHz. Floors in `tests/segment.rs`. Speed: 21 minutes of audio
+segmented in ~2 s (cache hit included). Frame scores after the corpus melodies stopped
+repeating notes: pYIN raw pitch 97.9 %, octave 0 %, gross 0.1 %, false alarm 7.3 % (YIN
+98.2 % / 0.2 % / 0.2 % / 9.1 %; its extra frames are glide edges, some at the wrong octave).
+
+Not done in NE-2, moved on: per-note drift and modulation *curves* (the decomposition the
+editor draws, NE-5; the notes carry drift slope and vibrato rate/depth), local re-segmentation
+of a range after a manual edit (a whole 3-minute take re-segments in ~0.3 s, so NE-5 can start
+with that), Huber costs and BIC self-checks (the squared-error DP plus the split self-check
+reached the targets), very wet reverb (tuned at 30 % wet) and the real labeled set.
 
 ## NE-3 — Audio-to-MIDI (mono) and hum-to-MIDI
 

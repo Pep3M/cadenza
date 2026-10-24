@@ -15,6 +15,8 @@ pub mod eval;
 pub mod features;
 mod par;
 pub mod pyin;
+pub mod segment;
+pub mod vibrato;
 pub mod yin;
 
 use thiserror::Error;
@@ -73,11 +75,12 @@ pub fn tracker(name: &str) -> Option<Box<dyn PitchTracker>> {
 }
 
 /// Ids accepted by [`detector`].
-pub const DETECTORS: &[&str] = &["baseline"];
+pub const DETECTORS: &[&str] = &["segment", "baseline"];
 
 /// The detector with that id.
 pub fn detector(name: &str) -> Option<Box<dyn NoteDetector>> {
 	match name {
+		"segment" => Some(Box::new(segment::Segmenter::default())),
 		"baseline" => Some(Box::new(baseline::Baseline::default())),
 		_ => None,
 	}

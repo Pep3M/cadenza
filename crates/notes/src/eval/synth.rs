@@ -568,7 +568,9 @@ impl Rng {
 
 const MAJOR: [i32; 7] = [0, 2, 4, 5, 7, 9, 11];
 
-/// A random walk on C major between `low` and `high` (MIDI), steps of up to a fourth.
+/// A random walk on C major between `low` and `high` (MIDI), steps of up to a fourth, never
+/// the same note twice in a row (bouncing off the range edges): two legato notes of one
+/// pitch with no articulation are one note, not a test of segmentation.
 fn melody(rng: &mut Rng, low: i32, high: i32, count: usize) -> Vec<f64> {
 	let degrees: Vec<i32> = (low..=high)
 		.filter(|p| MAJOR.contains(&p.rem_euclid(12)))
@@ -581,7 +583,12 @@ fn melody(rng: &mut Rng, low: i32, high: i32, count: usize) -> Vec<f64> {
 		if step == 0 {
 			step = 1;
 		}
-		at = (at as i32 + step).clamp(0, degrees.len() as i32 - 1) as usize;
+		let last = degrees.len() as i32 - 1;
+		let mut next = at as i32 + step;
+		if next < 0 || next > last {
+			next = at as i32 - step;
+		}
+		at = next.clamp(0, last) as usize;
 	}
 	out
 }

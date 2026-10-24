@@ -29,6 +29,12 @@ pub struct PyinOptions {
 	/// it (pYIN's "absolute minimum" rule).
 	pub no_dip_probability: f64,
 	pub max_candidates: usize,
+	/// A dip below the threshold is passed over for a later one this many times deeper: a
+	/// strong second harmonic makes a shallow dip at half the period (an octave up), while a
+	/// true period leaves its subharmonic dips about as deep as its own.
+	pub deeper_ratio: f64,
+	/// ...only when that dip is itself this aperiodic: a clean period has tiny dips everywhere.
+	pub deeper_above: f64,
 	/// Frames quieter than the loudest frame by more than this are unvoiced.
 	pub silence_db: f64,
 	/// Fade-in of the voicing mass over this many dB above the silence floor.
@@ -53,6 +59,8 @@ impl Default for PyinOptions {
 			beta: (2.0, 8.0),
 			no_dip_probability: 0.01,
 			max_candidates: 8,
+			deeper_ratio: 0.25,
+			deeper_above: 0.1,
 			silence_db: 50.0,
 			silence_knee_db: 10.0,
 			move_cost: 1.0,
@@ -192,7 +200,17 @@ fn frame_candidates(
 	for (t, p) in prior.iter().enumerate() {
 		let threshold = (t + 1) as f64 / 100.0;
 		match dips.iter().position(|d| d.1 < threshold) {
-			Some(k) => mass[k] += p,
+			Some(mut k) => {
+				while let Some(j) = (dips[k].1 > opts.deeper_above)
+					.then(|| {
+						(k + 1..dips.len()).find(|&j| dips[j].1 < opts.deeper_ratio * dips[k].1)
+					})
+					.flatten()
+				{
+					k = j;
+				}
+				mass[k] += p;
+			}
 			None => mass[global] += p * opts.no_dip_probability,
 		}
 	}

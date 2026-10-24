@@ -66,7 +66,9 @@ impl Cmnd {
 	/// `None` when the rate cannot hold the pitch range.
 	pub fn new(sample_rate: u32, hop_seconds: f64, min_hz: f64, max_hz: f64) -> Option<Self> {
 		let sr = f64::from(sample_rate.max(1));
-		let window = ((sr * 0.04) as usize).next_power_of_two().max(256);
+		// ~46 ms whatever the rate (1024 samples at 22.05 kHz): a power of two would make it
+		// 64 ms at 16 kHz and smear fast notes.
+		let window = (2 * (sr * 0.0232).round() as usize).max(256);
 		let max_lag = ((sr / min_hz) as usize).min(window / 2);
 		let min_lag = ((sr / max_hz) as usize).max(2);
 		let hop = ((sr * hop_seconds).round() as usize).max(1);

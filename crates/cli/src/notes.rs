@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use cadenza_audio_io::{AudioBuffer, ExportOptions, WavSampleFormat, decode_file, export};
 use cadenza_notes::analysis::{self, AnalysisOptions, Cache};
 use cadenza_notes::eval::{self, Case, FrameScore, Report, Score, labels, synth};
+use cadenza_notes::segment::{self, NoteFlag, SegmentOptions};
 use clap::{Args, Subcommand};
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "ogg", "m4a", "aif", "aiff"];
@@ -31,6 +32,19 @@ pub enum NotesCommand {
 		/// Analyze again even when a cached result exists.
 		#[arg(long)]
 		no_cache: bool,
+	},
+	/// Detect the notes of an audio file: onset, offset, stable core, center, drift,
+	/// vibrato, confidence and flags (doubtful regions), plus sibilants.
+	Segment {
+		file: PathBuf,
+		/// Above 1 finds more notes, below 1 fewer.
+		#[arg(long, default_value_t = 1.0)]
+		sensitivity: f64,
+		/// Forced note boundaries, seconds (repeatable).
+		#[arg(long)]
+		split: Vec<f64>,
+		#[arg(long)]
+		json: bool,
 	},
 	/// Write the synthetic corpus as `<case>.wav` + `<case>.json` labels into a folder.
 	Corpus {
@@ -86,6 +100,12 @@ pub fn run(command: NotesCommand) -> Result<()> {
 			json,
 			no_cache,
 		} => analyze(&file, json, no_cache),
+		NotesCommand::Segment {
+			file,
+			sensitivity,
+			split,
+			json,
+		} => segment_file(&file, sensitivity, &split, json),
 		NotesCommand::Corpus { dir, sample_rate } => write_corpus(&dir, sample_rate),
 	}
 }
@@ -349,5 +369,74 @@ fn analyze(file: &Path, json: bool, no_cache: bool) -> Result<()> {
 		elapsed,
 		analysis.duration / elapsed.max(1e-9)
 	);
+	Ok(())
+}
+
+fn segment_file(file: &Path, sensitivity: f64, splits: &[f64], json: bool) -> Result<()> {
+	if sensitivity.is_nan() || sensitivity <= 0.0 {
+		bail!("--sensitivity must be above 0 (1 = default, 2 = more notes, 0.5 = fewer)");
+	}
+	let buffer = decode_file(file).with_context(|| format!("decoding {}", file.display()))?;
+	let mono = buffer.to_mono();
+	let cache = Cache::new(cadenza_core::paths::cache_dir().join("analysis"));
+	let analysis = cache
+		.get_or_analyze(
+			mono.channel(0),
+			mono.sample_rate(),
+			&AnalysisOptions::default(),
+			&mut |_| true,
+		)
+		.context("analysis cancelled")?;
+	let opts = SegmentOptions {
+		sensitivity,
+		..SegmentOptions::default()
+	};
+	let result = segment::segment(&analysis, &opts, splits);
+	if json {
+		println!("{}", serde_json::to_string_pretty(&result)?);
+		return Ok(());
+	}
+	println!(
+		"{:>3} {:>8} {:>8} {:>17} {:>9} {:>7} {:>5} {:>13} {:>5}  flags",
+		"#", "onset", "offset", "core", "center", "cents", "drift", "vibrato", "conf"
+	);
+	for (i, n) in result.notes.iter().enumerate() {
+		let midi = n.center.round().clamp(0.0, 127.0) as u8;
+		let flags: Vec<String> = n
+			.flags
+			.iter()
+			.map(|f| match f {
+				NoteFlag::MaybeTwoNotes { at, cents } => {
+					format!("two notes? split at {at:.3} s ({cents:.0} c apart)")
+				}
+				NoteFlag::ShortCore => "short core".into(),
+				NoteFlag::WeakVoicing => "weak voicing".into(),
+			})
+			.collect();
+		println!(
+			"{:>3} {:>8.3} {:>8.3} {:>8.3}-{:<8.3} {:>9} {:>+7.1} {:>5.0} {:>13} {:>5.2}  {}",
+			i + 1,
+			n.onset,
+			n.offset,
+			n.core_start,
+			n.core_end,
+			cadenza_theory::format_pitch(midi, false),
+			(n.center - n.center.round()) * 100.0,
+			n.drift,
+			n.vibrato
+				.map(|v| format!("{:.1} Hz {:.0} c", v.rate_hz, v.depth_cents))
+				.unwrap_or_default(),
+			n.confidence,
+			flags.join("; ")
+		);
+	}
+	if !result.sibilants.is_empty() {
+		let list: Vec<String> = result
+			.sibilants
+			.iter()
+			.map(|s| format!("{:.3}-{:.3}", s.start, s.end))
+			.collect();
+		println!("sibilants: {}", list.join(", "));
+	}
 	Ok(())
 }

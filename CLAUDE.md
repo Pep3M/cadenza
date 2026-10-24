@@ -20,13 +20,13 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | core, theory |
 | `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
-| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics) | theory |
+| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, note segmentation (`segment`, `vibrato`), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics) | theory |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | model, mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes analyze|eval|eval-pitch|corpus` (pitch/feature analysis of a file, cached; score a note detector or a pitch tracker; write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes analyze|segment|eval|eval-pitch|corpus` (pitch/feature analysis of a file, cached; notes of a file with forced splits; score a note detector or a pitch tracker; write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
 
@@ -407,7 +407,7 @@ refinement passes; RBJ shapes at 48 kHz (`band_response_db`). moves. Engine: `an
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
 (cancellable).
 
-### cadenza-notes (NE-0, NE-1; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
+### cadenza-notes (NE-0..NE-2; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
 
 Pure, offline. Times in seconds of the analyzed audio, pitches fractional MIDI. `Note { onset,
 offset, center }`; `NoteDetector { name, detect(samples, rate) }`, registry `detector(id)` /
@@ -421,8 +421,8 @@ next to the audio: onset/offset/pitch name or MIDI, optional cores); `metrics` (
 COn/COnP/COnPOff with maximum matching, center error in cents of the region covering half the
 core, mixed regions = a region over two cores of different pitch, splits, merges, octave
 errors, voicing overlap); `evaluate(detector, cases) -> Report`. `baseline` (YIN + new note on
-a > 50 cent frame jump, mean center) is the bar: exact on steady notes; on the corpus 15.6 % mixed regions and 42 % of notes
-more than 10 cents off (96 c median on long glides). The crate and realfft/rustfft build with opt-level 3 in dev (root `Cargo.toml`).
+a > 50 cent frame jump, mean center) is the bar: exact on steady notes; on the corpus 41.8 % mixed regions, COnPOff
+68.9 %, 211 c p95 center error (66 c median on long glides). The crate and realfft/rustfft build with opt-level 3 in dev (root `Cargo.toml`).
 `CADENZA_NOTES_CORPUS` = folder of labeled recordings for `cadenza notes eval`.
 NE-1 frame analysis: `PitchTracker { name, track -> Vec<PitchFrame { time, pitch, voicing }> }`
 (`tracker(id)`: `pyin`, `yin`). `yin::Cmnd` = the shared difference function (FFT
@@ -441,7 +441,25 @@ the CLI uses `paths::cache_dir()/analysis`). Frame metrics (`eval::frames`, trut
 grid from the synth curve or from labels): raw pitch/chroma, voicing recall/false alarm,
 octave/gross rates; `evaluate_pitch`. Floors in `tests/pitch.rs` (pYIN: raw pitch >= 98 %, 0
 octave errors, gross <= 0.2 %, false alarm <= 8 %). A 3-minute 44.1 kHz take analyzes in ~0.3 s.
-SwiftF0 is not wired: tract 0.23.9 cannot type its graph (see the plan, NE-1).
+SwiftF0 is not wired: tract 0.23.9 cannot type its graph (see the plan, NE-1). pYIN passes over
+a dip with aperiodicity > 0.1 for a later one 4x deeper (`deeper_ratio`/`deeper_above`: the
+octave-up dip of a strong second harmonic); the YIN window is ~46 ms at every rate.
+NE-2 `segment::segment(&Analysis, &SegmentOptions, splits /* forced boundaries, s */) ->
+Segmentation { notes: [SegmentedNote { onset, offset, core_start, core_end, center, drift (c/s),
+vibrato: Option<NoteVibrato { rate_hz, depth_cents }>, confidence, flags: [NoteFlag::
+MaybeTwoNotes { at, cents } | ShortCore | WeakVoicing] (serde tag "flag") }], sibilants: [{start,
+end}] }`; `Segmenter` = detector `segment`. Per voiced run (short gaps bridged without an attack,
+forced splits cut, reverb tails cut: 12 dB fall within 100 ms not back within 8 dB for 60 ms):
+`vibrato::detect` (sinusoid 4-8.5 Hz on a detrended ±0.25 s window; rejected for staircases,
+too few zero crossings, one-way motion; regions >= 0.35 s) + `remove` (mean over one period) ->
+`partition` (exact DP: cores = lines |slope| <= 150 c/s priced by squared error + `note_cost`
+10k / `sensitivity`; transition frames 300 when moving, 4000 when still) -> `notes_of_run`
+(merge cores < 35 c apart across <= 60 ms glitches; absorb short edge cores: fall bottoms,
+quiet scoop starts (median level), unseen vibrato swings; legato boundary = glide crossing
+halfway between centers; centers from cores only; `self_check` -> confidence / MaybeTwoNotes).
+Synthetic corpus (22.05 kHz): COnPOff 99.6 %, 0 mixed/split/merge/octave, center median 0.4 c,
+p95 3 c; 16/44.1/48 kHz >= 97.2 %. Floors: `tests/segment.rs`; pYIN floors in `tests/pitch.rs`
+are raw pitch >= 97.5 % (glide-edge frames since the corpus melodies stopped repeating notes).
 
 ### cadenza-dsp
 

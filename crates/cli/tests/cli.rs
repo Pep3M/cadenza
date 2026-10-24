@@ -601,3 +601,59 @@ fn notes_analyze_and_eval_pitch() {
 	assert_eq!(r["tracker"], "pyin");
 	assert!(r["total"]["raw_pitch"].as_f64().unwrap() > 0.95);
 }
+
+#[test]
+fn notes_segment_finds_the_labeled_notes() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	let out = cadenza(&["notes", "corpus", &s(dir.path())]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let wav = s(&dir.path().join("legato_glide_long.wav"));
+	let run = |extra: &[&str]| {
+		let mut args = vec!["notes", "segment", wav.as_str()];
+		args.extend_from_slice(extra);
+		Command::new(env!("CARGO_BIN_EXE_cadenza"))
+			.args(&args)
+			.env("XDG_CACHE_HOME", dir.path().join("cache"))
+			.output()
+			.unwrap()
+	};
+	let labels: serde_json::Value = serde_json::from_str(
+		&std::fs::read_to_string(dir.path().join("legato_glide_long.json")).unwrap(),
+	)
+	.unwrap();
+	let truth = labels["notes"].as_array().unwrap();
+	let out = run(&["--json"]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let found: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	let notes = found["notes"].as_array().unwrap();
+	assert_eq!(notes.len(), truth.len());
+	for (n, t) in notes.iter().zip(truth) {
+		let cents = (n["center"].as_f64().unwrap() - t["pitch"].as_f64().unwrap()).abs() * 100.0;
+		assert!(cents < 5.0, "{n} vs {t}");
+	}
+
+	// A forced boundary in the middle of the first note adds one.
+	let first = &truth[0];
+	let mid = (first["onset"].as_f64().unwrap() + first["offset"].as_f64().unwrap()) / 2.0;
+	let out = run(&["--json", "--split", &format!("{mid}")]);
+	let split: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(split["notes"].as_array().unwrap().len(), truth.len() + 1);
+
+	let table = String::from_utf8_lossy(&run(&[]).stdout).to_string();
+	assert!(
+		table.contains("center") && table.lines().count() > truth.len(),
+		"{table}"
+	);
+	let bad = run(&["--sensitivity", "0"]);
+	assert!(!bad.status.success());
+	assert!(String::from_utf8_lossy(&bad.stderr).contains("--sensitivity"));
+}

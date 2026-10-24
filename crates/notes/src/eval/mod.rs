@@ -7,13 +7,15 @@
 //! - [`metrics`] scores detected notes against the truth.
 //! - [`evaluate`] runs a detector over cases and pools the scores into a [`Report`].
 
+pub mod frames;
 pub mod labels;
 pub mod metrics;
 pub mod synth;
 
 use serde::{Deserialize, Serialize};
 
-use crate::NoteDetector;
+use crate::{NoteDetector, PitchTracker};
+pub use frames::{FrameCounts, FrameScore, FrameState, TruthFrame};
 pub use metrics::{Counts, Score, score};
 
 /// One real note of the ground truth.
@@ -47,6 +49,8 @@ pub struct Case {
 	pub sample_rate: u32,
 	pub samples: Vec<f32>,
 	pub truth: Vec<TruthNote>,
+	/// Frame truth on the [`frames::TRUTH_HOP`] grid.
+	pub frames: Vec<TruthFrame>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,5 +89,50 @@ pub fn evaluate(detector: &dyn NoteDetector, cases: &[Case]) -> Report {
 		detector: detector.name().to_string(),
 		cases: reports,
 		total: Score::from_counts(&Counts::pooled(&counts)),
+	}
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PitchCaseReport {
+	pub name: String,
+	pub tags: Vec<String>,
+	pub score: FrameScore,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PitchReport {
+	pub tracker: String,
+	pub cases: Vec<PitchCaseReport>,
+	pub total: FrameScore,
+	/// Seconds of audio analyzed per second of computation.
+	pub speed: f64,
+}
+
+/// Runs a pitch tracker on every case and scores it frame by frame.
+pub fn evaluate_pitch(tracker: &dyn PitchTracker, cases: &[Case]) -> PitchReport {
+	let mut counts = Vec::with_capacity(cases.len());
+	let (mut audio, mut spent) = (0.0, 0.0);
+	let reports = cases
+		.iter()
+		.map(|case| {
+			let started = std::time::Instant::now();
+			let track = tracker.track(&case.samples, case.sample_rate);
+			spent += started.elapsed().as_secs_f64();
+			audio += case.samples.len() as f64 / f64::from(case.sample_rate.max(1));
+			let c = frames::count(&case.frames, &track);
+			let score = FrameScore::from_counts(&c);
+			counts.push(c);
+			PitchCaseReport {
+				name: case.name.clone(),
+				tags: case.tags.clone(),
+				score,
+			}
+		})
+		.collect();
+	PitchReport {
+		tracker: tracker.name().to_string(),
+		cases: reports,
+		total: FrameScore::from_counts(&FrameCounts::pooled(&counts)),
+		speed: if spent > 0.0 { audio / spent } else { 0.0 },
 	}
 }

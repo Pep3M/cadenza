@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 shipped** (2026-10-24, branch `feat/note-editing`): see the end of its section. Research and sources:
+Status: plan (2026-10-24). **NE-0 and NE-1 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -103,6 +103,34 @@ be collected (`CADENZA_NOTES_CORPUS`).
 Acceptance: voicing F1 and raw pitch accuracy on the corpus at or above published pYIN
 levels; octave errors < 1 % of voiced frames on the synthetic set; a 3-minute vocal analyzed
 in < 3 s on one core (models on).
+
+**Shipped (NE-1).** `pyin` (threshold-distribution candidates + Viterbi over candidates and an
+unvoiced state, O(frames x candidates²)), `features` (level, spectral flux, HF share on a 23 ms
+window), `analysis::analyze` -> `Analysis` (5 ms frames: pitch, voicing, aperiodicity, level,
+flux, HF share, top-3 candidates), frame-parallel over cores, progress + cancel, on-disk
+`Cache` keyed by content. CLI `cadenza notes analyze <file> [--json] [--no-cache]` and
+`cadenza notes eval-pitch [--tracker pyin|yin]`. Frame scores on the synthetic corpus:
+
+| | raw pitch | voicing recall | false alarm | octave | gross | p95 |
+|---|---|---|---|---|---|---|
+| YIN | 97.7 % | 99.0 % | 9.1 % | 0.6 % | 0.7 % | 10 c |
+| **pYIN** | **98.5 %** | 98.7 % | **7.5 %** | **0 %** | **0.1 %** | **8 c** |
+| YIN, noise SNR 10 dB | 73.8 % | 98.0 % | | 11.1 % | 13.6 % | 2400 c |
+| **pYIN, noise SNR 10 dB** | **95.1 %** | 95.2 % | | **0 %** | **0.1 %** | **10 c** |
+
+The paper's Beta mean 0.1 kept octave errors at 0 but lost voicing (93.7 % raw pitch, 32 % at
+SNR 10); mean 0.2 plus a small bias against "unvoiced" in frames with a period candidate gave
+the table above (sweep over beta, bias and switch cost). Remaining misses are window-bound:
+fast melisma glides (the 40 ms window averages them) and frames just after a note ends
+(false alarms). Speed: a 3-minute 44.1 kHz take in 0.29 s on 16 cores (2.2 s on one), a cache
+hit in 0.06 s.
+
+**SwiftF0 deferred.** Its ONNX (MIT, 135 kB, raw 16 kHz audio + fmin/fmax in, STFT inside the
+graph) does not load in tract 0.23.9 ("Impossible to unify F32 with F64" at MatMul node
+`v128`), and tract adds minutes of build time. pYIN already meets the NE-1 bar, so the model
+waits until real recordings (bleed, breathy voices) show where pYIN fails; options then: a
+hand port of the 14k-parameter network (weights read from the ONNX), or a fixed tract. The
+`PitchTracker` trait and the candidate lattice are ready to take its estimates.
 
 ## NE-2 — Note segmentation and pitch decomposition (the core)
 

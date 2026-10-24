@@ -1,13 +1,13 @@
 //! Frame-wise YIN pitch tracker (de Cheveigné & Kawahara 2002). The difference function is
 //! computed from an FFT autocorrelation plus prefix energies, so a frame costs
-//! O(W log W) instead of O(W x lags).
+//! O(W log W) instead of O(W x lags). [`Cmnd`] is shared with [`crate::pyin`].
 
 use std::sync::Arc;
 
 use realfft::num_complex::Complex;
 use realfft::{RealFftPlanner, RealToComplex};
 
-use crate::hz_to_midi;
+use crate::{PitchFrame, PitchTracker, hz_to_midi};
 
 #[derive(Debug, Clone)]
 pub struct YinOptions {
@@ -47,54 +47,119 @@ pub struct Frame {
 	pub rms: f64,
 }
 
-/// Tracks the pitch of mono `samples`.
-pub fn track(samples: &[f32], sample_rate: u32, opts: &YinOptions) -> Vec<Frame> {
-	let sr = f64::from(sample_rate.max(1));
-	let window = ((sr * 0.04) as usize).next_power_of_two().max(256);
-	let max_lag = ((sr / opts.min_hz) as usize).min(window / 2);
-	let min_lag = ((sr / opts.max_hz) as usize).max(2);
-	let hop = ((sr * opts.hop_seconds).round() as usize).max(1);
-	if samples.is_empty() || min_lag + 2 >= max_lag {
-		return Vec::new();
+/// Cumulative mean normalized difference function of one frame after another.
+pub(crate) struct Cmnd {
+	pub sample_rate: f64,
+	pub window: usize,
+	pub hop: usize,
+	pub min_lag: usize,
+	pub max_lag: usize,
+	fft: Autocorr,
+	frame: Vec<f64>,
+	energy: Vec<f64>,
+	acf: Vec<f64>,
+	/// d'(tau) for tau in 0..=max_lag, filled by [`Cmnd::compute`].
+	pub values: Vec<f64>,
+}
+
+impl Cmnd {
+	/// `None` when the rate cannot hold the pitch range.
+	pub fn new(sample_rate: u32, hop_seconds: f64, min_hz: f64, max_hz: f64) -> Option<Self> {
+		let sr = f64::from(sample_rate.max(1));
+		let window = ((sr * 0.04) as usize).next_power_of_two().max(256);
+		let max_lag = ((sr / min_hz) as usize).min(window / 2);
+		let min_lag = ((sr / max_hz) as usize).max(2);
+		let hop = ((sr * hop_seconds).round() as usize).max(1);
+		(min_lag + 2 < max_lag).then(|| Self {
+			sample_rate: sr,
+			window,
+			hop,
+			min_lag,
+			max_lag,
+			fft: Autocorr::new(window),
+			frame: vec![0.0; window],
+			energy: vec![0.0; window + 1],
+			acf: vec![0.0; window],
+			values: vec![0.0; max_lag + 1],
+		})
 	}
-	let mut fft = Autocorr::new(window);
-	let mut frame = vec![0.0f64; window];
-	let mut energy = vec![0.0f64; window + 1];
-	let mut acf = vec![0.0f64; window];
-	let mut cmnd = vec![0.0f64; max_lag + 1];
-	let count = samples.len().div_ceil(hop);
-	let mut frames = Vec::with_capacity(count);
-	for i in 0..count {
-		let center = i * hop;
-		for (j, slot) in frame.iter_mut().enumerate() {
-			let index = (center + j).checked_sub(window / 2);
-			*slot = index
+
+	pub fn frame_count(&self, samples: usize) -> usize {
+		samples.div_ceil(self.hop)
+	}
+
+	pub fn time(&self, index: usize) -> f64 {
+		(index * self.hop) as f64 / self.sample_rate
+	}
+
+	/// Fills `values` for frame `index` (centered on `index * hop`) and returns its RMS.
+	pub fn compute(&mut self, samples: &[f32], index: usize) -> f64 {
+		let (window, center) = (self.window, index * self.hop);
+		for (j, slot) in self.frame.iter_mut().enumerate() {
+			*slot = (center + j)
+				.checked_sub(window / 2)
 				.and_then(|k| samples.get(k))
 				.map_or(0.0, |&v| f64::from(v));
 		}
 		for j in 0..window {
-			energy[j + 1] = energy[j] + frame[j] * frame[j];
+			self.energy[j + 1] = self.energy[j] + self.frame[j] * self.frame[j];
 		}
-		let rms = (energy[window] / window as f64).sqrt();
-		fft.compute(&frame, &mut acf);
+		self.fft.compute(&self.frame, &mut self.acf);
 		// d(tau) = sum_{j < W - tau} (x_j - x_{j+tau})^2, normalized cumulatively.
-		cmnd[0] = 1.0;
+		let total = self.energy[window];
+		self.values[0] = 1.0;
 		let mut running = 0.0;
-		for tau in 1..=max_lag {
-			let d =
-				(energy[window - tau] + (energy[window] - energy[tau]) - 2.0 * acf[tau]).max(0.0);
+		for tau in 1..=self.max_lag {
+			let d = (self.energy[window - tau] + (total - self.energy[tau]) - 2.0 * self.acf[tau])
+				.max(0.0);
 			running += d;
-			cmnd[tau] = if running > 0.0 {
+			self.values[tau] = if running > 0.0 {
 				d * tau as f64 / running
 			} else {
 				1.0
 			};
 		}
+		(total / window as f64).sqrt()
+	}
+
+	/// Period in samples of a dip at `tau`, refined by parabolic interpolation.
+	pub fn refine(&self, tau: usize) -> f64 {
+		if tau <= self.min_lag || tau + 1 >= self.max_lag {
+			return tau as f64;
+		}
+		let (a, b, c) = (self.values[tau - 1], self.values[tau], self.values[tau + 1]);
+		let denom = a - 2.0 * b + c;
+		if denom.abs() > 1e-12 {
+			tau as f64 + (0.5 * (a - c) / denom).clamp(-0.5, 0.5)
+		} else {
+			tau as f64
+		}
+	}
+
+	pub fn pitch_of(&self, tau: usize) -> f64 {
+		hz_to_midi(self.sample_rate / self.refine(tau))
+	}
+}
+
+/// Tracks the pitch of mono `samples`.
+pub fn track(samples: &[f32], sample_rate: u32, opts: &YinOptions) -> Vec<Frame> {
+	let Some(mut cmnd) = Cmnd::new(sample_rate, opts.hop_seconds, opts.min_hz, opts.max_hz) else {
+		return Vec::new();
+	};
+	if samples.is_empty() {
+		return Vec::new();
+	}
+	let (min_lag, max_lag) = (cmnd.min_lag, cmnd.max_lag);
+	let count = cmnd.frame_count(samples.len());
+	let mut frames = Vec::with_capacity(count);
+	for i in 0..count {
+		let rms = cmnd.compute(samples, i);
+		let v = &cmnd.values;
 		let mut best = None;
 		let mut tau = min_lag;
 		while tau < max_lag {
-			if cmnd[tau] < opts.threshold {
-				while tau + 1 < max_lag && cmnd[tau + 1] < cmnd[tau] {
+			if v[tau] < opts.threshold {
+				while tau + 1 < max_lag && v[tau + 1] < v[tau] {
 					tau += 1;
 				}
 				best = Some(tau);
@@ -104,25 +169,13 @@ pub fn track(samples: &[f32], sample_rate: u32, opts: &YinOptions) -> Vec<Frame>
 		}
 		let best = best.unwrap_or_else(|| {
 			(min_lag..max_lag)
-				.min_by(|&a, &b| cmnd[a].total_cmp(&cmnd[b]))
+				.min_by(|&a, &b| v[a].total_cmp(&v[b]))
 				.unwrap_or(min_lag)
 		});
-		let aperiodicity = cmnd[best];
-		let shift = if best > min_lag && best + 1 < max_lag {
-			let (a, b, c) = (cmnd[best - 1], cmnd[best], cmnd[best + 1]);
-			let denom = a - 2.0 * b + c;
-			if denom.abs() > 1e-12 {
-				(0.5 * (a - c) / denom).clamp(-0.5, 0.5)
-			} else {
-				0.0
-			}
-		} else {
-			0.0
-		};
-		let period = best as f64 + shift;
-		let pitch = (aperiodicity <= opts.voicing_limit).then(|| hz_to_midi(sr / period));
+		let aperiodicity = v[best];
+		let pitch = (aperiodicity <= opts.voicing_limit).then(|| cmnd.pitch_of(best));
 		frames.push(Frame {
-			time: center as f64 / sr,
+			time: cmnd.time(i),
 			pitch,
 			aperiodicity,
 			rms,
@@ -136,6 +189,31 @@ pub fn track(samples: &[f32], sample_rate: u32, opts: &YinOptions) -> Vec<Frame>
 		}
 	}
 	frames
+}
+
+/// Plain YIN as a [`PitchTracker`] (the NE-0 reference).
+#[derive(Debug, Clone, Default)]
+pub struct Yin(pub YinOptions);
+
+impl PitchTracker for Yin {
+	fn name(&self) -> &'static str {
+		"yin"
+	}
+
+	fn track(&self, samples: &[f32], sample_rate: u32) -> Vec<PitchFrame> {
+		track(samples, sample_rate, &self.0)
+			.into_iter()
+			.map(|f| PitchFrame {
+				time: f.time,
+				pitch: f.pitch,
+				voicing: if f.pitch.is_some() {
+					1.0 - f.aperiodicity
+				} else {
+					0.0
+				},
+			})
+			.collect()
+	}
 }
 
 /// Linear autocorrelation of a frame through a zero-padded real FFT.
@@ -185,7 +263,7 @@ mod tests {
 	use super::*;
 	use crate::midi_to_hz;
 
-	fn tone(midi: f64, sr: u32, seconds: f64) -> Vec<f32> {
+	pub(crate) fn tone(midi: f64, sr: u32, seconds: f64) -> Vec<f32> {
 		let hz = midi_to_hz(midi);
 		(0..(f64::from(sr) * seconds) as usize)
 			.map(|i| {

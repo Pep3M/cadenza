@@ -548,3 +548,56 @@ fn notes_corpus_written_to_disk_scores_like_the_synthetic_one() {
 	let out = cadenza(&["notes", "eval", "--detector", "nope"]);
 	assert!(String::from_utf8_lossy(&out.stderr).contains("baseline"));
 }
+
+#[test]
+fn notes_analyze_and_eval_pitch() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	let out = cadenza(&["notes", "corpus", &s(dir.path())]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let wav = dir.path().join("vibrato.wav");
+	let run = |extra: &[&str]| {
+		let mut args = vec!["notes", "analyze", wav.to_str().unwrap()];
+		args.extend_from_slice(extra);
+		Command::new(env!("CARGO_BIN_EXE_cadenza"))
+			.args(&args)
+			.env("XDG_CACHE_HOME", dir.path().join("cache"))
+			.output()
+			.unwrap()
+	};
+	let out = run(&["--json"]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let a: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(a["sample_rate"], 22_050);
+	assert!(a["frames"].as_array().unwrap().len() > 1_000);
+	assert!(
+		dir.path()
+			.join("cache/cadenza/analysis")
+			.read_dir()
+			.unwrap()
+			.count() == 1
+	);
+	let summary = String::from_utf8_lossy(&run(&[]).stdout).to_string();
+	assert!(
+		summary.contains("voiced:") && summary.contains("pitch:"),
+		"{summary}"
+	);
+
+	let out = cadenza(&["notes", "eval-pitch", "--json", "--case", "steady_mid"]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(r["tracker"], "pyin");
+	assert!(r["total"]["raw_pitch"].as_f64().unwrap() > 0.95);
+}

@@ -14,6 +14,7 @@
 
 use std::f64::consts::PI;
 
+use super::frames::{FrameState, TRUTH_HOP, TruthFrame};
 use super::{Case, TruthNote};
 
 const LEAD_IN: f64 = 0.25;
@@ -294,8 +295,16 @@ pub fn truth(phrase: &Phrase) -> Vec<TruthNote> {
 		.collect()
 }
 
-/// Renders a phrase to mono samples (peak 0.7) and its truth.
-pub fn render(phrase: &Phrase) -> (Vec<f32>, Vec<TruthNote>) {
+/// A rendered phrase: mono samples (peak 0.7), note truth and frame truth.
+#[derive(Debug, Clone)]
+pub struct Rendered {
+	pub samples: Vec<f32>,
+	pub truth: Vec<TruthNote>,
+	pub frames: Vec<TruthFrame>,
+}
+
+/// Renders a phrase.
+pub fn render(phrase: &Phrase) -> Rendered {
 	let notes = &phrase.notes;
 	let truth = truth(phrase);
 	let spans = layout(notes);
@@ -307,6 +316,9 @@ pub fn render(phrase: &Phrase) -> (Vec<f32>, Vec<TruthNote>) {
 
 	let mut voice = vec![0.0f64; len];
 	let mut amp = vec![0.0f64; len];
+	let mut sung = vec![0.0f64; len];
+	// Level relative to the sounding note's own level: 1 = fully sounding.
+	let mut relative = vec![0.0f64; len];
 	let mut gains = [0.0f64; 64];
 	let mut gains_for = 0usize;
 	let mut phase = 0.0f64;
@@ -337,13 +349,15 @@ pub fn render(phrase: &Phrase) -> (Vec<f32>, Vec<TruthNote>) {
 			level += notes[current + 1].level * envelope(&spans[current + 1], t);
 		}
 		amp[i] = level;
+		sung[i] = pitch;
+		relative[i] = level / n.level.max(1e-9);
 		let hz = crate::midi_to_hz(pitch);
 		phase = (phase + 2.0 * PI * hz / sr) % (2.0 * PI);
 		if level <= 0.0 {
 			continue;
 		}
 		let harmonics = ((0.45 * sr / hz) as usize).clamp(1, 30);
-		if i % 32 == 0 || harmonics != gains_for {
+		if i.is_multiple_of(32) || harmonics != gains_for {
 			gains_for = harmonics;
 			for (k, g) in gains.iter_mut().enumerate().take(harmonics) {
 				let k1 = (k + 1) as f64;
@@ -414,7 +428,29 @@ pub fn render(phrase: &Phrase) -> (Vec<f32>, Vec<TruthNote>) {
 	}
 	let peak = mix.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-9);
 	let samples = mix.iter().map(|v| (0.7 * v / peak) as f32).collect();
-	(samples, truth)
+	let frames = (0..)
+		.map(|k| k as f64 * TRUTH_HOP)
+		.take_while(|t| *t < len as f64 / sr)
+		.map(|time| {
+			let i = ((time * sr).round() as usize).min(len - 1);
+			let state = if relative[i] >= 0.5 {
+				FrameState::Voiced {
+					pitch: sung[i],
+					tolerance_cents: 50.0,
+				}
+			} else if relative[i] < 0.01 && phrase.reverb.is_none() {
+				FrameState::Unvoiced
+			} else {
+				FrameState::Ignore
+			};
+			TruthFrame { time, state }
+		})
+		.collect();
+	Rendered {
+		samples,
+		truth,
+		frames,
+	}
 }
 
 /// Amplitude of one note at `t` (0..1): attack/release when detached, complementary
@@ -559,13 +595,14 @@ fn detune(rng: &mut Rng, max: f64) -> f64 {
 pub fn corpus(sample_rate: u32) -> Vec<Case> {
 	let mut cases = Vec::new();
 	let mut add = |name: &str, tags: &[&str], phrase: Phrase| {
-		let (samples, truth) = render(&phrase);
+		let r = render(&phrase);
 		cases.push(Case {
 			name: name.to_string(),
 			tags: tags.iter().map(|t| t.to_string()).collect(),
 			sample_rate,
-			samples,
-			truth,
+			samples: r.samples,
+			truth: r.truth,
+			frames: r.frames,
 		});
 	};
 	let phrase = |notes: Vec<SynthNote>, vowel: Vowel, seed: u64| Phrase {
@@ -732,7 +769,7 @@ pub fn corpus(sample_rate: u32) -> Vec<Case> {
 	for (i, p) in base.into_iter().enumerate() {
 		for (k, q) in [p, p + 12.0].into_iter().enumerate() {
 			let mut n = SynthNote::new(q, rng.range(0.3, 0.5));
-			n = if k == 1 && i % 2 == 0 {
+			n = if k == 1 && i.is_multiple_of(2) {
 				n.legato(0.05)
 			} else {
 				n.rest(0.12)
@@ -924,9 +961,9 @@ mod tests {
 			seconds: 0.1,
 		});
 		let phrase = one(vec![SynthNote::new(60.0, 0.6), b, c]);
-		let (samples, truth) = render(&phrase);
-		let frames = yin::track(&samples, phrase.sample_rate, &YinOptions::default());
-		for t in &truth {
+		let r = render(&phrase);
+		let frames = yin::track(&r.samples, phrase.sample_rate, &YinOptions::default());
+		for t in &r.truth {
 			let inside: Vec<f64> = frames
 				.iter()
 				.filter(|f| f.time > t.core_start + 0.03 && f.time < t.core_end - 0.03)

@@ -9,8 +9,12 @@
 //! Times are seconds of the analyzed audio; pitches are fractional MIDI numbers (60.0 = C4,
 //! 60.5 = C4 + 50 cents).
 
+pub mod analysis;
 pub mod baseline;
 pub mod eval;
+pub mod features;
+mod par;
+pub mod pyin;
 pub mod yin;
 
 use thiserror::Error;
@@ -37,6 +41,35 @@ pub trait NoteDetector {
 	/// Short id used on the command line and in reports.
 	fn name(&self) -> &'static str;
 	fn detect(&self, samples: &[f32], sample_rate: u32) -> Vec<Note>;
+}
+
+/// One frame of a pitch track.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PitchFrame {
+	/// Seconds (frame center).
+	pub time: f64,
+	/// Fractional MIDI pitch, `None` when unvoiced.
+	pub pitch: Option<f64>,
+	/// How sure the tracker is that the frame is voiced, 0..1.
+	pub voicing: f64,
+}
+
+/// Anything that turns mono audio into a frame-wise pitch track. Deterministic.
+pub trait PitchTracker {
+	fn name(&self) -> &'static str;
+	fn track(&self, samples: &[f32], sample_rate: u32) -> Vec<PitchFrame>;
+}
+
+/// Ids accepted by [`tracker`].
+pub const TRACKERS: &[&str] = &["pyin", "yin"];
+
+/// The pitch tracker with that id.
+pub fn tracker(name: &str) -> Option<Box<dyn PitchTracker>> {
+	match name {
+		"pyin" => Some(Box::new(pyin::Pyin::default())),
+		"yin" => Some(Box::new(yin::Yin::default())),
+		_ => None,
+	}
 }
 
 /// Ids accepted by [`detector`].

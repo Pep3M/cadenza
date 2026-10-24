@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::TruthNote;
+use super::frames::{FrameState, TRUTH_HOP, TruthFrame};
 use crate::{NotesError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +54,27 @@ pub fn parse(json: &str) -> Result<Vec<TruthNote>> {
 		.collect::<Result<Vec<_>>>()?;
 	notes.sort_by(|a, b| a.onset.total_cmp(&b.onset));
 	Ok(notes)
+}
+
+/// Frame truth implied by labeled notes over `duration` seconds: the labeled pitch inside
+/// cores (100 cents tolerance: labels hold one pitch per note, the voice moves around it),
+/// not scored elsewhere inside notes, unvoiced outside them.
+pub fn frames(truth: &[TruthNote], duration: f64) -> Vec<TruthFrame> {
+	(0..)
+		.map(|k| k as f64 * TRUTH_HOP)
+		.take_while(|t| *t < duration)
+		.map(|time| {
+			let state = match truth.iter().find(|n| n.onset <= time && time < n.offset) {
+				Some(n) if n.core_start <= time && time < n.core_end => FrameState::Voiced {
+					pitch: n.center,
+					tolerance_cents: 100.0,
+				},
+				Some(_) => FrameState::Ignore,
+				None => FrameState::Unvoiced,
+			};
+			TruthFrame { time, state }
+		})
+		.collect()
 }
 
 /// Writes truth notes as a label file (used to save the synthetic corpus).

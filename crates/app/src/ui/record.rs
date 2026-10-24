@@ -75,11 +75,27 @@ pub fn header_buttons(
 		paint_arm(&p, r, armed, resp.hovered());
 		let tip = if track.kind == TrackKind::Audio {
 			tr("Arm for recording (audio input)")
+		} else if state.is_hum(track.id) {
+			tr("Arm for recording (hum to MIDI: your voice from input 1 becomes notes)")
 		} else {
 			tr("Arm for recording (MIDI input; also plays live MIDI)")
 		};
 		if resp.on_hover_text(tip).clicked() {
 			state.toggle_arm(track.id);
+		}
+		left = r.left();
+	}
+	if track.kind == TrackKind::Instrument && state.is_hum(track.id) {
+		let r = Rect::from_min_size(pos2(left - 21.0, right_of.top()), right_of.size());
+		let resp = ui.interact(r, id.with("hum"), Sense::click());
+		widgets::paint_toggle(&p, r, true, "H", theme::RECORD, resp.hovered());
+		if resp
+			.on_hover_text(tr(
+				"Hum to MIDI is on: recording captures your voice as notes (click to turn off)",
+			))
+			.clicked()
+		{
+			state.toggle_hum(track.id);
 		}
 		left = r.left();
 	}

@@ -657,3 +657,41 @@ fn notes_segment_finds_the_labeled_notes() {
 	assert!(!bad.status.success());
 	assert!(String::from_utf8_lossy(&bad.stderr).contains("--sensitivity"));
 }
+
+#[test]
+fn notes_to_midi_writes_a_midi_file() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	assert!(
+		cadenza(&["notes", "corpus", &s(dir.path())])
+			.status
+			.success()
+	);
+	let mid = dir.path().join("out.mid");
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"notes",
+			"to-midi",
+			&s(&dir.path().join("legato_glide_long.wav")),
+			"-o",
+			&s(&mid),
+			"--hum",
+			"--bends",
+		])
+		.env("XDG_CACHE_HOME", dir.path().join("cache"))
+		.output()
+		.unwrap();
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let stdout = String::from_utf8_lossy(&out.stdout);
+	assert!(stdout.starts_with("12 notes"), "{stdout}");
+	assert!(
+		stdout.contains("key:") && stdout.contains("pitch bend:"),
+		"{stdout}"
+	);
+	let bytes = std::fs::read(&mid).unwrap();
+	assert_eq!(&bytes[..4], b"MThd");
+}

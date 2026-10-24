@@ -9178,3 +9178,74 @@ fn render_midi_learn_screens() {
 	shot(&mut h, &dir, "explain_device_chat");
 	assert!(h.state().state.project().midi_map.len() == 3);
 }
+
+/// The "Convert to MIDI" dialog on a sung phrase (NE-3):
+/// `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored render_to_midi_screens`.
+#[test]
+#[ignore]
+fn render_to_midi_screens() {
+	use cadenza_mcp::tools::notes::ConvertMode;
+	use cadenza_notes::eval::synth::{Phrase, SynthNote, Vibrato, Vowel, render};
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	let wav = tmp.path().join("Lead vocal.wav");
+	let mut notes: Vec<SynthNote> = [
+		(57.0, 0.5),
+		(60.0, 0.25),
+		(62.0, 0.25),
+		(64.0, 1.0),
+		(62.0, 0.5),
+		(60.0, 0.5),
+		(59.0, 0.25),
+		(57.0, 1.5),
+	]
+	.into_iter()
+	.map(|(p, d)| SynthNote::new(p, d).legato(0.06))
+	.collect();
+	notes[0].rest_before = 0.2;
+	notes[3].detune_cents = 25.0;
+	notes[7].vibrato = Some(Vibrato {
+		rate_hz: 5.5,
+		depth_cents: 40.0,
+		delay: 0.3,
+	});
+	let r = render(&Phrase {
+		notes,
+		vowel: Vowel::A,
+		sample_rate: 44_100,
+		snr_db: None,
+		reverb: None,
+		seed: 4,
+	});
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(44_100, vec![r.samples]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	let mut state = AppState::headless();
+	state.analysis_cache = Some(tmp.path().join("cache"));
+	state.import_audio(&wav);
+	let clip = state.project().tracks.last().unwrap().clips[0].id;
+	state.start_convert_to_midi(clip);
+	let start = std::time::Instant::now();
+	while state.convert_preview().is_none() {
+		assert!(start.elapsed().as_secs() < 30);
+		std::thread::sleep(std::time::Duration::from_millis(5));
+		state.tick(std::time::Instant::now());
+	}
+	let mut h = screenshot_harness(CadenzaApp::with_state(state));
+	shot(&mut h, &dir, "to_midi_recording");
+	{
+		let c = h.state_mut().state.convert_to_midi_mut().unwrap();
+		c.set_mode(ConvertMode::Hum);
+		c.args.bends = Some(true);
+	}
+	shot(&mut h, &dir, "to_midi_humming");
+	h.get_by_label("Convert").click();
+	shot(&mut h, &dir, "to_midi_result");
+}

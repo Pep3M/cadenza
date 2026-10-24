@@ -13,6 +13,42 @@ use clap::{Args, Subcommand};
 
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "ogg", "m4a", "aif", "aiff"];
 
+#[derive(Args)]
+pub struct ToMidiArgs {
+	file: PathBuf,
+	/// Output .mid file (default: next to the input).
+	#[arg(short, long)]
+	output: Option<PathBuf>,
+	/// Tempo of the MIDI file, BPM (beats and the quantize grid follow it).
+	#[arg(long, default_value_t = 120.0)]
+	tempo: f64,
+	/// Hum defaults: sixteenth grid, key inferred and snapped, repeats merged.
+	#[arg(long)]
+	hum: bool,
+	/// Grid in beats (0.25 = sixteenths, 0 = none).
+	#[arg(long)]
+	quantize: Option<f64>,
+	/// "off", "auto" or a scale ("A minor").
+	#[arg(long)]
+	key: Option<String>,
+	/// Write a pitch-bend lane replaying the sung curve.
+	#[arg(long)]
+	bends: bool,
+	#[arg(long, allow_hyphen_values = true)]
+	octave_shift: Option<i32>,
+	/// Fold notes into lowest..highest (note names or MIDI numbers).
+	#[arg(long)]
+	lowest: Option<String>,
+	#[arg(long)]
+	highest: Option<String>,
+	/// Above 1 finds more notes, below 1 fewer.
+	#[arg(long)]
+	sensitivity: Option<f64>,
+	/// Shorter notes are dropped, seconds.
+	#[arg(long)]
+	min_length: Option<f64>,
+}
+
 #[derive(Subcommand)]
 pub enum NotesCommand {
 	/// Score a note detector: COnPOff/COnP/COn F-measures, pitch-center error in cents,
@@ -46,6 +82,9 @@ pub enum NotesCommand {
 		#[arg(long)]
 		json: bool,
 	},
+	/// Capture the notes of a monophonic recording (voice, hum, bass, lead) as a standard MIDI
+	/// file; the same conversion as the AI's `audio_to_midi` tool.
+	ToMidi(ToMidiArgs),
 	/// Write the synthetic corpus as `<case>.wav` + `<case>.json` labels into a folder.
 	Corpus {
 		dir: PathBuf,
@@ -106,8 +145,86 @@ pub fn run(command: NotesCommand) -> Result<()> {
 			split,
 			json,
 		} => segment_file(&file, sensitivity, &split, json),
+		NotesCommand::ToMidi(args) => to_midi(args),
 		NotesCommand::Corpus { dir, sample_rate } => write_corpus(&dir, sample_rate),
 	}
+}
+
+/// Runs the MCP tools on a scratch session: import the file, convert, export the clip.
+fn to_midi(args: ToMidiArgs) -> Result<()> {
+	use cadenza_mcp::Session;
+	use cadenza_mcp::tools::{audio, midi, notes};
+
+	if !(args.tempo.is_finite() && (10.0..=999.0).contains(&args.tempo)) {
+		bail!("--tempo {} is invalid; use 10..999 BPM", args.tempo);
+	}
+	let output = args
+		.output
+		.clone()
+		.unwrap_or_else(|| args.file.with_extension("mid"));
+	let mut session = Session::new();
+	session
+		.document_mut()
+		.execute(cadenza_model::Command::SetTempo {
+			tick: cadenza_core::Tick::ZERO,
+			bpm: args.tempo,
+		})?;
+	let imported = audio::import_audio(
+		&mut session,
+		audio::ImportAudioArgs {
+			path: args.file.display().to_string(),
+			..Default::default()
+		},
+	)?;
+	let out = notes::audio_to_midi(
+		&mut session,
+		notes::AudioToMidiArgs {
+			clip_id: imported.clip_id,
+			mode: if args.hum {
+				notes::ConvertMode::Hum
+			} else {
+				notes::ConvertMode::Audio
+			},
+			quantize_beats: args.quantize,
+			key: args.key,
+			bends: args.bends.then_some(true),
+			octave_shift: args.octave_shift,
+			lowest: args.lowest,
+			highest: args.highest,
+			sensitivity: args.sensitivity,
+			min_length_seconds: args.min_length,
+			..Default::default()
+		},
+	)?;
+	// The MIDI clip starts where the audio does, so beat 0 of the file is the recording's start.
+	midi::export_midi(
+		&session,
+		midi::ExportMidiArgs {
+			path: output.display().to_string(),
+			clip_id: Some(out.clip_id),
+			..Default::default()
+		},
+	)?;
+	println!("{} notes -> {}", out.note_count, output.display());
+	if let Some(key) = &out.key {
+		println!("key: {key}");
+	}
+	if let Some(range) = &out.range {
+		println!("range: {range}");
+	}
+	if out.bend_points > 0 {
+		println!("pitch bend: {} events", out.bend_points);
+	}
+	for n in &out.notes {
+		println!("  {n}");
+	}
+	if out.note_count > out.notes.len() {
+		println!("  ... {} more", out.note_count - out.notes.len());
+	}
+	for w in &out.warnings {
+		println!("warning: {w}");
+	}
+	Ok(())
 }
 
 fn run_eval(args: EvalArgs) -> Result<()> {

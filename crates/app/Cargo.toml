@@ -29,6 +29,7 @@ cadenza-theory.workspace = true
 cadenza-agent.workspace = true
 cadenza-library.workspace = true
 cadenza-analysis.workspace = true
+cadenza-notes.workspace = true
 realfft.workspace = true
 eframe.workspace = true
 egui.workspace = true

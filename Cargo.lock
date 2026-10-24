@@ -770,6 +770,7 @@ dependencies = [
  "cadenza-mcp",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
  "eframe",
@@ -894,6 +895,7 @@ dependencies = [
  "cadenza-library",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
  "hound",
@@ -941,6 +943,7 @@ dependencies = [
 name = "cadenza-notes"
 version = "0.2.0"
 dependencies = [
+ "cadenza-core",
  "cadenza-theory",
  "realfft",
  "serde",

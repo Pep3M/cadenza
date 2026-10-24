@@ -187,6 +187,11 @@ pub struct RecordState {
 	pub test_tone: bool,
 	/// The recording in progress as of this frame (one snapshot per frame).
 	pub live: Option<cadenza_engine::LiveRecording>,
+	/// Instrument tracks that record the voice from `hum_input` and turn it into MIDI
+	/// when the recording ends (hum-to-MIDI; session state like arming).
+	pub hum: std::collections::BTreeSet<TrackId>,
+	/// Input the hummed tracks record (`None`: input 1).
+	pub hum_input: Option<TrackInput>,
 }
 
 /// Input level fall-off, per second (linear full scale).
@@ -203,6 +208,31 @@ impl AppState {
 	}
 
 	/// Audio and instrument tracks can record.
+	/// Whether an instrument track records hummed audio as MIDI.
+	pub fn is_hum(&self, track: TrackId) -> bool {
+		self.record.hum.contains(&track)
+	}
+
+	/// Hum to MIDI on / off for an instrument track (arming it when turned on).
+	pub fn toggle_hum(&mut self, track: TrackId) {
+		if self
+			.project()
+			.track(track)
+			.is_none_or(|t| t.kind != TrackKind::Instrument)
+		{
+			return;
+		}
+		if !self.record.hum.remove(&track) {
+			self.record.hum.insert(track);
+			if !self.is_armed(track) {
+				self.toggle_arm(track);
+			}
+			self.notices.info(tr(
+				"Hum to MIDI: record your voice on this track; it becomes notes when you stop",
+			));
+		}
+	}
+
 	pub fn can_arm(&self, track: TrackId) -> bool {
 		self.project()
 			.track(track)
@@ -375,7 +405,11 @@ impl AppState {
 				TrackKind::Instrument => Some(RecordTrack {
 					track: t.id,
 					name: t.name.clone(),
-					input: None,
+					input: self
+						.record
+						.hum
+						.contains(&t.id)
+						.then(|| self.record.hum_input.unwrap_or(TrackInput::mono(0))),
 				}),
 				TrackKind::Bus | TrackKind::Folder => None,
 			})
@@ -507,7 +541,41 @@ impl AppState {
 			quantize: s.quantize.grid(),
 			pattern_clip: self.record.pattern.take(),
 		};
-		let Some(cmd) = record_commands(self.project(), rec, &options) else {
+		let cache = self
+			.analysis_cache
+			.clone()
+			.unwrap_or_else(cadenza_mcp::tools::notes::default_cache_dir);
+		let (rec, hummed, warnings) =
+			super::to_midi::hum_commands(self.project(), rec, &self.record.hum, &cache);
+		for w in warnings {
+			self.notices.warn(w);
+		}
+		let cmd = match (
+			record_commands(self.project(), &rec, &options),
+			hummed.is_empty(),
+		) {
+			(
+				Some(Command::Batch {
+					label,
+					mut commands,
+				}),
+				_,
+			) => {
+				commands.extend(hummed);
+				Some(Command::Batch { label, commands })
+			}
+			(Some(cmd), true) => Some(cmd),
+			(Some(cmd), false) => Some(Command::Batch {
+				label: "Record".into(),
+				commands: std::iter::once(cmd).chain(hummed).collect(),
+			}),
+			(None, false) => Some(Command::Batch {
+				label: "Record".into(),
+				commands: hummed,
+			}),
+			(None, true) => None,
+		};
+		let Some(cmd) = cmd else {
 			self.notices.info(tr("Nothing was recorded"));
 			// The player may still play merged passes: give it the project back.
 			self.schedule_reload();
@@ -717,6 +785,9 @@ impl AppState {
 	pub(crate) fn prune_record(&mut self) {
 		let p = &self.doc.project;
 		self.view.takes.retain(|t| p.track(*t).is_some());
+		self.record
+			.hum
+			.retain(|t| p.track(*t).is_some_and(|t| t.kind == TrackKind::Instrument));
 		if self.record.armed == p.armed {
 			return;
 		}
@@ -758,6 +829,9 @@ impl AppState {
 					i.label(),
 					i.monitor.name()
 				),
+				_ if self.is_hum(t.id) => {
+					format!("{} (hum to MIDI: voice from In 1 becomes notes)", t.name)
+				}
 				_ => format!("{} (MIDI)", t.name),
 			})
 			.collect();
@@ -1011,5 +1085,89 @@ mod tests {
 		};
 		chosen.metronome.on_record = true;
 		assert_eq!(chosen.migrated(), chosen);
+	}
+
+	#[test]
+	fn a_hummed_recording_lands_as_notes_on_the_instrument_track() {
+		use cadenza_notes::eval::synth::{Phrase, SynthNote, Vowel, render};
+		let dir = tempfile::tempdir().unwrap();
+		let wav = dir.path().join("Lead rec.wav");
+		let r = render(&Phrase {
+			notes: [57.0, 60.0, 62.0, 64.0]
+				.into_iter()
+				.map(|p| SynthNote::new(p, 0.4))
+				.collect(),
+			vowel: Vowel::U,
+			sample_rate: 48_000,
+			snr_db: Some(30.0),
+			reverb: None,
+			seed: 9,
+		});
+		let frames = r.samples.len() as u64;
+		let buf = cadenza_audio_io::AudioBuffer::from_planar(48_000, vec![r.samples]).unwrap();
+		cadenza_audio_io::export(
+			&buf,
+			&wav,
+			&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+		)
+		.unwrap();
+		let mut s = AppState::headless();
+		s.analysis_cache = Some(dir.path().join("cache"));
+		let mut p = Project::new("hum");
+		let lead = Track::new("Lead", TrackKind::Instrument);
+		let id = lead.id;
+		p.tracks.push(lead);
+		s.load_document(Document::new(p), None);
+		s.toggle_hum(id);
+		assert!(
+			s.is_hum(id) && s.is_armed(id),
+			"turning hum on arms the track"
+		);
+		let plan = s.record_plan().unwrap();
+		assert_eq!(
+			plan.setup.tracks[0].input,
+			Some(TrackInput::mono(0)),
+			"it records audio"
+		);
+		let undo_before = s.document().history_labels().len();
+		let rec = Recording {
+			sample_rate: 48_000,
+			start: 0,
+			punch_out: None,
+			stop: frames as i64,
+			latency: 0,
+			midi_latency: 0,
+			passes: vec![RecordedPass {
+				tag: 0,
+				file_start: 0,
+				frames,
+				wrapped_at: None,
+			}],
+			audio: vec![RecordedAudio {
+				track: id,
+				name: "Lead".into(),
+				file: wav.clone(),
+				frames,
+				channels: 1,
+			}],
+			midi_tracks: Vec::new(),
+			midi: Vec::new(),
+			dropouts: 0,
+			warnings: Vec::new(),
+		};
+		s.record.phase = Phase::Stopping;
+		assert!(s.finish_recording(&rec));
+		assert_eq!(s.document().history_labels().len(), undo_before + 1);
+		let track = s.project().track(id).unwrap();
+		assert_eq!(track.clips.len(), 1);
+		let clip = &track.clips[0];
+		assert!(clip.is_midi());
+		let pitches: Vec<u8> = clip.notes().iter().map(|n| n.pitch).collect();
+		assert_eq!(pitches, [57, 60, 62, 64]);
+		// Hum defaults: on the sixteenth grid.
+		for n in clip.notes() {
+			assert_eq!((clip.start + n.start).0 % (PPQ / 4), 0, "{n:?}");
+		}
+		assert!(wav.exists(), "the take audio is kept");
 	}
 }

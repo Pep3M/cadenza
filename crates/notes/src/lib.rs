@@ -13,6 +13,7 @@ pub mod analysis;
 pub mod baseline;
 pub mod eval;
 pub mod features;
+pub mod midi;
 mod par;
 pub mod pyin;
 pub mod segment;

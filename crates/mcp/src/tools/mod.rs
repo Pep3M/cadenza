@@ -12,6 +12,7 @@ pub mod match_eq;
 pub mod midi;
 pub mod mix;
 pub mod modulation;
+pub mod notes;
 pub mod playback;
 pub mod portable;
 pub mod presets;

@@ -65,6 +65,7 @@ pub mod saturator_editor;
 pub mod selection;
 pub mod start;
 pub mod timeline;
+pub mod to_midi;
 pub mod transport;
 pub mod windows;
 pub mod xruns;
@@ -416,6 +417,10 @@ pub struct AppState {
 	pub mix: mix::MixAssistant,
 	/// Match EQ of the EQ editors.
 	match_eq: match_eq::MatchEqState,
+	/// The "Convert to MIDI" dialog of an audio clip (NE-3).
+	to_midi: Option<to_midi::ConvertToMidi>,
+	/// Note-analysis cache folder; `None` = the user cache folder (tests use a temp dir).
+	pub analysis_cache: Option<std::path::PathBuf>,
 	collisions: collisions::CollisionState,
 	/// MIDI learn and the mapped controllers' values (T36).
 	pub midi: midi_learn::MidiLearnState,
@@ -562,6 +567,8 @@ impl AppState {
 			),
 			mix: mix::MixAssistant::default(),
 			match_eq: match_eq::MatchEqState::default(),
+			to_midi: None,
+			analysis_cache: None,
 			collisions: collisions::CollisionState::default(),
 			midi: midi_learn::MidiLearnState::default(),
 			start: start::StartScreen::default(),
@@ -4130,6 +4137,7 @@ impl AppState {
 		self.poll_jobs();
 		self.poll_mix();
 		self.poll_match_eq();
+		self.poll_convert_to_midi();
 		self.poll_collisions();
 		self.poll_file_jobs();
 		self.tick_autosave(now);

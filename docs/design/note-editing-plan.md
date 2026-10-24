@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0, NE-1 and NE-2 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-3 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -232,6 +232,44 @@ reached the targets), very wet reverb (tuned at 30 % wet) and the real labeled s
 
 Acceptance: round trip "MIDI -> synth render -> audio_to_midi" recovers the notes (COnP F ≥
 0.95 on clean synth material); a hummed melody lands quantized and in key.
+
+**Shipped (NE-3).** `cadenza_notes::midi::to_midi(&Segmentation, &Analysis, &TempoMap, origin,
+&MidiOptions { quantize, quantize_strength, key: Off | Auto | Scale, bends, bend_range, min_length,
+merge_repeats, octave_shift, range, velocity, region })` -> `MidiConversion { notes (song beats,
+pitch, velocity from the core's 90th-percentile level, sung cents), bends (-1..1, a point when the
+curve moves 3 c, reset after a detached note; mapped onto quantized notes), key, dropped }`;
+`MidiOptions::hum()` = 1/16 grid, inferred key (Krumhansl, now `Scale::infer` in
+cadenza-theory, shared with the library importer), repeats < 50 ms apart merged, notes < 80 ms
+dropped. Mono line: a note ends where the next starts. MCP `audio_to_midi { clip_id, mode:
+audio|hum, track_id?, quantize_beats, quantize_strength, key, bends, bend_range,
+min_length_seconds, merge_repeats, octave_shift, lowest/highest, velocity, sensitivity }`
+(`tools::notes`: `analyze_clip` decodes the clip's file and analyzes it through the content
+cache, `convert` keeps what the clip plays, `conversion_command` = ONE Batch "Convert '<clip>' to
+MIDI": a MIDI clip "<clip> (MIDI)" over the audio clip's span with an optional pitch-bend lane,
+on the given instrument track or on a new one below the audio track (median pitch < C3 =
+poly_synth "Sub Bass", < C4 = electric_piano, else poly_synth "Night Drive Lead"; colour and
+folder copied)). CLI `cadenza notes to-midi <file> [-o out.mid] [--tempo] [--hum] [--quantize]
+[--key] [--bends] [--octave-shift] [--lowest --highest] [--sensitivity] [--min-length]` runs the
+same tool on a scratch session and exports the clip. App: audio clip menu "Convert to MIDI…"
+(dialog: Recording | Humming, quantize grid + strength, key Off / Detect / 24 keys, pitch bend
++ range, octave, sensitivity (re-segments on a worker), write to a new track or an instrument
+track; live preview picture and "n notes · key · range"; Convert = one undo step, then the
+piano roll opens on the clip); dragging an audio clip onto an instrument track opens the dialog
+aimed at it. Hum to MIDI: instrument track menu "Hum to MIDI when recording" (arms the track,
+"H" toggle on the header; session state): the track records input 1 as audio and, when the
+recording ends, its last pass is converted with the hum settings inside the same "Record" undo
+step (the WAV stays in `Audio/`); the AI's recording context says so.
+
+Segmentation gained a rule found by the round trip: a core shorter than 80 ms right next to a
+note an octave, a twelfth or two octaves away is the tracker locking onto a harmonic (attacks,
+beating unison oscillators) and is folded into that note (drift is measured over the core
+ranges only). Round trip (`mcp/tests/audio_to_midi.rs`: 16-note line on the poly synth, engine
+render at 44.1 kHz, import, convert): COnP F ≥ 0.95 in audio mode (all 16 notes), hum mode gives
+the written notes back exactly (pitches, starts and lengths on the grid) and infers A minor.
+
+Not done: folding hummed notes into "the instrument's range" (instruments declare none; the
+lowest/highest option does it by hand), a per-track hum input picker (input 1), live monitoring
+of the hummed voice, and converting every loop pass of a hum take (the active one is used).
 
 ## NE-4 — Resynthesis engine (pitch, formant, time, sibilants)
 

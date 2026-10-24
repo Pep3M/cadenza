@@ -27,8 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, controllers, devices, library, midi, mix, modulation, playback,
-	portable, presets, project, render, samples, tracks,
+	arrange, audio, clips, compose, controllers, devices, library, midi, mix, modulation, notes,
+	playback, portable, presets, project, render, samples, tracks,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -79,7 +79,8 @@ hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in
 `warnings` (re-render to retry); during playback `transport_status` lists it under \
 `plugin_crashes` and `restart_plugins` reloads it. Replace a plugin that keeps crashing.\n\n\
 Audio and MIDI files: `import_audio` puts a recording on an Audio track (then \
-`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files. \
+`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files; \
+`audio_to_midi` turns a sung, hummed or played (monophonic) audio clip into a MIDI clip. \
 `export_stems` writes per-track/bus stems (and the mixdown) with range, format, \
 normalization and metadata. Project files: `list_missing_files`/`relink_files` fix moved \
 audio, `collect_files` copies outside files into the project folder, `pack_project` zips it.\n\n\
@@ -880,6 +881,24 @@ impl CadenzaServer {
 		Parameters(args): Parameters<audio::SetClipFadesArgs>,
 	) -> Result<Json<audio::SetClipFadesOutput>, ErrorData> {
 		Ok(Json(self.run_mut(|s| audio::set_clip_fades(s, args))?))
+	}
+
+	#[tool(
+		description = "Captures the notes of a monophonic audio clip (voice, hum, bass, lead) \
+			as a MIDI clip, in one undo step: on track_id (an instrument track) or on a new \
+			instrument track below the audio track (bass, keys or lead sound by register), \
+			aligned with the audio. mode audio (default) keeps the sung timing and nearest \
+			semitone; mode hum quantizes to sixteenths, infers and snaps to the key and merges \
+			repeats. Override with quantize_beats, key (\"auto\", \"off\", \"A minor\"), \
+			bends (pitch-bend lane replaying slides/vibrato), octave_shift, lowest/highest \
+			(fold into a range), velocity, sensitivity. Returns the clip, key, range and the \
+			first notes with their sung intonation in cents."
+	)]
+	fn audio_to_midi(
+		&self,
+		Parameters(args): Parameters<notes::AudioToMidiArgs>,
+	) -> Result<Json<notes::AudioToMidiOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| notes::audio_to_midi(s, args))?))
 	}
 
 	#[tool(

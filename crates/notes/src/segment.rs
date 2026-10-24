@@ -60,6 +60,10 @@ pub struct SegmentOptions {
 	pub tail_drop_db: f64,
 	pub tail_hold_db: f64,
 	pub min_tail: f64,
+	/// A core shorter than this (seconds), right next to a note an octave, a twelfth or two
+	/// octaves away, is the tracker locking onto a harmonic for a moment (attacks, beating
+	/// unison oscillators): it belongs to that note.
+	pub harmonic_glitch: f64,
 	/// Above 1 finds more notes, below 1 fewer.
 	pub sensitivity: f64,
 }
@@ -84,6 +88,7 @@ impl Default for SegmentOptions {
 			tail_drop_db: 12.0,
 			tail_hold_db: 8.0,
 			min_tail: 0.06,
+			harmonic_glitch: 0.08,
 			sensitivity: 1.0,
 		}
 	}
@@ -566,6 +571,49 @@ fn notes_of_run(
 			}
 		}
 	}
+	// Harmonic glitches: drop them, joining the notes on both sides when they are one.
+	let adjacent = (0.04 / hop).round() as usize;
+	let harmonic = |a: f64, b: f64| {
+		let d = (a - b).abs();
+		[1200.0, 1901.955, 2400.0]
+			.iter()
+			.any(|h| (d - h).abs() < 40.0)
+	};
+	let mut k = 0;
+	while k < groups.len() {
+		let g = &groups[k];
+		let short = (g.ranges.last().expect("ranges").1 - g.ranges[0].0) as f64 * hop
+			< opts.harmonic_glitch;
+		let center = mean_of(&g.ranges);
+		let gap = |lead: Option<(usize, usize)>| lead.map_or(0, |(a, b)| b - a);
+		let prev = k.checked_sub(1).filter(|_| {
+			gap(g.lead) <= adjacent && harmonic(center, mean_of(&groups[k - 1].ranges))
+		});
+		let next = groups
+			.get(k + 1)
+			.filter(|n| gap(n.lead) <= adjacent && harmonic(center, mean_of(&n.ranges)))
+			.map(|_| k + 1);
+		if !short || (prev.is_none() && next.is_none()) {
+			k += 1;
+			continue;
+		}
+		let glitch = groups.remove(k);
+		if k > 0 && k < groups.len() {
+			let joined = (mean_of(&groups[k - 1].ranges) - mean_of(&groups[k].ranges)).abs()
+				< opts.merge_cents;
+			if joined {
+				let after = groups.remove(k);
+				groups[k - 1].ranges.extend(after.ranges);
+			} else if next.is_some() {
+				// It is the start of the next note: the boundary moves to where it began.
+				let start = glitch.ranges[0].0;
+				groups[k].lead = Some(glitch.lead.unwrap_or((start, start)));
+			}
+		} else if k == 0 && !groups.is_empty() {
+			// The note it led into starts with the run.
+			groups[0].lead = None;
+		}
+	}
 	// A short core at either end of the run, joined to its neighbour by a glide and clearly
 	// quieter than it, is the start of a scoop or the bottom of a fall, not a note (a grace
 	// note sounds at full level).
@@ -656,7 +704,14 @@ fn notes_of_run(
 				None => time(core_b) - hop / 2.0,
 			}
 		};
-		let whole = fits.fit(core_a, core_b);
+		// Over the core ranges only (a merged glitch between them is not the note).
+		let frames: usize = g.ranges.iter().map(|&(a, b)| b - a).sum();
+		let slope = g
+			.ranges
+			.iter()
+			.map(|&(a, b)| fits.fit(a, b).slope * (b - a) as f64)
+			.sum::<f64>()
+			/ frames.max(1) as f64;
 		let (confidence, split) = self_check(&fits, &g.ranges, opts);
 		let mut flags = Vec::new();
 		if let Some(f) = split {
@@ -684,7 +739,7 @@ fn notes_of_run(
 			core_start: time(core_a) - hop / 2.0,
 			core_end: time(core_b - 1) + hop / 2.0,
 			center: centers[k] / 100.0,
-			drift: whole.slope / hop,
+			drift: slope / hop,
 			vibrato,
 			confidence,
 			flags,

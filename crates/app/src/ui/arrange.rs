@@ -66,6 +66,8 @@ struct ClipDrag {
 	copy: bool,
 	/// Shift held on a MIDI clip's right edge: the content stretches with it.
 	stretch: bool,
+	/// An audio clip held over an instrument track: dropping converts it to MIDI there.
+	convert: Option<TrackId>,
 }
 
 /// A Paint / knife / sweep gesture of the arrange tools.
@@ -2294,6 +2296,7 @@ impl ArrangeUi {
 					target: None,
 					copy: false,
 					stretch: false,
+					convert: None,
 				});
 			}
 			// Draw: the right button deletes (sweep), as in FL Studio.
@@ -2326,12 +2329,19 @@ impl ArrangeUi {
 				if d.kind == DragKind::Move {
 					let y = Self::content_y(layout, state, pos.y);
 					let tracks = &state.project().tracks;
-					d.target = self
-						.rows
-						.track_at(y)
-						.and_then(|(_, i)| tracks.get(i))
+					let under = self.rows.track_at(y).and_then(|(_, i)| tracks.get(i));
+					d.target = under
 						.filter(|t| t.id != track.id && edits::compatible(track.kind, t.kind))
 						.map(|t| t.id);
+					d.convert = under
+						.filter(|t| {
+							track.kind == TrackKind::Audio && t.kind == TrackKind::Instrument
+						})
+						.map(|t| t.id);
+					if let Some(t) = under.filter(|_| d.convert.is_some()) {
+						let text = trf("Convert to MIDI on '{track}'", &[("track", &t.name)]);
+						super::dnd::draw_hint(ui.ctx(), pos, &text, true);
+					}
 				}
 			}
 			let released = ui.input(|i| i.pointer.any_released())
@@ -2346,6 +2356,12 @@ impl ArrangeUi {
 							&& state.apply(cmd)
 						{
 							state.selection.clips = ids.into_iter().collect();
+						}
+					}
+					DragKind::Move if d.convert.is_some() => {
+						state.start_convert_to_midi(d.anchor);
+						if let Some(c) = state.convert_to_midi_mut() {
+							c.args.track_id = d.convert;
 						}
 					}
 					DragKind::Move => {
@@ -2762,6 +2778,16 @@ fn track_menu(
 			state.new_clip_in_piano_roll(track.id, at);
 			ui.close();
 		}
+		let mut hum = state.is_hum(track.id);
+		if super::widgets::checkbox(ui, &mut hum, tr("Hum to MIDI when recording"))
+			.on_hover_text(tr(
+				"Records your voice from input 1 and turns it into notes when you stop",
+			))
+			.changed()
+		{
+			state.toggle_hum(track.id);
+			ui.close();
+		}
 		ui.separator();
 	}
 	if ui.button(tr("Rename")).clicked() {
@@ -2930,6 +2956,10 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 			.clicked()
 		{
 			state.open_audio_editor(clip.id);
+			ui.close();
+		}
+		if ui.button(tr("Convert to MIDI…")).clicked() {
+			state.start_convert_to_midi(clip.id);
 			ui.close();
 		}
 		ui.separator();

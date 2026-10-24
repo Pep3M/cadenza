@@ -20,13 +20,13 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | core, theory |
 | `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
-| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, note segmentation (`segment`, `vibrato`), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics) | theory |
+| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, note segmentation (`segment`, `vibrato`), notes -> MIDI (`midi`), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics) | core, theory |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | model, mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes analyze|segment|eval|eval-pitch|corpus` (pitch/feature analysis of a file, cached; notes of a file with forced splits; score a note detector or a pitch tracker; write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes analyze|segment|to-midi|eval|eval-pitch|corpus` (pitch/feature analysis of a file, cached; notes of a file with forced splits; a recording to a .mid (`--hum`, `--bends`, `--key`, `--quantize`); score a note detector or a pitch tracker; write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
 
@@ -407,7 +407,7 @@ refinement passes; RBJ shapes at 48 kHz (`band_response_db`). moves. Engine: `an
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
 (cancellable).
 
-### cadenza-notes (NE-0..NE-2; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
+### cadenza-notes (NE-0..NE-3; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
 
 Pure, offline. Times in seconds of the analyzed audio, pitches fractional MIDI. `Note { onset,
 offset, center }`; `NoteDetector { name, detect(samples, rate) }`, registry `detector(id)` /
@@ -460,6 +460,20 @@ halfway between centers; centers from cores only; `self_check` -> confidence / M
 Synthetic corpus (22.05 kHz): COnPOff 99.6 %, 0 mixed/split/merge/octave, center median 0.4 c,
 p95 3 c; 16/44.1/48 kHz >= 97.2 %. Floors: `tests/segment.rs`; pYIN floors in `tests/pitch.rs`
 are raw pitch >= 97.5 % (glide-edge frames since the corpus melodies stopped repeating notes).
+A core < 80 ms next to a note an octave / twelfth / two octaves away is folded into it
+(`harmonic_glitch`: the tracker locking onto a harmonic in attacks or beating unisons).
+NE-3 `midi::to_midi(&Segmentation, &Analysis, &TempoMap, origin /* song s at analysis 0 */,
+&MidiOptions { quantize (beats), quantize_strength, key: KeySnap::Off|Auto|Scale, bends,
+bend_range, min_length, merge_repeats, octave_shift, range, velocity, region }) ->
+MidiConversion { notes: [MidiNote { start, length (song beats), pitch, velocity, cents }],
+bends: [BendPoint { beat, value -1..1 }], key, dropped }`; `MidiOptions::hum()` (1/16, key
+inferred with `Scale::infer` (cadenza-theory, Krumhansl; the library importer uses it too),
+repeats merged, < 80 ms dropped). MCP `audio_to_midi` (`tools::notes`: `analyze_clip(project,
+clip, sensitivity, cache_dir)` -> `ClipNotes`, `midi_options(args)`, `convert`,
+`conversion_command` -> ONE Batch "Convert '<clip>' to MIDI" (clip "<clip> (MIDI)" + pitch-bend
+lane on `track_id` or a new instrument track below: bass/keys/lead by median pitch); the app's
+dialog and hum recording reuse them. Round trip MIDI -> render -> audio_to_midi:
+`mcp/tests/audio_to_midi.rs` (COnP F >= 0.95, hum mode exact).
 
 ### cadenza-dsp
 
@@ -1606,6 +1620,17 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   (`AudioEngine::configure`, device lists probed there). The AI context carries the armed
   tracks/metronome/count-in (`recording_context`). Recordings go to the project's `Audio/`, or
   `$XDG_STATE_HOME/cadenza/recordings/untitled-<pid>/` before the first save.
+- Audio to MIDI (NE-3, `state::to_midi` + `ui::to_midi`): audio clip menu "Convert to MIDI…" or
+  dragging an audio clip onto an instrument track opens the dialog (`start_convert_to_midi`):
+  `analyze_clip` on a `cadenza-to-midi` worker (cache `AppState.analysis_cache`, default the
+  user cache), options = `AudioToMidiArgs` (Recording | Humming resets the overrides, quantize +
+  strength, key Off/Detect/24 keys, pitch bend + range, octave, sensitivity -> re-segments,
+  target new track / instrument track), `convert_preview()` (pure, each frame: summary +
+  picture), `apply_convert_to_midi` = one undo step + piano roll on the clip. Hum to MIDI
+  (`RecordState.hum`, session only): instrument track menu "Hum to MIDI when recording" arms
+  the track and shows an "H" header toggle; `record_plan` gives it audio input 1 and
+  `finish_recording` runs `to_midi::hum_commands` (last pass on a scratch audio track ->
+  `MidiOptions::hum()` -> AddClip on the instrument track) inside the same "Record" batch.
 - AI producer chat (phase 12; `state::ai` logic, `ui::chat` view): F10 / View / AI menu / F1.
   Docked right (`PanelKind::Chat`). `ai::worker` is a thread with its own tokio runtime that
   owns the `SessionAgent` (conversation kept across requests) and everything that may block

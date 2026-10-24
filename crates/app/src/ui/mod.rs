@@ -24,6 +24,7 @@ pub mod piano_roll;
 pub mod project_dialogs;
 pub mod record;
 pub mod start;
+pub mod to_midi;
 pub mod transport;
 pub mod widgets;
 pub mod windows;
@@ -521,6 +522,7 @@ impl CadenzaApp {
 		toasts(ui.ctx(), state);
 		unsaved_prompt(ui.ctx(), state);
 		project_dialogs::show(ui.ctx(), state);
+		to_midi::show(ui.ctx(), state);
 		record::audio_settings(ui.ctx(), state);
 		midi_learn::show(ui.ctx(), state);
 		help_overlay(ui.ctx(), state);

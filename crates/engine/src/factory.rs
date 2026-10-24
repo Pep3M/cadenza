@@ -8,9 +8,15 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use cadenza_core::ModulatorId;
 use cadenza_dsp::factory_samples as names;
-use cadenza_dsp::{FactoryPreset, MidiEvent, Transport};
-use cadenza_model::{LoopMode, SampleRef, SampleZone};
+use cadenza_dsp::{
+	FactoryPreset, MidiEvent, PresetLfoShape, PresetModSource, PresetRetrigger, Transport,
+};
+use cadenza_model::{
+	Device, EnvelopeSource, LfoShape, LoopMode, ModTarget, Modulator, ModulatorKind, Retrigger,
+	SampleRef, SampleZone,
+};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -247,6 +253,72 @@ pub fn preset_zones(preset: &FactoryPreset) -> Result<Vec<SampleZone>, EngineErr
 			zone
 		})
 		.collect())
+}
+
+/// The modulators of a factory preset as project modulators, with fresh ids.
+pub fn preset_modulators(preset: &FactoryPreset) -> Vec<Modulator> {
+	preset
+		.modulators
+		.iter()
+		.map(|m| Modulator {
+			id: ModulatorId::new(),
+			kind: match m.source {
+				PresetModSource::Lfo {
+					shape,
+					rate_hz,
+					sync_beats,
+					phase,
+					retrigger,
+				} => ModulatorKind::Lfo {
+					shape: match shape {
+						PresetLfoShape::Sine => LfoShape::Sine,
+						PresetLfoShape::Triangle => LfoShape::Triangle,
+						PresetLfoShape::Saw => LfoShape::Saw,
+						PresetLfoShape::Square => LfoShape::Square,
+						PresetLfoShape::Random => LfoShape::Random,
+					},
+					rate_hz,
+					sync_beats,
+					phase,
+					retrigger: match retrigger {
+						PresetRetrigger::Free => Retrigger::Free,
+						PresetRetrigger::Note => Retrigger::Note,
+						PresetRetrigger::Transport => Retrigger::Transport,
+					},
+				},
+				PresetModSource::Envelope {
+					attack_ms,
+					release_ms,
+					gain_db,
+				} => ModulatorKind::Envelope {
+					source: EnvelopeSource::OwnInput,
+					attack_ms,
+					release_ms,
+					gain_db,
+				},
+			},
+			targets: m
+				.targets
+				.iter()
+				.map(|(param, depth)| ModTarget {
+					param: (*param).to_owned(),
+					depth: *depth,
+				})
+				.collect(),
+		})
+		.collect()
+}
+
+/// Loads factory `preset` into a new `device`: its params, zones and modulators.
+pub fn apply_preset(device: &mut Device, preset: &FactoryPreset) -> Result<(), EngineError> {
+	device.params = preset
+		.params
+		.iter()
+		.map(|(k, v)| ((*k).to_owned(), *v))
+		.collect();
+	device.zones = preset_zones(preset)?;
+	device.modulators = preset_modulators(preset);
+	Ok(())
 }
 
 /// What a freshly created built-in device starts with: the params and zones of its first

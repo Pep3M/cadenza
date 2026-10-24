@@ -26,6 +26,7 @@ fn instrument_track_with_synth(session: &mut Session) -> cadenza_core::TrackId {
 			instrument: Some(DeviceSpec {
 				device: "poly_synth".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			}),
 			color: None,
 			output: None,

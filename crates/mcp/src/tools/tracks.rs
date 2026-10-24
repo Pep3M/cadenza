@@ -376,6 +376,7 @@ mod tests {
 				instrument: Some(DeviceSpec {
 					device: "poly_synth".into(),
 					params: BTreeMap::new(),
+					preset: None,
 				}),
 				color: None,
 				output: None,
@@ -409,6 +410,7 @@ mod tests {
 				instrument: Some(DeviceSpec {
 					device: "nope".into(),
 					params: BTreeMap::new(),
+					preset: None,
 				}),
 				color: None,
 				output: None,
@@ -429,6 +431,7 @@ mod tests {
 				instrument: Some(DeviceSpec {
 					device: "reverb".into(),
 					params: BTreeMap::new(),
+					preset: None,
 				}),
 				color: None,
 				output: None,
@@ -451,6 +454,7 @@ mod tests {
 				device: DeviceSpec {
 					device: "reverb".into(),
 					params,
+					preset: None,
 				},
 				index: None,
 			},
@@ -472,6 +476,7 @@ mod tests {
 				device: DeviceSpec {
 					device: "reverb".into(),
 					params,
+					preset: None,
 				},
 				index: None,
 			},
@@ -491,6 +496,7 @@ mod tests {
 				device: DeviceSpec {
 					device: "reverb".into(),
 					params: BTreeMap::new(),
+					preset: None,
 				},
 				index: None,
 			},

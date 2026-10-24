@@ -1,0 +1,2246 @@
+//! Factory presets of the Poly Synth: a genre library grouped by category. Recipes follow
+//! published sound-design breakdowns of popular styles, adapted to this synth (no pitch
+//! envelope, FM or mono mode yet); levels are matched by `tests/preset_library.rs` in
+//! `cadenza-engine`.
+
+use super::{FactoryPreset, PresetLfoShape as Shape, PresetModulator as Mod, preset};
+
+pub(super) static PRESETS: [FactoryPreset; 93] = [
+	preset(
+		"Sub Bass",
+		"Clean, round sine sub with a quiet octave on top so it still reads on small \
+		 speakers. The safe low end for pop, reggaeton, trap, R&B and house; keep it mono and \
+		 let the kick through.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 12.0),
+			("filter_cutoff", 1_200.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 2.0),
+			("amp_sustain", 100.0),
+			("amp_release", 90.0),
+			("velocity_sensitivity", 30.0),
+			("gain", -1.0),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Reese Bass",
+		"Two detuned saws beating against each other under a slow filter drift: the classic \
+		 dark, moving drum & bass, jungle and garage bass. Add saturation and keep the sub in \
+		 mono.",
+		&[
+			("osc2_cents", 28.0),
+			("unison", 2.0),
+			("unison_detune", 14.0),
+			("filter_cutoff", 900.0),
+			("filter_env_amount", 6.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 60.0),
+			("gain", 4.5),
+		],
+	)
+	.category("Bass")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.15, &[("filter_cutoff", 0.012)])]),
+	preset(
+		"Garage Reese",
+		"Detuned saw reese over a sine sub with a fast sixteenth-note filter shimmer: UK \
+		 garage, bass house and breakbeat. Chorus and tape saturation finish it.",
+		&[
+			("osc2_wave", 0.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 2.0),
+			("unison_detune", 16.0),
+			("filter_cutoff", 650.0),
+			("filter_resonance", 22.0),
+			("filter_env_amount", 8.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 70.0),
+			("gain", 5.0),
+		],
+	)
+	.category("Bass")
+	.modulators(&[Mod::synced(Shape::Sine, 0.25, &[("filter_cutoff", 0.012)])]),
+	preset(
+		"Rubber Tech Bass",
+		"Resonant, bouncy saw and square-sub bass with a short filter snap: tech house and \
+		 minimal basslines in sixteenths. Automate filter_cutoff through the build; sidechain \
+		 it to the kick.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("unison", 2.0),
+			("unison_detune", 8.0),
+			("filter_cutoff", 180.0),
+			("filter_resonance", 55.0),
+			("filter_env_amount", 30.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_release", 50.0),
+			("filter_attack", 0.0),
+			("filter_decay", 220.0),
+			("filter_sustain", 10.0),
+			("filter_release", 80.0),
+			("gain", 7.0),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Rolling Sub",
+		"Short, round saw-plus-sub pluck for rolling off-beat sixteenths: melodic techno, \
+		 afro house and progressive. Leave the downbeats to the kick and duck it with a \
+		 sidechain.",
+		&[
+			("osc2_wave", 0.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 45.0),
+			("filter_cutoff", 650.0),
+			("filter_resonance", 20.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_decay", 220.0),
+			("amp_sustain", 0.0),
+			("amp_release", 60.0),
+			("filter_attack", 0.0),
+			("filter_decay", 110.0),
+			("filter_sustain", 0.0),
+			("filter_release", 80.0),
+			("gain", 11.0),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Organ House Bass",
+		"Two squares a twelfth apart through a plucky filter: the 90s house organ bass, back \
+		 in house pop and piano house. Play it low (C1-C2); chorus and a hall reverb send \
+		 suit it.",
+		&[
+			("osc1_wave", 2.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 19.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 45.0),
+			("filter_cutoff", 800.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 18.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 100.0),
+			("filter_attack", 0.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 0.0),
+			("filter_release", 160.0),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Disco Octave Bass",
+		"Punchy saw bass with a square sub and a quick filter pluck, built for octave-jumping \
+		 eighths: nu-disco, synthwave pop and funk-pop. Harder notes open the filter more.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("filter_cutoff", 500.0),
+			("filter_resonance", 20.0),
+			("filter_env_amount", 30.0),
+			("filter_key_track", 40.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 60.0),
+			("amp_release", 80.0),
+			("filter_attack", 0.0),
+			("filter_decay", 180.0),
+			("filter_sustain", 0.0),
+			("filter_release", 100.0),
+			("velocity_sensitivity", 70.0),
+			("gain", 7.5),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Acid Line",
+		"Squelchy resonant saw with a decaying filter and a short glide: acid house and acid \
+		 techno. Write mono lines; every note slides from the last, and harder velocities \
+		 open the filter like accents. Distortion and a dotted-eighth delay help.",
+		&[
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("filter_cutoff", 300.0),
+			("filter_resonance", 72.0),
+			("filter_env_amount", 42.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 80.0),
+			("amp_release", 40.0),
+			("filter_attack", 0.0),
+			("filter_decay", 260.0),
+			("filter_sustain", 0.0),
+			("filter_release", 100.0),
+			("velocity_sensitivity", 80.0),
+			("glide", 45.0),
+			("gain", 5.5),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Wobble Bass",
+		"Saw and square sub through a resonant filter swept by an eighth-note LFO that \
+		 restarts on every note: dubstep and bass house wobble. Change the rhythm with the \
+		 modulator's sync; saturate hard.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 45.0),
+			("unison", 2.0),
+			("unison_detune", 15.0),
+			("filter_cutoff", 900.0),
+			("filter_resonance", 40.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 20.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 60.0),
+			("gain", 5.5),
+		],
+	)
+	.category("Bass")
+	.modulators(&[Mod::synced(Shape::Sine, 0.5, &[("filter_cutoff", 0.04)]).on_note(0.75)]),
+	preset(
+		"Vowel Wobble",
+		"Formant wavetable that says 'yoy' as an LFO sweeps its vowels, over a square sub: \
+		 riddim, tearout and growly bass music. Push it into the saturator; try 1/8T or 1/4 \
+		 sync.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 35.0),
+			("filter_cutoff", 4_000.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 60.0),
+			("gain", 4.0),
+			("osc1_table", 2.0),
+			("osc1_position", 0.5),
+		],
+	)
+	.category("Bass")
+	.modulators(&[Mod::synced(Shape::Triangle, 0.5, &[("osc1_position", 0.45)]).on_note(0.0)]),
+	preset(
+		"Eighties Pulse Bass",
+		"Hollow pulse bass with a slow, gentle filter decay: 80s pop, synth-funk and new wave \
+		 basslines. Add a little drive; a sixteenth delay makes it bounce.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("filter_cutoff", 260.0),
+			("filter_resonance", 35.0),
+			("filter_env_amount", 18.0),
+			("filter_key_track", 40.0),
+			("amp_attack", 0.0),
+			("amp_decay", 2_800.0),
+			("amp_sustain", 0.0),
+			("amp_release", 190.0),
+			("filter_attack", 0.0),
+			("filter_decay", 600.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("gain", 5.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.4),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Outrun Sweep Bass",
+		"Two saws an octave apart behind a resonant filter that sweeps down over a couple of \
+		 seconds: synthwave, outrun and darksynth bass. Saturate it and let held notes \
+		 breathe.",
+		&[
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("filter_cutoff", 700.0),
+			("filter_resonance", 55.0),
+			("filter_env_amount", 20.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 80.0),
+			("filter_attack", 0.0),
+			("filter_decay", 2_500.0),
+			("filter_sustain", 0.0),
+			("gain", 7.5),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Log Drum",
+		"Woody, percussive sine bass with a bright filter knock and a short slide between \
+		 notes: an amapiano log drum approximation (no pitch envelope yet). Play short \
+		 syncopated notes; saturate lightly and add a short room.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 25.0),
+			("filter_cutoff", 250.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 48.0),
+			("amp_attack", 0.0),
+			("amp_decay", 350.0),
+			("amp_sustain", 5.0),
+			("amp_release", 150.0),
+			("filter_attack", 0.0),
+			("filter_decay", 50.0),
+			("filter_sustain", 0.0),
+			("filter_release", 50.0),
+			("velocity_sensitivity", 70.0),
+			("glide", 40.0),
+			("gain", 11.0),
+		],
+	)
+	.category("Bass"),
+	preset(
+		"Pump Bass",
+		"Detuned saw bass that ducks on every beat by itself (a synced LFO on its gain), with \
+		 a long filter decay: future house, bass house and French-touch pumping without a \
+		 sidechain.",
+		&[
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 20.0),
+			("unison", 4.0),
+			("unison_detune", 8.0),
+			("filter_cutoff", 320.0),
+			("filter_resonance", 30.0),
+			("filter_env_amount", 12.0),
+			("filter_key_track", 30.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 40.0),
+			("filter_attack", 0.0),
+			("filter_decay", 1_350.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("gain", 9.0),
+		],
+	)
+	.category("Bass")
+	.modulators(&[Mod::synced(Shape::Saw, 1.0, &[("gain", 0.12)])]),
+	preset(
+		"808 Clean",
+		"Long, round sine 808 with a soft octave for small speakers and no glide: trap, \
+		 drill, R&B and reggaeton. Tune the notes to the song's root; saturate for more \
+		 presence.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 15.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 3.0),
+			("amp_decay", 2_500.0),
+			("amp_sustain", 35.0),
+			("velocity_sensitivity", 30.0),
+			("gain", 2.0),
+		],
+	)
+	.category("808"),
+	preset(
+		"808 Glide",
+		"Melodic sine 808 where every note slides from the previous one (120 ms glide): trap, \
+		 pluggnb and melodic drill. Write mono lines; jumps of an octave or a fifth sound \
+		 best. Saturate and sidechain to the kick.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 15.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 3.0),
+			("amp_decay", 2_500.0),
+			("amp_sustain", 50.0),
+			("amp_release", 220.0),
+			("velocity_sensitivity", 30.0),
+			("glide", 120.0),
+			("gain", 0.5),
+		],
+	)
+	.category("808"),
+	preset(
+		"Drill Slide 808",
+		"Sustaining sine 808 with a slow slide between notes for the constant pitch bends of \
+		 UK and NY drill. Overlap each note slightly with the next; keep the line mono.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 12.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 2.0),
+			("amp_decay", 3_000.0),
+			("amp_sustain", 75.0),
+			("amp_release", 120.0),
+			("velocity_sensitivity", 25.0),
+			("glide", 160.0),
+			("gain", -0.5),
+		],
+	)
+	.category("808"),
+	preset(
+		"Punch 808",
+		"Sine 808 with a short, bright filter knock on the attack that cuts through dense \
+		 trap drums, then a long tail. Pair with a clipped kick; no glide.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 22.0),
+			("filter_cutoff", 220.0),
+			("filter_resonance", 20.0),
+			("filter_env_amount", 48.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 2_200.0),
+			("amp_sustain", 40.0),
+			("amp_release", 220.0),
+			("filter_attack", 0.0),
+			("filter_decay", 40.0),
+			("filter_sustain", 0.0),
+			("filter_release", 50.0),
+			("velocity_sensitivity", 40.0),
+			("gain", 4.5),
+		],
+	)
+	.category("808"),
+	preset(
+		"Rage 808",
+		"Gritty 808 with a square an octave up and a sustain that holds: rage, hyper-trap and \
+		 aggressive hip-hop. Meant to be driven into the saturator and clipped; slides 80 ms.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("filter_cutoff", 1_800.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 18.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 2_000.0),
+			("amp_sustain", 60.0),
+			("amp_release", 200.0),
+			("filter_attack", 0.0),
+			("filter_decay", 80.0),
+			("filter_sustain", 0.0),
+			("filter_release", 80.0),
+			("velocity_sensitivity", 30.0),
+			("glide", 80.0),
+			("gain", 1.0),
+		],
+	)
+	.category("808"),
+	preset(
+		"Phonk 808",
+		"Dirty sine-and-square 808 for drift phonk: an 808 hit on every kick, octave glides, \
+		 and a lot of distortion after it. Play roots; let the saturator do the rest.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 2.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 18.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 1_500.0),
+			("amp_sustain", 50.0),
+			("amp_release", 150.0),
+			("velocity_sensitivity", 30.0),
+			("glide", 100.0),
+			("gain", 1.5),
+		],
+	)
+	.category("808"),
+	preset(
+		"Night Drive Lead",
+		"Bright 80s-style synth-pop lead: saw plus a narrow pulse an octave up, a touch of \
+		 unison and a filter that dips after the attack. Retro pop and synthwave hooks; \
+		 chorus, plate reverb and a dotted-eighth delay.",
+		&[
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 3_500.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 8.0),
+			("amp_decay", 800.0),
+			("amp_release", 300.0),
+			("filter_attack", 0.0),
+			("filter_decay", 400.0),
+			("filter_sustain", 85.0),
+			("gain", 3.0),
+			("osc2_table", 1.0),
+			("osc2_position", 0.35),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Euphoria Lead",
+		"Wide pulse-and-square lead an octave up with a sixteenth-note shimmer on the top \
+		 oscillator: the euphoric 2010s progressive house hook. Eighth-note delay, a little \
+		 reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 70.0),
+			("unison", 4.0),
+			("unison_detune", 13.0),
+			("filter_cutoff", 3_600.0),
+			("filter_resonance", 35.0),
+			("filter_env_amount", 6.0),
+			("filter_key_track", 20.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 40.0),
+			("amp_release", 600.0),
+			("gain", 3.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.7),
+		],
+	)
+	.category("Lead")
+	.modulators(&[Mod::synced(Shape::Triangle, 0.25, &[("osc2_cents", 0.14)])]),
+	preset(
+		"Fjord Hook Lead",
+		"Two pulses an octave apart with a gentle unison: the bright, singing 80s synth-pop \
+		 hook lead. Fast melodic lines; a little reverb only.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 60.0),
+			("unison", 4.0),
+			("unison_detune", 9.0),
+			("filter_cutoff", 7_000.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 240.0),
+			("gain", -1.0),
+			("osc1_table", 1.0),
+			("osc1_position", 0.3),
+			("osc2_table", 1.0),
+			("osc2_position", 0.3),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Trance Supersaw",
+		"Eight detuned saws with a breath of noise, wide and bright: uplifting trance, \
+		 trance-pop and big festival melodies. Large reverb; cut the lows with an EQ in a \
+		 dense mix.",
+		&[
+			("osc2_cents", 9.0),
+			("unison", 4.0),
+			("unison_detune", 35.0),
+			("noise", 8.0),
+			("filter_cutoff", 9_000.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_release", 300.0),
+			("gain", 3.5),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Festival Lead",
+		"Saw and slightly flat triangle with noise behind a mid filter that fades over two \
+		 seconds: big room and festival progressive leads in short sixteenths. Long delay and \
+		 a big hall.",
+		&[
+			("osc2_wave", 3.0),
+			("osc2_cents", -11.0),
+			("osc_mix", 45.0),
+			("unison", 2.0),
+			("unison_detune", 12.0),
+			("noise", 6.0),
+			("filter_cutoff", 2_000.0),
+			("filter_resonance", 38.0),
+			("filter_env_amount", 10.0),
+			("amp_attack", 0.0),
+			("amp_decay", 2_370.0),
+			("amp_sustain", 24.0),
+			("amp_release", 300.0),
+			("filter_attack", 0.0),
+			("filter_decay", 2_370.0),
+			("filter_sustain", 0.0),
+			("gain", 5.0),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"G-Funk Whistle",
+		"Thin, nearly pure saw pair whose filter opens slowly while you hold the note, with a \
+		 long glide: the West Coast G-funk whine. Play high, slow melodies; the mod wheel \
+		 adds vibrato.",
+		&[
+			("osc2_cents", 2.0),
+			("filter_cutoff", 1_500.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 14.0),
+			("filter_key_track", 60.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 60.0),
+			("filter_attack", 2_150.0),
+			("filter_sustain", 100.0),
+			("glide", 120.0),
+			("gain", 4.5),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Trap Sine Lead",
+		"Soft sine lead with a faint octave, a slow attack and a short glide: dreamy trap and \
+		 melodic rap toplines. The mod wheel adds vibrato; a quarter-note delay and a small \
+		 room.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 15.0),
+			("filter_cutoff", 8_000.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 30.0),
+			("amp_sustain", 100.0),
+			("amp_release", 80.0),
+			("glide", 40.0),
+			("gain", -1.0),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Smoke Flute",
+		"Breathy synthetic flute: a sine with natural vibrato and a puff of noise: trap, \
+		 drill and pluggnb flute melodies. A room reverb and a quarter-note delay.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 0.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 100.0),
+			("noise", 12.0),
+			("filter_resonance", 0.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 4.0),
+			("amp_attack", 90.0),
+			("amp_sustain", 90.0),
+			("amp_release", 220.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Lead")
+	.modulators(&[Mod::lfo(Shape::Sine, 5.2, &[("osc2_cents", 0.06)])]),
+	preset(
+		"Bendy Square Lead",
+		"Nasal resonant square with a quick filter blip and a 50 ms glide: the bendy late-90s \
+		 trance and Eurodance lead, back in house pop. Delay and reverb sends.",
+		&[
+			("osc1_wave", 2.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("filter_cutoff", 900.0),
+			("filter_resonance", 45.0),
+			("filter_env_amount", 15.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 110.0),
+			("filter_attack", 0.0),
+			("filter_decay", 130.0),
+			("filter_sustain", 0.0),
+			("filter_release", 400.0),
+			("glide", 50.0),
+			("gain", -3.0),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Darkwave Sync Lead",
+		"Hard-sync digital wavetable that slowly sweeps under a detuned saw: darkwave, \
+		 synthwave and electroclash leads. Stereo widening and a dark reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_cents", 6.0),
+			("osc_mix", 35.0),
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 5_000.0),
+			("filter_env_amount", 12.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 200.0),
+			("glide", 20.0),
+			("gain", 2.0),
+			("osc1_table", 4.0),
+			("osc1_position", 0.4),
+		],
+	)
+	.category("Lead")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.25, &[("osc1_position", 0.25)])]),
+	preset(
+		"Rave Scream Lead",
+		"Wide, noisy, very detuned saw that slides between notes: 90s rave, big beat and \
+		 electro screamers. Drive it hard with the saturator and a small reverb.",
+		&[
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("unison", 2.0),
+			("unison_detune", 40.0),
+			("noise", 25.0),
+			("filter_cutoff", 7_000.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 250.0),
+			("amp_sustain", 40.0),
+			("amp_release", 60.0),
+			("glide", 70.0),
+			("gain", 5.0),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Hyperpop Supersaw",
+		"Exaggeratedly detuned saws an octave apart, fully open: hyperpop, digicore and rage \
+		 leads. Clip it, bitcrush it, then add a big reverb.",
+		&[
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("unison", 4.0),
+			("unison_detune", 55.0),
+			("filter_cutoff", 12_000.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 80.0),
+			("amp_release", 150.0),
+			("glide", 40.0),
+			("gain", 1.5),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Honky Resonant Lead",
+		"Saw with a triangle a twelfth up through a nearly self-oscillating filter: the \
+		 honky, vocal indie-electronic hook of the late 2000s. The mod wheel adds a wide \
+		 vibrato.",
+		&[
+			("osc2_wave", 3.0),
+			("osc2_semitones", 19.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 45.0),
+			("filter_cutoff", 1_700.0),
+			("filter_resonance", 82.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 60.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 100.0),
+			("gain", 1.5),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Gated Techno Lead",
+		"Detuned saws a fifth apart chopped into sixteenths by a square LFO on the filter: \
+		 the gated, hypnotic melodic techno lead. Long delay, big reverb, a phaser if you \
+		 have one.",
+		&[
+			("osc2_semitones", 7.0),
+			("osc2_cents", 0.0),
+			("unison", 4.0),
+			("filter_cutoff", 1_200.0),
+			("filter_resonance", 35.0),
+			("filter_env_amount", 18.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 200.0),
+			("filter_attack", 0.0),
+			("filter_decay", 600.0),
+			("filter_sustain", 20.0),
+			("gain", 5.0),
+		],
+	)
+	.category("Lead")
+	.modulators(&[Mod::synced(Shape::Square, 0.25, &[("filter_cutoff", 0.05)])]),
+	preset(
+		"Mono Synth Lead",
+		"Fat square-and-saw lead with a slightly detuned octave, a medium glide and a classic \
+		 filter contour: funk, prog, G-funk and synthwave solos. The mod wheel adds vibrato.",
+		&[
+			("osc1_wave", 2.0),
+			("osc2_cents", 4.0),
+			("osc_mix", 45.0),
+			("filter_cutoff", 1_400.0),
+			("filter_resonance", 25.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 200.0),
+			("filter_attack", 10.0),
+			("filter_decay", 600.0),
+			("filter_sustain", 50.0),
+			("glide", 110.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Lead"),
+	preset(
+		"Pluck Lead",
+		"Bright, short pluck with a snappy filter envelope and an octave square: arpeggios, \
+		 hooks and pop-EDM melodies. A dotted-eighth delay makes it sparkle.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("filter_cutoff", 900.0),
+			("filter_resonance", 30.0),
+			("filter_env_amount", 40.0),
+			("amp_decay", 350.0),
+			("amp_sustain", 0.0),
+			("amp_release", 200.0),
+			("filter_decay", 180.0),
+			("filter_sustain", 0.0),
+			("gain", 9.0),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Digital Pluck",
+		"Glassy wavetable pluck: Digital and Harmonics tables with a short filter envelope; \
+		 arps and hooks in future bass, pop and melodic house.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc_mix", 45.0),
+			("filter_cutoff", 3_800.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 36.0),
+			("amp_decay", 420.0),
+			("amp_sustain", 0.0),
+			("amp_release", 260.0),
+			("filter_attack", 4.0),
+			("filter_decay", 220.0),
+			("filter_sustain", 0.0),
+			("gain", 12.0),
+			("osc1_table", 4.0),
+			("osc1_position", 0.4),
+			("osc2_table", 3.0),
+			("osc2_position", 0.6),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Melodic Techno Pluck",
+		"Detuned saw pluck through a 12 dB filter with a quick decay: melodic techno and \
+		 melodic house riffs. Ping-pong eighth delay and a big, wet, short reverb.",
+		&[
+			("osc2_cents", -15.0),
+			("osc_mix", 40.0),
+			("unison", 2.0),
+			("unison_detune", 15.0),
+			("filter_cutoff", 900.0),
+			("filter_resonance", 20.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 30.0),
+			("amp_attack", 4.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 0.0),
+			("filter_attack", 3.0),
+			("filter_decay", 150.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("gain", 12.0),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Dark Trap Pluck",
+		"Dark, minor-key pluck of a saw over a square an octave down: trap, drill and pluggnb \
+		 melodies. Dark reverb with high damping and a dotted-eighth delay.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 500.0),
+			("filter_resonance", 20.0),
+			("filter_env_amount", 36.0),
+			("amp_attack", 4.0),
+			("amp_decay", 450.0),
+			("amp_sustain", 0.0),
+			("amp_release", 300.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("gain", 9.5),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Tropical Pluck",
+		"Soft, marimba-like pluck of a mellow wavetable and a sine an octave up: tropical \
+		 house and chill pop. Dotted-eighth delay, light reverb, gentle sidechain.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 0.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("filter_cutoff", 2_400.0),
+			("filter_resonance", 10.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 4.0),
+			("amp_decay", 350.0),
+			("amp_sustain", 0.0),
+			("amp_release", 300.0),
+			("filter_decay", 150.0),
+			("filter_sustain", 0.0),
+			("filter_release", 150.0),
+			("velocity_sensitivity", 70.0),
+			("gain", 9.0),
+			("osc1_table", 3.0),
+			("osc1_position", 0.3),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Progressive Pluck",
+		"Phasey four-voice saw with a resonant filter that closes over a second: the bright \
+		 progressive house and electro-pop pluck. Eighth delay and a large reverb.",
+		&[
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("unison", 4.0),
+			("unison_detune", 4.0),
+			("filter_cutoff", 650.0),
+			("filter_resonance", 35.0),
+			("filter_env_amount", 30.0),
+			("amp_attack", 0.0),
+			("amp_decay", 200.0),
+			("amp_sustain", 60.0),
+			("amp_release", 120.0),
+			("filter_attack", 0.0),
+			("filter_decay", 1_000.0),
+			("filter_sustain", 0.0),
+			("filter_release", 120.0),
+			("gain", 11.0),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Afro Marimba",
+		"Sine with a soft two-octave overtone and a short filter tick: a marimba/kalimba-like \
+		 pluck for afrobeats, afropop and amapiano melodies. Dotted-eighth delay, short \
+		 reverb.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 0.0),
+			("osc2_semitones", 24.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 28.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 0.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 0.0),
+			("amp_decay", 350.0),
+			("amp_sustain", 0.0),
+			("amp_release", 200.0),
+			("filter_attack", 0.0),
+			("filter_decay", 80.0),
+			("filter_sustain", 0.0),
+			("filter_release", 80.0),
+			("velocity_sensitivity", 70.0),
+			("gain", 8.0),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Rubber Bloop",
+		"Bubbly, rubbery bloop from a very resonant filter snapping shut: hyperpop, bubblegum \
+		 pop and playful percussion lines. Short notes; add delay.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 20.0),
+			("filter_cutoff", 500.0),
+			("filter_resonance", 70.0),
+			("filter_env_amount", 48.0),
+			("amp_attack", 3.0),
+			("amp_decay", 200.0),
+			("amp_sustain", 0.0),
+			("amp_release", 80.0),
+			("filter_attack", 0.0),
+			("filter_decay", 60.0),
+			("filter_sustain", 0.0),
+			("filter_release", 60.0),
+			("gain", 10.5),
+		],
+	)
+	.category("Pluck"),
+	preset(
+		"Dream Pluck",
+		"Soft pulse-and-triangle pluck with a slowly moving pulse width: alternative \
+		 reggaeton, latin pop and dreamy R&B. Chorus, ping-pong quarter delay, big reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 2_000.0),
+			("filter_resonance", 10.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 20.0),
+			("amp_attack", 0.0),
+			("amp_decay", 700.0),
+			("amp_sustain", 10.0),
+			("amp_release", 500.0),
+			("filter_attack", 0.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 0.0),
+			("gain", 7.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.4),
+		],
+	)
+	.category("Pluck")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.3, &[("osc1_position", 0.2)])]),
+	preset(
+		"House Chord Stab",
+		"Short, warm saw-and-square chord stab: deep house, garage and lo-fi house \
+		 minor-ninth chords on the off-beats. Dotted-eighth delay and reverb.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("unison", 2.0),
+			("unison_detune", 8.0),
+			("filter_cutoff", 1_200.0),
+			("amp_attack", 6.0),
+			("amp_decay", 450.0),
+			("amp_sustain", 0.0),
+			("amp_release", 200.0),
+			("filter_attack", 4.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("gain", 2.5),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Progressive Stab",
+		"Bright, slightly detuned saw stab with a fast filter pop: progressive house and \
+		 electro chord stabs. Sidechain, eighth delay, reverb.",
+		&[
+			("unison", 2.0),
+			("unison_detune", 12.0),
+			("filter_cutoff", 800.0),
+			("filter_env_amount", 36.0),
+			("amp_attack", 6.0),
+			("amp_decay", 350.0),
+			("amp_sustain", 0.0),
+			("amp_release", 150.0),
+			("filter_attack", 4.0),
+			("filter_decay", 200.0),
+			("filter_sustain", 0.0),
+			("filter_release", 150.0),
+			("gain", 5.5),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Rage Chord Stab",
+		"Huge detuned saw stack with an octave below: rage and hyper-trap chord stabs and \
+		 pads. Soft-clip it, then EQ, delay and a big reverb.",
+		&[
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 45.0),
+			("unison", 4.0),
+			("unison_detune", 30.0),
+			("filter_cutoff", 7_000.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 6.0),
+			("amp_attack", 6.0),
+			("amp_decay", 600.0),
+			("amp_sustain", 50.0),
+			("gain", 3.5),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Lofi Tape Keys",
+		"Mellow triangle keys with a wobbling octave and a dark 12 dB filter, like a worn \
+		 tape: lo-fi hip-hop, chillhop and bedroom pop. Saturation, chorus and a soft reverb.",
+		&[
+			("osc1_wave", 3.0),
+			("osc2_wave", 0.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("noise", 2.0),
+			("filter_cutoff", 1_800.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 12.0),
+			("amp_attack", 0.0),
+			("amp_decay", 2_000.0),
+			("amp_sustain", 25.0),
+			("amp_release", 500.0),
+			("filter_attack", 0.0),
+			("filter_decay", 300.0),
+			("filter_sustain", 0.0),
+			("gain", 1.5),
+		],
+	)
+	.category("Keys")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.6, &[("osc2_cents", 0.04)])]),
+	preset(
+		"Glass Keys",
+		"Hazy triangle keys with a glassy harmonic layer an octave up: pluggnb, jerk and \
+		 melancholic trap chords. Chorus and a 35 % reverb.",
+		&[
+			("osc1_wave", 3.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("unison", 2.0),
+			("unison_detune", 8.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 12.0),
+			("amp_attack", 2.0),
+			("amp_decay", 1_200.0),
+			("amp_sustain", 30.0),
+			("amp_release", 600.0),
+			("filter_attack", 0.0),
+			("filter_decay", 400.0),
+			("filter_sustain", 0.0),
+			("gain", 3.5),
+			("osc2_table", 3.0),
+			("osc2_position", 0.15),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Velvet Keys",
+		"Soft, hissy pulse keys with a resonant, key-tracked filter and long decay: R&B, \
+		 neo-soul and slow-jam chords. A little chorus and a plate.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("unison", 4.0),
+			("unison_detune", 15.0),
+			("noise", 12.0),
+			("filter_cutoff", 630.0),
+			("filter_resonance", 50.0),
+			("filter_env_amount", 6.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 0.0),
+			("amp_decay", 1_900.0),
+			("amp_sustain", 60.0),
+			("amp_release", 700.0),
+			("velocity_sensitivity", 80.0),
+			("gain", -0.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.1),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Tine Keys",
+		"Bell-tipped electric-piano style keys: a sine body with a bright harmonic tine on \
+		 the attack that follows velocity: city pop, 80s ballads, R&B and lo-fi. Chorus and \
+		 plate.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 24.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 15.0),
+			("filter_cutoff", 2_000.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 30.0),
+			("filter_key_track", 80.0),
+			("amp_attack", 0.0),
+			("amp_decay", 3_000.0),
+			("amp_sustain", 15.0),
+			("amp_release", 500.0),
+			("filter_attack", 0.0),
+			("filter_decay", 120.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("velocity_sensitivity", 80.0),
+			("gain", -0.5),
+			("osc2_table", 3.0),
+			("osc2_position", 0.5),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Tremolo Keys",
+		"Round suitcase-style keys with a gentle 4.5 Hz tremolo: amapiano, afrobeats, R&B and \
+		 soul chords. Soft chorus and a room reverb.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 25.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 18.0),
+			("filter_key_track", 60.0),
+			("amp_attack", 0.0),
+			("amp_decay", 2_500.0),
+			("amp_sustain", 20.0),
+			("amp_release", 400.0),
+			("filter_attack", 0.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 0.0),
+			("velocity_sensitivity", 75.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Keys")
+	.modulators(&[Mod::lfo(Shape::Sine, 4.5, &[("gain", 0.05)])]),
+	preset(
+		"House Organ",
+		"Plucky synth organ: triangle body with a square two octaves up through a decaying \
+		 filter: 90s house and piano-house organ riffs and chords. Chorus, hall reverb, light \
+		 overdrive.",
+		&[
+			("osc1_wave", 3.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 24.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 35.0),
+			("filter_cutoff", 1_200.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 40.0),
+			("amp_attack", 0.0),
+			("amp_decay", 900.0),
+			("amp_sustain", 50.0),
+			("amp_release", 400.0),
+			("filter_attack", 0.0),
+			("filter_decay", 400.0),
+			("filter_sustain", 0.0),
+			("filter_release", 400.0),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Pop Square Keys",
+		"Two squares an octave apart with a short filter pluck and a long body: 2010s pop and \
+		 pop-EDM verse chords. A touch of delay and reverb.",
+		&[
+			("osc1_wave", 2.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("unison", 2.0),
+			("unison_detune", 9.0),
+			("filter_cutoff", 630.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 30.0),
+			("amp_attack", 20.0),
+			("amp_decay", 1_900.0),
+			("amp_sustain", 50.0),
+			("amp_release", 80.0),
+			("filter_attack", 0.0),
+			("filter_decay", 170.0),
+			("filter_sustain", 0.0),
+			("filter_release", 150.0),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Midnight Keys",
+		"Detuned saw keys with a breath of noise and a resonant filter that closes over four \
+		 seconds: synthwave and retro night-drive chords. Slow chorus and a medium reverb.",
+		&[
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("unison", 2.0),
+			("unison_detune", 8.0),
+			("noise", 15.0),
+			("filter_cutoff", 630.0),
+			("filter_resonance", 45.0),
+			("filter_env_amount", 32.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 40.0),
+			("filter_attack", 0.0),
+			("filter_decay", 3_700.0),
+			("filter_sustain", 0.0),
+			("gain", -2.5),
+		],
+	)
+	.category("Keys"),
+	preset(
+		"Haunted Bell",
+		"Dark sine bell with a two-octave partial and a long ring: the haunting trap and \
+		 drill bell melody. A quarter or dotted-eighth delay and a big reverb.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 0.0),
+			("osc2_semitones", 24.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("filter_cutoff", 6_000.0),
+			("filter_resonance", 0.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 0.0),
+			("amp_decay", 1_500.0),
+			("amp_sustain", 0.0),
+			("amp_release", 1_500.0),
+			("filter_attack", 0.0),
+			("filter_decay", 300.0),
+			("filter_sustain", 0.0),
+			("gain", 3.0),
+		],
+	)
+	.category("Bell"),
+	preset(
+		"Glass Bell",
+		"Sine bell with a shimmering harmonic layer that slowly moves, sustaining softly: \
+		 ambient, holiday pop and ballads. Chorus and a large reverb.",
+		&[
+			("osc1_wave", 0.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("filter_cutoff", 6_000.0),
+			("filter_resonance", 0.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_decay", 3_000.0),
+			("amp_sustain", 40.0),
+			("amp_release", 3_000.0),
+			("gain", 2.5),
+			("osc2_table", 3.0),
+			("osc2_position", 0.45),
+		],
+	)
+	.category("Bell")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.2, &[("osc2_position", 0.35)])]),
+	preset(
+		"Steel Drum Bell",
+		"Metallic, steel-drum-like riff tone: a bright harmonic wavetable with a square an \
+		 octave up and a short filter decay: indie pop riffs and tropical hooks. Light \
+		 chorus, short reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 35.0),
+			("filter_cutoff", 4_000.0),
+			("filter_resonance", 5.0),
+			("filter_env_amount", 18.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 0.0),
+			("amp_decay", 700.0),
+			("amp_sustain", 25.0),
+			("amp_release", 300.0),
+			("filter_attack", 0.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 20.0),
+			("filter_release", 200.0),
+			("velocity_sensitivity", 70.0),
+			("gain", 8.5),
+			("osc1_table", 3.0),
+			("osc1_position", 0.6),
+		],
+	)
+	.category("Bell"),
+	preset(
+		"Music Box",
+		"Delicate, slightly inharmonic box bell (a triangle with a detuned partial two \
+		 octaves up): lullabies, cinematic intros, dark trap and music-box hooks. Lots of \
+		 reverb.",
+		&[
+			("osc1_wave", 3.0),
+			("osc2_wave", 0.0),
+			("osc2_semitones", 24.0),
+			("osc2_cents", 38.0),
+			("osc_mix", 35.0),
+			("filter_cutoff", 8_000.0),
+			("filter_resonance", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 1_200.0),
+			("amp_sustain", 0.0),
+			("amp_release", 800.0),
+			("gain", 5.5),
+		],
+	)
+	.category("Bell"),
+	preset(
+		"808 Cowbell",
+		"Tuned, synthesized drum-machine cowbell: two detuned squares with a fast decay: \
+		 drift phonk melodies, Miami bass and electro. Distort it and add a short reverb.",
+		&[
+			("osc1_wave", 2.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", 6.0),
+			("osc2_cents", 40.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 30.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 0.0),
+			("amp_release", 100.0),
+			("gain", 8.0),
+		],
+	)
+	.category("Bell"),
+	preset(
+		"Warm Pad",
+		"Slow, detuned saw pad with a soft filter: sustained chords and beds in pop, ballads \
+		 and cinematic tracks. Reverb send; sidechain it lightly in dance music.",
+		&[
+			("unison", 3.0),
+			("unison_detune", 18.0),
+			("filter_cutoff", 1_400.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 12.0),
+			("amp_attack", 600.0),
+			("amp_sustain", 85.0),
+			("amp_release", 1_200.0),
+			("gain", -1.0),
+		],
+	)
+	.category("Pad"),
+	preset(
+		"Vowel Pad",
+		"Wavetable pad on the Formant table, a fifth above in Basic; automate or modulate the \
+		 position to make it talk. Dreamy pop, chillwave and ambient.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 7.0),
+			("osc_mix", 35.0),
+			("unison", 2.0),
+			("unison_detune", 14.0),
+			("filter_cutoff", 3_500.0),
+			("filter_env_amount", 6.0),
+			("amp_attack", 450.0),
+			("amp_sustain", 85.0),
+			("amp_release", 1_600.0),
+			("gain", 1.0),
+			("osc1_table", 2.0),
+			("osc1_position", 0.35),
+			("osc2_position", 0.5),
+		],
+	)
+	.category("Pad"),
+	preset(
+		"Eighties Dip Pad",
+		"Saw-and-pulse pad whose filter dips after the attack, with slow filter motion: 80s, \
+		 synth-pop and indie pad chords. Chorus is essential; reverb and a soft sidechain.",
+		&[
+			("osc2_wave", 4.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 33.0),
+			("unison", 2.0),
+			("unison_detune", 8.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 20.0),
+			("filter_env_amount", -12.0),
+			("amp_attack", 500.0),
+			("amp_decay", 3_000.0),
+			("amp_sustain", 80.0),
+			("amp_release", 1_500.0),
+			("filter_attack", 10.0),
+			("filter_decay", 1_500.0),
+			("filter_sustain", 40.0),
+			("filter_release", 800.0),
+			("gain", -3.0),
+			("osc2_table", 1.0),
+			("osc2_position", 0.3),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.4, &[("filter_cutoff", 0.03)])]),
+	preset(
+		"Future Bass Chords",
+		"Two massive detuned saw stacks an octave apart, bright and open: future bass and \
+		 melodic dubstep chords. Heavy sidechain, multiband compression, reverb; bend into \
+		 the chords.",
+		&[
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("unison", 4.0),
+			("unison_detune", 32.0),
+			("filter_cutoff", 6_000.0),
+			("filter_resonance", 5.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 8.0),
+			("amp_sustain", 85.0),
+			("amp_release", 300.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Pad"),
+	preset(
+		"Wobble Chords",
+		"Future bass supersaw chords with an eighth-note filter wobble locked to the song: \
+		 future bass drops and kawaii chords. Sidechain and OTT-style compression.",
+		&[
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("unison", 4.0),
+			("unison_detune", 30.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 8.0),
+			("amp_sustain", 90.0),
+			("gain", -1.0),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::synced(Shape::Triangle, 0.5, &[("filter_cutoff", 0.1)])]),
+	preset(
+		"Dusty Lofi Pad",
+		"Detuned saw and sine pad with a dark filter and a slow tape-like pitch wander: \
+		 lo-fi, vaporwave and chillwave. Saturation, chorus, reverb.",
+		&[
+			("osc2_wave", 0.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 2.0),
+			("unison_detune", 18.0),
+			("filter_cutoff", 800.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 500.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.3, &[("osc2_cents", 0.05)])]),
+	preset(
+		"Ambient Bloom",
+		"Very slow harmonic wavetable pad that blooms in and keeps evolving: ambient, \
+		 cinematic and new age. Huge reverb and a long feedback delay.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 3.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 2_000.0),
+			("amp_sustain", 100.0),
+			("amp_release", 4_000.0),
+			("gain", 1.0),
+			("osc1_table", 3.0),
+			("osc1_position", 0.5),
+			("osc2_position", 0.2),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::lfo(Shape::Triangle, 0.05, &[("osc1_position", 0.4)])]),
+	preset(
+		"Sunrise Pad",
+		"Warm analog pad whose filter opens slowly as the chord swells: melodic house, indie \
+		 dance and emotional breakdowns. Chorus, ping-pong delay, very large reverb.",
+		&[
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 900.0),
+			("filter_env_amount", 18.0),
+			("amp_attack", 900.0),
+			("amp_sustain", 100.0),
+			("amp_release", 2_500.0),
+			("filter_attack", 1_500.0),
+			("filter_decay", 3_000.0),
+			("filter_sustain", 40.0),
+			("filter_release", 2_000.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.1, &[("filter_cutoff", 0.014)])]),
+	preset(
+		"Lush Jazz Pad",
+		"Lush saw pad with a triangle an octave down and gentle filter motion: amapiano \
+		 'private school', deep house and lounge chords (sevenths and ninths). Chorus and a \
+		 big reverb.",
+		&[
+			("osc2_wave", 3.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 3.0),
+			("unison_detune", 14.0),
+			("filter_cutoff", 1_200.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 6.0),
+			("amp_attack", 600.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("filter_attack", 800.0),
+			("filter_decay", 1_000.0),
+			("filter_release", 1_000.0),
+			("gain", -2.5),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.2, &[("filter_cutoff", 0.016)])]),
+	preset(
+		"Psych Filter Pad",
+		"Saw pad an octave wide with a sixteenth-note filter flutter: psychedelic pop and \
+		 indie chords that shimmer in time. Chorus and a medium reverb.",
+		&[
+			("osc2_semitones", 12.0),
+			("osc2_cents", -6.0),
+			("filter_cutoff", 800.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 150.0),
+			("amp_sustain", 100.0),
+			("amp_release", 300.0),
+			("gain", 0.5),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::synced(Shape::Saw, 0.25, &[("filter_cutoff", 0.025)])]),
+	preset(
+		"Liquid Pad",
+		"Soft, airy saw pad with a triangle shimmer and slow filter drift: liquid drum & \
+		 bass, chill and melodic breaks. Big reverb and sidechain.",
+		&[
+			("osc2_wave", 3.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("unison", 3.0),
+			("unison_detune", 12.0),
+			("filter_cutoff", 2_000.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 400.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("gain", -3.0),
+		],
+	)
+	.category("Pad")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.2, &[("filter_cutoff", 0.025)])]),
+	preset(
+		"Dark Choir",
+		"Slowly morphing 'ah-oh' formant choir with a saw an octave down: drill and dark trap \
+		 choirs. Large reverb and a little chorus.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 20.0),
+			("unison", 3.0),
+			("unison_detune", 12.0),
+			("filter_cutoff", 1_800.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 300.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_200.0),
+			("osc1_table", 2.0),
+			("osc1_position", 0.3),
+		],
+	)
+	.category("Choir")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.1, &[("osc1_position", 0.15)])]),
+	preset(
+		"Disco Choir",
+		"Muted 'ooh' vocal-synth pad with a slow attack: nu-disco and dance-pop intros and \
+		 breakdowns in the style of string-machine choirs. Ensemble chorus and a big reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 20.0),
+			("unison", 3.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 1_000.0),
+			("filter_resonance", 20.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 400.0),
+			("amp_sustain", 100.0),
+			("amp_release", 800.0),
+			("gain", 4.5),
+			("osc1_table", 2.0),
+			("osc1_position", 0.75),
+		],
+	)
+	.category("Choir")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.15, &[("osc1_position", 0.14)])]),
+	preset(
+		"Snow Choir",
+		"Airy two-layer 'aah' choir, a formant table with a brighter one an octave up, softly \
+		 moving: K-pop, UK garage pop and wintry ballads. Long reverb, chorus.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("unison", 3.0),
+			("unison_detune", 15.0),
+			("filter_resonance", 5.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 500.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("gain", 1.5),
+			("osc1_table", 2.0),
+			("osc1_position", 0.25),
+			("osc2_table", 2.0),
+			("osc2_position", 0.6),
+		],
+	)
+	.category("Choir")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.15, &[("osc1_position", 0.15)])]),
+	preset(
+		"Outrun Strings",
+		"Pulse-and-saw string section whose filter swells open and decays over five seconds: \
+		 synthwave and outrun chorus strings. Chorus, delay and reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_cents", 8.0),
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 400.0),
+			("filter_resonance", 18.0),
+			("filter_env_amount", 30.0),
+			("amp_attack", 300.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_000.0),
+			("filter_attack", 44.0),
+			("filter_decay", 5_400.0),
+			("filter_sustain", 20.0),
+			("filter_release", 1_000.0),
+			("gain", -2.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.18),
+		],
+	)
+	.category("Strings"),
+	preset(
+		"String Machine",
+		"Bright 70s/80s ensemble string machine with a fast unison shimmer: disco, synth-pop \
+		 and retro strings. Chorus and a hall reverb.",
+		&[
+			("osc2_cents", 5.0),
+			("unison", 4.0),
+			("unison_detune", 14.0),
+			("filter_cutoff", 3_000.0),
+			("filter_resonance", 5.0),
+			("filter_slope", 0.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 400.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("gain", -3.0),
+		],
+	)
+	.category("Strings")
+	.modulators(&[Mod::lfo(Shape::Sine, 6.0, &[("unison_detune", 0.08)])]),
+	preset(
+		"Indie Strings",
+		"Dark, soft saw strings whose filter blooms after the attack: psych-pop, indie and \
+		 dream-pop string beds. Chorus and a lot of reverb.",
+		&[
+			("osc2_cents", 5.0),
+			("unison", 2.0),
+			("unison_detune", 8.0),
+			("filter_cutoff", 300.0),
+			("filter_resonance", 40.0),
+			("filter_env_amount", 30.0),
+			("amp_attack", 250.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_200.0),
+			("filter_attack", 150.0),
+			("filter_decay", 2_000.0),
+			("filter_sustain", 50.0),
+			("filter_release", 1_200.0),
+			("gain", -0.5),
+		],
+	)
+	.category("Strings"),
+	preset(
+		"Arena Brass",
+		"Bright, wide unison saw brass that decays slowly while held: the 80s arena-rock and \
+		 synth-pop brass stab and riff. Reverb send.",
+		&[
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("unison", 4.0),
+			("unison_detune", 9.0),
+			("filter_cutoff", 7_000.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 0.0),
+			("amp_decay", 10_000.0),
+			("amp_sustain", 0.0),
+			("amp_release", 80.0),
+			("gain", -2.5),
+		],
+	)
+	.category("Brass"),
+	preset(
+		"Replicant Brass",
+		"Slow-swelling pulse brass with moving pulse widths and a filter that opens late: 80s \
+		 film-score, darksynth and synthwave brass. Lots of reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", -6.0),
+			("osc_mix", 40.0),
+			("filter_env_amount", 12.0),
+			("amp_attack", 250.0),
+			("amp_decay", 1_900.0),
+			("amp_sustain", 40.0),
+			("amp_release", 750.0),
+			("filter_attack", 650.0),
+			("filter_decay", 10_000.0),
+			("filter_sustain", 0.0),
+			("filter_release", 2_000.0),
+			("gain", -1.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.3),
+			("osc2_table", 1.0),
+			("osc2_position", 0.3),
+		],
+	)
+	.category("Brass")
+	.modulators(&[Mod::synced(
+		Shape::Triangle,
+		0.5,
+		&[("osc1_position", 0.25), ("osc2_position", 0.25)],
+	)]),
+	preset(
+		"Swell Brass",
+		"Classic poly-synth brass: detuned saws with a filter that swells in after the \
+		 attack: disco, nu-disco, funk-pop and 80s brass sections. Chorus and a medium \
+		 reverb.",
+		&[
+			("osc2_cents", 8.0),
+			("unison", 2.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 900.0),
+			("filter_resonance", 10.0),
+			("amp_attack", 60.0),
+			("amp_sustain", 100.0),
+			("amp_release", 300.0),
+			("filter_attack", 120.0),
+			("filter_decay", 800.0),
+			("filter_sustain", 50.0),
+			("gain", -1.5),
+		],
+	)
+	.category("Brass"),
+	preset(
+		"Fanfare Brass",
+		"Punchy unison saw brass with a quick filter blip on every note: rock-anthem fanfares \
+		 and big 80s brass leads. Reverb send.",
+		&[
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("unison", 4.0),
+			("unison_detune", 10.0),
+			("filter_cutoff", 4_000.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 12.0),
+			("amp_attack", 15.0),
+			("amp_sustain", 100.0),
+			("amp_release", 80.0),
+			("filter_attack", 0.0),
+			("filter_decay", 60.0),
+			("filter_sustain", 70.0),
+			("filter_release", 200.0),
+			("gain", -6.5),
+		],
+	)
+	.category("Brass"),
+	preset(
+		"Psych Brass",
+		"Soft pulse brass with a square sub whose brightness comes from the filter envelope, \
+		 gently wobbling: psychedelic pop and modern indie. Chorus, big reverb, light \
+		 overdrive.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 25.0),
+			("filter_cutoff", 150.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 48.0),
+			("amp_attack", 200.0),
+			("amp_decay", 1_500.0),
+			("amp_sustain", 30.0),
+			("amp_release", 700.0),
+			("filter_attack", 200.0),
+			("filter_decay", 1_500.0),
+			("filter_release", 700.0),
+			("gain", -1.5),
+			("osc1_table", 1.0),
+			("osc1_position", 0.4),
+		],
+	)
+	.category("Brass")
+	.modulators(&[Mod::lfo(Shape::Sine, 3.0, &[("osc1_position", 0.15)])]),
+	preset(
+		"Eighties Horror Arp",
+		"Gritty saw-and-digital arp with noise and a slow filter cycle over each bar: 80s \
+		 horror, darksynth and retro sci-fi arpeggios. Chorus, a half-note delay, a big \
+		 reverb.",
+		&[
+			("osc2_wave", 4.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 20.0),
+			("noise", 18.0),
+			("amp_attack", 0.0),
+			("amp_decay", 300.0),
+			("amp_sustain", 0.0),
+			("amp_release", 40.0),
+			("filter_attack", 0.0),
+			("filter_decay", 40.0),
+			("filter_sustain", 0.0),
+			("filter_release", 40.0),
+			("gain", 9.0),
+			("osc2_table", 4.0),
+			("osc2_position", 0.2),
+		],
+	)
+	.category("Arp")
+	.modulators(&[Mod::synced(
+		Shape::Triangle,
+		4.0,
+		&[("filter_cutoff", 0.04)],
+	)]),
+	preset(
+		"Night Pulse Arp",
+		"Narrow pulse with a square sub and a gentle pluck: synthwave and retro night-drive \
+		 sixteenth arpeggios. A lush 80s chorus and a little reverb.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_wave", 2.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("filter_cutoff", 800.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 18.0),
+			("amp_attack", 2.0),
+			("amp_sustain", 0.0),
+			("amp_release", 300.0),
+			("filter_decay", 400.0),
+			("filter_sustain", 0.0),
+			("gain", 9.0),
+			("osc1_table", 1.0),
+			("osc1_position", 0.8),
+		],
+	)
+	.category("Arp"),
+	preset(
+		"Disco Sequence",
+		"Tight saw with a triangle sub and a percussive filter: the hypnotic eighth-note \
+		 disco and italo sequencer bass/arp. Chorus or an auto-pan.",
+		&[
+			("osc2_wave", 3.0),
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("filter_cutoff", 320.0),
+			("filter_resonance", 20.0),
+			("filter_env_amount", 30.0),
+			("amp_attack", 0.0),
+			("amp_decay", 650.0),
+			("amp_sustain", 0.0),
+			("amp_release", 220.0),
+			("filter_attack", 0.0),
+			("filter_decay", 250.0),
+			("filter_sustain", 0.0),
+			("filter_release", 190.0),
+			("gain", 10.5),
+		],
+	)
+	.category("Arp"),
+	preset(
+		"Progressive Arp",
+		"Detuned saw arp with a resonant filter meant to be automated open over minutes: \
+		 progressive house and melodic techno sixteenths. Dotted-eighth delay, hall reverb, \
+		 sidechain.",
+		&[
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 3.0),
+			("unison_detune", 12.0),
+			("filter_cutoff", 800.0),
+			("filter_resonance", 30.0),
+			("filter_env_amount", 18.0),
+			("amp_attack", 0.0),
+			("amp_decay", 250.0),
+			("amp_sustain", 60.0),
+			("amp_release", 120.0),
+			("filter_attack", 0.0),
+			("filter_decay", 180.0),
+			("filter_release", 150.0),
+			("gain", 9.0),
+		],
+	)
+	.category("Arp"),
+	preset(
+		"New Wave Sequencer",
+		"Saw-and-square sequencer bass/arp with a wide unison and a short pluck: new wave, \
+		 synth-pop and post-punk sequences. Chorus.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("unison", 4.0),
+			("unison_detune", 11.0),
+			("filter_cutoff", 1_600.0),
+			("filter_resonance", 10.0),
+			("filter_env_amount", 15.0),
+			("amp_attack", 3.0),
+			("amp_decay", 250.0),
+			("amp_sustain", 20.0),
+			("amp_release", 160.0),
+			("filter_attack", 0.0),
+			("filter_decay", 300.0),
+			("filter_sustain", 0.0),
+			("filter_release", 200.0),
+			("gain", 12.0),
+		],
+	)
+	.category("Arp"),
+	preset(
+		"Rising Filter Arp",
+		"Triangle-and-saw arp under a resonant filter that swells on a half-note cycle \
+		 restarting with each note: progressive and melodic house builds. Reverb send.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_semitones", 12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 35.0),
+			("unison", 4.0),
+			("unison_detune", 25.0),
+			("filter_cutoff", 700.0),
+			("filter_resonance", 60.0),
+			("filter_env_amount", 0.0),
+			("filter_key_track", 100.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 90.0),
+			("gain", 7.5),
+			("osc1_position", 0.33),
+		],
+	)
+	.category("Arp")
+	.modulators(&[Mod::synced(Shape::Sine, 2.0, &[("filter_cutoff", 0.03)]).on_note(0.75)]),
+	preset(
+		"Dark Drone",
+		"Very slow, dark drone of a detuned saw and a formant layer with a creeping filter: \
+		 film, trailers and dark ambient. Hold one note or a fifth; long reverb.",
+		&[
+			("osc2_wave", 4.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 4.0),
+			("noise", 5.0),
+			("filter_cutoff", 450.0),
+			("filter_resonance", 25.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 3_000.0),
+			("amp_sustain", 100.0),
+			("amp_release", 5_000.0),
+			("gain", 3.5),
+			("osc2_table", 2.0),
+			("osc2_position", 0.4),
+		],
+	)
+	.category("FX")
+	.modulators(&[Mod::lfo(Shape::Sine, 0.05, &[("filter_cutoff", 0.018)])]),
+	preset(
+		"Noise Riser",
+		"White noise and saws behind a resonant filter that opens over four seconds while \
+		 held: risers and build-ups into a drop. Hold a note for the length of the build; add \
+		 reverb.",
+		&[
+			("osc2_semitones", 7.0),
+			("osc2_cents", 0.0),
+			("noise", 70.0),
+			("filter_cutoff", 200.0),
+			("filter_resonance", 40.0),
+			("filter_env_amount", 60.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 1_500.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("filter_attack", 4_000.0),
+			("filter_decay", 400.0),
+			("filter_sustain", 100.0),
+			("filter_release", 1_500.0),
+			("gain", 1.5),
+		],
+	)
+	.category("FX"),
+	preset(
+		"Laser Zap",
+		"Digital wavetable through a screaming filter that snaps shut: lasers, zaps and \
+		 arcade hits for transitions and hyperpop ear candy. Short notes, high register.",
+		&[
+			("osc1_wave", 4.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 0.0),
+			("filter_cutoff", 200.0),
+			("filter_resonance", 75.0),
+			("filter_env_amount", 60.0),
+			("amp_attack", 0.0),
+			("amp_decay", 250.0),
+			("amp_sustain", 0.0),
+			("amp_release", 100.0),
+			("filter_attack", 0.0),
+			("filter_decay", 150.0),
+			("filter_sustain", 0.0),
+			("filter_release", 100.0),
+			("gain", 6.5),
+			("osc1_table", 4.0),
+			("osc1_position", 1.0),
+		],
+	)
+	.category("FX"),
+	preset(
+		"Random Burble",
+		"Resonant saw whose filter jumps to a new random value eight times a second (sample \
+		 and hold): retro computer burbles, sci-fi textures and techno ear candy.",
+		&[
+			("osc2_wave", 2.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 30.0),
+			("filter_cutoff", 1_400.0),
+			("filter_resonance", 65.0),
+			("filter_env_amount", 0.0),
+			("amp_attack", 10.0),
+			("amp_sustain", 100.0),
+			("amp_release", 400.0),
+			("gain", 0.5),
+		],
+	)
+	.category("FX")
+	.modulators(&[Mod::lfo(Shape::Random, 8.0, &[("filter_cutoff", 0.06)])]),
+	preset(
+		"Downlifter",
+		"Noise and detuned saws behind a filter that falls from bright to dark over three \
+		 seconds: downlifters and exits after a drop or into a breakdown. Hold one note; add \
+		 reverb.",
+		&[
+			("osc2_semitones", -12.0),
+			("osc2_cents", 0.0),
+			("osc_mix", 40.0),
+			("unison", 2.0),
+			("unison_detune", 30.0),
+			("noise", 60.0),
+			("filter_cutoff", 12_000.0),
+			("filter_resonance", 30.0),
+			("filter_env_amount", -60.0),
+			("filter_key_track", 0.0),
+			("amp_attack", 0.0),
+			("amp_sustain", 100.0),
+			("amp_release", 1_500.0),
+			("filter_attack", 3_000.0),
+			("filter_decay", 400.0),
+			("filter_sustain", 100.0),
+			("filter_release", 1_500.0),
+			("gain", -0.5),
+		],
+	)
+	.category("FX"),
+];

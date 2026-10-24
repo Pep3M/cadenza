@@ -179,9 +179,19 @@ impl LoudnessMeter {
 		self.steps.len()
 	}
 
+	/// Highest 400 ms momentary loudness; the whole signal when shorter than 400 ms.
+	pub fn momentary_max(&self) -> f32 {
+		self.max_window(4)
+	}
+
 	/// Highest 3 s short-term loudness; the whole signal when shorter than 3 s.
 	pub fn short_term_max(&self) -> f32 {
-		let mut windows = self.windows(30, 0);
+		self.max_window(30)
+	}
+
+	/// Loudest window of `steps` 100 ms steps (the whole signal when shorter).
+	fn max_window(&self, steps: usize) -> f32 {
+		let mut windows = self.windows(steps, 0);
 		if windows.is_empty() {
 			windows.extend(self.whole());
 		}
@@ -241,5 +251,23 @@ mod tests {
 		m.push(&[0.0; 48_000], &[0.0; 48_000]);
 		assert_eq!(m.integrated(), FLOOR_DB);
 		assert_eq!(m.short_term_max(), FLOOR_DB);
+		assert_eq!(m.momentary_max(), FLOOR_DB);
+	}
+
+	#[test]
+	fn momentary_max_catches_a_short_burst_the_short_term_averages_away() {
+		let rate = 48_000;
+		let mut burst = vec![0.0f32; 3 * rate as usize];
+		for (i, s) in burst.iter_mut().take(rate as usize / 2).enumerate() {
+			*s = 0.1 * (std::f32::consts::TAU * 1000.0 * i as f32 / rate as f32).sin();
+		}
+		let mut m = LoudnessMeter::new(rate);
+		m.push(&burst, &burst);
+		assert!(
+			(m.momentary_max() + 20.0).abs() < 0.3,
+			"{}",
+			m.momentary_max()
+		);
+		assert!(m.short_term_max() < -27.0, "{}", m.short_term_max());
 	}
 }

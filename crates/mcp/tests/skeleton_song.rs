@@ -31,6 +31,7 @@ fn builds_a_song_skeleton_and_undo_reverses_whole_steps() {
 			instrument: Some(DeviceSpec {
 				device: "drum_machine".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			}),
 			color: None,
 			output: None,
@@ -47,6 +48,7 @@ fn builds_a_song_skeleton_and_undo_reverses_whole_steps() {
 			instrument: Some(DeviceSpec {
 				device: "electric_piano".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			}),
 			color: None,
 			output: None,
@@ -63,6 +65,7 @@ fn builds_a_song_skeleton_and_undo_reverses_whole_steps() {
 			instrument: Some(DeviceSpec {
 				device: "poly_synth".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			}),
 			color: None,
 			output: None,
@@ -90,6 +93,7 @@ fn builds_a_song_skeleton_and_undo_reverses_whole_steps() {
 			device: DeviceSpec {
 				device: "reverb".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			},
 			index: None,
 		},
@@ -114,6 +118,7 @@ fn builds_a_song_skeleton_and_undo_reverses_whole_steps() {
 			device: DeviceSpec {
 				device: "limiter".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			},
 			index: None,
 		},

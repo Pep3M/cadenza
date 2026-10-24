@@ -4,7 +4,7 @@
 //! drag files onto the arrange view, double-click to import) and the style Library tab
 //! (`ui::library`).
 
-use crate::i18n::{tr, trf};
+use crate::i18n::{tr, tr_str, trf};
 use std::path::PathBuf;
 
 use cadenza_dsp::DeviceRole;
@@ -363,6 +363,25 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 	};
 	let list = cadenza_dsp::factory_presets(id);
 	let id = id.clone();
+	let loaded = state.preset_status(r).name;
+	let filter_id = Id::new(("preset-filter", &id));
+	let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+	if list.len() > 12 {
+		ui.add(
+			egui::TextEdit::singleline(&mut filter)
+				.hint_text(tr("Search presets"))
+				.desired_width(f32::INFINITY),
+		);
+		ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+	}
+	let words: Vec<String> = filter.split_whitespace().map(str::to_lowercase).collect();
+	let shown: Vec<&'static cadenza_dsp::FactoryPreset> = list
+		.iter()
+		.filter(|p| {
+			let text = format!("{} {} {}", p.name, p.category, p.description).to_lowercase();
+			words.iter().all(|w| text.contains(w.as_str()))
+		})
+		.collect();
 	egui::ScrollArea::vertical()
 		.id_salt("presets")
 		.auto_shrink([false, false])
@@ -373,17 +392,28 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
+			} else if shown.is_empty() {
+				ui.label(
+					RichText::new(tr("No preset matches"))
+						.font(theme::small())
+						.color(theme::TEXT_FAINT),
+				);
 			}
-			let device_id = id.clone();
-			for preset in list {
+			let mut row = |ui: &mut Ui, preset: &'static cadenza_dsp::FactoryPreset| {
 				let payload = Payload::Preset {
-					device: device_id.clone(),
+					device: id.clone(),
 					preset,
 				};
-				let drag_id = Id::new(("preset", &device_id, preset.name));
+				let drag_id = Id::new(("preset", &id, preset.name));
+				let current = loaded.as_deref() == Some(preset.name);
 				let resp = ui
 					.dnd_drag_source(drag_id, payload, |ui| {
-						ui.add(egui::Label::new(preset.name).selectable(false))
+						let text = RichText::new(preset.name).color(if current {
+							theme::ACCENT
+						} else {
+							theme::TEXT
+						});
+						ui.add(egui::Label::new(text).selectable(false))
 					})
 					.response;
 				let resp = ui
@@ -400,6 +430,28 @@ fn presets(ui: &mut Ui, state: &mut AppState) {
 				if resp.clicked() {
 					state.load_factory_preset(r, preset);
 				}
+			};
+			if shown.iter().all(|p| p.category.is_empty()) {
+				for preset in shown {
+					row(ui, preset);
+				}
+				return;
+			}
+			for category in cadenza_dsp::PRESET_CATEGORIES {
+				let group: Vec<_> = shown.iter().filter(|p| p.category == category).collect();
+				if group.is_empty() {
+					continue;
+				}
+				let holds_loaded = group.iter().any(|p| loaded.as_deref() == Some(p.name));
+				egui::CollapsingHeader::new(format!("{} · {}", tr_str(category), group.len()))
+					.id_salt(("preset-category", &id, category))
+					.default_open(holds_loaded)
+					.open((!words.is_empty()).then_some(true))
+					.show(ui, |ui| {
+						for preset in group {
+							row(ui, preset);
+						}
+					});
 			}
 		});
 }

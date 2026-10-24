@@ -433,10 +433,18 @@ pub trait Processor: Send {
 }
 pub fn registry() -> &'static [&'static DeviceInfo];
 pub fn create(id: &str) -> Option<Box<dyn Processor>>;
-pub fn factory_presets(id: &str) -> &'static [FactoryPreset { name, description, params, zones: &[FactoryZone] }];
+pub fn factory_presets(id: &str) -> &'static [FactoryPreset { name, category /* PRESET_CATEGORIES or "" */, description, params,
+	zones: &[FactoryZone], modulators: &[PresetModulator { source: Lfo{..} | Envelope{..}, targets }] }];
 	fn set_zones(&mut self, zones: Vec<Zone>) -> bool  // sample built-ins; non-realtime, after prepare
 pub trait SampleData: Send + Sync { sample_rate, num_channels, channel(i) -> &[f32] } // Arc<dyn SampleData> per zone
 ```
+Poly Synth library (`presets/poly_synth.rs`, design `docs/design/synth-preset-library.md`): 93
+genre presets in `PRESET_CATEGORIES` (Bass, 808, Lead, Pluck, Keys, Bell, Pad, Choir, Strings, Brass,
+Arp, FX), 31 with modulators; no artist/song/brand names in shipped text. A built-in preset is the
+whole patch: loading replaces params and modulators (`engine::factory::{preset_modulators,
+apply_preset}`). `engine/tests/preset_library.rs` plays each with a category phrase: -15..-10 LUFS
+momentary (`LoudnessMeter::momentary_max`) unless peak-limited (>= -2.5 dBTP), <= -1 dBTP, every
+modulator audible; `CADENZA_PRESET_AUDITION_DIR=dir ... --ignored audition_presets` writes WAVs.
 `response` module (device editor pictures, pure/allocation-light, reusing each processor's own
 coefficient/shaping code so the picture and the sound cannot drift): `eq_response_db`/
 `eq_band_response_db`/`EqBands` (7-band EQ magnitude), `poly_synth_filter_response_db`/
@@ -594,7 +602,11 @@ in the app's Audio settings status). Surge XT stress test:
 `cargo test -p cadenza-plugin-host --release --test sandbox_realtime -- --ignored --nocapture`.
 Plugin state is captured explicitly (MCP `capture_plugin_state`, automatically on `save_project`,
 and after loading a plugin preset) from a fresh instance, then stored with `SetDeviceState`.
-MCP preset tools: `list_presets`/`load_preset`/`save_preset` (user presets in
+MCP preset tools: `list_presets { category, query }` (the tool, `list_presets_tool`, drops descriptions
+from long unfiltered lists)/`load_preset` (Batch with `SetModulators` for built-ins; reports `modulators`)/
+`save_preset` (user presets keep modulators; `DeviceSpec.preset` starts a built-in on a factory preset in
+create_track/insert_device, `convert::find_factory_preset` suggests close names; `get_device_info`
+groups names per category) (user presets in
 `$CADENZA_PRESET_DIR` or `$XDG_DATA_HOME/cadenza/presets/<device id>/<name>.json`); routing tools
 `set_sidechain`, `set_output_routes`. Plugin factory presets: CLAP preset-discovery + preset-load;
 VST3 `IUnitInfo` program lists (phase 19a, `Vst3Plugin::program_lists`: each list with the
@@ -1283,6 +1295,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   player's master tap via `AudioEvent::Ready.master`, silence while stopped, click resets) in
   its sends/output rows and Mono / Dim −20 toggles (`AppState::set_monitor_fx`, monitoring only,
   kept across device reopens).
+- Presets: browser Presets list grouped by category (collapsible, search box, loaded one in the
+  accent; `load_factory_preset` goes through MCP `load_preset`), editor preset menu one submenu per
+  category (`device::preset_groups`: built-in order, plugin banks after); `PresetEntry.category`.
 - Look: the Graphite design system (`docs/design/redesign-brief`; tokens in `theme`: 7 surfaces,
   text/accent/semantic `*_SOFT` states, meters, 16 `TRACK_COLORS`, clip tint alphas, radii,
   metrics). Fonts: IBM Plex Sans/Mono (OFL-1.1, `crates/app/assets/fonts`, embedded) with one

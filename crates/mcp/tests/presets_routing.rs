@@ -55,15 +55,21 @@ fn builtin_factory_and_user_presets() {
 		.unwrap();
 	assert_eq!(list.device, "poly_synth");
 	let names: Vec<&str> = list.presets.iter().map(|p| p.name.as_str()).collect();
-	assert_eq!(
-		names,
-		[
-			"Warm Pad",
-			"Pluck Lead",
-			"Sub Bass",
-			"Vowel Pad",
-			"Digital Pluck"
-		]
+	assert!(names.len() >= 60, "{names:?}");
+	for n in [
+		"Warm Pad",
+		"Pluck Lead",
+		"Sub Bass",
+		"Vowel Pad",
+		"Digital Pluck",
+	] {
+		assert!(names.contains(&n), "{n}");
+	}
+	let pad_preset = list.presets.iter().find(|p| p.name == "Warm Pad").unwrap();
+	assert_eq!(pad_preset.category, "Pad");
+	assert!(
+		!pad_preset.description.is_empty(),
+		"the app gets every description"
 	);
 
 	let loaded = presets::load_preset(
@@ -114,7 +120,16 @@ fn builtin_factory_and_user_presets() {
 		args(json!({ "track_id": pad, "device_id": synth, "name": "Sub Bass" })),
 	)
 	.unwrap();
-	assert_eq!(device(&s).params.get("gain"), None);
+	let sub = cadenza_dsp::factory_presets("poly_synth")
+		.iter()
+		.find(|p| p.name == "Sub Bass")
+		.unwrap();
+	let sub_gain = sub
+		.params
+		.iter()
+		.find(|(k, _)| *k == "gain")
+		.map(|(_, v)| *v);
+	assert_eq!(device(&s).params.get("gain").copied(), sub_gain);
 	let mine = presets::load_preset(
 		&mut s,
 		args(json!({ "track_id": pad, "device_id": synth, "name": "my pad" })),
@@ -146,6 +161,130 @@ fn builtin_factory_and_user_presets() {
 	)
 	.unwrap_err();
 	assert!(err.to_string().contains("saved for device 'eq'"), "{err}");
+}
+
+#[test]
+fn presets_bring_their_modulators_and_replace_the_devices_own() {
+	let dir = tempfile::tempdir().unwrap();
+	let mut s = session(&dir, false);
+	let (bass, synth) = track(&mut s, "Bass", "instrument", Some("poly_synth"));
+	let synth = synth.unwrap();
+	let mods = |s: &Session| {
+		s.document()
+			.project()
+			.device(Some(bass), synth)
+			.unwrap()
+			.modulators
+			.clone()
+	};
+	let loaded = presets::load_preset(
+		&mut s,
+		args(json!({ "track_id": bass, "device_id": synth, "name": "Wobble Bass" })),
+	)
+	.unwrap();
+	assert_eq!(loaded.modulators.len(), 1, "{:?}", loaded.modulators);
+	assert!(
+		loaded.modulators[0].contains("filter_cutoff"),
+		"{:?}",
+		loaded.modulators
+	);
+	assert_eq!(mods(&s).len(), 1);
+	assert_eq!(
+		s.document().history_labels().last().copied(),
+		Some("Load preset 'Wobble Bass'")
+	);
+
+	// A user preset keeps them too.
+	presets::save_preset(
+		&mut s,
+		args(json!({ "track_id": bass, "device_id": synth, "name": "My Wobble" })),
+	)
+	.unwrap();
+	// A preset without modulators clears them: a preset is the whole patch.
+	presets::load_preset(
+		&mut s,
+		args(json!({ "track_id": bass, "device_id": synth, "name": "Sub Bass" })),
+	)
+	.unwrap();
+	assert!(mods(&s).is_empty());
+	let mine = presets::load_preset(
+		&mut s,
+		args(json!({ "track_id": bass, "device_id": synth, "name": "My Wobble" })),
+	)
+	.unwrap();
+	assert_eq!(mine.modulators.len(), 1);
+	assert_eq!(mods(&s).len(), 1);
+	// One undo step restores the previous patch, modulators included.
+	project::undo(&mut s).unwrap();
+	assert!(mods(&s).is_empty());
+}
+
+#[test]
+fn list_presets_filters_by_category_and_words() {
+	let dir = tempfile::tempdir().unwrap();
+	let mut s = session(&dir, false);
+	let (t, synth) = track(&mut s, "Synth", "instrument", Some("poly_synth"));
+	let list = |s: &mut Session, extra: serde_json::Value| {
+		let mut a = json!({ "track_id": t, "device_id": synth.unwrap() });
+		a.as_object_mut()
+			.unwrap()
+			.extend(extra.as_object().unwrap().clone());
+		presets::list_presets_tool(s, args(a)).unwrap()
+	};
+	let all = list(&mut s, json!({}));
+	assert!(all.presets.iter().all(|p| p.description.is_empty()));
+	assert!(all.note.unwrap().contains("category or query"));
+	let basses = list(&mut s, json!({ "category": "808" }));
+	assert!(basses.presets.len() >= 2);
+	assert!(
+		basses
+			.presets
+			.iter()
+			.all(|p| p.category == "808" && !p.description.is_empty())
+	);
+	let trap = list(&mut s, json!({ "query": "trap bell" }));
+	assert!(trap.presets.iter().any(|p| p.name == "Haunted Bell"));
+	let none = list(&mut s, json!({ "query": "bagpipes" }));
+	assert!(none.presets.is_empty() && none.note.is_some());
+}
+
+#[test]
+fn create_track_starts_an_instrument_on_a_factory_preset() {
+	let dir = tempfile::tempdir().unwrap();
+	let mut s = session(&dir, false);
+	let out = tracks::create_track(
+		&mut s,
+		args(json!({
+			"name": "Wobble",
+			"kind": "instrument",
+			"instrument": { "device": "poly_synth", "preset": "wobble bass",
+				"params": { "glide": 25.0 } }
+		})),
+	)
+	.unwrap();
+	let device = s
+		.document()
+		.project()
+		.device(Some(out.track_id), out.instrument_device_id.unwrap())
+		.unwrap()
+		.clone();
+	assert_eq!(device.modulators.len(), 1);
+	assert_eq!(device.params.get("unison"), Some(&2.0));
+	assert_eq!(
+		device.params.get("glide"),
+		Some(&25.0),
+		"params apply on top"
+	);
+	let err = tracks::create_track(
+		&mut s,
+		args(json!({
+			"name": "Bad",
+			"kind": "instrument",
+			"instrument": { "device": "poly_synth", "preset": "Wobble Bas" }
+		})),
+	)
+	.unwrap_err();
+	assert!(err.to_string().contains("Wobble Bass"), "{err}");
 }
 
 #[test]

@@ -67,6 +67,61 @@ pub struct DeviceSpec {
 	/// `"module/name"` (see `get_device_info`).
 	#[serde(default)]
 	pub params: BTreeMap<String, f32>,
+	/// Factory preset of a built-in device to start from (name from get_device_info /
+	/// list_presets, case-insensitive), with its modulators; `params` apply on top.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub preset: Option<String>,
+}
+
+impl DeviceSpec {
+	/// A device with no overrides.
+	pub fn new(device: impl Into<String>) -> Self {
+		Self {
+			device: device.into(),
+			params: BTreeMap::new(),
+			preset: None,
+		}
+	}
+}
+
+/// The factory preset `name` of built-in `id`, or an actionable error naming the close ones.
+pub fn find_factory_preset(
+	id: &str,
+	name: &str,
+) -> Result<&'static cadenza_dsp::FactoryPreset, McpError> {
+	let presets = cadenza_dsp::factory_presets(id);
+	let wanted = name.trim();
+	if let Some(p) = presets.iter().find(|p| p.name.eq_ignore_ascii_case(wanted)) {
+		return Ok(p);
+	}
+	if presets.is_empty() {
+		return Err(McpError::Invalid(format!(
+			"device '{id}' has no factory presets; set its params instead"
+		)));
+	}
+	let lower = wanted.to_lowercase();
+	let close: Vec<&str> = presets
+		.iter()
+		.filter(|p| {
+			let n = p.name.to_lowercase();
+			lower
+				.split_whitespace()
+				.any(|w| n.contains(w) || p.category.eq_ignore_ascii_case(w))
+		})
+		.take(8)
+		.map(|p| p.name)
+		.collect();
+	Err(McpError::Invalid(if close.is_empty() {
+		format!(
+			"device '{id}' has no factory preset named '{wanted}'; list them with \
+			 get_device_info or list_presets"
+		)
+	} else {
+		format!(
+			"device '{id}' has no factory preset named '{wanted}'; close ones: {}",
+			close.join(", ")
+		)
+	}))
 }
 
 /// A resolved device: a built-in registry entry or a scanned plugin.
@@ -357,7 +412,24 @@ pub fn build_device(
 	// Samplers start with their default factory content so they sound out of the box;
 	// explicit params apply on top of the preset's.
 	let mut zones = Vec::new();
-	if let DeviceKind::Builtin { id } = &kind {
+	let mut modulators = Vec::new();
+	if let Some(name) = &spec.preset {
+		let DeviceKind::Builtin { id } = &kind else {
+			return Err(McpError::Invalid(format!(
+				"'preset' only picks factory presets of built-in devices; for plugin '{}' \
+				 use load_preset after adding it",
+				spec.device
+			)));
+		};
+		let preset = find_factory_preset(id, name)?;
+		let mut device = Device::builtin(id.as_str(), "");
+		cadenza_engine::factory::apply_preset(&mut device, preset)?;
+		let mut merged = device.params;
+		merged.extend(params);
+		params = merged;
+		zones = device.zones;
+		modulators = device.modulators;
+	} else if let DeviceKind::Builtin { id } = &kind {
 		match cadenza_engine::factory::default_content(id) {
 			Ok(Some(content)) => {
 				let mut merged = content.params;
@@ -379,7 +451,7 @@ pub fn build_device(
 		sidechain: None,
 		aux_outputs: Vec::new(),
 		zones,
-		modulators: Vec::new(),
+		modulators,
 	})
 }
 

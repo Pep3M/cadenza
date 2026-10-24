@@ -60,8 +60,11 @@ tone with `insert_device`/`set_device_params` on a track or the master.\n\
 Samples: the built-in `drum_sampler` (16 GM pads, starts with the factory 'Synth Kit') and \
 `sampler` (multi-zone, starts with 'Sine Pad') play audio files: `list_factory_samples`, \
 `load_sample` (pad or zone), `set_pad`, `set_zone`; their zones show in get_project.\n\
-Devices have presets: `list_presets`/`load_preset` for a quick starting sound, \
-`save_preset` to keep one for later. Duck a pad or bass under the kick with a compressor \
+Devices have presets: start an instrument or effect from a factory preset with \
+`preset` in create_track / insert_device (get_device_info lists them by category; the \
+poly_synth ships a genre library: trap 808s, reese and house basses, supersaw leads, \
+plucks, keys, pads, choirs, brass, arps), `list_presets { category, query }` to search, \
+`load_preset` to switch, `save_preset` to keep one for later. Duck a pad or bass under the kick with a compressor \
 keyed by it (`set_sidechain`); give the separate outputs of a multi-output drum plugin \
 their own buses with `set_output_routes`.\n\
 5. Balance the mix with `set_channel` (volume/pan/mute/solo) and mark song sections with \
@@ -466,22 +469,25 @@ impl CadenzaServer {
 	#[tool(
 		description = "Lists the presets of a device already in the project (track_id + \
 			device_id from get_project; omit track_id for a master insert): factory presets \
-			(built-in devices ship a few named starting points; plugins expose their own) and \
-			user presets saved with save_preset. Plugins are loaded to list theirs, so this can \
-			take a moment."
+			(built-in devices ship named starting points by category — the poly_synth has a \
+			large library of genre sounds: Bass, 808, Lead, Pluck, Keys, Bell, Pad, Choir, \
+			Strings, Brass, Arp, FX; plugins expose their own) and user presets saved with \
+			save_preset. Narrow it with `category` and/or `query` (genre or character words) \
+			to get descriptions. Plugins are loaded to list theirs, so this can take a moment."
 	)]
 	fn list_presets(
 		&self,
 		Parameters(args): Parameters<presets::ListPresetsArgs>,
 	) -> Result<Json<presets::ListPresetsOutput>, ErrorData> {
-		Ok(Json(presets::list_presets(&mut self.session(), args)?))
+		Ok(Json(presets::list_presets_tool(&mut self.session(), args)?))
 	}
 
 	#[tool(
 		description = "Loads a preset (by name from list_presets) into a device in one undo \
 			step. It replaces the device's explicit params (built-ins: the preset's values, \
-			others at defaults) and, for plugins, its stored state. Tweak afterwards with \
-			set_device_params."
+			others at defaults) and modulators (built-ins), and for plugins its stored state. \
+			Tweak afterwards with set_device_params. To create a device already on a factory \
+			preset, pass `preset` in create_track's instrument or insert_device instead."
 	)]
 	fn load_preset(
 		&self,

@@ -2016,42 +2016,16 @@ impl AppState {
 		));
 	}
 
-	/// Loads a built-in factory preset into a device (one undo step); sampler presets
-	/// bring their (factory) samples.
+	/// Loads a built-in factory preset into a device (one undo step): params, modulators
+	/// and, for sampler presets, their (factory) samples.
 	pub fn load_factory_preset(&mut self, device: DeviceRef, preset: &cadenza_dsp::FactoryPreset) {
-		let params = preset
-			.params
-			.iter()
-			.map(|(k, v)| ((*k).to_owned(), *v))
-			.collect();
-		let set = Command::SetDeviceState {
-			track: device.track,
-			device: device.device,
-			state: None,
-			params: Some(params),
+		let entry = device::PresetEntry {
+			name: preset.name.to_owned(),
+			user: false,
+			category: preset.category.to_owned(),
+			description: preset.description.to_owned(),
 		};
-		let cmd = if preset.zones.is_empty() {
-			set
-		} else {
-			match cadenza_engine::factory::preset_zones(preset) {
-				Ok(zones) => Command::Batch {
-					label: format!("Load preset '{}'", preset.name),
-					commands: vec![
-						set,
-						Command::SetSampleZones {
-							track: device.track,
-							device: device.device,
-							zones,
-						},
-					],
-				},
-				Err(e) => {
-					self.notices.error(e.to_string());
-					return;
-				}
-			}
-		};
-		self.apply(cmd);
+		self.load_device_preset(device, &entry);
 	}
 
 	/// The device at `r`, if it still exists (instrument or insert).
@@ -2753,6 +2727,7 @@ impl AppState {
 		let spec = cadenza_mcp::convert::DeviceSpec {
 			device: item.id.clone(),
 			params: Default::default(),
+			preset: None,
 		};
 		match cadenza_mcp::convert::build_device(&spec, item.role, catalog.as_deref()) {
 			Ok(d) => Some(d),
@@ -2841,14 +2816,8 @@ impl AppState {
 			return false;
 		};
 		let mut d = cadenza_model::Device::builtin(info.id, info.name);
-		d.params = preset
-			.params
-			.iter()
-			.map(|(k, v)| ((*k).to_owned(), *v))
-			.collect();
-		match cadenza_engine::factory::preset_zones(preset) {
-			Ok(zones) => d.zones = zones,
-			Err(e) => self.notices.error(e.to_string()),
+		if let Err(e) = cadenza_engine::factory::apply_preset(&mut d, preset) {
+			self.notices.error(e.to_string());
 		}
 		let r = DeviceRef {
 			track: Some(track),
@@ -3435,6 +3404,8 @@ impl AppState {
 		let args = cadenza_mcp::tools::presets::ListPresetsArgs {
 			track_id: r.track,
 			device_id: r.device,
+			category: None,
+			query: None,
 		};
 		let listed = cadenza_mcp::tools::presets::list_presets(&mut self.session(), args);
 		match listed {
@@ -3444,6 +3415,7 @@ impl AppState {
 				.map(|p| device::PresetEntry {
 					name: p.name,
 					user: p.source == cadenza_mcp::tools::presets::PresetSource::User,
+					category: p.category,
 					description: p.description,
 				})
 				.collect(),

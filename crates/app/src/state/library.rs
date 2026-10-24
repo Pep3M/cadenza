@@ -185,11 +185,8 @@ fn track_for(project: &Project, pattern: &Pattern) -> Track {
 			.iter()
 			.find(|p| p.name == n)
 	}) {
-		instrument.params = p
-			.params
-			.iter()
-			.map(|(k, v)| ((*k).to_owned(), *v))
-			.collect();
+		// Built-in synth presets need no samples, so this cannot fail.
+		let _ = cadenza_engine::factory::apply_preset(&mut instrument, p);
 	}
 	track.name = name.to_owned();
 	track.instrument = Some(instrument);

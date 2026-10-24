@@ -9,7 +9,7 @@
 //! / zones editor, else [`generic_body`] (every param as a kit control, grouped in rows).
 //! A dedicated body (`eq_body(ui, state, cx)`) is one more match arm there.
 
-use crate::i18n::{tr, trf};
+use crate::i18n::{tr, tr_str, trf};
 use cadenza_core::ParamAddress;
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 use cadenza_engine::ProbeFrame;
@@ -726,9 +726,11 @@ impl DeviceEditorUi {
 						.font(theme::small())
 						.color(theme::TEXT_FAINT),
 				);
-				for e in entries {
-					let current = status.name.as_deref() == Some(&e.name) && status.user == user;
-					let mut b = ui.selectable_label(current, &e.name);
+				let current = |e: &PresetEntry| {
+					status.name.as_deref() == Some(&e.name) && status.user == e.user
+				};
+				let mut pick = |ui: &mut Ui, e: &PresetEntry| {
+					let mut b = ui.selectable_label(current(e), &e.name);
 					if !e.description.is_empty() {
 						b = b.on_hover_text(&e.description);
 					}
@@ -736,6 +738,22 @@ impl DeviceEditorUi {
 						state.load_device_preset(r, e);
 						ui.close();
 					}
+				};
+				for (category, group) in device::preset_groups(&entries) {
+					if category.is_empty() {
+						for e in group {
+							pick(ui, e);
+						}
+						continue;
+					}
+					let on = group.iter().any(|e| current(e));
+					let title = format!("{}{}", tr_str(category), if on { "  ●" } else { "" });
+					ui.menu_button(title, |ui| {
+						ui.set_min_width(200.0);
+						for e in group {
+							pick(ui, e);
+						}
+					});
 				}
 			}
 		});

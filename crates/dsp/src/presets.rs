@@ -1,17 +1,160 @@
-//! Factory presets of the built-in devices: named parameter maps. Loading one
-//! replaces a device's explicit parameter values (params left out return to
-//! their defaults).
+//! Factory presets of the built-in devices: named parameter maps (plus sample zones and
+//! modulators). Loading one replaces a device's explicit parameter values (params left
+//! out return to their defaults) and its modulators.
+
+mod poly_synth;
 
 /// A named set of parameter values for a built-in device.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FactoryPreset {
 	pub name: &'static str,
+	/// One of [`PRESET_CATEGORIES`], or empty for devices whose presets are not grouped.
+	pub category: &'static str,
 	/// What it sounds like and when to use it, written for an AI choosing presets.
 	pub description: &'static str,
 	/// Plain values by param id; every other param stays at its default.
 	pub params: &'static [(&'static str, f32)],
 	/// Sample zones (sample-based devices), playing factory samples by file name.
 	pub zones: &'static [FactoryZone],
+	/// Modulators the preset installs on the device (replacing its own).
+	pub modulators: &'static [PresetModulator],
+}
+
+impl FactoryPreset {
+	pub const fn category(mut self, category: &'static str) -> Self {
+		self.category = category;
+		self
+	}
+
+	pub const fn modulators(mut self, modulators: &'static [PresetModulator]) -> Self {
+		self.modulators = modulators;
+		self
+	}
+}
+
+/// Preset categories, in browsing order.
+pub const PRESET_CATEGORIES: [&str; 12] = [
+	"Bass", "808", "Lead", "Pluck", "Keys", "Bell", "Pad", "Choir", "Strings", "Brass", "Arp", "FX",
+];
+
+/// LFO wave of a [`PresetModulator`] (mirrors the model's `LfoShape`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetLfoShape {
+	Sine,
+	Triangle,
+	Saw,
+	Square,
+	Random,
+}
+
+/// When a preset LFO restarts (mirrors the model's `Retrigger`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetRetrigger {
+	Free,
+	Note,
+	Transport,
+}
+
+/// What drives a [`PresetModulator`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PresetModSource {
+	Lfo {
+		shape: PresetLfoShape,
+		rate_hz: f32,
+		/// Tempo-synced cycle in quarter notes; overrides `rate_hz`.
+		sync_beats: Option<f32>,
+		phase: f32,
+		retrigger: PresetRetrigger,
+	},
+	/// Follower of the device's own input (an instrument: its own output).
+	Envelope {
+		attack_ms: f32,
+		release_ms: f32,
+		gain_db: f32,
+	},
+}
+
+/// A modulator of a factory preset: the source and the params it moves, each by a depth
+/// in -1..1 of the param's range (the model's `ModTarget`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PresetModulator {
+	pub source: PresetModSource,
+	pub targets: &'static [(&'static str, f32)],
+}
+
+impl PresetModulator {
+	/// A free-running LFO at `rate_hz`.
+	pub const fn lfo(
+		shape: PresetLfoShape,
+		rate_hz: f32,
+		targets: &'static [(&'static str, f32)],
+	) -> Self {
+		Self {
+			source: PresetModSource::Lfo {
+				shape,
+				rate_hz,
+				sync_beats: None,
+				phase: 0.0,
+				retrigger: PresetRetrigger::Free,
+			},
+			targets,
+		}
+	}
+
+	/// An LFO locked to the song: one cycle every `beats` quarter notes.
+	pub const fn synced(
+		shape: PresetLfoShape,
+		beats: f32,
+		targets: &'static [(&'static str, f32)],
+	) -> Self {
+		Self {
+			source: PresetModSource::Lfo {
+				shape,
+				rate_hz: 1.0,
+				sync_beats: Some(beats),
+				phase: 0.0,
+				retrigger: PresetRetrigger::Transport,
+			},
+			targets,
+		}
+	}
+
+	/// An envelope follower on the device's own signal.
+	pub const fn follower(
+		attack_ms: f32,
+		release_ms: f32,
+		gain_db: f32,
+		targets: &'static [(&'static str, f32)],
+	) -> Self {
+		Self {
+			source: PresetModSource::Envelope {
+				attack_ms,
+				release_ms,
+				gain_db,
+			},
+			targets,
+		}
+	}
+
+	/// The same LFO restarting at every note-on, from `phase` (0..1).
+	pub const fn on_note(mut self, phase: f32) -> Self {
+		if let PresetModSource::Lfo {
+			shape,
+			rate_hz,
+			sync_beats,
+			..
+		} = self.source
+		{
+			self.source = PresetModSource::Lfo {
+				shape,
+				rate_hz,
+				sync_beats,
+				phase,
+				retrigger: PresetRetrigger::Note,
+			};
+		}
+		self
+	}
 }
 
 /// A zone of a factory preset: a file of the factory sample folder (synthesized on first
@@ -76,9 +219,11 @@ const fn preset(
 ) -> FactoryPreset {
 	FactoryPreset {
 		name,
+		category: "",
 		description,
 		params,
 		zones: &[],
+		modulators: &[],
 	}
 }
 
@@ -90,9 +235,11 @@ const fn sampled(
 ) -> FactoryPreset {
 	FactoryPreset {
 		name,
+		category: "",
 		description,
 		params,
 		zones,
+		modulators: &[],
 	}
 }
 
@@ -229,101 +376,6 @@ static SAMPLER: [FactoryPreset; 2] = [
 	),
 ];
 
-static POLY_SYNTH: [FactoryPreset; 5] = [
-	preset(
-		"Warm Pad",
-		"Slow, detuned saw pad with a soft filter; sustained chords and beds.",
-		&[
-			("unison", 3.0),
-			("unison_detune", 18.0),
-			("filter_cutoff", 1_400.0),
-			("filter_resonance", 10.0),
-			("filter_env_amount", 12.0),
-			("amp_attack", 600.0),
-			("amp_sustain", 85.0),
-			("amp_release", 1_200.0),
-			("gain", -6.0),
-		],
-	),
-	preset(
-		"Pluck Lead",
-		"Bright, short pluck with a snappy filter envelope; arpeggios and hooks.",
-		&[
-			("osc2_wave", 2.0),
-			("osc2_semitones", 12.0),
-			("filter_cutoff", 900.0),
-			("filter_resonance", 30.0),
-			("filter_env_amount", 40.0),
-			("filter_decay", 180.0),
-			("filter_sustain", 0.0),
-			("amp_decay", 350.0),
-			("amp_sustain", 0.0),
-			("amp_release", 200.0),
-		],
-	),
-	preset(
-		"Sub Bass",
-		"Round mono-style bass: sine + square an octave down, low cutoff, tight release.",
-		&[
-			("osc1_wave", 0.0),
-			("osc2_wave", 2.0),
-			("osc2_semitones", -12.0),
-			("osc2_cents", 0.0),
-			("osc_mix", 35.0),
-			("filter_cutoff", 450.0),
-			("filter_env_amount", 6.0),
-			("amp_sustain", 90.0),
-			("amp_release", 80.0),
-			("glide", 30.0),
-		],
-	),
-	preset(
-		"Vowel Pad",
-		"Wavetable pad on the Formant table, a fifth above in Basic; automate or modulate the position to make it talk.",
-		&[
-			("osc1_wave", 4.0),
-			("osc1_table", 2.0),
-			("osc1_position", 0.35),
-			("osc2_wave", 4.0),
-			("osc2_table", 0.0),
-			("osc2_position", 0.5),
-			("osc2_semitones", 7.0),
-			("osc_mix", 35.0),
-			("unison", 2.0),
-			("unison_detune", 14.0),
-			("filter_cutoff", 3_500.0),
-			("filter_env_amount", 6.0),
-			("amp_attack", 450.0),
-			("amp_sustain", 85.0),
-			("amp_release", 1_600.0),
-			("gain", -6.0),
-		],
-	),
-	preset(
-		"Digital Pluck",
-		"Glassy wavetable pluck: Digital and Harmonics tables, short filter envelope; arps and hooks.",
-		&[
-			("osc1_wave", 4.0),
-			("osc1_table", 4.0),
-			("osc1_position", 0.4),
-			("osc2_wave", 4.0),
-			("osc2_table", 3.0),
-			("osc2_position", 0.6),
-			("osc2_semitones", 12.0),
-			("osc_mix", 40.0),
-			("filter_cutoff", 1_200.0),
-			("filter_resonance", 25.0),
-			("filter_env_amount", 36.0),
-			("filter_decay", 220.0),
-			("filter_sustain", 0.0),
-			("amp_decay", 420.0),
-			("amp_sustain", 0.0),
-			("amp_release", 260.0),
-			("gain", -3.0),
-		],
-	),
-];
-
 static DRUM_MACHINE: [FactoryPreset; 2] = [
 	preset(
 		"Tight Kit",
@@ -437,7 +489,7 @@ static REVERB: [FactoryPreset; 2] = [
 /// Factory presets of the built-in device `id` (empty for unknown ids).
 pub fn factory_presets(id: &str) -> &'static [FactoryPreset] {
 	match id {
-		"poly_synth" => &POLY_SYNTH,
+		"poly_synth" => &poly_synth::PRESETS,
 		"drum_machine" => &DRUM_MACHINE,
 		"electric_piano" => &ELECTRIC_PIANO,
 		"sampler" => &SAMPLER,

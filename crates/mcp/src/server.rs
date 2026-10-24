@@ -784,13 +784,19 @@ impl CadenzaServer {
 	// -- samplers ---------------------------------------------------------------------
 
 	#[tool(
-		description = "Lists the factory samples (synthesized drum hits and a sine multisample, \
-			rendered on first use) with absolute paths for load_sample, each with its kind \
-			(drum with its GM note, or tonal with its recorded pitch), plus the factory presets \
-			built from them (load_preset on a sampler / drum_sampler)."
+		description = "Lists the factory samples (the bundled genre-kit one-shots: kicks, \
+			snares, claps, hats, 808s, acoustic kit pieces, Latin and African percussion; plus a \
+			synthesized kit and a sine multisample) with absolute paths for load_sample, each \
+			with its kind (drum with its GM note, or tonal with its recorded pitch), plus the \
+			factory kits built from them by genre (load_preset on a drum_sampler / sampler, or \
+			create_track with preset). Filter with query (words in the file name, e.g. \
+			\"909 clap\", \"conga\") and pad (a drum name or note); limit defaults to 40."
 	)]
-	fn list_factory_samples(&self) -> Result<Json<samples::ListFactorySamplesOutput>, ErrorData> {
-		Ok(Json(samples::list_factory_samples()?))
+	fn list_factory_samples(
+		&self,
+		Parameters(args): Parameters<samples::ListFactorySamplesArgs>,
+	) -> Result<Json<samples::ListFactorySamplesOutput>, ErrorData> {
+		Ok(Json(samples::list_factory_samples(args)?))
 	}
 
 	#[tool(

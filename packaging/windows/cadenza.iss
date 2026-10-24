@@ -154,6 +154,7 @@ Source: "{#Dist}\cadenza.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\cadenza-plugin-scanner.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"
 Source: "..\..\README.md"; DestDir: "{app}"
+Source: "..\..\assets\samples\*"; DestDir: "{app}\samples"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{autoprograms}\Cadenza"; Filename: "{app}\cadenza-app.exe"

@@ -615,28 +615,81 @@ pub fn set_pad(session: &mut Session, args: SetPadArgs) -> Result<ZonesOutput, M
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ListFactorySamplesOutput {
-	/// Folder holding them (synthesized on first use).
+	/// Folder holding them.
 	pub folder: String,
+	/// Samples matching the filters (at most `limit`).
 	pub samples: Vec<cadenza_engine::factory::FactorySample>,
-	/// Ready-made kits / instruments built from them (load_preset on the device).
+	/// How many samples match in all.
+	pub total: usize,
+	/// Ready-made kits / instruments built from them (load_preset on the device), one
+	/// line per device and category: "drum_sampler (House): Deep House Kit, ...".
 	pub presets: Vec<String>,
 }
 
-pub fn list_factory_samples() -> Result<ListFactorySamplesOutput, McpError> {
-	let samples = cadenza_engine::factory::list_factory_samples()?;
-	let presets = ["drum_sampler", "sampler"]
-		.iter()
-		.flat_map(|id| {
-			cadenza_dsp::factory_presets(id)
-				.iter()
-				.map(move |p| format!("{id}: {}", p.name))
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ListFactorySamplesArgs {
+	/// Words that must all appear in the file name ("909 kick", "conga", "trap 808").
+	#[serde(default)]
+	pub query: Option<String>,
+	/// Only drum samples made for this pad: a drum name (kick, snare, open_conga...), a
+	/// note name ("C2") or a MIDI number (36).
+	#[serde(default, deserialize_with = "opt_text_or_number")]
+	pub pad: Option<String>,
+	/// Most samples returned (default 40, at most 400).
+	#[serde(default)]
+	pub limit: Option<usize>,
+}
+
+pub fn list_factory_samples(
+	args: ListFactorySamplesArgs,
+) -> Result<ListFactorySamplesOutput, McpError> {
+	let note = args.pad.as_deref().map(pad_note).transpose()?;
+	let words: Vec<String> = args
+		.query
+		.as_deref()
+		.unwrap_or_default()
+		.split_whitespace()
+		.map(str::to_lowercase)
+		.collect();
+	let matching: Vec<_> = cadenza_engine::factory::list_factory_samples()?
+		.into_iter()
+		.filter(|s| note.is_none_or(|n| s.kind == "drum" && s.note == n))
+		.filter(|s| {
+			let name = s.name.to_lowercase();
+			words.iter().all(|w| name.contains(w.as_str()))
 		})
 		.collect();
+	let total = matching.len();
+	let limit = args.limit.unwrap_or(40).clamp(1, 400);
+	let mut presets = Vec::new();
+	for id in ["drum_sampler", "sampler"] {
+		let all = cadenza_dsp::factory_presets(id);
+		let mut categories: Vec<&str> = Vec::new();
+		for p in all {
+			if !categories.contains(&p.category) {
+				categories.push(p.category);
+			}
+		}
+		for c in categories {
+			let names: Vec<&str> = all
+				.iter()
+				.filter(|p| p.category == c)
+				.map(|p| p.name)
+				.collect();
+			let head = if c.is_empty() {
+				id.to_owned()
+			} else {
+				format!("{id} ({c})")
+			};
+			presets.push(format!("{head}: {}", names.join(", ")));
+		}
+	}
 	Ok(ListFactorySamplesOutput {
 		folder: cadenza_engine::factory::factory_sample_dir()
 			.display()
 			.to_string(),
-		samples,
+		samples: matching.into_iter().take(limit).collect(),
+		total,
 		presets,
 	})
 }

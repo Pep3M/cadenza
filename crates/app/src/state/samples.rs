@@ -321,7 +321,8 @@ mod tests {
 		let d = device(&p, r).unwrap();
 		assert_eq!(pad_zones(d, 38), vec![1, 2]);
 		assert_eq!(pad_label(38), "Snare");
-		assert_eq!(pad_label(60), "C4");
+		assert_eq!(pad_label(60), "Hi Bongo");
+		assert_eq!(pad_label(84), "C6");
 		let cmd = edit_pad(&p, r, 38, |z| {
 			z.gain_db = -6.0;
 			z.output = 2;

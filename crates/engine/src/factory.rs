@@ -1,8 +1,10 @@
-//! Factory content of the sample-based built-ins: a small kit and a multisample, rendered
-//! procedurally (the built-in `drum_machine` and additive synthesis) into WAV files on
-//! first use, so the repository ships no third-party samples. The factory presets of
-//! `sampler` and `drum_sampler` ([`cadenza_dsp::factory_presets`]) refer to these files by
-//! name; [`preset_zones`] turns them into project zones with absolute paths.
+//! Factory content of the sample-based built-ins, gathered in one folder on first use:
+//! a small kit and a multisample rendered procedurally (the built-in `drum_machine` and
+//! additive synthesis) into WAV files, plus the bundled genre kits (`assets/samples` in
+//! the repository, shipped next to the binaries; see `assets/samples/CREDITS.md` for
+//! sources and licenses) copied in. The factory presets of `sampler` and `drum_sampler`
+//! ([`cadenza_dsp::factory_presets`]) refer to these files by name; [`preset_zones`]
+//! turns them into project zones with absolute paths.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,76 @@ pub fn factory_sample_dir() -> PathBuf {
 	cadenza_core::paths::data_dir()
 		.join("samples")
 		.join("factory")
+}
+
+/// Overrides the folder of bundled samples (tests, unusual installs).
+pub const BUNDLED_SAMPLES_ENV: &str = "CADENZA_BUNDLED_SAMPLES";
+
+/// The audio extensions of bundled samples.
+const BUNDLED_EXTENSIONS: [&str; 2] = ["flac", "wav"];
+
+/// Where the bundled sample files ship: `$CADENZA_BUNDLED_SAMPLES`, else `samples` next
+/// to the executable (tar.gz, zip, Windows installer), `../share/cadenza/samples`
+/// (AppImage), `../Resources/samples` (macOS bundle), else the repository's
+/// `assets/samples` (development builds and tests). `None` when none exists.
+pub fn bundled_sample_dir() -> Option<PathBuf> {
+	if let Some(dir) = std::env::var_os(BUNDLED_SAMPLES_ENV).filter(|v| !v.is_empty()) {
+		return Some(PathBuf::from(dir));
+	}
+	let exe = std::env::current_exe()
+		.ok()
+		.and_then(|e| e.canonicalize().ok());
+	let beside = exe.as_deref().and_then(Path::parent).map(|bin| {
+		[
+			bin.join("samples"),
+			bin.join("../share/cadenza/samples"),
+			bin.join("../Resources/samples"),
+		]
+	});
+	let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/samples");
+	beside
+		.into_iter()
+		.flatten()
+		.chain(std::iter::once(repo))
+		.find(|d| d.join("CREDITS.md").is_file())
+}
+
+/// The bundled audio files (name, path), sorted by name.
+fn bundled_files(dir: &Path) -> Vec<(String, PathBuf)> {
+	let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+		.into_iter()
+		.flatten()
+		.flatten()
+		.map(|e| e.path())
+		.filter(|p| {
+			p.extension()
+				.and_then(|e| e.to_str())
+				.is_some_and(|e| BUNDLED_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+		})
+		.filter_map(|p| Some((p.file_name()?.to_str()?.to_owned(), p)))
+		.collect();
+	files.sort();
+	files
+}
+
+/// Copies the bundled files missing from `dir` (or of another size) into it.
+fn copy_bundled(bundled: &Path, dir: &Path) -> Result<(), EngineError> {
+	for (name, from) in bundled_files(bundled) {
+		let to = dir.join(&name);
+		let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
+		if size(&to).is_some() && size(&to) == size(&from) {
+			continue;
+		}
+		let err = |e: std::io::Error| EngineError::WavWrite {
+			path: to.clone(),
+			message: format!("cannot copy the bundled sample {}: {e}", from.display()),
+		};
+		let tmp = to.with_extension("part");
+		std::fs::copy(&from, &tmp).map_err(err)?;
+		std::fs::rename(&tmp, &to).map_err(err)?;
+		cadenza_audio_io::AudioCache::global().invalidate(&to);
+	}
+	Ok(())
 }
 
 /// One factory sample file.
@@ -179,13 +251,33 @@ fn write_wav(path: &Path, samples: &[f32]) -> Result<(), EngineError> {
 /// Renders the factory samples into [`factory_sample_dir`] unless they are already there
 /// (same content version, every file present); returns the folder.
 pub fn ensure_factory_samples() -> Result<PathBuf, EngineError> {
-	ensure_in(&factory_sample_dir())
+	let dir = factory_sample_dir();
+	let bundled = bundled_sample_dir();
+	// Copying is checked once per process and folder (sizes of a few hundred files).
+	static SYNCED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+	let synced = SYNCED
+		.lock()
+		.unwrap_or_else(|p| p.into_inner())
+		.contains(&dir);
+	ensure_in(&dir, if synced { None } else { bundled.as_deref() })?;
+	SYNCED
+		.lock()
+		.unwrap_or_else(|p| p.into_inner())
+		.push(dir.clone());
+	Ok(dir)
 }
 
 static GENERATING: Mutex<()> = Mutex::new(());
 
-fn ensure_in(dir: &Path) -> Result<PathBuf, EngineError> {
+fn ensure_in(dir: &Path, bundled: Option<&Path>) -> Result<PathBuf, EngineError> {
 	let _guard = GENERATING.lock().unwrap_or_else(|p| p.into_inner());
+	if let Some(bundled) = bundled {
+		std::fs::create_dir_all(dir).map_err(|e| EngineError::WavWrite {
+			path: dir.to_path_buf(),
+			message: format!("cannot create the factory sample folder: {e}"),
+		})?;
+		copy_bundled(bundled, dir)?;
+	}
 	let specs = specs();
 	let version = std::fs::read_to_string(dir.join(VERSION_FILE)).unwrap_or_default();
 	let complete = version.trim() == CONTENT_VERSION
@@ -209,12 +301,20 @@ fn ensure_in(dir: &Path) -> Result<PathBuf, EngineError> {
 	Ok(dir.to_path_buf())
 }
 
-/// Every factory sample (rendering them on first use).
+/// Every factory sample: the synthesized ones (rendered on first use), then the bundled
+/// kit samples that are installed.
 pub fn list_factory_samples() -> Result<Vec<FactorySample>, EngineError> {
 	let dir = ensure_factory_samples()?;
-	Ok(specs()
+	let synthesized = specs()
 		.into_iter()
-		.map(|(name, kind, note, _)| FactorySample {
+		.map(|(name, kind, note, _)| (name, kind, note));
+	let bundled = cadenza_dsp::KIT_SAMPLES
+		.iter()
+		.map(|&(name, note)| (name, "drum", note))
+		.filter(|(name, ..)| dir.join(name).is_file());
+	Ok(synthesized
+		.chain(bundled)
+		.map(|(name, kind, note)| FactorySample {
 			name: name.to_owned(),
 			path: dir.join(name),
 			kind,
@@ -244,6 +344,12 @@ pub fn preset_zones(preset: &FactoryPreset) -> Result<Vec<SampleZone>, EngineErr
 			zone.pan = z.pan;
 			zone.choke = z.choke;
 			zone.decay_ms = z.decay_ms;
+			zone.vel_low = z.vel_low;
+			zone.vel_high = z.vel_high;
+			zone.round_robin = z.round_robin;
+			zone.tune = z.tune;
+			zone.attack_ms = z.attack_ms;
+			zone.reverse = z.reverse;
 			if let Some((start, end, xf)) = z.forward_loop {
 				zone.loop_mode = LoopMode::Forward;
 				zone.loop_start = start;
@@ -357,7 +463,7 @@ mod tests {
 	fn renders_once_and_regenerates_stale_content() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().join("factory");
-		ensure_in(&root).unwrap();
+		ensure_in(&root, None).unwrap();
 		for (name, kind, ..) in specs() {
 			let buf = cadenza_audio_io::decode_file(root.join(name)).unwrap();
 			assert!(buf.peak() > 0.5 && buf.peak() < 0.95, "{name}");
@@ -370,14 +476,14 @@ mod tests {
 		}
 		let kick = root.join(names::KICK);
 		let modified = std::fs::metadata(&kick).unwrap().modified().unwrap();
-		ensure_in(&root).unwrap();
+		ensure_in(&root, None).unwrap();
 		assert_eq!(
 			std::fs::metadata(&kick).unwrap().modified().unwrap(),
 			modified,
 			"complete content is reused"
 		);
 		std::fs::remove_file(&kick).unwrap();
-		ensure_in(&root).unwrap();
+		ensure_in(&root, None).unwrap();
 		assert!(kick.is_file());
 	}
 

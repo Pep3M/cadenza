@@ -2,7 +2,10 @@
 //! modulators). Loading one replaces a device's explicit parameter values (params left
 //! out return to their defaults) and its modulators.
 
+mod drum_sampler;
 mod poly_synth;
+
+pub use drum_sampler::KIT_SAMPLES;
 
 /// A named set of parameter values for a built-in device.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,9 +35,53 @@ impl FactoryPreset {
 	}
 }
 
-/// Preset categories, in browsing order.
-pub const PRESET_CATEGORIES: [&str; 12] = [
+/// Categories of the synth presets (sound roles), in browsing order.
+pub const SYNTH_CATEGORIES: [&str; 12] = [
 	"Bass", "808", "Lead", "Pluck", "Keys", "Bell", "Pad", "Choir", "Strings", "Brass", "Arp", "FX",
+];
+
+/// Categories of the drum kits (genres), in browsing order.
+pub const KIT_CATEGORIES: [&str; 12] = [
+	"House",
+	"Techno",
+	"Dance",
+	"Trap",
+	"Hip-Hop",
+	"Reggaeton",
+	"Latin",
+	"Afro",
+	"Pop",
+	"Funk",
+	"Acoustic",
+	"Retro",
+];
+
+/// Every preset category, in browsing order: [`SYNTH_CATEGORIES`], then [`KIT_CATEGORIES`].
+pub const PRESET_CATEGORIES: [&str; 24] = [
+	"Bass",
+	"808",
+	"Lead",
+	"Pluck",
+	"Keys",
+	"Bell",
+	"Pad",
+	"Choir",
+	"Strings",
+	"Brass",
+	"Arp",
+	"FX",
+	"House",
+	"Techno",
+	"Dance",
+	"Trap",
+	"Hip-Hop",
+	"Reggaeton",
+	"Latin",
+	"Afro",
+	"Pop",
+	"Funk",
+	"Acoustic",
+	"Retro",
 ];
 
 /// LFO wave of a [`PresetModulator`] (mirrors the model's `LfoShape`).
@@ -173,6 +220,15 @@ pub struct FactoryZone {
 	pub decay_ms: Option<f32>,
 	/// `Some((start, end, crossfade))` in seconds: a forward loop.
 	pub forward_loop: Option<(f64, f64, f64)>,
+	/// Velocity range (0..1) this layer answers.
+	pub vel_low: f32,
+	pub vel_high: f32,
+	/// Round-robin group 1..=16 (zones of a group matching a note take turns), 0 = none.
+	pub round_robin: u8,
+	/// Semitones.
+	pub tune: f32,
+	pub attack_ms: f32,
+	pub reverse: bool,
 }
 
 impl FactoryZone {
@@ -188,7 +244,41 @@ impl FactoryZone {
 			choke: 0,
 			decay_ms: None,
 			forward_loop: None,
+			vel_low: 0.0,
+			vel_high: 1.0,
+			round_robin: 0,
+			tune: 0.0,
+			attack_ms: 0.0,
+			reverse: false,
 		}
+	}
+
+	/// Only for velocities in `low..=high` (0..1): a velocity layer.
+	pub const fn vel(mut self, low: f32, high: f32) -> Self {
+		self.vel_low = low;
+		self.vel_high = high;
+		self
+	}
+
+	/// Takes turns with the other zones of round-robin `group` matching the same note.
+	pub const fn rr(mut self, group: u8) -> Self {
+		self.round_robin = group;
+		self
+	}
+
+	pub const fn tune(mut self, semitones: f32) -> Self {
+		self.tune = semitones;
+		self
+	}
+
+	pub const fn attack(mut self, ms: f32) -> Self {
+		self.attack_ms = ms;
+		self
+	}
+
+	pub const fn reversed(mut self) -> Self {
+		self.reverse = true;
+		self
 	}
 
 	pub const fn gain(mut self, db: f32) -> Self {
@@ -266,73 +356,88 @@ pub const SINE_PAD: [&str; 4] = [
 pub const SINE_PAD_LOOP: (f64, f64, f64) = (0.5, 2.5, 0.25);
 
 const fn pad_loop(sample: &'static str, low: u8, high: u8, root: u8) -> FactoryZone {
-	FactoryZone {
-		sample,
-		key_low: low,
-		key_high: high,
-		root_key: root,
-		gain_db: 0.0,
-		pan: 0.0,
-		choke: 0,
-		decay_ms: None,
-		forward_loop: Some(SINE_PAD_LOOP),
-	}
+	let mut z = FactoryZone::pad(sample, root);
+	z.key_low = low;
+	z.key_high = high;
+	z.forward_loop = Some(SINE_PAD_LOOP);
+	z
 }
 
-static DRUM_SAMPLER: [FactoryPreset; 2] = [
-	sampled(
-		"Synth Kit",
-		"Punchy synthesized kit on GM notes (kick, snare, clap, rim, hats with the closed \
-		 and pedal hat choking the open hat, three toms, crash, ride). Pop, house, hip-hop.",
-		&[],
-		&[
-			FactoryZone::pad(KICK, 36),
-			FactoryZone::pad(KICK, 35).gain(-2.0),
-			FactoryZone::pad(SNARE, 38),
-			FactoryZone::pad(SNARE, 40).gain(-3.0),
-			FactoryZone::pad(RIM, 37).gain(-4.0),
-			FactoryZone::pad(CLAP, 39),
-			FactoryZone::pad(CLOSED_HAT, 42).choke(1).pan(0.15),
-			FactoryZone::pad(CLOSED_HAT, 44)
-				.choke(1)
-				.pan(0.15)
-				.gain(-4.0),
-			FactoryZone::pad(OPEN_HAT, 46).choke(1).pan(0.15),
-			FactoryZone::pad(LOW_TOM, 41).pan(-0.3),
-			FactoryZone::pad(LOW_TOM, 43).pan(-0.3),
-			FactoryZone::pad(MID_TOM, 45),
-			FactoryZone::pad(MID_TOM, 47),
-			FactoryZone::pad(HIGH_TOM, 48).pan(0.3),
-			FactoryZone::pad(HIGH_TOM, 50).pan(0.3),
-			FactoryZone::pad(CRASH, 49).pan(-0.35),
-			FactoryZone::pad(CRASH, 57).pan(0.35),
-			FactoryZone::pad(RIDE, 51).pan(0.35),
-			FactoryZone::pad(RIDE, 59).pan(0.35),
-		],
-	),
-	sampled(
-		"Tight Synth Kit",
-		"The Synth Kit with short decays and a gated open hat: tight funk, disco and dense mixes.",
-		&[],
-		&[
-			FactoryZone::pad(KICK, 36).decay(220.0),
-			FactoryZone::pad(SNARE, 38).decay(160.0),
-			FactoryZone::pad(RIM, 37).gain(-4.0),
-			FactoryZone::pad(CLAP, 39).decay(180.0),
-			FactoryZone::pad(CLOSED_HAT, 42).choke(1).decay(45.0),
-			FactoryZone::pad(CLOSED_HAT, 44)
-				.choke(1)
-				.decay(40.0)
-				.gain(-4.0),
-			FactoryZone::pad(OPEN_HAT, 46).choke(1).decay(220.0),
-			FactoryZone::pad(LOW_TOM, 41).pan(-0.3).decay(250.0),
-			FactoryZone::pad(MID_TOM, 45).decay(250.0),
-			FactoryZone::pad(HIGH_TOM, 48).pan(0.3).decay(250.0),
-			FactoryZone::pad(CRASH, 49).pan(-0.35).decay(900.0),
-			FactoryZone::pad(RIDE, 51).pan(0.35).decay(700.0),
-		],
-	),
-];
+/// Part of the `drum_sampler` library (`presets::drum_sampler`).
+const SYNTH_KIT: FactoryPreset = sampled(
+	"Synth Kit",
+	"Punchy synthesized kit on GM notes (kick, snare, clap, rim, hats with the closed \
+	 and pedal hat choking the open hat, three toms, crash, ride). Pop, house, hip-hop.",
+	&[("gain", -7.7)],
+	&[
+		FactoryZone::pad(KICK, 36),
+		FactoryZone::pad(KICK, 35).gain(-2.0),
+		FactoryZone::pad(SNARE, 38).gain(-2.0),
+		FactoryZone::pad(SNARE, 40).gain(-5.0),
+		FactoryZone::pad(RIM, 37).gain(-7.0),
+		FactoryZone::pad(CLAP, 39).gain(-3.0),
+		FactoryZone::pad(CLOSED_HAT, 42)
+			.choke(1)
+			.pan(0.15)
+			.gain(-8.0),
+		FactoryZone::pad(CLOSED_HAT, 44)
+			.choke(1)
+			.pan(0.15)
+			.gain(-11.0),
+		FactoryZone::pad(OPEN_HAT, 46).choke(1).pan(0.15).gain(-8.0),
+		FactoryZone::pad(LOW_TOM, 41).pan(-0.3).gain(-3.0),
+		FactoryZone::pad(LOW_TOM, 43).pan(-0.3).gain(-3.0),
+		FactoryZone::pad(MID_TOM, 45).gain(-3.0),
+		FactoryZone::pad(MID_TOM, 47).gain(-3.0),
+		FactoryZone::pad(HIGH_TOM, 48).pan(0.3).gain(-3.0),
+		FactoryZone::pad(HIGH_TOM, 50).pan(0.3).gain(-3.0),
+		FactoryZone::pad(CRASH, 49).pan(-0.35).gain(-8.0),
+		FactoryZone::pad(CRASH, 57).pan(0.35).gain(-8.0),
+		FactoryZone::pad(RIDE, 51).pan(0.35).gain(-9.0),
+		FactoryZone::pad(RIDE, 59).pan(0.35).gain(-9.0),
+	],
+)
+.category("Retro");
+
+/// Part of the `drum_sampler` library (`presets::drum_sampler`).
+const TIGHT_SYNTH_KIT: FactoryPreset = sampled(
+	"Tight Synth Kit",
+	"The Synth Kit with short decays and a gated open hat: tight funk, disco and dense mixes.",
+	&[("gain", -7.5)],
+	&[
+		FactoryZone::pad(KICK, 36).decay(220.0),
+		FactoryZone::pad(SNARE, 38).decay(160.0).gain(-2.0),
+		FactoryZone::pad(RIM, 37).gain(-7.0),
+		FactoryZone::pad(CLAP, 39).decay(180.0).gain(-3.0),
+		FactoryZone::pad(CLOSED_HAT, 42)
+			.choke(1)
+			.decay(45.0)
+			.gain(-6.0),
+		FactoryZone::pad(CLOSED_HAT, 44)
+			.choke(1)
+			.decay(40.0)
+			.gain(-9.0),
+		FactoryZone::pad(OPEN_HAT, 46)
+			.choke(1)
+			.decay(220.0)
+			.gain(-7.0),
+		FactoryZone::pad(LOW_TOM, 41)
+			.pan(-0.3)
+			.decay(250.0)
+			.gain(-3.0),
+		FactoryZone::pad(MID_TOM, 45).decay(250.0).gain(-3.0),
+		FactoryZone::pad(HIGH_TOM, 48)
+			.pan(0.3)
+			.decay(250.0)
+			.gain(-3.0),
+		FactoryZone::pad(CRASH, 49)
+			.pan(-0.35)
+			.decay(900.0)
+			.gain(-8.0),
+		FactoryZone::pad(RIDE, 51).pan(0.35).decay(700.0).gain(-9.0),
+	],
+)
+.category("Retro");
 
 static SAMPLER: [FactoryPreset; 2] = [
 	sampled(
@@ -493,7 +598,7 @@ pub fn factory_presets(id: &str) -> &'static [FactoryPreset] {
 		"drum_machine" => &DRUM_MACHINE,
 		"electric_piano" => &ELECTRIC_PIANO,
 		"sampler" => &SAMPLER,
-		"drum_sampler" => &DRUM_SAMPLER,
+		"drum_sampler" => &drum_sampler::PRESETS,
 		"compressor" => &COMPRESSOR,
 		"reverb" => &REVERB,
 		_ => &[],
@@ -503,6 +608,16 @@ pub fn factory_presets(id: &str) -> &'static [FactoryPreset] {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn preset_categories_are_the_synth_then_the_kit_categories() {
+		let joined: Vec<&str> = SYNTH_CATEGORIES
+			.iter()
+			.chain(&KIT_CATEGORIES)
+			.copied()
+			.collect();
+		assert_eq!(joined, PRESET_CATEGORIES);
+	}
 
 	#[test]
 	fn every_preset_param_exists_and_is_in_range() {
@@ -524,7 +639,7 @@ mod tests {
 			}
 			for z in presets.iter().flat_map(|p| p.zones) {
 				assert!(z.key_low <= z.key_high && z.key_high <= 127 && z.root_key <= 127);
-				assert!(z.sample.ends_with(".wav"));
+				assert!(z.sample.ends_with(".wav") || z.sample.ends_with(".flac"));
 			}
 			assert_eq!(
 				crate::uses_samples(info.id),

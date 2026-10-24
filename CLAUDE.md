@@ -20,12 +20,13 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | core, theory |
 | `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
+| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): FFT YIN tracker (`yin`), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, COnPOff/center-error/mixed-region metrics) | theory |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | model, mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `gui` (starts `cadenza-app`) | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes eval|corpus` (note-detection harness: score a detector, write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
 
@@ -405,6 +406,24 @@ fitted_db, before_db, residual_db }`: greedy (LS, 3 bells, HS on sixth-octave gr
 refinement passes; RBJ shapes at 48 kHz (`band_response_db`). moves. Engine: `analyze_mix_detailed(project, opts, progress) -> DetailedMix { report,
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
 (cancellable).
+
+### cadenza-notes (NE-0, plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
+
+Pure, offline. Times in seconds of the analyzed audio, pitches fractional MIDI. `Note { onset,
+offset, center }`; `NoteDetector { name, detect(samples, rate) }`, registry `detector(id)` /
+`DETECTORS`. `yin::track` = FFT-autocorrelation YIN per 5 ms frame (pitch, aperiodicity, rms).
+`eval`: `TruthNote { onset, offset, nominal, center (sung, over the core without vibrato),
+core_start, core_end }` (a legato boundary = middle of the glide; cores exclude glides,
+scoops, falls, 20 ms attack, 30 ms release); `synth::corpus(rate)` (20 deterministic cases:
+steady, legato glides, scoops/falls, vibrato, drift, repeated + consonants, grace notes,
+melisma, octave leaps, breaths, expressive, noise SNR 20/10, reverb); `labels` (`<name>.json`
+next to the audio: onset/offset/pitch name or MIDI, optional cores); `metrics` (mir_eval
+COn/COnP/COnPOff with maximum matching, center error in cents of the region covering half the
+core, mixed regions = a region over two cores of different pitch, splits, merges, octave
+errors, voicing overlap); `evaluate(detector, cases) -> Report`. `baseline` (YIN + new note on
+a > 50 cent frame jump, mean center) is the bar: exact on steady notes; on the corpus 15.6 % mixed regions and 42 % of notes
+more than 10 cents off (96 c median on long glides). The crate and realfft/rustfft build with opt-level 3 in dev (root `Cargo.toml`).
+`CADENZA_NOTES_CORPUS` = folder of labeled recordings for `cadenza notes eval`.
 
 ### cadenza-dsp
 

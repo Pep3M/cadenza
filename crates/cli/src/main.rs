@@ -18,6 +18,7 @@ mod export;
 mod library;
 mod midi_files;
 mod mix;
+mod notes;
 mod portable;
 
 const PLUGIN_HOSTING_HELP: &str = "\
@@ -79,6 +80,12 @@ enum Command {
 	Library {
 		#[command(subcommand)]
 		command: library::LibraryCommand,
+	},
+	/// Note detection on audio: score a detector against ground truth (`cadenza notes eval`)
+	/// or write the synthetic test corpus (`cadenza notes corpus <dir>`).
+	Notes {
+		#[command(subcommand)]
+		command: notes::NotesCommand,
 	},
 	/// Analyze a project's mix (loudness, peaks, band energy) without writing audio
 	Analyze {
@@ -424,6 +431,7 @@ fn main() -> Result<()> {
 		Command::ListPlugins { query, json } => list_plugins(query, json),
 		Command::Export(args) => export::run(args, hosting),
 		Command::Library { command } => library::run(command),
+		Command::Notes { command } => notes::run(command),
 		Command::Collect {
 			project,
 			include_factory,

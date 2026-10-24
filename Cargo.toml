@@ -24,6 +24,7 @@ cadenza-midi-io = { path = "crates/midi-io" }
 cadenza-app = { path = "crates/app" }
 cadenza-library = { path = "crates/library" }
 cadenza-analysis = { path = "crates/analysis" }
+cadenza-notes = { path = "crates/notes" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -77,3 +78,12 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [profile.release]
 debug = 1
+
+# Note detection runs FFT-heavy analysis over a whole corpus in its tests: unoptimized it
+# is ~40x slower (40 s instead of 1 s per test run).
+[profile.dev.package.cadenza-notes]
+opt-level = 3
+[profile.dev.package.realfft]
+opt-level = 3
+[profile.dev.package.rustfft]
+opt-level = 3

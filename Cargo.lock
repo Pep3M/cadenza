@@ -822,6 +822,7 @@ dependencies = [
  "cadenza-mcp",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
  "clap",
@@ -934,6 +935,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "cadenza-notes"
+version = "0.2.0"
+dependencies = [
+ "cadenza-theory",
+ "realfft",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1,0 +1,14 @@
+[package]
+name = "cadenza-notes"
+description = "Note detection on audio for Cadenza: pitch tracking, note segmentation, evaluation against ground truth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cadenza-theory.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+realfft.workspace = true

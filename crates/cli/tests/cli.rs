@@ -507,3 +507,44 @@ fn library_import_validate_and_list() {
 	assert!(!out.status.success());
 	assert!(String::from_utf8_lossy(&out.stderr).contains("broken.json"));
 }
+
+#[test]
+fn notes_corpus_written_to_disk_scores_like_the_synthetic_one() {
+	let dir = tempfile::tempdir().unwrap();
+	let corpus = dir.path().join("corpus");
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	let out = cadenza(&["notes", "corpus", &s(&corpus)]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	assert!(corpus.join("legato_glide_long.wav").is_file());
+	assert!(corpus.join("legato_glide_long.json").is_file());
+
+	let eval = |extra: &[&str]| {
+		let mut args = vec!["notes", "eval", "--json", "--case", "legato_glide_long"];
+		args.extend_from_slice(extra);
+		let out = cadenza(&args);
+		assert!(
+			out.status.success(),
+			"{}",
+			String::from_utf8_lossy(&out.stderr)
+		);
+		serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+	};
+	let synthetic = eval(&[]);
+	let from_disk = eval(&["--no-synthetic", "--corpus", &s(&corpus)]);
+	assert_eq!(from_disk["cases"][0]["tags"][0], "real");
+	assert_eq!(
+		synthetic["total"]["detected"],
+		from_disk["total"]["detected"]
+	);
+	assert_eq!(
+		synthetic["total"]["mixed_rate"],
+		from_disk["total"]["mixed_rate"]
+	);
+
+	let out = cadenza(&["notes", "eval", "--detector", "nope"]);
+	assert!(String::from_utf8_lossy(&out.stderr).contains("baseline"));
+}

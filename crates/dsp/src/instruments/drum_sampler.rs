@@ -41,9 +41,91 @@ pub const PADS: [(u8, &str); 16] = [
 	(56, "Cowbell"),
 ];
 
-/// GM name of a pad note, if it is one of [`PADS`].
+/// General MIDI percussion names, notes 35..=81.
+const GM_DRUMS: [&str; 47] = [
+	"Kick 2",
+	"Kick",
+	"Rim",
+	"Snare",
+	"Clap",
+	"Snare 2",
+	"Low Tom",
+	"Closed Hat",
+	"Floor Tom",
+	"Pedal Hat",
+	"Mid Tom",
+	"Open Hat",
+	"Low Mid Tom",
+	"High Tom",
+	"Crash",
+	"High Tom 2",
+	"Ride",
+	"China",
+	"Ride Bell",
+	"Tambourine",
+	"Splash",
+	"Cowbell",
+	"Crash 2",
+	"Vibraslap",
+	"Ride 2",
+	"Hi Bongo",
+	"Low Bongo",
+	"Mute Conga",
+	"Open Conga",
+	"Low Conga",
+	"High Timbale",
+	"Low Timbale",
+	"High Agogo",
+	"Low Agogo",
+	"Cabasa",
+	"Maracas",
+	"Short Whistle",
+	"Long Whistle",
+	"Short Guiro",
+	"Long Guiro",
+	"Claves",
+	"Hi Wood Block",
+	"Low Wood Block",
+	"Mute Cuica",
+	"Open Cuica",
+	"Mute Triangle",
+	"Open Triangle",
+];
+
+/// Name of a drum note: its General MIDI percussion name (35..=81, the pads' names).
 pub fn pad_name(note: u8) -> Option<&'static str> {
-	PADS.iter().find(|(n, _)| *n == note).map(|(_, name)| *name)
+	note.checked_sub(35)
+		.and_then(|i| GM_DRUMS.get(usize::from(i)))
+		.copied()
+}
+
+/// The pads of [`PADS`] a kit gives up first when it holds notes that are not pads.
+const TAKEOVER: [u8; 16] = [
+	35, 40, 44, 54, 56, 51, 49, 48, 45, 41, 37, 39, 46, 42, 38, 36,
+];
+
+/// The 4x4 grid of a kit whose zones sit on `notes`: [`PADS`], where each note holding
+/// zones that is not a pad (congas, timbales, guiro...) takes over a pad holding none,
+/// least essential first (Kick 2, Snare 2, Pedal Hat...), lowest note first. Notes left
+/// over still play; they just have no pad. A kit on the GM pads gets [`PADS`].
+pub fn pad_layout(notes: impl IntoIterator<Item = u8>) -> [(u8, &'static str); 16] {
+	let mut used = [false; 128];
+	for n in notes {
+		if let Some(u) = used.get_mut(usize::from(n)) {
+			*u = true;
+		}
+	}
+	let mut layout = PADS;
+	let mut free = TAKEOVER
+		.iter()
+		.filter(|n| !used[usize::from(**n)])
+		.filter_map(|n| PADS.iter().position(|(p, _)| p == n));
+	let extra = (0..128u8).filter(|&n| used[usize::from(n)] && !PADS.iter().any(|(p, _)| *p == n));
+	for note in extra {
+		let Some(slot) = free.next() else { break };
+		layout[slot] = (note, pad_name(note).unwrap_or("Pad"));
+	}
+	layout
 }
 
 static PARAMS: [ParamInfo; N_PARAMS] = [
@@ -137,8 +219,10 @@ pub struct DrumSampler {
 	longest: f32,
 	aux: Vec<[Vec<f32>; 2]>,
 	aux_len: usize,
-	/// Note-ons per pad of [`PADS`] (editor flashes, [`readings::DRUM_PAD_TRIGGERS_START`]).
+	/// Note-ons per pad of [`pad_layout`] (editor flashes, [`readings::DRUM_PAD_TRIGGERS_START`]).
 	triggers: [f32; readings::DRUM_PADS],
+	/// The notes of the pads ([`pad_layout`] of the zones).
+	pads: [u8; readings::DRUM_PADS],
 	held: HeldNotes,
 }
 
@@ -165,6 +249,7 @@ impl DrumSampler {
 			aux: (0..AUX_OUTPUTS).map(|_| [Vec::new(), Vec::new()]).collect(),
 			aux_len: 0,
 			triggers: [0.0; readings::DRUM_PADS],
+			pads: PADS.map(|(n, _)| n),
 			held: HeldNotes::default(),
 		}
 	}
@@ -207,7 +292,7 @@ impl DrumSampler {
 				sounded = true;
 			}
 		}
-		if sounded && let Some(pad) = PADS.iter().position(|(note, _)| *note == pitch) {
+		if sounded && let Some(pad) = self.pads.iter().position(|note| *note == pitch) {
 			self.triggers[pad] += 1.0;
 		}
 	}
@@ -447,6 +532,13 @@ impl Processor for DrumSampler {
 				(region.min(decay) + f64::from(z.attack_ms) * 0.001) as f32
 			})
 			.fold(0.0, f32::max);
+		self.pads = pad_layout(
+			zones
+				.iter()
+				.filter(|z| z.key_low == z.key_high)
+				.map(|z| z.key_low),
+		)
+		.map(|(n, _)| n);
 		self.zones = zones;
 		self.rr = [0; 17];
 		true
@@ -514,6 +606,25 @@ mod tests {
 
 	fn rms(x: &[f32]) -> f32 {
 		(x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+	}
+
+	#[test]
+	fn pad_layout_gives_spare_pads_to_other_drum_notes() {
+		assert_eq!(pad_layout([36, 38, 42]), PADS);
+		assert_eq!(pad_name(62), Some("Mute Conga"));
+		assert_eq!(pad_name(81), Some("Open Triangle"));
+		assert_eq!(pad_name(82), None);
+		// Congas and a guiro take Kick 2, Snare 2 and Pedal Hat; the used cowbell stays.
+		let layout = pad_layout([36, 38, 56, 62, 63, 74, 62]);
+		let at = |note: u8| PADS.iter().position(|(n, _)| *n == note).unwrap();
+		assert_eq!(layout[at(35)], (62, "Mute Conga"));
+		assert_eq!(layout[at(40)], (63, "Open Conga"));
+		assert_eq!(layout[at(44)], (74, "Long Guiro"));
+		assert_eq!(layout[at(56)], (56, "Cowbell"));
+		assert_eq!(layout[at(36)], (36, "Kick"));
+		// More extra notes than spare pads: the lowest get pads, the rest still play.
+		let busy = pad_layout(PADS.iter().map(|p| p.0).chain(60..=70));
+		assert_eq!(busy, PADS);
 	}
 
 	#[test]
@@ -590,7 +701,8 @@ mod tests {
 			out
 		};
 		assert!(counters(&d).iter().all(|c| *c == 0.0));
-		// Two kicks, a snare, a note on no pad, a pad without a sample (closed hat).
+		// Two kicks, a snare, a bongo (it takes over Kick 2's pad), a pad without a
+		// sample (closed hat).
 		run(
 			&mut d,
 			&[
@@ -606,7 +718,8 @@ mod tests {
 		let at = |note: u8| PADS.iter().position(|(n, _)| *n == note).unwrap();
 		assert_eq!(c[at(36)], 2.0);
 		assert_eq!(c[at(38)], 1.0);
-		assert_eq!(c[..readings::DRUM_PADS].iter().sum::<f32>(), 3.0, "{c:?}");
+		assert_eq!(c[at(35)], 1.0, "the bongo's pad");
+		assert_eq!(c[..readings::DRUM_PADS].iter().sum::<f32>(), 4.0, "{c:?}");
 		// Reset and new zones keep counting up (readers compare with their last value).
 		d.reset();
 		assert_eq!(counters(&d)[at(36)], 2.0);

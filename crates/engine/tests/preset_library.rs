@@ -226,7 +226,7 @@ fn every_preset_is_categorized_named_once_and_valid() {
 	assert!(all.len() >= 60, "the library has {} presets", all.len());
 	for p in all {
 		assert!(
-			cadenza_dsp::PRESET_CATEGORIES.contains(&p.category),
+			cadenza_dsp::SYNTH_CATEGORIES.contains(&p.category),
 			"{}: category '{}'",
 			p.name,
 			p.category
@@ -252,7 +252,7 @@ fn every_preset_is_categorized_named_once_and_valid() {
 			}
 		}
 	}
-	for c in cadenza_dsp::PRESET_CATEGORIES {
+	for c in cadenza_dsp::SYNTH_CATEGORIES {
 		assert!(
 			all.iter().filter(|p| p.category == c).count() >= 2,
 			"category {c} needs at least two presets"

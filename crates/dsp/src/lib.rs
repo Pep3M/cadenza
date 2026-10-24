@@ -17,8 +17,8 @@ pub mod util;
 pub use effects::compressor::Compressor;
 pub use effects::limiter::Limiter;
 pub use presets::{
-	FactoryPreset, FactoryZone, PRESET_CATEGORIES, PresetLfoShape, PresetModSource,
-	PresetModulator, PresetRetrigger, factory_presets,
+	FactoryPreset, FactoryZone, KIT_CATEGORIES, KIT_SAMPLES, PRESET_CATEGORIES, PresetLfoShape,
+	PresetModSource, PresetModulator, PresetRetrigger, SYNTH_CATEGORIES, factory_presets,
 };
 /// File names of the factory samples the built-in presets use.
 pub mod factory_samples {

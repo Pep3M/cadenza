@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cadenza_core::TrackId;
-use cadenza_dsp::instruments::drum_sampler::PADS;
 use cadenza_model::{Device, SampleZone};
 use egui::{
 	Align2, Color32, CornerRadius, CursorIcon, Id, Key, Layout, Pos2, Rect, Sense, Shape, Stroke,
@@ -156,7 +155,7 @@ fn lock(view: &Shared) -> std::sync::MutexGuard<'_, SamplerView> {
 	view.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Holds pad `pad` (index into [`PADS`]) lit at `level` as if the engine had just
+/// Holds pad `pad` (index into the kit's [`ds::kit_pads`]) lit at `level` as if the engine had just
 /// triggered it (screenshots); `None` lets the counters drive the flashes again.
 pub fn set_flash(ctx: &egui::Context, salt: &str, r: DeviceRef, flash: Option<(usize, f32)>) {
 	lock(&view(ctx, salt, r)).pinned = flash;
@@ -177,6 +176,9 @@ pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef, hits: 
 	let Some(track) = r.track else {
 		return;
 	};
+	let Some(pads) = state.device(r).map(ds::kit_pads) else {
+		return;
+	};
 	for (k, key) in DIGITS.iter().enumerate() {
 		let shift = ctx.input(|i| i.modifiers.shift);
 		let pressed = ctx.input_mut(|i| {
@@ -187,7 +189,7 @@ pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef, hits: 
 			&& !hits.keys.iter().any(|(held, ..)| held == key)
 			&& let Some(pad) = ds::key_pad(k as u8 + 1, shift)
 		{
-			let note = PADS[pad].0;
+			let note = pads[pad].0;
 			state.preview_note_on(track, note, 0.85);
 			hits.keys.push((*key, track, note));
 			state.view.instrument.pad = note;
@@ -197,11 +199,11 @@ pub fn shortcuts(ctx: &egui::Context, state: &mut AppState, r: DeviceRef, hits: 
 	// ← → the pad (bottom-left first), ↑ ↓ the selected layer's gain.
 	let keys = crate::ui::device_editor::arrows(ctx);
 	if keys.h != 0 {
-		let at = PADS
+		let at = pads
 			.iter()
 			.position(|p| p.0 == state.view.instrument.pad)
 			.unwrap_or(0) as i32;
-		state.view.instrument.pad = PADS[(at + keys.h).clamp(0, PADS.len() as i32 - 1) as usize].0;
+		state.view.instrument.pad = pads[(at + keys.h).clamp(0, pads.len() as i32 - 1) as usize].0;
 		state.view.instrument.layer = 0;
 	}
 	if keys.v != 0 {
@@ -490,7 +492,7 @@ fn pads(
 	let file = dragged_file(ui.ctx()).filter(|p| !p.is_dir());
 	let pointer = ui.ctx().pointer_latest_pos();
 	let live = state.live_voices(cx.r.device);
-	for (i, &(note, _)) in PADS.iter().enumerate() {
+	for (i, &(note, _)) in ds::kit_pads(d).iter().enumerate() {
 		let (row, col) = ds::grid_cell(i);
 		let rect = Rect::from_min_size(
 			pos2(

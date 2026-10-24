@@ -171,6 +171,18 @@ pub const PRESET_CATEGORIES: &[&str] = &[
 	mark("Brass"),
 	mark("Arp"),
 	mark("FX"),
+	mark("House"),
+	mark("Techno"),
+	mark("Dance"),
+	mark("Trap"),
+	mark("Hip-Hop"),
+	mark("Reggaeton"),
+	mark("Latin"),
+	mark("Afro"),
+	mark("Pop"),
+	mark("Funk"),
+	mark("Acoustic"),
+	mark("Retro"),
 ];
 
 /// `cadenza_analysis::roles::Role::name`.

@@ -29,6 +29,8 @@ package() {
 	for bin in cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner; do
 		install -Dm755 "$bin" "$pkgdir/opt/cadenza/$bin"
 	done
+	# Factory drum kits (releases after 0.2.0).
+	if [ -d samples ]; then cp -R samples "$pkgdir/opt/cadenza/samples"; fi
 	ln -s /opt/cadenza/cadenza "$pkgdir/usr/bin/cadenza"
 	ln -s /opt/cadenza/cadenza-app "$pkgdir/usr/bin/cadenza-app"
 	install -Dm644 cadenza.desktop "$pkgdir/usr/share/applications/cadenza.desktop"

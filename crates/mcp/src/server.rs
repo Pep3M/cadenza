@@ -1047,7 +1047,9 @@ impl CadenzaServer {
 			tracks per source track (or per channel with split_by_channel; drums get \
 			drum_machine, the rest poly_synth), or one clip on an existing instrument track \
 			(track_id, at_beats). Also applies the file's tempo map, time signature and \
-			markers. Returns the created tracks/clip and warnings about data that was dropped."
+			markers. MPE files (an MPE configuration message) become one instrument per \
+			zone whose notes keep their own pitch bends (see get_clip_notes). Returns the \
+			created tracks/clip and warnings about data that was dropped."
 	)]
 	fn import_midi(
 		&self,

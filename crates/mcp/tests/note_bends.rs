@@ -121,24 +121,54 @@ fn notes_carry_their_own_bend_through_the_tools() {
 	assert_eq!(out.notes, 3);
 	let parsed = cadenza_midi_io::parse_smf(&std::fs::read(&mpe_path).unwrap()).unwrap();
 	let notes: Vec<_> = parsed.tracks.iter().flat_map(|t| t.notes.clone()).collect();
-	let top_channel = notes.iter().find(|n| n.pitch == 62).unwrap().channel;
-	let bends: Vec<i16> = parsed
-		.tracks
+	// Read back as MPE: the member channel's bend is the note's own curve again, +2
+	// semitones (of a 48-semitone range) at the top of the ramp.
+	assert!(parsed.mpe.is_some());
+	let top_curve = &notes.iter().find(|n| n.pitch == 62).unwrap().bend;
+	let peak = top_curve
 		.iter()
-		.flat_map(|t| t.other_events.iter())
-		.filter_map(|e| match e.event {
-			cadenza_midi_io::OtherEvent::PitchBend { channel, bend } if channel == top_channel => {
-				Some(bend)
-			}
-			_ => None,
-		})
-		.collect();
-	// +2 semitones of a 48-semitone range at the top of the ramp.
-	let top_bend = *bends.iter().max().unwrap();
-	assert!(
-		(f64::from(top_bend) / 8191.0 * 48.0 - 2.0).abs() < 0.05,
-		"{bends:?}"
+		.map(|p| p.semitones)
+		.fold(f32::MIN, f32::max);
+	assert!((peak - 2.0).abs() < 0.05, "{top_curve:?}");
+	// Importing the MPE file gives the note its curve back, on one instrument track.
+	let imported = midi::import_midi(
+		&mut session,
+		midi::ImportMidiArgs {
+			path: mpe_path.display().to_string(),
+			split_by_channel: true,
+			track_id: None,
+			at_beats: None,
+		},
+	)
+	.unwrap();
+	assert_eq!(imported.created_tracks.len(), 1, "{imported:?}");
+	let model_note = |clip: cadenza_core::ClipId| {
+		session
+			.document()
+			.project()
+			.find_clip(clip)
+			.unwrap()
+			.1
+			.notes()
+			.iter()
+			.find(|n| n.pitch == 62)
+			.unwrap()
+			.clone()
+	};
+	let (before, after) = (
+		model_note(clip_id),
+		model_note(imported.created_tracks[0].clip_id),
 	);
+	assert!(!after.bend.is_empty());
+	for k in 0..before.length.0 / 30 {
+		let at = cadenza_core::Tick(k * 30);
+		assert!(
+			(before.bend_at(at) - after.bend_at(at)).abs() < 0.02,
+			"at {at:?}: {} vs {}",
+			before.bend_at(at),
+			after.bend_at(at)
+		);
+	}
 	// set_note_bend straightens it again.
 	let id = top.id;
 	let straight = clips::set_note_bend(

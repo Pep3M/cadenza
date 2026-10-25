@@ -132,6 +132,7 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 									velocity,
 									start: Tick(start),
 									length: Tick((abs_tick - start).max(1)),
+									bend: Vec::new(),
 								}),
 								None => dropped_note_offs += 1,
 							}
@@ -213,6 +214,7 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 					velocity,
 					start: Tick(start),
 					length: Tick((abs_tick - start).max(1)),
+					bend: Vec::new(),
 				});
 				unterminated += 1;
 			}
@@ -279,13 +281,16 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 		})
 		.collect();
 
-	Ok(ParsedMidiFile {
+	let mut parsed = ParsedMidiFile {
 		tracks,
 		tempo_map,
 		time_signatures,
 		markers,
 		warnings,
-	})
+		mpe: None,
+	};
+	crate::mpe_import::apply(&mut parsed);
+	Ok(parsed)
 }
 
 /// One group of notes that will become a single Cadenza instrument track + clip.
@@ -524,7 +529,7 @@ pub fn build_import_command(
 						velocity: n.velocity,
 						start: n.start,
 						length: n.length,
-						bend: Vec::new(),
+						bend: n.bend.clone(),
 					})
 					.collect();
 				let clip = Clip {
@@ -572,7 +577,7 @@ pub fn build_import_command(
 					velocity: n.velocity,
 					start: n.start,
 					length: n.length,
-					bend: Vec::new(),
+					bend: n.bend.clone(),
 				})
 				.collect();
 			let all_events: Vec<ParsedOtherEvent> = parsed

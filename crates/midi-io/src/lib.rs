@@ -18,6 +18,7 @@
 pub mod error;
 pub mod ids;
 pub mod input;
+pub mod mpe_import;
 pub mod parsed;
 pub mod raw;
 pub mod record;
@@ -31,8 +32,8 @@ pub use input::{
 	new_queue, open_input_port,
 };
 pub use parsed::{
-	GM_DRUM_CHANNEL, OtherEvent, ParsedMarker, ParsedMidiFile, ParsedNote, ParsedOtherEvent,
-	ParsedTempoPoint, ParsedTrack,
+	GM_DRUM_CHANNEL, MpeLayout, MpeZone, OtherEvent, ParsedMarker, ParsedMidiFile, ParsedNote,
+	ParsedOtherEvent, ParsedTempoPoint, ParsedTrack,
 };
 pub use raw::{RawMessage, RunningStatusDecoder};
 pub use record::{RecordedControl, RecordedNote, Recorder, control_lanes};

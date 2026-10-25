@@ -560,3 +560,134 @@ fn mpe_export_gives_each_note_its_channel_and_bend() {
 	.unwrap();
 	assert_eq!(out.shared, 1);
 }
+
+#[test]
+fn mpe_import_gives_notes_their_member_channel_bends() {
+	use crate::smf_export::{MpeNote, export_mpe};
+	// Twelve notes at once (member channel 10 is used: not a drum kit), the top one
+	// bending up a whole tone halfway, then a note that falls a semitone from its start.
+	let mut notes: Vec<MpeNote> = (0..12)
+		.map(|i| MpeNote {
+			start: Tick(0),
+			length: Tick(960),
+			pitch: 48 + i,
+			velocity: 0.8,
+			curve: Vec::new(),
+		})
+		.collect();
+	notes[11].curve = vec![(Tick(0), 0.0), (Tick(480), 2.0)];
+	notes.push(MpeNote {
+		start: Tick(960),
+		length: Tick(960),
+		pitch: 62,
+		velocity: 0.8,
+		curve: vec![(Tick(960), -1.0)],
+	});
+	let out = export_mpe(
+		&notes,
+		&TempoMap::constant(120.0),
+		&TimeSignature::default(),
+		"Expressive",
+	)
+	.unwrap();
+	let options = ImportOptions {
+		split_by_channel: true,
+		..Default::default()
+	};
+	let result = crate::import_smf(&out.bytes, &options).unwrap();
+	let mpe = result.parsed.mpe.as_ref().expect("an MPE file");
+	assert_eq!(mpe.zones.len(), 1);
+	assert_eq!(mpe.zones[0].members.len(), 15);
+	assert!(
+		result
+			.warnings
+			.iter()
+			.any(|w| w.starts_with("MPE file: 13 note(s)")),
+		"{:?}",
+		result.warnings
+	);
+	let Command::Batch { commands, .. } = result.command else {
+		panic!("a batch");
+	};
+	let tracks: Vec<&cadenza_model::Track> = commands
+		.iter()
+		.filter_map(|c| match c {
+			Command::AddTrack { track, .. } => Some(track),
+			_ => None,
+		})
+		.collect();
+	assert_eq!(tracks.len(), 1, "one instrument for the zone");
+	let track = tracks[0];
+	assert!(
+		matches!(&track.instrument.as_ref().unwrap().kind, cadenza_model::DeviceKind::Builtin { id } if id == "poly_synth")
+	);
+	let clip = &track.clips[0];
+	assert_eq!(clip.notes().len(), 13);
+	let top = clip.notes().iter().find(|n| n.pitch == 59).unwrap();
+	assert!(top.bend_at(Tick(479)).abs() < 1e-3);
+	assert!(
+		(top.bend_at(Tick(480)) - 2.0).abs() < 0.01,
+		"{:?}",
+		top.bend
+	);
+	let later = clip.notes().iter().find(|n| n.pitch == 62).unwrap();
+	assert!(
+		(later.bend_at(Tick(0)) + 1.0).abs() < 0.01,
+		"{:?}",
+		later.bend
+	);
+	assert!(
+		clip.notes().iter().filter(|n| !n.bend.is_empty()).count() == 2,
+		"the others are straight"
+	);
+	// No configuration or member bends left as lanes.
+	let cadenza_model::ClipContent::Midi { controllers, .. } = &clip.content else {
+		panic!("midi");
+	};
+	assert!(controllers.is_empty(), "{controllers:?}");
+}
+
+#[test]
+fn mpe_layout_reads_both_zones_and_bend_ranges() {
+	use crate::parsed::{OtherEvent, ParsedMidiFile, ParsedOtherEvent, ParsedTrack};
+	let cc = |tick: i64, channel: u8, controller: u8, value: u8| ParsedOtherEvent {
+		tick: Tick(tick),
+		event: OtherEvent::Controller {
+			channel,
+			controller,
+			value,
+		},
+	};
+	let rpn = |channel: u8, number: u8, value: u8| {
+		vec![
+			cc(0, channel, 101, 0),
+			cc(0, channel, 100, number),
+			cc(0, channel, 6, value),
+		]
+	};
+	let mut events = Vec::new();
+	events.extend(rpn(0, 6, 7)); // lower zone: channels 2..8
+	events.extend(rpn(15, 6, 5)); // upper zone: channels 15..11
+	events.extend(rpn(3, 0, 24)); // member channel 4: ±24
+	events.push(cc(0, 3, 38, 50)); // + 50 cents
+	let parsed = ParsedMidiFile {
+		tracks: vec![ParsedTrack {
+			name: None,
+			notes: Vec::new(),
+			is_drum: false,
+			other_events: events,
+		}],
+		..Default::default()
+	};
+	let layout = crate::mpe_import::layout(&parsed).unwrap();
+	assert_eq!(layout.zones[0].members, (1..=7).collect::<Vec<u8>>());
+	assert_eq!(layout.zones[1].master, 15);
+	assert_eq!(layout.zones[1].members, vec![14, 13, 12, 11, 10]);
+	assert_eq!(layout.bend_ranges[0], 2.0);
+	assert_eq!(layout.bend_ranges[1], 48.0);
+	assert_eq!(layout.bend_ranges[3], 24.5);
+	assert_eq!(layout.master_of(12), Some(15));
+	assert_eq!(layout.master_of(8), None, "between the zones");
+	// A plain file has no layout.
+	assert!(crate::mpe_import::layout(&ParsedMidiFile::default()).is_none());
+}

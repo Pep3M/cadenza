@@ -6,6 +6,7 @@
 //! [`ParsedMidiFile::other_events`].
 
 use cadenza_core::{Tick, TimeSignature};
+use cadenza_model::NoteBendPoint;
 
 /// GM channel 10 (1-based), i.e. zero-based channel index 9.
 pub const GM_DRUM_CHANNEL: u8 = 9;
@@ -18,6 +19,9 @@ pub struct ParsedNote {
 	/// Absolute start, already rescaled to Cadenza's PPQ.
 	pub start: Tick,
 	pub length: Tick,
+	/// The note's own pitch curve (from its start), read from its MPE member channel's
+	/// pitch bend; empty outside MPE files.
+	pub bend: Vec<NoteBendPoint>,
 }
 
 /// A non-note channel event. Controllers, pitch bend and channel pressure become clip
@@ -92,4 +96,33 @@ pub struct ParsedMidiFile {
 	pub time_signatures: Vec<(Tick, TimeSignature)>,
 	pub markers: Vec<ParsedMarker>,
 	pub warnings: Vec<String>,
+	/// MPE zones announced by the file (MCM), when it is an MPE file. Notes of member
+	/// channels then carry their bends and are moved to their zone's master channel.
+	pub mpe: Option<MpeLayout>,
+}
+
+/// The MPE (MIDI Polyphonic Expression) layout of a file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MpeLayout {
+	pub zones: Vec<MpeZone>,
+	/// Pitch-bend range of each channel, semitones (RPN 0; MPE defaults: 48 on member
+	/// channels, 2 on masters).
+	pub bend_ranges: [f32; 16],
+}
+
+/// One MPE zone: a master channel (0 = lower zone, 15 = upper zone) and its members.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MpeZone {
+	pub master: u8,
+	pub members: Vec<u8>,
+}
+
+impl MpeLayout {
+	/// The master channel of the zone `channel` is a member of.
+	pub fn master_of(&self, channel: u8) -> Option<u8> {
+		self.zones
+			.iter()
+			.find(|z| z.members.contains(&channel))
+			.map(|z| z.master)
+	}
 }

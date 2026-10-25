@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note bends in the project) and NE-9i (drawing bends in the piano roll) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note bends in the project) NE-9i (drawing bends in the piano roll) and NE-9j (MPE import) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -788,7 +788,23 @@ point with the value it had there), clamps to the note, drops points repeating t
 and the whole curve when it never leaves 0. A click or double-click is not a stroke (only a
 pointer that moved > 3 px commits); double-click with the tool straightens the note. Tests:
 builder (ramp, later stroke keeps the earlier one, backwards / out of range, straighten, no
-step when unchanged), UI (drag C4 up two rows, double-click). Not done: MPE import.
+step when unchanged), UI (drag C4 up two rows, double-click).
+
+**Shipped (NE-9j, MPE import).** `cadenza_midi_io::mpe_import`: `parse_smf` reads the file's MPE
+layout (`ParsedMidiFile.mpe: Option<MpeLayout { zones: [MpeZone { master, members }],
+bend_ranges }>`): zones from MPE Configuration Messages (RPN 6 on channel 1 = lower zone, members
+2.., channel 16 = upper zone, members 15 down; the upper one yields where they overlap), bend
+ranges from RPN 0 (+ cents), following each channel's RPN selection in time order across tracks
+(defaults 48 on members, 2 on masters). Each note on a member channel gets
+`ParsedNote.bend` = that channel's pitch bend in effect at its note-on and every change before
+its end (x the channel's range, ±48, repeats dropped) and moves to its zone's master channel,
+so a zone imports as one instrument (split by channel too) and a member channel 10 is not a drum
+kit. Member pitch bends, member CCs/pressure (per-note timbre/pressure: no per-note lane, counted
+in a warning) and the RPN/NRPN configuration CCs leave the lanes; master-channel events stay
+lanes (warning when the master's bend range is not the ±2 Cadenza plays). Every import path
+(MCP `import_midi`, the app's file drops) gets it. Tests: export_mpe -> import round trip (13
+notes, channel 10 as a member, curves back within 0.01 st, no lanes), layout of both zones +
+ranges, MCP project -> MPE file -> import_midi with the curve back.
 - Polyphonic per-note editing after legal review / patent expiry.
 
 ## Order and dependencies

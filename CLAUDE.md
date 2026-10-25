@@ -21,7 +21,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | core, theory |
 | `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
 | `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, note segmentation (`segment`, `vibrato`), notes -> MIDI (`midi`), resynthesis of note edits (`edit`, `marks`, `psola`, `timemap`, `resynth`: PSOLA + closed loop), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics), stored clip notes <-> detection (`clip`) | core, model, theory |
-| `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export (+ MPE: `export_mpe`), hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
+| `cadenza-midi-io` | SMF import (-> undoable `Batch`; MPE files: per-note bends, `mpe_import`) / export (+ MPE: `export_mpe`), hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
 | `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in, rendered copies of audio clips with note edits (`note_render`) | core, model, dsp, audio-io, midi-io, analysis, notes |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
@@ -534,6 +534,8 @@ NE-9h per-note bends: `Note.bend: Vec<NoteBendPoint { tick (from the note start)
 in JSON, `NotePatch.bend`, points past the end kept unplayed; `bend_at/split_bend/scaled_bend`) -> `MidiEvent::NoteBend`
 (per-key bend in `Expression`: poly_synth/electric_piano/sampler; sandbox `EV_NOTE_BEND`; CLAP tuning expression) from
 `MidiSchedule` (chased); piano roll draws it + "Straighten", Bend tool (G) draws it freehand (NE-9i, `piano::draw_bend`); MCP `bend` on notes, `set_note_bend`, `export_midi { mpe }`.
+NE-9j MPE import: `midi_io::mpe_import` (MCM zones + RPN 0 ranges -> `ParsedMidiFile.mpe`; member-channel bends become `ParsedNote.bend`,
+notes move to the zone's master channel = one instrument, member events/config CCs leave the lanes) for every MIDI import.
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

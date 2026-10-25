@@ -286,7 +286,7 @@ pub fn to_midi(
 }
 
 /// The scale tone nearest to a fractional pitch (the lower one on a tie).
-fn nearest_in_key(key: &Scale, sung: f64) -> u8 {
+pub(crate) fn nearest_in_key(key: &Scale, sung: f64) -> u8 {
 	let around = sung.round().clamp(0.0, 127.0) as u8;
 	key.pitches_in_range(around.saturating_sub(2), around.saturating_add(2).min(127))
 		.into_iter()

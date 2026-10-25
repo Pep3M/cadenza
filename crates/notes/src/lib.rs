@@ -11,12 +11,17 @@
 
 pub mod analysis;
 pub mod baseline;
+pub mod edit;
 pub mod eval;
 pub mod features;
+pub mod marks;
 pub mod midi;
 mod par;
+pub mod psola;
 pub mod pyin;
+pub mod resynth;
 pub mod segment;
+pub mod timemap;
 pub mod vibrato;
 pub mod yin;
 
@@ -91,6 +96,8 @@ pub fn detector(name: &str) -> Option<Box<dyn NoteDetector>> {
 pub enum NotesError {
 	#[error("invalid note labels: {0}")]
 	Labels(String),
+	#[error("invalid note edit: {0}")]
+	Edit(String),
 }
 
 pub type Result<T> = std::result::Result<T, NotesError>;

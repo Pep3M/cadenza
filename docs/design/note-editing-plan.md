@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-3 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-4 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -291,6 +291,71 @@ of the hummed voice, and converting every loop pass of a hum take (the active on
 Acceptance: corrected notes within ±5 cents (closed loop) on the corpus; null test: an edit
 state with no changes renders bit-close to the original (residual < −80 dB); no clicks at
 object borders (transient detector on the output).
+
+**Shipped (NE-4).** Pure Rust in `cadenza-notes`, no new dependency:
+
+- `edit`: `NoteEdit { pitch (new center), drift, modulation (shares kept, -1..2), formant_cents,
+  gain_db, time: Option<TimeEdit { onset, offset }> }`, `Edits { notes (by index, missing =
+  unchanged), sibilant_gain_db }` with `validate` (actionable errors naming the note; shifts ≤ 24
+  st, formant ±1200 c). `curves` -> per-frame shift (semitones), formant (cents), gain: a core
+  frame shifts by `(target − center) + (a_drift − 1)·drift + (a_mod − 1)·mod`, drift = 0.2 s
+  double box of the deviation (removes vibrato), mod = the rest; transitions between connected
+  notes blend smoothly (smoothstep) from one core's value to the next, attacks/releases take
+  their core's value, and so do the pitched frames touching a note (`marks::pitched`: voiced
+  frames plus up to 3 frames at each end that still hold a period within a semitone and are
+  < 30 dB quieter: a short note's onset and decay outlast the voiced frames and otherwise kept
+  its old pitch). `time_map`: anchors per note, a moved/stretched note keeps its attack (≤ 80
+  ms) at speed 1, unedited notes stay put so the material between them stretches; crossing
+  edits are refused. `correct_pitch(seg, &Correction { key, center, drift, threshold_cents })`
+  = the Correct Pitch macro (nearest scale tone or semitone).
+- `marks`: one mark per period on pitched stretches, 5 ms marks elsewhere, first at 0 and last
+  at the end. The time of each cycle comes from the fundamental's phase (two-period Hann DFT at
+  the analysis period: absolute and sub-sample, so nothing drifts; narrow band, so noise barely
+  moves it) and the mark sits on the cycle's pulse — the period-rate component of the
+  derivative's energy — through its offset from the fundamental's peak (pulses weaker than
+  0.5 take the median offset of ±5 cycles). Both lessons were measured: peak picking on the raw
+  waveform jumps between look-alike peaks (spacing 0.8–1.2 P, notes 8 dB down after a move),
+  and grains centered off the pulse interpolate the spectrum between harmonics out of phase
+  (−7 dB on some notes).
+- `psola`: TD-PSOLA. A grain spans previous mark -> next mark with sin² / cos² slopes, so grains
+  laid back at their marks sum to the input exactly (null render); output grains are one source
+  period / ratio apart, taken from the source mark nearest the time map's source position
+  (repeats/skips for time edits), read `2^(formant/1200)` times faster for formant moves (grain
+  resampling: the envelope moves, the spacing does not; no vocoder path was needed: +300 c
+  measures ×1.18 against ×1.189 asked), fractional placement by Catmull-Rom, gain curve last.
+  Unvoiced marks keep ratio 1. Stereo: every channel gets the grains of the mono mix's marks.
+- `resynth`: `render(channels, analysis, seg, edits) -> Render { channels, map }` (an unchanged
+  edit state returns the input; reshaped notes are brought back to their own core level, ±6
+  dB, because re-spaced grains sample the spectrum between harmonics); `verify` re-analyzes and
+  re-segments the render and measures each note at its mapped core (the render's note covering
+  half of it, else the vibrato-free mean over the core: a move can make a note look like its
+  neighbour's fall); `render_verified` = up to 2 more passes taking the error against the
+  original target out of each note further than 2 c (an integrating loop), keeping the best.
+- CLI `cadenza notes tune <file> [-o] [--key] [--center %] [--drift %] [--vibrato %]
+  [--threshold c] [--transpose st] [--formant c] [--sibilants dB] [--sensitivity] [--no-verify]`
+  writes "<name> tuned.wav" and lists every note sung -> target -> after.
+
+Measured (`tests/resynth.rs`, synthetic corpus; 22.05 kHz unless said): moves of 0..±3 st on
+every note (closed loop) median 0.3 c, p95 2.0 c, worst 4.5 c (SNR 10 dB noise), every note
+within ±5 c, also at 44.1 kHz; the first pass alone reached 9 c. Uniform shifts over the corpus
+(p95 / worst on clean takes): −12 st 2.8 c / 7 c, −7 st 2.0 / 5.7, +7 st 1.8 / 3.5, +12 st
+1.6 / 5.5 (−12 on the lowest voices goes under the tracker's 50 Hz floor: unmeasurable).
+Null render < −80 dB through PSOLA itself; no new clicks at ±7/−3.5 st alternating steps (one-
+off second-difference bursts, the detector checked on an injected click); level after a move
+within 0.5 dB; +4 st keeps the LPC envelope (1.0 dB mean distance vs 5.3 dB for resampling);
+modulation 0 removes the vibrato (depth 413 c -> 0) leaving the notes in place; moved/stretched
+notes land within 20/30 ms of the asked onset/offset with their neighbours untouched; sibilant
+gain −12 dB moves only the sibilants; a +7 st move of the SNR 10 dB take keeps ≥ 75 % of its
+voiced frames (peak-picked or per-cycle pulse marks kept 30 %). Speed: the whole corpus at 44.1 kHz
+(158 s) goes through analysis + segmentation + the closed loop in about 11 s (~15x realtime);
+PSOLA itself is a small part of it.
+
+Decision: PSOLA with formant by grain resampling is the default and only engine; no
+listening comparison against WORLD or Signalsmith was made (the corpus is synthetic and nobody
+has listened yet; samples via `cadenza notes tune` on `cadenza notes corpus`). Not done:
+attack-speed edits (the attack is kept at speed 1), per-note fades, a vocoder path for very
+breathy voices and big downward shifts (grains spread apart below −12 st), and any real-voice
+listening test.
 
 ## NE-5 — Project model, commands and playback
 

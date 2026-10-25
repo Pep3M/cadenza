@@ -695,3 +695,46 @@ fn notes_to_midi_writes_a_midi_file() {
 	let bytes = std::fs::read(&mid).unwrap();
 	assert_eq!(&bytes[..4], b"MThd");
 }
+
+#[test]
+fn notes_tune_corrects_a_recording() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	assert!(
+		cadenza(&["notes", "corpus", &s(dir.path())])
+			.status
+			.success()
+	);
+	let wav = dir.path().join("tuned.wav");
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"notes",
+			"tune",
+			&s(&dir.path().join("steady_mid.wav")),
+			"-o",
+			&s(&wav),
+			"--transpose",
+			"-2",
+		])
+		.env("XDG_CACHE_HOME", dir.path().join("cache"))
+		.output()
+		.unwrap();
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let stdout = String::from_utf8_lossy(&out.stdout);
+	assert!(stdout.contains("10 notes, 10 moved"), "{stdout}");
+	let worst: f64 = stdout
+		.split("worst after: ")
+		.nth(1)
+		.and_then(|t| t.split(' ').next())
+		.and_then(|t| t.parse().ok())
+		.unwrap();
+	assert!(worst <= 5.0, "{stdout}");
+	assert!(std::fs::metadata(&wav).unwrap().len() > 1000);
+	let bad = cadenza(&["notes", "tune", &s(&wav), "--key", "H major"]);
+	assert!(!bad.status.success());
+	assert!(String::from_utf8_lossy(&bad.stderr).contains("A minor"));
+}

@@ -1,6 +1,8 @@
-//! `cadenza notes eval | corpus`: the note-detection evaluation harness (NE-0). `eval`
-//! scores a detector on the synthetic corpus and on hand-labeled recordings; `corpus`
-//! writes the synthetic corpus as WAV + label files to listen to or to label tools with.
+//! `cadenza notes ...`: note detection on audio files. `eval` scores a detector on the
+//! synthetic corpus and on hand-labeled recordings (NE-0); `corpus` writes that corpus as
+//! WAV + label files; `analyze`/`segment` show what the detection finds (NE-1/NE-2);
+//! `to-midi` captures the notes as MIDI (NE-3); `tune` corrects the pitch and renders the
+//! result through the resynthesis (NE-4).
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +51,44 @@ pub struct ToMidiArgs {
 	min_length: Option<f64>,
 }
 
+#[derive(Args)]
+pub struct TuneArgs {
+	file: PathBuf,
+	/// Output WAV (default: "<name> tuned.wav" next to the input).
+	#[arg(short, long)]
+	output: Option<PathBuf>,
+	/// Scale the notes snap to ("A minor"); default: nearest semitone.
+	#[arg(long)]
+	key: Option<String>,
+	/// How far each note moves toward its scale tone, percent.
+	#[arg(long, default_value_t = 100.0)]
+	center: f64,
+	/// How much of the drift is straightened, percent.
+	#[arg(long, default_value_t = 0.0)]
+	drift: f64,
+	/// How much of the vibrato is kept, percent.
+	#[arg(long, default_value_t = 100.0)]
+	vibrato: f64,
+	/// Notes closer than this to their tone are left alone, cents.
+	#[arg(long, default_value_t = 0.0)]
+	threshold: f64,
+	/// Semitones added to every note after the correction.
+	#[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+	transpose: f64,
+	/// Formant move, cents (the voice's colour).
+	#[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+	formant: f64,
+	/// Gain of the sibilants and breaths, dB.
+	#[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+	sibilants: f64,
+	/// Above 1 finds more notes, below 1 fewer.
+	#[arg(long, default_value_t = 1.0)]
+	sensitivity: f64,
+	/// Render once, without measuring the result and correcting what is still off.
+	#[arg(long)]
+	no_verify: bool,
+}
+
 #[derive(Subcommand)]
 pub enum NotesCommand {
 	/// Score a note detector: COnPOff/COnP/COn F-measures, pitch-center error in cents,
@@ -85,6 +125,10 @@ pub enum NotesCommand {
 	/// Capture the notes of a monophonic recording (voice, hum, bass, lead) as a standard MIDI
 	/// file; the same conversion as the AI's `audio_to_midi` tool.
 	ToMidi(ToMidiArgs),
+	/// Correct the pitch of a monophonic recording and write the result: notes snap to the
+	/// scale (or the nearest semitone), drift and vibrato as asked, formants kept; each note
+	/// is measured on the render and listed before -> after.
+	Tune(TuneArgs),
 	/// Write the synthetic corpus as `<case>.wav` + `<case>.json` labels into a folder.
 	Corpus {
 		dir: PathBuf,
@@ -146,6 +190,7 @@ pub fn run(command: NotesCommand) -> Result<()> {
 			json,
 		} => segment_file(&file, sensitivity, &split, json),
 		NotesCommand::ToMidi(args) => to_midi(args),
+		NotesCommand::Tune(args) => tune(args),
 		NotesCommand::Corpus { dir, sample_rate } => write_corpus(&dir, sample_rate),
 	}
 }
@@ -555,5 +600,126 @@ fn segment_file(file: &Path, sensitivity: f64, splits: &[f64], json: bool) -> Re
 			.collect();
 		println!("sibilants: {}", list.join(", "));
 	}
+	Ok(())
+}
+
+fn pitch_name(p: f64) -> String {
+	let midi = p.round().clamp(0.0, 127.0) as u8;
+	format!(
+		"{}{:+.0}c",
+		cadenza_theory::format_pitch(midi, false),
+		(p - p.round()) * 100.0
+	)
+}
+
+fn tune(args: TuneArgs) -> Result<()> {
+	use cadenza_notes::edit::{self, Correction, Edits};
+	use cadenza_notes::resynth::{self, VerifyOptions};
+
+	let percent = |name: &str, v: f64, hi: f64| -> Result<f64> {
+		if !(v.is_finite() && (0.0..=hi).contains(&v)) {
+			bail!("--{name} {v} is outside 0..{hi} %");
+		}
+		Ok(v / 100.0)
+	};
+	let center = percent("center", args.center, 100.0)?;
+	let drift = percent("drift", args.drift, 100.0)?;
+	let vibrato = percent("vibrato", args.vibrato, 200.0)?;
+	if args.sensitivity.is_nan() || args.sensitivity <= 0.0 {
+		bail!("--sensitivity must be above 0 (1 = default, 2 = more notes, 0.5 = fewer)");
+	}
+	let key = match &args.key {
+		Some(k) => Some(cadenza_theory::Scale::parse(k).with_context(|| {
+			format!("unknown key '{k}'; use a root and a scale, e.g. \"A minor\" or \"F# major\"")
+		})?),
+		None => None,
+	};
+	let buffer =
+		decode_file(&args.file).with_context(|| format!("decoding {}", args.file.display()))?;
+	let rate = buffer.sample_rate();
+	let mono = resynth::mono(
+		&buffer
+			.channels()
+			.iter()
+			.map(Vec::as_slice)
+			.collect::<Vec<_>>(),
+	);
+	let started = std::time::Instant::now();
+	let cache = Cache::new(cadenza_core::paths::cache_dir().join("analysis"));
+	let analysis = cache
+		.get_or_analyze(&mono, rate, &AnalysisOptions::default(), &mut |_| true)
+		.context("analysis cancelled")?;
+	let seg_opts = SegmentOptions {
+		sensitivity: args.sensitivity,
+		..SegmentOptions::default()
+	};
+	let seg = segment::segment(&analysis, &seg_opts, &[]);
+	let mut notes = edit::correct_pitch(
+		&seg,
+		&Correction {
+			key,
+			center,
+			drift,
+			threshold_cents: args.threshold,
+		},
+	);
+	for (e, n) in notes.iter_mut().zip(&seg.notes) {
+		e.modulation = vibrato;
+		e.formant_cents = args.formant;
+		if args.transpose != 0.0 {
+			e.pitch = Some(e.pitch.unwrap_or(n.center) + args.transpose);
+		}
+	}
+	let edits = Edits {
+		notes,
+		sibilant_gain_db: args.sibilants,
+	};
+	let channels: Vec<&[f32]> = buffer.channels().iter().map(Vec::as_slice).collect();
+	let opts = VerifyOptions {
+		segment: seg_opts,
+		passes: if args.no_verify { 0 } else { 2 },
+		..VerifyOptions::default()
+	};
+	let (render, residuals) = resynth::render_verified(&channels, &analysis, &seg, &edits, &opts)?;
+	let output = args.output.clone().unwrap_or_else(|| {
+		let stem = args
+			.file
+			.file_stem()
+			.map_or("audio".into(), |s| s.to_string_lossy());
+		args.file.with_file_name(format!("{stem} tuned.wav"))
+	});
+	let out = AudioBuffer::from_planar(rate, render.channels)?;
+	export(&out, &output, &ExportOptions::wav(WavSampleFormat::Float32))?;
+
+	println!(
+		"{:>3} {:>8} {:>8} {:>9} {:>9} {:>9}",
+		"#", "onset", "offset", "sung", "target", "after"
+	);
+	let mut worst = 0.0f64;
+	for (n, r) in seg.notes.iter().zip(&residuals) {
+		let after = match r.cents() {
+			Some(c) => {
+				worst = worst.max(c.abs());
+				format!("{c:+.1}c")
+			}
+			None => "?".into(),
+		};
+		println!(
+			"{:>3} {:>8.3} {:>8.3} {:>9} {:>9} {:>9}",
+			r.note + 1,
+			n.onset,
+			n.offset,
+			pitch_name(n.center),
+			pitch_name(r.target),
+			after
+		);
+	}
+	let moved = edits.notes.iter().filter(|e| e.pitch.is_some()).count();
+	println!(
+		"{} notes, {moved} moved; worst after: {worst:.1} cents; {:.2} s",
+		seg.notes.len(),
+		started.elapsed().as_secs_f64()
+	);
+	println!("wrote {}", output.display());
 	Ok(())
 }

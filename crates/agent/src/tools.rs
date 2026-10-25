@@ -30,6 +30,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"analyze_track",
 	"compare_to_reference",
 	"mix_targets",
+	"analyze_vocal",
+	"get_audio_notes",
 	"render",
 	"save_project",
 	"get_audio_info",

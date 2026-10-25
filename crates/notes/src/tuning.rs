@@ -111,27 +111,11 @@ pub fn fit_scale(notes: &[TuningNote], count: usize) -> Vec<ScaleFit> {
 	if notes.len() < MIN_NOTES {
 		return Vec::new();
 	}
-	let weighted: Vec<(f64, f64)> = notes
-		.iter()
-		.map(|n| (n.center, n.core().max(0.01)))
-		.collect();
-	let total: f64 = weighted.iter().map(|w| w.1).sum();
+	let (weighted, total) = weights(notes);
 	let mut fits: Vec<(f64, u8, ScaleKind, f64, f64)> = Vec::new();
 	for kind in SETS {
 		for root in 0..12u8 {
-			let set = pcs(root, kind);
-			let mut best = (f64::INFINITY, 0.0, 0.0);
-			for o in -50..=50 {
-				let off = f64::from(o) / 100.0;
-				let sse: f64 = weighted
-					.iter()
-					.map(|&(c, w)| w * (nearest(&set, c - off).0 * 100.0).powi(2))
-					.sum();
-				let cost = sse + total * OFFSET_PRIOR * (f64::from(o) / 50.0).powi(2);
-				if cost < best.0 {
-					best = (cost, f64::from(o), (sse / total).sqrt());
-				}
-			}
+			let best = best_offset(&weighted, total, &pcs(root, kind));
 			let penalty = if kind == ScaleKind::HarmonicMinor {
 				HARMONIC_PENALTY
 			} else {
@@ -149,6 +133,52 @@ pub fn fit_scale(notes: &[TuningNote], count: usize) -> Vec<ScaleFit> {
 			rms_cents: rms,
 		})
 		.collect()
+}
+
+/// (Pitch, core weight) of each note and their total weight.
+fn weights(notes: &[TuningNote]) -> (Vec<(f64, f64)>, f64) {
+	let weighted: Vec<(f64, f64)> = notes
+		.iter()
+		.map(|n| (n.center, n.core().max(0.01)))
+		.collect();
+	let total = weighted.iter().map(|w| w.1).sum();
+	(weighted, total)
+}
+
+/// (Cost, offset in cents, rms cents) of the offset that fits `set` best.
+fn best_offset(weighted: &[(f64, f64)], total: f64, set: &[bool; 12]) -> (f64, f64, f64) {
+	let mut best = (f64::INFINITY, 0.0, 0.0);
+	for o in -50..=50 {
+		let off = f64::from(o) / 100.0;
+		let sse: f64 = weighted
+			.iter()
+			.map(|&(c, w)| w * (nearest(set, c - off).0 * 100.0).powi(2))
+			.sum();
+		let cost = sse + total * OFFSET_PRIOR * (f64::from(o) / 50.0).powi(2);
+		if cost < best.0 {
+			best = (cost, f64::from(o), (sse / total.max(1e-9)).sqrt());
+		}
+	}
+	best
+}
+
+/// The singer's offset under a scale chosen by someone else (the user, the AI picking an
+/// alternative mode). `None` without notes.
+pub fn fit_for_scale(notes: &[TuningNote], scale: Scale) -> Option<ScaleFit> {
+	if notes.is_empty() {
+		return None;
+	}
+	let (weighted, total) = weights(notes);
+	let mut set = [false; 12];
+	for (pc, slot) in set.iter_mut().enumerate() {
+		*slot = scale.contains(pc as u8);
+	}
+	let (_, offset_cents, rms_cents) = best_offset(&weighted, total, &set);
+	Some(ScaleFit {
+		scale,
+		offset_cents,
+		rms_cents,
+	})
 }
 
 /// The mode of a pitch set: its tone the notes dwell on most (cores in seconds, the last
@@ -188,6 +218,8 @@ pub enum TargetReason {
 	JoinsNext,
 	/// A short core inside a big scoop: tuned to where the scoop lands.
 	ScoopLanding,
+	/// The note a reference melody (MIDI) plays there.
+	Reference,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -379,6 +411,24 @@ mod tests {
 		assert_eq!(got, [64.0, 65.0, 67.0, 69.0, 67.0, 65.0, 64.0, 60.0]);
 		// Ends on C, dwells on E-F-G: the set is C major's, the mode follows the notes.
 		assert!(fit.scale.contains(65) && !fit.scale.contains(66), "{fit:?}");
+	}
+
+	#[test]
+	fn a_chosen_scale_gets_its_own_offset() {
+		let pitches = [64.4, 65.45, 67.35, 69.4, 67.42, 65.38, 64.41, 60.4];
+		let notes: Vec<TuningNote> = pitches
+			.iter()
+			.enumerate()
+			.map(|(i, &p)| note(i as f64 * 0.5, i as f64 * 0.5 + 0.45, p))
+			.collect();
+		let a_minor = Scale::new(PitchClass(9), ScaleKind::NaturalMinor);
+		let fit = fit_for_scale(&notes, a_minor).unwrap();
+		assert_eq!(fit.scale, a_minor);
+		assert!((fit.offset_cents - 40.0).abs() <= 5.0, "{fit:?}");
+		// E major has G#: the G sung 35 c sharp sits between G and G#, a worse fit.
+		let e_major = fit_for_scale(&notes, Scale::new(PitchClass(4), ScaleKind::Major)).unwrap();
+		assert!(e_major.rms_cents > fit.rms_cents + 10.0, "{e_major:?}");
+		assert!(fit_for_scale(&[], a_minor).is_none());
 	}
 
 	#[test]

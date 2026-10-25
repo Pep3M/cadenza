@@ -251,15 +251,7 @@ pub fn snap(key: Option<&Scale>, pitch: f64) -> f64 {
 }
 
 fn pitch_patch(n: &AudioNote, pitch: f64) -> AudioNotePatch {
-	let pitch = pitch.clamp(
-		n.center - cadenza_model::audio_notes::MAX_SHIFT,
-		n.center + cadenza_model::audio_notes::MAX_SHIFT,
-	);
-	AudioNotePatch {
-		id: n.id,
-		pitch: Some(((pitch - n.center).abs() > 1e-9).then_some(pitch)),
-		..Default::default()
-	}
+	cadenza_mcp::tools::tuning::pitch_patch(n, pitch)
 }
 
 fn command(clip: ClipId, label: &str, patches: Vec<AudioNotePatch>) -> Option<Command> {
@@ -432,7 +424,8 @@ fn check_times(edits: &NoteEdits) -> Result<(), String> {
 	.map_err(|e| e.to_string())
 }
 
-/// Correct Pitch macro over `ids` (all notes when empty).
+/// Correct Pitch macro over `ids` (all notes when empty); the AI's tune_audio_notes runs
+/// the same correction.
 pub fn correct_pitch(
 	clip: ClipId,
 	edits: &NoteEdits,
@@ -443,38 +436,24 @@ pub fn correct_pitch(
 	let targets = (view.key == KeyChoice::Detected)
 		.then(|| detected_targets(edits))
 		.flatten();
-	let center = f64::from(view.correct_center.clamp(0.0, 1.0));
-	let drift = 1.0 - view.correct_drift.clamp(0.0, 1.0);
-	let patches = edits
+	let tones: Vec<f64> = edits
 		.notes
 		.iter()
 		.enumerate()
-		.filter(|(_, n)| ids.is_empty() || ids.contains(&n.id))
-		.filter_map(|(i, n)| {
-			let tone = targets
+		.map(|(i, n)| {
+			targets
 				.as_ref()
 				.and_then(|t| t.get(i))
-				.map_or_else(|| snap(key.as_ref(), n.center), |t| t.pitch);
-			let off = tone - n.center;
-			let mut p = AudioNotePatch {
-				id: n.id,
-				..Default::default()
-			};
-			if off.abs() * 100.0 > f64::from(view.correct_threshold) && center > 0.0 {
-				let target = n.center + center * off;
-				if (target - n.result_pitch()).abs() > 1e-9 {
-					p = AudioNotePatch {
-						pitch: pitch_patch(n, target).pitch,
-						..p
-					};
-				}
-			}
-			if (n.drift - drift).abs() > 1e-6 && view.correct_drift > 0.0 {
-				p.drift = Some(drift);
-			}
-			(!p.is_empty()).then_some(p)
+				.map_or_else(|| snap(key.as_ref(), n.center), |t| t.pitch)
 		})
 		.collect();
+	let correction = cadenza_mcp::tools::tuning::Correction {
+		center: f64::from(view.correct_center),
+		drift: f64::from(view.correct_drift),
+		vibrato: None,
+		threshold_cents: f64::from(view.correct_threshold),
+	};
+	let patches = cadenza_mcp::tools::tuning::correction_patches(edits, &tones, ids, &correction);
 	command(clip, "Correct pitch", patches)
 }
 
@@ -731,17 +710,7 @@ impl NoteAnalyses {
 
 /// Decodes `file` and analyzes its mono mix through the content cache in `cache`.
 pub fn analyze_file(file: &Path, cache: &Path) -> Result<Analysis, String> {
-	let buffer = cadenza_audio_io::decode_file(file).map_err(|e| e.to_string())?;
-	let channels: Vec<&[f32]> = buffer.channels().iter().map(Vec::as_slice).collect();
-	let mono = cadenza_notes::resynth::mono(&channels);
-	cadenza_notes::analysis::Cache::new(cache)
-		.get_or_analyze(
-			&mono,
-			buffer.sample_rate(),
-			&cadenza_notes::analysis::AnalysisOptions::default(),
-			&mut |_| true,
-		)
-		.ok_or_else(|| "the analysis was cancelled".into())
+	cadenza_mcp::tools::tuning::analyze_file(file, cache).map_err(|e| e.to_string())
 }
 
 /// The pitch each analysis frame ends up at with the edits (`None` = unvoiced), for the
@@ -913,6 +882,53 @@ impl super::AppState {
 	pub fn remove_audio_notes(&mut self, clip: ClipId) -> bool {
 		self.view.audio.notes.selection.clear();
 		self.apply(Command::SetAudioNotes { clip, notes: None })
+	}
+
+	/// "Tune with AI": the tuning engineer works on the notes of audio clip `clip` (detecting
+	/// them first if needed), as one undo step "AI tuning pass"; the key chosen in the note
+	/// editor is passed on. Opens the chat so the report shows. Returns whether it was sent.
+	pub fn tune_with_ai(&mut self, clip: ClipId) -> bool {
+		let Some(r) = audio_edit::region(self.project(), clip) else {
+			return false;
+		};
+		if self.ai.busy() {
+			return false;
+		}
+		let track = self
+			.project()
+			.find_clip(clip)
+			.map(|(t, _)| t.name.clone())
+			.unwrap_or_default();
+		let described = format!(
+			"\"{}\" (clip {}, track \"{track}\", beats {:.2}-{:.2}, audio)",
+			r.clip.name,
+			r.clip.id,
+			r.clip.start.beats(),
+			(r.clip.start + r.clip.length).beats()
+		);
+		let key = match &self.view.audio.notes.key {
+			KeyChoice::Detected => None,
+			KeyChoice::Chromatic => Some("nearest".to_owned()),
+			KeyChoice::Scale(s) => Some(cadenza_mcp::tools::notes::scale_name(s)),
+		};
+		let brief = cadenza_agent::TuningBrief {
+			clip: described,
+			key,
+			reference: None,
+			notes: None,
+		};
+		let label = crate::i18n::trf("Tune '{clip}' with AI", &[("clip", &r.clip.name)]);
+		let context = self.ai_context();
+		let session = self.session.clone();
+		self.begin_ai_changes(cadenza_agent::TUNING_UNDO_LABEL);
+		let sent = self.ai.send_tuning_pass(&label, brief, context, &session);
+		if sent {
+			self.view.panels.set(super::PanelKind::Chat, true);
+			self.mix.open = false;
+		} else {
+			self.ai_snapshot = None;
+		}
+		sent
 	}
 
 	/// A note command from the editor; errors become notices.

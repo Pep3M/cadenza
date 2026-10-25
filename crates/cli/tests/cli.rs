@@ -313,6 +313,94 @@ fn mix_runs_an_engineer_pass_and_prints_what_changed() {
 }
 
 #[test]
+fn tune_runs_a_tuning_pass_on_a_clip() {
+	use cadenza_model::{AudioNote, ClipContent, NoteEdits};
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("take.cdz");
+	let mut p = Project::new("Take");
+	let mut t = Track::new("Vox", TrackKind::Audio);
+	let mut clip = cadenza_model::Clip::audio(
+		"Lead vocal",
+		cadenza_core::Tick::ZERO,
+		cadenza_core::Tick::from_beats(8.0),
+		dir.path().join("vox.wav"),
+	);
+	if let ClipContent::Audio { notes, .. } = &mut clip.content {
+		*notes = Some(Box::new(NoteEdits {
+			notes: [60.3, 62.3, 64.3, 65.3, 67.3, 60.3]
+				.iter()
+				.enumerate()
+				.map(|(i, &pitch)| {
+					let at = i as f64 * 0.5;
+					AudioNote::new(cadenza_core::AudioNoteId::new(), at, at + 0.4, pitch)
+				})
+				.collect(),
+			sibilants: Vec::new(),
+			sibilant_gain_db: 0.0,
+			sensitivity: 1.0,
+			user_splits: Vec::new(),
+			user_merges: Vec::new(),
+		}));
+	}
+	let clip_id = clip.id;
+	t.clips.push(clip);
+	p.tracks.push(t);
+	p.save_json(&path).unwrap();
+	let calls = serde_json::json!([{"id": "c1", "type": "function", "function": {
+		"name": "tune_audio_notes",
+		"arguments": format!("{{\"clip_id\":\"{clip_id}\"}}")}}]);
+	let reply = |content: &str, calls: Option<serde_json::Value>| {
+		let mut message = serde_json::json!({"role": "assistant", "content": content});
+		if let Some(calls) = calls {
+			message["tool_calls"] = calls;
+		}
+		serde_json::json!({
+			"id": "x", "model": "local",
+			"choices": [{"index": 0, "finish_reason": "stop", "message": message}],
+			"usage": {"prompt_tokens": 100, "completion_tokens": 10}
+		})
+		.to_string()
+	};
+	let url = mock_completions(vec![
+		reply("Tuning.", Some(calls)),
+		reply("C major +30 c, now on target.", None),
+	]);
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"tune",
+			s(&path),
+			"--track",
+			"vox",
+			"--provider",
+			"openai-compatible",
+			"--base-url",
+			&url,
+			"--model",
+			"local",
+			"--reasoning-effort",
+			"none",
+		])
+		.env("XDG_STATE_HOME", dir.path().join("state"))
+		.env_remove("OPENAI_API_KEY")
+		.output()
+		.unwrap();
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(out.status.success(), "{stderr}");
+	for needle in ["before: 6 notes", "after: 6 notes", "6 on target", "saved:"] {
+		assert!(stderr.contains(needle), "missing {needle}: {stderr}");
+	}
+	let saved = Project::load_json(&path).unwrap();
+	let ClipContent::Audio { notes: Some(n), .. } = &saved.tracks[0].clips[0].content else {
+		panic!("notes saved");
+	};
+	assert!((n.notes[0].result_pitch() - 60.0).abs() < 1e-6);
+
+	let out = cadenza(&["tune", s(&path), "--clip", "nope", "--model", "x"]);
+	assert!(!out.status.success());
+	assert!(String::from_utf8_lossy(&out.stderr).contains("'Lead vocal'"));
+}
+
+#[test]
 fn collect_pack_and_unpack_make_a_portable_project() {
 	let dir = tempfile::tempdir().unwrap();
 	let take = dir.path().join("external").join("take.wav");

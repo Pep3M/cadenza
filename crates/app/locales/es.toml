@@ -2269,3 +2269,6 @@
 "Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Reproduce solo la pista de este clip (un clic en esta regla lo activa, un clic en la regla del arreglo reproduce toda la canción)"
 "{key} {offset} c (detected)" = "{key} {offset} c (detectada)"
 "The scale (any mode) and how sharp or flat the singer is, fitted to the take: Correct Pitch tunes each note to its scale tone after taking the singer's offset out, keeps clearly sung chromatic notes and tunes short slides with the note they join" = "La escala (cualquier modo) y cuánto canta alto o bajo el cantante, ajustadas a la toma: Corregir afinación lleva cada nota a su tono de la escala tras quitar el desvío del cantante, respeta las notas cromáticas cantadas con claridad y afina los deslizamientos cortos con la nota a la que se unen"
+"Tune with AI" = "Afinar con IA"
+"The AI tuning engineer fixes doubtful splits, decides the doubtful notes and tunes the whole clip gently, keeping vibrato and slides (one undo step)" = "El ingeniero de afinación con IA corrige los cortes dudosos, decide las notas dudosas y afina todo el clip con suavidad, conservando el vibrato y los deslizamientos (un paso de deshacer)"
+"Tune '{clip}' with AI" = "Afinar '{clip}' con IA"

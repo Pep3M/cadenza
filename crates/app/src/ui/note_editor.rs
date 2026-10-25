@@ -990,6 +990,15 @@ impl NoteEditorUi {
 					let view = state.view.audio.notes.clone();
 					state.note_edit(Ok(ne::correct_pitch(clip, edits, &sel, &view)));
 				}
+				if ui
+					.add_enabled(!state.ai.busy(), egui::Button::new(tr("Tune with AI")))
+					.on_hover_text(tr(
+						"The AI tuning engineer fixes doubtful splits, decides the doubtful notes and tunes the whole clip gently, keeping vibrato and slides (one undo step)",
+					))
+					.clicked()
+				{
+					state.tune_with_ai(clip);
+				}
 				ui.add_space(8.0);
 
 				theme::section_label(ui, tr("Quantize time"));

@@ -858,6 +858,62 @@ pub(crate) mod ai_chat {
 	}
 
 	#[test]
+	fn tune_with_ai_retunes_the_clip_as_one_undo_step() {
+		use cadenza_core::AudioNoteId;
+		use cadenza_model::{AudioNote, Clip, ClipContent, NoteEdits};
+
+		let mut clip = Clip::audio("Vox", Tick::ZERO, Tick::from_beats(8.0), "/takes/vox.wav");
+		if let ClipContent::Audio { notes, .. } = &mut clip.content {
+			*notes = Some(Box::new(NoteEdits {
+				notes: [60.3, 62.3, 64.3, 65.3, 67.3, 60.3]
+					.iter()
+					.enumerate()
+					.map(|(i, &p)| {
+						let t = i as f64 * 0.5;
+						AudioNote::new(AudioNoteId::new(), t, t + 0.4, p)
+					})
+					.collect(),
+				sibilants: Vec::new(),
+				sibilant_gain_db: 0.0,
+				sensitivity: 1.0,
+				user_splits: Vec::new(),
+				user_merges: Vec::new(),
+			}));
+		}
+		let id = clip.id;
+		let tune = format!(r#"{{"clip_id":"{id}"}}"#);
+		let mut c = chat_state(
+			vec![
+				ScriptedTurn::tools(Some("Tuning."), &[("tune_audio_notes", tune.as_str())]),
+				ScriptedTurn::text("C major, sung +30 c: now on target."),
+			],
+			0,
+			true,
+		);
+		let s = &mut c.state;
+		let track = cadenza_model::Track::new("Vox", cadenza_model::TrackKind::Audio);
+		let track_id = track.id;
+		assert!(s.apply(Command::AddTrack { track, index: None }));
+		assert!(s.apply(Command::AddClip {
+			track: track_id,
+			clip,
+		}));
+		assert!(s.tune_with_ai(id));
+		assert!(s.view.panels.shown(PanelKind::Chat));
+		wait(s);
+		assert_eq!(s.undo_label(), Some(cadenza_agent::TUNING_UNDO_LABEL));
+		let (_, clip) = s.project().find_clip(id).unwrap();
+		let ClipContent::Audio { notes: Some(n), .. } = &clip.content else {
+			panic!("notes kept");
+		};
+		assert!(
+			n.notes
+				.iter()
+				.all(|n| (n.result_pitch() - n.center.round()).abs() < 1e-6)
+		);
+	}
+
+	#[test]
 	fn explain_this_device_is_read_only_and_streams_the_answer() {
 		let mut c = chat_state(
 			vec![

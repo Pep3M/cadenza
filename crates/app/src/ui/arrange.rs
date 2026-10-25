@@ -2968,6 +2968,16 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 			state.open_note_editor(clip.id);
 			ui.close();
 		}
+		if ui
+			.add_enabled(!state.ai.busy(), egui::Button::new(tr("Tune with AI")))
+			.on_hover_text(tr(
+				"The AI tuning engineer fixes doubtful splits, decides the doubtful notes and tunes the whole clip gently, keeping vibrato and slides (one undo step)",
+			))
+			.clicked()
+		{
+			state.tune_with_ai(clip.id);
+			ui.close();
+		}
 		if ui.button(tr("Convert to MIDI…")).clicked() {
 			state.start_convert_to_midi(clip.id);
 			ui.close();

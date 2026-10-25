@@ -2268,3 +2268,6 @@
 "Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Играть только дорожку этого клипа (щелчок по этой линейке включает, щелчок по линейке аранжировки играет всю песню)"
 "{key} {offset} c (detected)" = "{key} {offset} c (определена)"
 "The scale (any mode) and how sharp or flat the singer is, fitted to the take: Correct Pitch tunes each note to its scale tone after taking the singer's offset out, keeps clearly sung chromatic notes and tunes short slides with the note they join" = "Лад (любой) и насколько певец поёт выше или ниже, подобранные по дублю: «Исправить высоту» ставит каждую ноту на ступень лада, убрав смещение певца, сохраняет ясно спетые хроматические ноты и подстраивает короткие подъезды под ноту, к которой они ведут"
+"Tune with AI" = "Настроить с ИИ"
+"The AI tuning engineer fixes doubtful splits, decides the doubtful notes and tunes the whole clip gently, keeping vibrato and slides (one undo step)" = "ИИ-звукорежиссёр по интонации исправляет сомнительные разрезы, решает спорные ноты и мягко выравнивает весь клип, сохраняя вибрато и подъезды (один шаг отмены)"
+"Tune '{clip}' with AI" = "Настроить «{clip}» с ИИ"

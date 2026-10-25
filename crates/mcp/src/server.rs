@@ -28,7 +28,7 @@ use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
 	arrange, audio, clips, compose, controllers, devices, library, midi, mix, modulation, notes,
-	playback, portable, presets, project, render, samples, tracks,
+	playback, portable, presets, project, render, samples, tracks, tuning,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -81,6 +81,9 @@ hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in
 Audio and MIDI files: `import_audio` puts a recording on an Audio track (then \
 `set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files; \
 `audio_to_midi` turns a sung, hummed or played (monophonic) audio clip into a MIDI clip. \
+Tuning a vocal: `detect_audio_notes`, `analyze_vocal` (scale, the singer's offset, the \
+doubtful notes), `tune_audio_notes` (toward the targets, overrides for your decisions), \
+`edit_audio_notes`, `split_audio_note`/`merge_audio_notes`, `get_audio_notes`. \
 `export_stems` writes per-track/bus stems (and the mixdown) with range, format, \
 normalization and metadata. Project files: `list_missing_files`/`relink_files` fix moved \
 audio, `collect_files` copies outside files into the project folder, `pack_project` zips it.\n\n\
@@ -899,6 +902,103 @@ impl CadenzaServer {
 		Parameters(args): Parameters<notes::AudioToMidiArgs>,
 	) -> Result<Json<notes::AudioToMidiOutput>, ErrorData> {
 		Ok(Json(self.run_mut(|s| notes::audio_to_midi(s, args))?))
+	}
+
+	#[tool(
+		description = "Detects the notes of a sung or played monophonic audio clip (voice, \
+			lead, bass) for tuning, in one undo step. Again on a clip that has notes, it keeps \
+			the edits, splits and merges of the notes it finds again. sensitivity above 1 \
+			finds more notes, below 1 fewer. Then analyze_vocal."
+	)]
+	fn detect_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::DetectAudioNotesArgs>,
+	) -> Result<Json<tuning::DetectAudioNotesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::detect_audio_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "The tuning engineer's read of an audio clip's detected notes (read \
+			only): the scale and the singer's overall offset fitted to the notes (every mode; \
+			alternatives that fit nearly as well), range, mean error of the sung and the \
+			current pitches against their targets, and the decisions left to you: notes \
+			between two tones, chromatic notes kept, notes that may hold two notes (split \
+			them), unsure notes. key (\"auto\", \"nearest\", \"E phrygian\"), \
+			offset_cents and reference_clip_id (a MIDI melody) change where targets come from. \
+			Notes are numbered in time order."
+	)]
+	fn analyze_vocal(
+		&self,
+		Parameters(args): Parameters<tuning::AnalyzeVocalArgs>,
+	) -> Result<Json<tuning::VocalReport>, ErrorData> {
+		Ok(Json(tuning::analyze_vocal(&self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Lists the detected notes of an audio clip (read only), optionally in \
+			start_beat..end_beat: number, beat, length, sung pitch with cents, target tone \
+			with its reason (in_scale, chromatic, joins_next, scoop_landing, reference) and the \
+			other tone it could be, the pitch now when retuned, other edits, confidence and \
+			flags. Same key/offset_cents/reference_clip_id as analyze_vocal; limit (40, max \
+			200)."
+	)]
+	fn get_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::GetAudioNotesArgs>,
+	) -> Result<Json<tuning::GetAudioNotesOutput>, ErrorData> {
+		Ok(Json(tuning::get_audio_notes(&self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Retunes the notes of an audio clip toward their targets (the same as \
+			analyze_vocal's), in one undo step: center_pct of the way (100 default), drift_pct \
+			of the slow drift straightened (0 default), vibrato_pct of the vibrato kept (default \
+			untouched), notes within threshold_cents left alone. notes picks note numbers \
+			(default all); overrides gives your tone for doubtful notes ([{note, pitch}]). \
+			Returns the mean error before -> after and the changes. The sound updates after a \
+			short background render."
+	)]
+	fn tune_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::TuneAudioNotesArgs>,
+	) -> Result<Json<tuning::TuneAudioNotesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::tune_audio_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "Edits single notes of an audio clip by number, in one undo step: pitch \
+			(tone name or MIDI number) and/or cents, drift_pct and vibrato_pct kept (100 = as \
+			sung, 0 = straight/flat), formant_cents, gain_db, as_sung (reset first)."
+	)]
+	fn edit_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::EditAudioNotesArgs>,
+	) -> Result<Json<tuning::EditAudioNotesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::edit_audio_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "Splits a detected note of an audio clip at a song beat (two notes that \
+			can be tuned apart; kept by later detections), one undo step. Notes are renumbered: \
+			the result lists the notes around the cut."
+	)]
+	fn split_audio_note(
+		&self,
+		Parameters(args): Parameters<tuning::SplitAudioNoteArgs>,
+	) -> Result<Json<tuning::ReshapeOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::split_audio_note(s, args))?))
+	}
+
+	#[tool(
+		description = "Joins a detected note of an audio clip with the next one (a note the \
+			detection cut in two; kept by later detections), one undo step. Notes are \
+			renumbered: the result lists the notes around the join."
+	)]
+	fn merge_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::MergeAudioNotesArgs>,
+	) -> Result<Json<tuning::ReshapeOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::merge_audio_notes(s, args))?))
 	}
 
 	#[tool(

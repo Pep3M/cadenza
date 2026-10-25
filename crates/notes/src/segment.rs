@@ -171,6 +171,11 @@ pub fn segment(analysis: &Analysis, opts: &SegmentOptions, splits: &[f64]) -> Se
 	if let Some(r) = &opts.refine {
 		refine::drop_blips(analysis, &mut notes, r);
 	}
+	// Boundaries from glide crossings can land a hair inside the core's frame edge.
+	for n in &mut notes {
+		n.core_start = n.core_start.clamp(n.onset, n.offset);
+		n.core_end = n.core_end.clamp(n.core_start, n.offset);
+	}
 	Segmentation {
 		notes,
 		sibilants: sibilants(analysis),
@@ -714,8 +719,8 @@ fn notes_of_run(
 	if groups.len() >= 2 {
 		let (first, second) = (&groups[0], &groups[1]);
 		if span(first) < opts.edge_glide_core
-			&& (second.lead.is_some() || glides(first, None))
-			&& (median_level(first) < median_level(second) - opts.scoop_drop_db
+			&& (((second.lead.is_some() || glides(first, None))
+				&& median_level(first) < median_level(second) - opts.scoop_drop_db)
 				|| in_swing(first, second))
 		{
 			groups.remove(0);
@@ -731,11 +736,11 @@ fn notes_of_run(
 		let landing = span(last) >= opts.landing_hold
 			&& mean_of(&last.ranges) <= mean_of(&before.ranges) - opts.landing_cents
 			&& fits.fit(a, b).slope.abs() < 0.5 * opts.max_drift * hop;
+		// A swing needs no glide: its peak is flat.
 		if span(last) < opts.edge_glide_core
 			&& !landing
-			&& glides(last, last.lead)
-			&& (drop >= opts.loud_drop_db
-				|| (down && drop >= opts.fall_drop_db)
+			&& ((glides(last, last.lead)
+				&& (drop >= opts.loud_drop_db || (down && drop >= opts.fall_drop_db)))
 				|| in_swing(last, before))
 		{
 			groups.pop();

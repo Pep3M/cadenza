@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-6 and NE-7a shipped** (2026-10-24/25, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-7 shipped** (2026-10-24/25, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -505,7 +505,27 @@ nearest semitone); `cadenza notes tune --key auto`. Labels in
 `crates/notes/tests/data/expert_take.json` (`tests/tuning.rs`; `tests/expert.rs` needs
 `CADENZA_NOTES_EXPERT_TAKE`, the recording is not in the repository).
 
-NE-7b (the AI, next):
+**Shipped (NE-7b).** MCP `tools::tuning` (shared with the app's note editor):
+`detect_audio_notes`, `analyze_vocal` (fit + alternatives, sung/now error, the decisions
+left open: between two tones, chromatic kept, maybe two notes, unsure), `get_audio_notes`
+(budgeted rows: sung, target, reason, runner-up, now, edits, flags), `tune_audio_notes`
+(Correct Pitch toward the targets with `overrides`, center/drift/vibrato/threshold; the
+app macro runs the same `correction_patches`), `edit_audio_notes`, `split_audio_note`,
+`merge_audio_notes`. Notes are addressed by number in time order (ids cost too many tokens);
+targets can come from a MIDI reference clip (`TargetReason::Reference`, octave of the
+singer) or a chosen scale (`tuning::fit_for_scale`). `propose_splits` / `propose_targets`
+became `analyze_vocal`'s decisions and `get_audio_notes`' columns; `quantize_audio_timing`
+was not exposed. Agent: "# Tuning engineer" prompt section, `SessionAgent::run_tuning_pass(
+&TuningBrief)` = one undo step "AI tuning pass"; app "Tune with AI" (note editor macros, audio
+clip menu); CLI `cadenza tune <project> --clip|--track [--key] [--reference] [--notes]`.
+Found on the way: a vibrato swing ending a run became a 60 ms note (swing absorption no
+longer needs a glide) and a glide crossing could put a core end a hair past the note
+(cores clamped); the expert take's mixed regions 11.8 % -> 10.9 %. Tests: scripted provider
+(agent, app, CLI), `mcp/tests/tuning_tools.rs` (E Phrygian sung +30 c: scale and offset
+found, 0 c after, vibrato untouched; overrides, edits, split/merge, reference). Not measured:
+vibrato depth after the render of an AI pass (the tools leave modulation at 1 unless asked).
+
+NE-7b as planned:
 
 - MCP (`tools::notes`): `detect_notes { clip_id, algorithm?, sensitivity? }`,
   `get_notes { clip_id, range }` (beats + note names + cents error + confidence + flags,

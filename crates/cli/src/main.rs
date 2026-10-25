@@ -20,6 +20,7 @@ mod midi_files;
 mod mix;
 mod notes;
 mod portable;
+mod tune;
 
 const PLUGIN_HOSTING_HELP: &str = "\
 Plugin sandbox:
@@ -225,6 +226,12 @@ enum Command {
 	/// One undo step "AI mix pass"; saves in place unless --out or --dry-run
 	#[command(after_long_help = compose::presets_help())]
 	Mix(mix::MixArgs),
+	/// Let the AI tuning engineer tune a sung (or played) audio clip of a project: detect the
+	/// notes, fix doubtful splits, decide doubtful notes, tune gently keeping vibrato and
+	/// slides, then print before -> after. One undo step "AI tuning pass"; saves in place
+	/// unless --out or --dry-run
+	#[command(after_long_help = compose::presets_help())]
+	Tune(tune::TuneArgs),
 }
 
 /// Finds a track by id or (case-insensitive) name.
@@ -400,6 +407,7 @@ fn main() -> Result<()> {
 			set_in_process_env(cli.in_process_plugins);
 			mix::run(args)
 		}
+		Command::Tune(args) => tune::run(args),
 		Command::ScanPlugins { paths, json } => scan_plugins(paths, json),
 		Command::Monitor {
 			midi_in,

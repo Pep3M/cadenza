@@ -15,10 +15,14 @@
 //!    crosses halfway between their centers.
 //! 5. Every note checks itself: the best split of its own core is computed, and a gain
 //!    close to the price of a note lowers its confidence and flags where it might split.
+//! 6. [`crate::refine`] looks for notes the partition left inside transitions (passing
+//!    tones, re-articulations) and partitions again with them as boundaries; non-vocal
+//!    blips are dropped and notes still holding another pitch outside their core flagged.
 
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::{Analysis, AnalysisOptions, analyze};
+use crate::refine::{self, RefineOptions, RunView};
 use crate::vibrato::{self, VibratoFrame, VibratoOptions};
 use crate::{Note, NoteDetector};
 
@@ -53,6 +57,11 @@ pub struct SegmentOptions {
 	pub edge_glide_core: f64,
 	pub fall_drop_db: f64,
 	pub loud_drop_db: f64,
+	/// ... unless it holds: a core of at least `landing_hold` seconds, `landing_cents` or
+	/// more below the note before it, is a note sung after a fall (phrase-end landings are
+	/// often much quieter).
+	pub landing_hold: f64,
+	pub landing_cents: f64,
 	pub scoop_drop_db: f64,
 	/// A voice that stops in a reverberant room leaves its pitch ringing: a level fall of
 	/// `tail_drop_db` within 100 ms that does not come back within `tail_hold_db` of the level
@@ -66,6 +75,8 @@ pub struct SegmentOptions {
 	pub harmonic_glitch: f64,
 	/// Above 1 finds more notes, below 1 fewer.
 	pub sensitivity: f64,
+	/// The second look for notes inside transitions (`None`: one partition only).
+	pub refine: Option<RefineOptions>,
 }
 
 impl Default for SegmentOptions {
@@ -84,12 +95,15 @@ impl Default for SegmentOptions {
 			edge_glide_core: 0.1,
 			fall_drop_db: 3.0,
 			loud_drop_db: 10.0,
+			landing_hold: 0.06,
+			landing_cents: 150.0,
 			scoop_drop_db: 12.0,
 			tail_drop_db: 12.0,
 			tail_hold_db: 8.0,
 			min_tail: 0.06,
 			harmonic_glitch: 0.08,
 			sensitivity: 1.0,
+			refine: Some(RefineOptions::default()),
 		}
 	}
 }
@@ -147,9 +161,34 @@ pub struct Segmentation {
 /// Segments an analysis. `splits` are times (seconds) where a note boundary is forced (the
 /// user's separations).
 pub fn segment(analysis: &Analysis, opts: &SegmentOptions, splits: &[f64]) -> Segmentation {
+	let (mut notes, extra) = pass(analysis, opts, splits, true);
+	if !extra.is_empty() {
+		let mut all = splits.to_vec();
+		all.extend(extra);
+		all.sort_by(f64::total_cmp);
+		notes = pass(analysis, opts, &all, false).0;
+	}
+	if let Some(r) = &opts.refine {
+		refine::drop_blips(analysis, &mut notes, r);
+	}
+	Segmentation {
+		notes,
+		sibilants: sibilants(analysis),
+	}
+}
+
+/// One partition of every run: the notes and (when `look` and refining) the boundaries the
+/// second look would add. Without them the notes get their region flags.
+fn pass(
+	analysis: &Analysis,
+	opts: &SegmentOptions,
+	splits: &[f64],
+	look: bool,
+) -> (Vec<SegmentedNote>, Vec<f64>) {
 	let hop = analysis.hop_seconds();
 	let frames = &analysis.frames;
-	let mut notes = Vec::new();
+	let mut runs = Vec::new();
+	let mut extra = Vec::new();
 	for run in voiced_runs(analysis, opts, splits) {
 		let cents: Vec<f64> = run.pitch.iter().map(|p| p * 100.0).collect();
 		let vib = vibrato::detect(&cents, hop, &opts.vibrato);
@@ -163,12 +202,29 @@ pub fn segment(analysis: &Analysis, opts: &SegmentOptions, splits: &[f64]) -> Se
 			voicing: &voicing,
 			level: &level,
 		};
-		notes.extend(notes_of_run(&run, &parts, &curves, hop, opts));
+		let mut notes = notes_of_run(&run, &parts, &curves, hop, opts);
+		if let Some(r) = &opts.refine {
+			let view = RunView {
+				start: run.start,
+				hop,
+				smooth: &smooth,
+				raw: &cents,
+				vibrato: &vib,
+				level: &level,
+			};
+			let cuts = if look {
+				refine::cuts(&view, &notes, splits, r)
+			} else {
+				Vec::new()
+			};
+			if cuts.is_empty() {
+				refine::flag(&view, &mut notes, r);
+			}
+			extra.extend(cuts);
+		}
+		runs.push(notes);
 	}
-	Segmentation {
-		notes,
-		sibilants: sibilants(analysis),
-	}
+	(runs.into_iter().flatten().collect(), extra)
 }
 
 /// A stretch of consecutive frames treated as continuously voiced.
@@ -672,7 +728,11 @@ fn notes_of_run(
 		let (a, b) = (last.ranges[0].0, last.ranges.last().expect("ranges").1);
 		// A fall leaving a vibrato peak can sit above the note's mean while it goes down.
 		let down = mean_of(&last.ranges) < mean_of(&before.ranges) || fits.fit(a, b).slope < 0.0;
+		let landing = span(last) >= opts.landing_hold
+			&& mean_of(&last.ranges) <= mean_of(&before.ranges) - opts.landing_cents
+			&& fits.fit(a, b).slope.abs() < 0.5 * opts.max_drift * hop;
 		if span(last) < opts.edge_glide_core
+			&& !landing
 			&& glides(last, last.lead)
 			&& (drop >= opts.loud_drop_db
 				|| (down && drop >= opts.fall_drop_db)
@@ -949,6 +1009,31 @@ mod tests {
 			(s.notes[0].offset - at).abs() < 0.01 && (s.notes[1].onset - at).abs() < 0.01,
 			"{s:?}"
 		);
+	}
+
+	#[test]
+	fn a_metronome_click_leaking_into_the_mic_is_not_a_note() {
+		let mut r = phrase(
+			vec![
+				SynthNote::new(52.0, 0.5),
+				SynthNote::new(55.0, 0.5).rest(0.3),
+			],
+			None,
+		);
+		// A 1320 Hz click, 50 ms, 30 dB down, in the rest after the phrase.
+		let start = r.samples.len();
+		r.samples
+			.extend((0..(0.4 * f64::from(RATE)) as usize).map(|i| {
+				let t = i as f64 / f64::from(RATE);
+				if (0.2..0.25).contains(&t) {
+					(0.02 * (std::f64::consts::TAU * 1320.0 * t).sin()) as f32
+				} else {
+					0.0
+				}
+			}));
+		assert!(r.samples.len() > start);
+		let s = run(&r, &[]);
+		assert_eq!(s.notes.len(), 2, "{:?}", s.notes);
 	}
 
 	#[test]

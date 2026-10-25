@@ -13,6 +13,7 @@ use cadenza_model::{
 	AudioNote, AudioNotePatch, ClipContent, Command, NoteEdits, NoteSpan, Project,
 };
 use cadenza_notes::analysis::Analysis;
+use cadenza_notes::tuning::{self, ScaleFit, Target, TargetOptions, TuningNote};
 use cadenza_theory::Scale;
 
 use super::audio_edit::{self, Region};
@@ -113,9 +114,9 @@ impl NoteTool {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum KeyChoice {
 	/// Nearest semitone.
-	#[default]
 	Chromatic,
-	/// The key inferred from the clip's notes.
+	/// The scale and the singer's offset fitted to the clip's notes (NE-7a).
+	#[default]
 	Detected,
 	Scale(Scale),
 }
@@ -157,7 +158,7 @@ impl Default for NoteEditorView {
 			low: 48.0,
 			high: 72.0,
 			framed: None,
-			key: KeyChoice::Chromatic,
+			key: KeyChoice::Detected,
 			snap: true,
 			correct_center: 1.0,
 			correct_drift: 0.0,
@@ -213,7 +214,7 @@ impl NoteEditorView {
 	pub fn scale(&self, edits: &NoteEdits) -> Option<Scale> {
 		match &self.key {
 			KeyChoice::Chromatic => None,
-			KeyChoice::Detected => detected_key(edits),
+			KeyChoice::Detected => detected_fit(edits).map(|f| f.scale),
 			KeyChoice::Scale(s) => Some(*s),
 		}
 	}
@@ -228,14 +229,20 @@ pub fn clip_notes(project: &Project, clip: ClipId) -> Option<(NoteEdits, Region)
 	Some(((**n).clone(), r))
 }
 
-/// The key the notes suggest (pitch classes weighted by core length).
-pub fn detected_key(edits: &NoteEdits) -> Option<Scale> {
-	let mut weights = [0.0f64; 12];
-	for n in &edits.notes {
-		let pc = (n.center.round() as i64).rem_euclid(12) as usize;
-		weights[pc] += (n.core_end - n.core_start).max(0.01);
-	}
-	Scale::infer(&weights)
+fn tuning_notes(edits: &NoteEdits) -> Vec<TuningNote> {
+	edits.notes.iter().map(TuningNote::from).collect()
+}
+
+/// The scale (any mode) and the singer's offset that explain the notes best.
+pub fn detected_fit(edits: &NoteEdits) -> Option<ScaleFit> {
+	tuning::fit_scale(&tuning_notes(edits), 1).first().copied()
+}
+
+/// The tone each note is tuned to under the detected scale, by note.
+pub fn detected_targets(edits: &NoteEdits) -> Option<Vec<Target>> {
+	let notes = tuning_notes(edits);
+	let fit = tuning::fit_scale(&notes, 1).first().copied()?;
+	Some(tuning::targets(&notes, &fit, &TargetOptions::default()))
 }
 
 /// The tone `pitch` snaps to.
@@ -433,14 +440,21 @@ pub fn correct_pitch(
 	view: &NoteEditorView,
 ) -> Option<Command> {
 	let key = view.scale(edits);
+	let targets = (view.key == KeyChoice::Detected)
+		.then(|| detected_targets(edits))
+		.flatten();
 	let center = f64::from(view.correct_center.clamp(0.0, 1.0));
 	let drift = 1.0 - view.correct_drift.clamp(0.0, 1.0);
 	let patches = edits
 		.notes
 		.iter()
-		.filter(|n| ids.is_empty() || ids.contains(&n.id))
-		.filter_map(|n| {
-			let tone = snap(key.as_ref(), n.center);
+		.enumerate()
+		.filter(|(_, n)| ids.is_empty() || ids.contains(&n.id))
+		.filter_map(|(i, n)| {
+			let tone = targets
+				.as_ref()
+				.and_then(|t| t.get(i))
+				.map_or_else(|| snap(key.as_ref(), n.center), |t| t.pitch);
 			let off = tone - n.center;
 			let mut p = AudioNotePatch {
 				id: n.id,
@@ -999,6 +1013,37 @@ mod tests {
 	}
 
 	#[test]
+	fn detected_correction_takes_the_singers_offset_out() {
+		// E Phrygian sung 35 c sharp: the F at 65.5 rounds to F# chromatically.
+		let sung = [64.35, 65.5, 67.3, 65.45, 64.4, 62.3, 60.4, 64.35];
+		let e = NoteEdits {
+			notes: sung
+				.iter()
+				.enumerate()
+				.map(|(i, &c)| note(i as f64 * 0.5, i as f64 * 0.5 + 0.45, c))
+				.collect(),
+			..edits()
+		};
+		let fit = detected_fit(&e).expect("a fit");
+		assert!((fit.offset_cents - 35.0).abs() <= 6.0, "{fit:?}");
+		let (mut p, clip) = project(&e);
+		let all = BTreeSet::new();
+		let after = run(
+			&mut p,
+			correct_pitch(clip, &e, &all, &NoteEditorView::default()).unwrap(),
+		);
+		let pitches: Vec<f64> = after.notes.iter().map(|n| n.pitch.unwrap()).collect();
+		assert_eq!(pitches, [64.0, 65.0, 67.0, 65.0, 64.0, 62.0, 60.0, 64.0]);
+		let chromatic = NoteEditorView {
+			key: KeyChoice::Chromatic,
+			..NoteEditorView::default()
+		};
+		let (mut p, clip) = project(&e);
+		let after = run(&mut p, correct_pitch(clip, &e, &all, &chromatic).unwrap());
+		assert_eq!(after.notes[1].pitch, Some(66.0));
+	}
+
+	#[test]
 	fn macros_correct_quantize_level_and_reset() {
 		let e = edits();
 		let (mut p, clip) = project(&e);
@@ -1088,7 +1133,9 @@ mod tests {
 		let mut v = NoteEditorView::default();
 		v.frame(&e);
 		assert!(v.low <= 57.3 && v.high >= 69.6, "{v:?}");
-		assert_eq!(detected_key(&e).map(|s| s.root.name(false)), Some("C"));
+		// Three notes say nothing about a scale: Detected tunes to the nearest semitone.
+		assert_eq!(detected_fit(&e), None);
+		assert_eq!(NoteEditorView::default().scale(&e), None);
 	}
 
 	#[test]

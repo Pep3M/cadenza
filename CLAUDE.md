@@ -26,7 +26,7 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | model, mcp |
-| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes analyze|segment|to-midi|tune|eval|eval-pitch|corpus` (pitch/feature analysis of a file, cached; notes of a file with forced splits; a recording to a .mid (`--hum`, `--bends`, `--key`, `--quantize`); pitch correction rendered to a WAV with before -> after cents per note (`--key`, `--center`, `--vibrato`, `--transpose`, `--formant`, `--sibilants`); score a note detector or a pitch tracker; write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
+| `cadenza-cli` | `cadenza` binary: `render`, `export` (mixdown/stems), `collect`, `relink`, `pack`, `unpack`, `analyze`, `play` (`--midi-in --monitor`), `monitor`, `midi-ports`, `import-midi`, `export-midi`, `mcp`, `scan-plugins`, `list-plugins`, `compose`, `chat` (one AI request on a project), `mix` (AI sound-engineer pass: `--target-lufs`, `--reference`, `--notes`, `--dry-run`, `-o`; analysis before/after + changed numbers), `library list|validate|import` (style library packs; MIDI -> pattern), `notes analyze|segment|to-midi|tune|eval|eval-pitch|corpus` (pitch/feature analysis of a file, cached; notes of a file with forced splits; a recording to a .mid (`--hum`, `--bends`, `--key`, `--quantize`); pitch correction rendered to a WAV with before -> after cents per note (`--key` (or `auto`: fitted scale + offset, reason per note), `--center`, `--vibrato`, `--transpose`, `--formant`, `--sibilants`); score a note detector or a pitch tracker; write the synthetic corpus), `gui` (starts `cadenza-app`) | all |
 | `cadenza-app` | `cadenza-app` desktop GUI (egui/eframe, wgpu): transport, arrange, piano roll, mixer with live meters, browser (devices/presets/files), inspector, AI producer chat; `AppState` over the shared MCP `Session` | core, model, theory, dsp, engine, mcp, agent, plugin-host, audio-io, midi-io |
 | `cadenza-test-plugins` | tiny CLAP/VST3 plugins for tests (gain, sine, crash; routing: sidechain ducker with presets, multi-output; `clap_gui` scripted editor; VST3 gain with a scripted `IPlugView` and an `IUnitInfo` program list) | — |
 
@@ -409,7 +409,7 @@ refinement passes; RBJ shapes at 48 kHz (`band_response_db`). moves. Engine: `an
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
 (cancellable).
 
-### cadenza-notes (NE-0..NE-4; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
+### cadenza-notes (NE-0..NE-7a; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
 
 Pure, offline. Times in seconds of the analyzed audio, pitches fractional MIDI. `Note { onset,
 offset, center }`; `NoteDetector { name, detect(samples, rate) }`, registry `detector(id)` /
@@ -503,6 +503,17 @@ $CADENZA_NOTE_RENDERS or <cache>/note-renders), ready, render (closed loop), pen
 plays the render, offline mode renders a missing one, realtime plays as recorded with
 `PENDING_WARNING`; the app renders missing ones on a worker (`state::note_renders`) and
 reloads; audio editor reverse/stretch/transpose drop the notes.
+NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
+(`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
+vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,
+joined under max(60 c, 2.5 x depth); new forced boundaries between holds of different pitch
+and at re-articulations (>= 100 c in 20 ms + 5 dB dip), notes >= 80 ms, edge holds >= 60 ms,
+then one more partition; landing notes after a fall kept (`landing_hold`); blips (< 120 ms,
+> 24 st from the median, pure tone: metronome bleed) dropped; region `MaybeTwoNotes` flags.
+`tuning::{fit_scale (modes + harmonic minor x offset -50..50 c, >= 6 notes), targets (reason
+in_scale|chromatic|joins_next|scoop_landing, runner_up, ambiguous), auto_targets}`;
+`Correction.targets`. Expert labels `tests/data/expert_take.json` (`tests/tuning.rs` 51/52;
+`tests/expert.rs` with `CADENZA_NOTES_EXPERT_TAKE`, COnPOff >= 83 %).
 
 ### cadenza-dsp
 
@@ -1668,7 +1679,8 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   hatched, flagged notes amber with a ✂ split; tools Main (⇕ retune snapped to the key / Alt free,
   ⇔ move, double-click split/merge), Vibrato, Drift, Formant, Level, Split (keys 1–6); macros
   column Correct pitch / Quantize time / Leveling / Sibilants / Detection; builders
-  `move_pitch`, `move_time` (crossing refused), `tool_edit`, `correct_pitch`, `quantize_time`,
+  `move_pitch`, `move_time` (crossing refused), `tool_edit`, `correct_pitch` (key defaults to
+  Detected = `tuning` fit + targets, "E phrygian +33 c (detected)"), `quantize_time`,
   `leveling`, `reset`, `sibilant_gain`, `replace`; `AppState::{detect_notes, split_audio_note,
   merge_audio_notes, remove_audio_notes, note_edit}`. Arrange "♪" on clips with edited notes.
 - AI producer chat (phase 12; `state::ai` logic, `ui::chat` view): F10 / View / AI menu / F1.

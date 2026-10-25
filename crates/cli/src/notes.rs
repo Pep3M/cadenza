@@ -57,7 +57,9 @@ pub struct TuneArgs {
 	/// Output WAV (default: "<name> tuned.wav" next to the input).
 	#[arg(short, long)]
 	output: Option<PathBuf>,
-	/// Scale the notes snap to ("A minor"); default: nearest semitone.
+	/// Scale the notes snap to ("A minor"), or "auto": the scale and the singer's offset
+	/// fitted to the take, with per-note rules (chromatic notes kept, short plateaus tuned
+	/// with the note they join, scoops by where they land); default: nearest semitone.
 	#[arg(long)]
 	key: Option<String>,
 	/// How far each note moves toward its scale tone, percent.
@@ -612,6 +614,14 @@ fn pitch_name(p: f64) -> String {
 	)
 }
 
+/// "phrygian", "harmonic minor"...
+fn scale_kind_name(kind: cadenza_theory::ScaleKind) -> String {
+	serde_json::to_value(kind)
+		.ok()
+		.and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+		.unwrap_or_default()
+}
+
 fn tune(args: TuneArgs) -> Result<()> {
 	use cadenza_notes::edit::{self, Correction, Edits};
 	use cadenza_notes::resynth::{self, VerifyOptions};
@@ -628,9 +638,16 @@ fn tune(args: TuneArgs) -> Result<()> {
 	if args.sensitivity.is_nan() || args.sensitivity <= 0.0 {
 		bail!("--sensitivity must be above 0 (1 = default, 2 = more notes, 0.5 = fewer)");
 	}
+	let auto = args
+		.key
+		.as_deref()
+		.is_some_and(|k| k.eq_ignore_ascii_case("auto"));
 	let key = match &args.key {
+		Some(_) if auto => None,
 		Some(k) => Some(cadenza_theory::Scale::parse(k).with_context(|| {
-			format!("unknown key '{k}'; use a root and a scale, e.g. \"A minor\" or \"F# major\"")
+			format!(
+				"unknown key '{k}'; use a root and a scale, e.g. \"A minor\" or \"F# major\", or \"auto\""
+			)
 		})?),
 		None => None,
 	};
@@ -654,6 +671,18 @@ fn tune(args: TuneArgs) -> Result<()> {
 		..SegmentOptions::default()
 	};
 	let seg = segment::segment(&analysis, &seg_opts, &[]);
+	let fitted = auto
+		.then(|| cadenza_notes::tuning::auto_targets(&seg, Some(&analysis)))
+		.flatten();
+	if let Some((fit, _)) = &fitted {
+		println!(
+			"scale: {} {}, sung {:+.0} c from concert pitch (fit within {:.0} c)",
+			fit.scale.root.name(false),
+			scale_kind_name(fit.scale.kind),
+			fit.offset_cents,
+			fit.rms_cents
+		);
+	}
 	let mut notes = edit::correct_pitch(
 		&seg,
 		&Correction {
@@ -661,6 +690,9 @@ fn tune(args: TuneArgs) -> Result<()> {
 			center,
 			drift,
 			threshold_cents: args.threshold,
+			targets: fitted
+				.as_ref()
+				.map(|(_, t)| t.iter().map(|t| t.pitch).collect()),
 		},
 	);
 	for (e, n) in notes.iter_mut().zip(&seg.notes) {
@@ -692,7 +724,7 @@ fn tune(args: TuneArgs) -> Result<()> {
 	export(&out, &output, &ExportOptions::wav(WavSampleFormat::Float32))?;
 
 	println!(
-		"{:>3} {:>8} {:>8} {:>9} {:>9} {:>9}",
+		"{:>3} {:>8} {:>8} {:>9} {:>9} {:>9}  why",
 		"#", "onset", "offset", "sung", "target", "after"
 	);
 	let mut worst = 0.0f64;
@@ -704,8 +736,21 @@ fn tune(args: TuneArgs) -> Result<()> {
 			}
 			None => "?".into(),
 		};
+		let why = fitted.as_ref().map_or(String::new(), |(_, t)| {
+			let t = &t[r.note];
+			let reason = serde_json::to_value(t.reason)
+				.ok()
+				.and_then(|v| v.as_str().map(str::to_owned))
+				.unwrap_or_default();
+			let doubt = if t.ambiguous {
+				format!(" (or {}?)", pitch_name(t.runner_up))
+			} else {
+				String::new()
+			};
+			format!("{reason}{doubt}")
+		});
 		println!(
-			"{:>3} {:>8.3} {:>8.3} {:>9} {:>9} {:>9}",
+			"{:>3} {:>8.3} {:>8.3} {:>9} {:>9} {:>9}  {why}",
 			r.note + 1,
 			n.onset,
 			n.offset,

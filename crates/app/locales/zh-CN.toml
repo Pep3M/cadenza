@@ -2219,7 +2219,6 @@
 "Every semitone is a target" = "每个半音都是目标"
 "formant {cents} c" = "共振峰 {cents} c"
 "Keeps your edits, splits and merges" = "保留你的编辑、拆分与合并"
-"{key} (detected)" = "{key}（检测）"
 "leave within" = "容差内保留"
 "level" = "电平"
 "level {db} dB" = "电平 {db} dB"
@@ -2262,3 +2261,5 @@
 "Wheel / Alt+Wheel" = "滚轮 / Alt+滚轮"
 "Track only" = "仅此轨道"
 "Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "只播放此片段所在的轨道（点击此标尺开启，点击编排标尺播放整首歌）"
+"{key} {offset} c (detected)" = "{key} {offset} c（检测）"
+"The scale (any mode) and how sharp or flat the singer is, fitted to the take: Correct Pitch tunes each note to its scale tone after taking the singer's offset out, keeps clearly sung chromatic notes and tunes short slides with the note they join" = "根据这段录音拟合的音阶（任意调式）和歌手整体偏高或偏低的程度：校正音高会先去掉歌手的偏差，再把每个音校到音阶音上，保留清楚唱出的半音，短的滑音跟随它连接的音"

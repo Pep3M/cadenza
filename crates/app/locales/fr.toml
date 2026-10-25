@@ -2225,7 +2225,6 @@
 "Every semitone is a target" = "Chaque demi-ton est une cible"
 "formant {cents} c" = "formant {cents} c"
 "Keeps your edits, splits and merges" = "Garde vos modifications, coupures et fusions"
-"{key} (detected)" = "{key} (détectée)"
 "leave within" = "laisser si moins de"
 "level" = "niveau"
 "level {db} dB" = "niveau {db} dB"
@@ -2268,3 +2267,5 @@
 "Wheel / Alt+Wheel" = "Molette / Alt+Molette"
 "Track only" = "Piste seule"
 "Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Ne joue que la piste de ce clip (un clic sur cette règle l'active, un clic sur la règle de l'arrangement joue tout le morceau)"
+"{key} {offset} c (detected)" = "{key} {offset} c (détectée)"
+"The scale (any mode) and how sharp or flat the singer is, fitted to the take: Correct Pitch tunes each note to its scale tone after taking the singer's offset out, keeps clearly sung chromatic notes and tunes short slides with the note they join" = "La gamme (tout mode) et à quel point le chanteur chante haut ou bas, ajustées à la prise : Corriger la justesse amène chaque note sur son degré après avoir retiré le décalage du chanteur, garde les notes chromatiques nettement chantées et accorde les glissements courts avec la note qu'ils rejoignent"

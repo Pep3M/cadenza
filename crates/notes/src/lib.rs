@@ -20,9 +20,11 @@ pub mod midi;
 mod par;
 pub mod psola;
 pub mod pyin;
+pub mod refine;
 pub mod resynth;
 pub mod segment;
 pub mod timemap;
+pub mod tuning;
 pub mod vibrato;
 pub mod yin;
 

@@ -1262,17 +1262,25 @@ fn grid(p: &egui::Painter, v: &View, key: Option<&Scale>) {
 }
 
 fn key_combo(ui: &mut Ui, state: &mut AppState, edits: &NoteEdits) {
-	let detected = ne::detected_key(edits);
+	let detected = ne::detected_fit(edits);
+	let detected_text = |f: &cadenza_notes::tuning::ScaleFit| {
+		trf(
+			"{key} {offset} c (detected)",
+			&[
+				("key", &scale_label(&f.scale)),
+				("offset", &format!("{:+.0}", f.offset_cents)),
+			],
+		)
+	};
 	let current = match &state.view.audio.notes.key {
 		KeyChoice::Chromatic => tr("Chromatic").to_owned(),
-		KeyChoice::Detected => detected.as_ref().map_or_else(
-			|| tr("Detected").to_owned(),
-			|s| trf("{key} (detected)", &[("key", &scale_label(s))]),
-		),
+		KeyChoice::Detected => detected
+			.as_ref()
+			.map_or_else(|| tr("Detected").to_owned(), detected_text),
 		KeyChoice::Scale(s) => scale_label(s),
 	};
 	egui::ComboBox::from_id_salt("note-key")
-		.width(150.0)
+		.width(170.0)
 		.selected_text(current)
 		.show_ui(ui, |ui| {
 			let v = &mut state.view.audio.notes;
@@ -1285,10 +1293,10 @@ fn key_combo(ui: &mut Ui, state: &mut AppState, edits: &NoteEdits) {
 			}
 			if let Some(d) = &detected
 				&& ui
-					.selectable_label(
-						v.key == KeyChoice::Detected,
-						trf("{key} (detected)", &[("key", &scale_label(d))]),
-					)
+					.selectable_label(v.key == KeyChoice::Detected, detected_text(d))
+					.on_hover_text(tr(
+						"The scale (any mode) and how sharp or flat the singer is, fitted to the take: Correct Pitch tunes each note to its scale tone after taking the singer's offset out, keeps clearly sung chromatic notes and tunes short slides with the note they join",
+					))
 					.clicked()
 			{
 				v.key = KeyChoice::Detected;

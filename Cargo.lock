@@ -945,6 +945,7 @@ dependencies = [
 name = "cadenza-notes"
 version = "0.2.0"
 dependencies = [
+ "cadenza-audio-io",
  "cadenza-core",
  "cadenza-model",
  "cadenza-theory",

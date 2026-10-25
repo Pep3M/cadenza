@@ -385,6 +385,9 @@ pub struct Correction {
 	pub drift: f64,
 	/// Notes closer than this to their tone keep their center, cents.
 	pub threshold_cents: f64,
+	/// The tone of each note (by index), chosen beforehand ([`crate::tuning::targets`]);
+	/// `key` then only matters for notes past the end.
+	pub targets: Option<Vec<f64>>,
 }
 
 impl Default for Correction {
@@ -394,6 +397,7 @@ impl Default for Correction {
 			center: 1.0,
 			drift: 0.0,
 			threshold_cents: 0.0,
+			targets: None,
 		}
 	}
 }
@@ -410,8 +414,13 @@ pub fn snap_target(key: Option<&Scale>, center: f64) -> f64 {
 pub fn correct_pitch(seg: &Segmentation, c: &Correction) -> Vec<NoteEdit> {
 	seg.notes
 		.iter()
-		.map(|n| {
-			let tone = snap_target(c.key.as_ref(), n.center);
+		.enumerate()
+		.map(|(i, n)| {
+			let tone = c
+				.targets
+				.as_ref()
+				.and_then(|t| t.get(i).copied())
+				.unwrap_or_else(|| snap_target(c.key.as_ref(), n.center));
 			let off = tone - n.center;
 			let pitch = (off.abs() * 100.0 > c.threshold_cents && c.center > 0.0)
 				.then(|| n.center + c.center.clamp(0.0, 1.0) * off);

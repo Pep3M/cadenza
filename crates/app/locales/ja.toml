@@ -2223,7 +2223,6 @@
 "Every semitone is a target" = "すべての半音がターゲット"
 "formant {cents} c" = "フォルマント {cents} c"
 "Keeps your edits, splits and merges" = "編集・分割・結合は保持されます"
-"{key} (detected)" = "{key}（検出）"
 "leave within" = "許容範囲"
 "level" = "レベル"
 "level {db} dB" = "レベル {db} dB"
@@ -2266,3 +2265,5 @@
 "Wheel / Alt+Wheel" = "ホイール / Alt+ホイール"
 "Track only" = "トラックのみ"
 "Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "このクリップのトラックだけを再生します（このルーラーをクリックでオン、アレンジのルーラーをクリックで曲全体を再生）"
+"{key} {offset} c (detected)" = "{key} {offset} c（検出）"
+"The scale (any mode) and how sharp or flat the singer is, fitted to the take: Correct Pitch tunes each note to its scale tone after taking the singer's offset out, keeps clearly sung chromatic notes and tunes short slides with the note they join" = "テイクに合わせて求めたスケール（任意のモード）と歌い手のずれ：ピッチ補正は歌い手のずれを除いてから各ノートをスケール音に合わせ、はっきり歌われた半音階の音は残し、短いスライドはつながる先のノートに合わせます"

@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-6 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-6 and NE-7a shipped** (2026-10-24/25, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -487,6 +487,26 @@ NE-8), and any measurement on real vocals (the < 2 % flagged target is unverifie
 
 ## NE-7 — AI tuning engineer
 
+Split in two after an expert's session on a real take
+([note-editing-expert-session.md](note-editing-expert-session.md)): the rules the expert
+follows go into deterministic code first (NE-7a), the AI works on top of them (NE-7b).
+
+**Shipped (NE-7a).** `cadenza_notes::refine` (second look at a segmentation: notes left
+inside transitions — passing tones sung as slow-downs, re-articulations, landings — become
+forced boundaries for one more partition; non-vocal blips dropped; notes holding another
+pitch outside their core flagged) and `cadenza_notes::tuning` (`fit_scale`: every mode +
+harmonic minor fitted jointly with the singer's offset; `targets`: per-note tone with a
+reason — in scale, chromatic kept, joins next, scoop landing — a runner-up and an ambiguity
+flag). On the expert's take: segmentation COnPOff 70.1 % -> 83.7 %, mixed regions 20 % ->
+11.8 %, 0 false cuts; targets equal to the expert's on 51/52 notes (nearest semitone 33/52).
+Synthetic corpus unchanged or better at every rate. The note editor's key defaults to the
+detected fit ("E phrygian +33 c (detected)", Correct Pitch uses the targets; < 6 notes =
+nearest semitone); `cadenza notes tune --key auto`. Labels in
+`crates/notes/tests/data/expert_take.json` (`tests/tuning.rs`; `tests/expert.rs` needs
+`CADENZA_NOTES_EXPERT_TAKE`, the recording is not in the repository).
+
+NE-7b (the AI, next):
+
 - MCP (`tools::notes`): `detect_notes { clip_id, algorithm?, sensitivity? }`,
   `get_notes { clip_id, range }` (beats + note names + cents error + confidence + flags,
   token budgeted), `tuning_report { clip_id | track_id, key?, reference_clip_id? }` (per note
@@ -494,6 +514,10 @@ NE-8), and any measurement on real vocals (the < 2 % flagged target is unverifie
   summary numbers), `correct_pitch { clip_id, notes?, center_pct, drift_pct, mod_pct?,
   threshold_cents?, key? }`, `edit_audio_notes { clip_id, patches }`,
   `split_audio_note` / `merge_audio_notes`, `quantize_audio_timing`, `audio_to_midi` (NE-3).
+- The deterministic proposals as tools: `analyze_vocal` (fit + alternatives, blips),
+  `propose_splits` (refine candidates with their evidence and kind), `propose_targets`
+  (targets with reason, runner-up, ambiguity): the LLM decides the ambiguous items (mode,
+  ornaments, F vs F#), never reasons over frames.
 - Agent prompt section "Tuning engineer": analyze -> fix segmentation flags -> correct with
   musical restraint (keep intentional slides, blue notes, vibrato) -> re-analyze -> report
   before -> after cents; one undo step per request; app: "Tune with AI" on audio clips /

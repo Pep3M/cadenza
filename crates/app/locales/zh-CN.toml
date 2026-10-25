@@ -2299,3 +2299,5 @@
 "SCALE" = "音阶"
 "Scale" = "音阶"
 "Sung" = "演唱"
+"♪ Hear" = "♪ 试听"
+"Hear a note when you press it and as you drag it to another pitch (transport stopped)" = "按下音符或将其拖到其他音高时播放(走带停止时)"

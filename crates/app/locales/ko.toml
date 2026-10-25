@@ -2304,3 +2304,5 @@
 "SCALE" = "스케일"
 "Scale" = "스케일"
 "Sung" = "부른 음"
+"♪ Hear" = "♪ 듣기"
+"Hear a note when you press it and as you drag it to another pitch (transport stopped)" = "노트를 누를 때와 다른 음높이로 드래그할 때 들려줍니다(정지 상태에서)"

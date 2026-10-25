@@ -107,6 +107,8 @@ pub struct NoteEditorUi {
 	pub canvas: Option<Rect>,
 	/// Clip whose pitch range was fitted to its polyphonic notes.
 	poly_framed: Option<ClipId>,
+	/// Pitches the dragged notes were last auditioned at.
+	heard: Option<Vec<(AudioNoteId, f64)>>,
 }
 
 struct View<'a> {
@@ -239,6 +241,22 @@ impl NoteEditorUi {
 		.clicked()
 		{
 			state.view.audio.notes.chords = !chords;
+		}
+		let audition = state.view.audio.notes.audition;
+		if super::arrange::toolbar_chip(
+			ui,
+			audition,
+			tr("♪ Hear"),
+			None,
+			theme::BG_WIDGET,
+			theme::TEXT,
+		)
+		.on_hover_text(tr(
+			"Hear a note when you press it and as you drag it to another pitch (transport stopped)",
+		))
+		.clicked()
+		{
+			state.view.audio.notes.audition = !audition;
 		}
 		let macros = state.view.audio.notes.macros;
 		if super::arrange::toolbar_chip(
@@ -833,6 +851,13 @@ impl NoteEditorUi {
 				}
 				_ => Gesture::Band { add: mods.shift },
 			};
+			// Hear the pressed notes as they are (Main tool).
+			if let Gesture::Notes { ids, .. } = &gesture
+				&& tool == NoteTool::Main
+			{
+				state.audition_notes(clip, edits, ids);
+				self.heard = Some(ne::moved_pitches(edits, ids, 0.0, None));
+			}
 			self.drag = Some(Drag {
 				press,
 				gesture,
@@ -863,6 +888,24 @@ impl NoteEditorUi {
 					Axis::Time => CursorIcon::ResizeHorizontal,
 				});
 			}
+			// Hear the notes again whenever the drag moves them to another pitch.
+			if let Gesture::Notes {
+				ids,
+				axis: Some(Axis::Pitch),
+			} = &d.gesture
+				&& tool == NoteTool::Main
+			{
+				let delta = f64::from((d.press.y - pos.y) / v.row());
+				let snap = snap_choice(ui, state, key);
+				let moved = ne::moved_pitches(edits, ids, delta, snap.as_ref().map(|k| k.as_ref()));
+				if ne::heard_differently(self.heard.as_deref(), &moved) {
+					state.audition_notes(clip, &ne::with_pitches(edits, &moved), ids);
+					self.heard = Some(moved);
+				}
+			}
+		}
+		if resp.drag_stopped() {
+			self.heard = None;
 		}
 		if resp.drag_stopped()
 			&& let Some(d) = self.drag.take()

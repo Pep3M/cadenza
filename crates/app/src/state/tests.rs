@@ -2120,3 +2120,73 @@ fn editor_ruler_seeks_play_only_the_track_until_the_arrange_is_clicked() {
 	assert_eq!(s.transport_config().0.audition, None);
 	s.stop();
 }
+
+#[test]
+fn a_dragged_note_asks_to_be_heard_over_its_stretch() {
+	use cadenza_core::AudioNoteId;
+	use cadenza_model::{AudioNote, ClipContent, NoteEdits};
+	use std::collections::BTreeSet;
+
+	let mut s = AppState::headless();
+	let mut track = Track::new("Vox", TrackKind::Audio);
+	track.channel.volume_db = -4.0;
+	let mut clip = Clip::audio("Vox", Tick::ZERO, Tick::from_beats(8.0), "/takes/vox.wav");
+	let notes: Vec<AudioNote> = (0..4)
+		.map(|i| {
+			let t = 0.5 + i as f64 * 0.5;
+			AudioNote::new(AudioNoteId::new(), t, t + 0.4, 60.0 + i as f64)
+		})
+		.collect();
+	if let ClipContent::Audio {
+		notes: slot,
+		gain_db,
+		..
+	} = &mut clip.content
+	{
+		*gain_db = 2.0;
+		*slot = Some(Box::new(NoteEdits {
+			notes: notes.clone(),
+			sibilants: Vec::new(),
+			sibilant_gain_db: 0.0,
+			sensitivity: 1.0,
+			user_splits: Vec::new(),
+			user_merges: Vec::new(),
+		}));
+	}
+	let id = clip.id;
+	let edits = match &clip.content {
+		ClipContent::Audio { notes: Some(n), .. } => (**n).clone(),
+		_ => unreachable!(),
+	};
+	track.clips.push(clip);
+	assert!(s.apply(Command::AddTrack { track, index: None }));
+	let ids: BTreeSet<AudioNoteId> = [notes[1].id, notes[2].id].into();
+	let moved = note_editor::with_pitches(&edits, &[(notes[1].id, 62.5)]);
+	s.audition_notes(id, &moved, &ids);
+	let r = s.note_audition.pending().expect("a request");
+	assert_eq!(r.file, std::path::PathBuf::from("/takes/vox.wav"));
+	assert!(
+		(r.from - (1.0 - note_audition::LEAD)).abs() < 1e-9,
+		"{}",
+		r.from
+	);
+	assert!(
+		(r.to - (1.9 + note_audition::TAIL)).abs() < 1e-9,
+		"{}",
+		r.to
+	);
+	assert_eq!(r.gain_db, -2.0, "clip gain + track volume");
+	assert_eq!(r.edits.notes[1].pitch, Some(62.5));
+	// Heard again only once the drag moved a note far enough.
+	let heard = note_editor::moved_pitches(&edits, &ids, 0.0, None);
+	assert!(!note_editor::heard_differently(Some(&heard), &heard));
+	let nudged = note_editor::moved_pitches(&edits, &ids, 0.02, None);
+	assert!(!note_editor::heard_differently(Some(&heard), &nudged));
+	let moved = note_editor::moved_pitches(&edits, &ids, 0.3, None);
+	assert!(note_editor::heard_differently(Some(&heard), &moved));
+	// Switched off: nothing is asked.
+	s.note_audition.cancel();
+	s.view.audio.notes.audition = false;
+	s.audition_notes(id, &edits, &ids);
+	assert!(s.note_audition.pending().is_none());
+}

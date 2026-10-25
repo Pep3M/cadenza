@@ -512,6 +512,10 @@ sibilant gain, > 60 % of the take). `note_render` v2 keeps `<render>.json` (aske
 edits) and `<file key>.renders` (last 8): renders start from the closest earlier one
 (`NoteRender.local`; one note on a 20 s take 1.7 s -> 30-70 ms), and the player plays it while
 the new one is pending.
+NE-9d hearing while dragging: note editor Main drag -> `AppState::audition_notes` (stopped transport,
+`NoteEditorView.audition`, toolbar "♪ Hear") -> `state::note_audition` worker (take + analysis + marks
+per file, newest request wins) -> `resynth::audition` (open-loop window render) -> engine
+`Player::play_snippet` (`snippet::Snippet`, handover + garbage rings, 5 ms fades, monitoring only).
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

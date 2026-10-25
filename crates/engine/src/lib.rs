@@ -30,6 +30,7 @@ pub mod record;
 mod render;
 mod samples;
 mod schedule;
+pub mod snippet;
 
 pub use analysis::{BandEnergy, LevelStats, MixReport, TrackLevel};
 pub use automation::AutomationBindings;

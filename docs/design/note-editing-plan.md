@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction) and NE-9b (local re-renders) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache) and NE-9d (hear while dragging) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -672,6 +672,21 @@ re-renders only around what changed:
   of the recording.
 On the user's take: whole render 1.67 s, then one note moved: 26-70 ms, the note within 2 c.
 The realtime streaming path stays open for when edits must sound during a drag.
+
+**Shipped (NE-9d, hear notes while dragging).** Melodyne plays a blob when it is pressed and
+as it is dragged; here: the note editor's Main tool auditions the pressed notes and plays
+them again whenever the drag moves a note 5 cents or more from where it was last heard
+(`note_editor::{with_pitches, heard_differently, HEAR_AGAIN}`), transport stopped, toolbar
+"♪ Hear" toggle (on by default). `resynth::audition` renders a stretch (file seconds) open loop
+without level fixes or time edits (grain plan of the whole take + `psola_range`: milliseconds);
+`state::note_audition::NoteAudition` keeps the take, analysis (shared content cache) and pitch
+marks loaded per file on a worker and coalesces requests into the newest (`audition_notes`:
+the dragged notes' span + 20 ms before / 60 ms after, at most 4 s, clip gain + track volume).
+Engine: `snippet::Snippet` (built off the audio thread with 5 ms end fades, Hermite resampled
+to the output rate) handed over through its own ring + garbage ring, `Player::{play_snippet,
+stop_snippet}` (`Cmd::Snippet` replaces the playing one, which fades out over 5 ms), mixed
+after the graph and before the monitor switches, never in renders; `no_alloc` test. The
+committed edit still renders locally (NE-9b) when the drag ends.
 - Polyphonic per-note editing after legal review / patent expiry.
 - MPE export of polyphonic bends.
 

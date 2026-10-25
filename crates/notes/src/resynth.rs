@@ -644,3 +644,39 @@ fn closed_loop(
 	}
 	Ok(best)
 }
+
+/// File seconds `from..to` of `edits` rendered quickly to audition a note while it is
+/// dragged: open loop, no level fix, time edits left out (pitch, formant, gain and
+/// modulation only). Milliseconds for a note on a long take.
+pub fn audition(
+	channels: &[&[f32]],
+	analysis: &Analysis,
+	seg: &Segmentation,
+	marks: &Marks,
+	edits: &Edits,
+	from: f64,
+	to: f64,
+) -> Result<Vec<Vec<f32>>, NotesError> {
+	let mut edits = edits.clone();
+	for n in &mut edits.notes {
+		n.time = None;
+	}
+	check(channels, seg, &edits)?;
+	let len = channels.first().map_or(0, |c| c.len());
+	let rate = analysis.sample_rate;
+	let r = f64::from(rate);
+	let a = ((from.max(0.0) * r) as usize).min(len);
+	let b = ((to.max(0.0) * r) as usize).clamp(a, len);
+	let curves = edit::curves(analysis, seg, &edits);
+	let map = TimeMap::identity();
+	let grains = plan(rate, marks, &curves, &map, len);
+	Ok(psola_range(
+		channels,
+		rate,
+		marks,
+		&curves,
+		&map,
+		&grains,
+		a..b,
+	))
+}

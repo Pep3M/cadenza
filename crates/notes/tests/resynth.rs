@@ -634,3 +634,41 @@ fn a_local_change_re_renders_only_around_its_note() {
 			.is_none()
 	);
 }
+
+#[test]
+fn an_audition_is_the_note_at_its_new_pitch() {
+	let case = busy_case();
+	let rate = case.sample_rate;
+	let (a, seg) = prepare(&case.samples, rate);
+	let marks = pitch_marks(&case.samples, &a);
+	let k = seg.notes.len() / 2;
+	let n = &seg.notes[k];
+	let mut edits = Edits::default();
+	edits.notes.resize(seg.notes.len(), NoteEdit::default());
+	edits.notes[k].pitch = Some(n.center + 3.0);
+	let part = resynth::audition(
+		&[&case.samples],
+		&a,
+		&seg,
+		&marks,
+		&edits,
+		n.onset,
+		n.offset,
+	)
+	.unwrap();
+	let r = f64::from(rate);
+	assert_eq!(
+		part[0].len(),
+		((n.offset * r) as usize) - ((n.onset * r) as usize)
+	);
+	let heard = analyze(&part[0], rate, &AnalysisOptions::default(), &mut |_| true).unwrap();
+	let pitches: Vec<f64> = heard.frames.iter().filter_map(|f| f.pitch).collect();
+	let mut sorted = pitches.clone();
+	sorted.sort_by(f64::total_cmp);
+	let median = sorted[sorted.len() / 2];
+	assert!(
+		(median - (n.center + 3.0)).abs() < 0.15,
+		"{median} vs {}",
+		n.center + 3.0
+	);
+}

@@ -150,6 +150,8 @@ pub struct NoteEditorView {
 	pub macros: bool,
 	/// Show the polyphonic detector's notes behind (read only).
 	pub chords: bool,
+	/// Hear notes while they are dragged.
+	pub audition: bool,
 }
 
 impl Default for NoteEditorView {
@@ -169,6 +171,7 @@ impl Default for NoteEditorView {
 			quantize_strength: 1.0,
 			leveling: 0.5,
 			sensitivity: 1.0,
+			audition: true,
 			macros: true,
 			chords: false,
 		}
@@ -273,6 +276,33 @@ fn selected<'a>(
 	ids: &'a BTreeSet<AudioNoteId>,
 ) -> impl Iterator<Item = &'a AudioNote> {
 	edits.notes.iter().filter(|n| ids.contains(&n.id))
+}
+
+/// `edits` with the notes of `pitches` moved there (a drag's provisional state).
+pub fn with_pitches(edits: &NoteEdits, pitches: &[(AudioNoteId, f64)]) -> NoteEdits {
+	let mut out = edits.clone();
+	for n in &mut out.notes {
+		if let Some((_, p)) = pitches.iter().find(|(id, _)| *id == n.id) {
+			n.pitch = Some(*p);
+		}
+	}
+	out
+}
+
+/// Pitch change (semitones) a drag must make before the notes are heard again.
+pub const HEAR_AGAIN: f64 = 0.05;
+
+/// Whether `now` moved any note at least [`HEAR_AGAIN`] from where it was last heard.
+pub fn heard_differently(heard: Option<&[(AudioNoteId, f64)]>, now: &[(AudioNoteId, f64)]) -> bool {
+	let Some(heard) = heard else {
+		return true;
+	};
+	now.iter().any(|(id, p)| {
+		heard
+			.iter()
+			.find(|(h, _)| h == id)
+			.is_none_or(|(_, q)| (p - q).abs() >= HEAR_AGAIN)
+	})
 }
 
 /// Where each note lands when `ids` are dragged by `delta` semitones: snapped to the key
@@ -845,6 +875,52 @@ impl super::AppState {
 		let cache = self.note_cache();
 		let waker = self.waker.clone();
 		self.note_analyses.request(&r.file, cache, waker);
+	}
+
+	/// Hears `edits` (the clip's notes with a drag's provisional pitches) over the notes
+	/// `ids`, once, as long as the transport is stopped and the editor's audition is on.
+	pub fn audition_notes(&mut self, clip: ClipId, edits: &NoteEdits, ids: &BTreeSet<AudioNoteId>) {
+		if self.is_playing() || !self.view.audio.notes.audition {
+			return;
+		}
+		let Some(r) = audio_edit::region(self.project(), clip) else {
+			return;
+		};
+		let (from, to) = edits
+			.notes
+			.iter()
+			.filter(|n| ids.contains(&n.id))
+			.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), n| {
+				(a.min(n.start), b.max(n.end))
+			});
+		if from > to {
+			return;
+		}
+		let from = (from - super::note_audition::LEAD).max(0.0);
+		let to = (to + super::note_audition::TAIL).min(from + super::note_audition::MAX_SECONDS);
+		let volume = self
+			.project()
+			.track(r.track)
+			.map_or(0.0, |t| t.channel.volume_db);
+		self.note_audition.request(super::note_audition::Request {
+			file: r.file,
+			edits: edits.clone(),
+			from,
+			to,
+			gain_db: r.gain_db + volume,
+		});
+	}
+
+	/// Plays the auditions as they are rendered.
+	pub(super) fn poll_note_audition(&mut self) {
+		let cache = self.note_cache();
+		let waker = self.waker.clone();
+		if let Some(heard) = self.note_audition.tick(&cache, waker)
+			&& !self.is_playing()
+			&& let Some(audio) = &self.audio
+		{
+			audio.play_snippet(heard.channels, heard.rate, heard.gain_db);
+		}
 	}
 
 	/// Per frame: lands analyses, runs queued detections, keeps the open clip analyzed.

@@ -50,6 +50,7 @@ pub mod midi_learn;
 pub mod mix;
 pub mod mixer;
 pub mod modulation;
+pub mod note_audition;
 pub mod note_editor;
 pub mod note_renders;
 pub mod notices;
@@ -430,6 +431,8 @@ pub struct AppState {
 	pub note_analyses: note_editor::NoteAnalyses,
 	/// The note editor's read-only polyphonic layer, per file.
 	pub poly_layers: note_editor::PolyLayers,
+	/// Hearing notes while they are dragged in the note editor.
+	pub note_audition: note_audition::NoteAudition,
 	collisions: collisions::CollisionState,
 	/// MIDI learn and the mapped controllers' values (T36).
 	pub midi: midi_learn::MidiLearnState,
@@ -581,6 +584,7 @@ impl AppState {
 			note_renders: note_renders::NoteRenders::new(),
 			note_analyses: note_editor::NoteAnalyses::default(),
 			poly_layers: note_editor::PolyLayers::default(),
+			note_audition: note_audition::NoteAudition::default(),
 			collisions: collisions::CollisionState::default(),
 			midi: midi_learn::MidiLearnState::default(),
 			start: start::StartScreen::default(),
@@ -4192,6 +4196,7 @@ impl AppState {
 		self.poll_convert_to_midi();
 		self.poll_note_renders();
 		self.poll_note_analyses();
+		self.poll_note_audition();
 		self.poll_collisions();
 		self.poll_file_jobs();
 		self.tick_autosave(now);
@@ -4219,6 +4224,7 @@ impl AppState {
 			|| self.note_renders.busy()
 			|| self.note_analyses.busy()
 			|| self.poly_layers.busy()
+			|| self.note_audition.busy()
 			|| self.ai.busy()
 			|| self.mix.busy()
 			|| self.record_animating()

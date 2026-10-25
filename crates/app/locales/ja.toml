@@ -2303,3 +2303,5 @@
 "SCALE" = "スケール"
 "Scale" = "スケール"
 "Sung" = "歌唱"
+"♪ Hear" = "♪ 試聴"
+"Hear a note when you press it and as you drag it to another pitch (transport stopped)" = "ノートを押したときと、別の音程へドラッグしたときに鳴らします(停止中)"

@@ -2266,3 +2266,5 @@
 "↑ ↓ (Shift: octave)" = "↑ ↓ (Maj : octave)"
 "Split the note / merge at a boundary" = "Couper la note / fusionner à une limite"
 "Wheel / Alt+Wheel" = "Molette / Alt+Molette"
+"Track only" = "Piste seule"
+"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Ne joue que la piste de ce clip (un clic sur cette règle l'active, un clic sur la règle de l'arrangement joue tout le morceau)"

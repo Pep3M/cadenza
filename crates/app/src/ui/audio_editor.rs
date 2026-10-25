@@ -103,6 +103,7 @@ impl AudioEditorUi {
 		}
 		self.navigate(ui, state, wave.union(ruler), wave.left(), &r);
 		ruler_paint(ui, state, ruler);
+		ruler_seek(ui, state, ruler, wave.left(), &r);
 		self.waveform(ui, state, wave, &r);
 		self.handles(ui, state, wave, &r);
 		// Playhead (song position mapped into the file).
@@ -130,7 +131,11 @@ impl AudioEditorUi {
 		if zoom != 1.0 {
 			v.zoom_around(zoom, (p.x - left).max(0.0));
 		}
-		let dx = if scroll.x != 0.0 { scroll.x } else { scroll.y };
+		let mut dx = if scroll.x != 0.0 { scroll.x } else { scroll.y };
+		if ui.input(|i| i.pointer.middle_down()) {
+			dx += ui.input(|i| i.pointer.delta().x);
+			ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+		}
 		if dx != 0.0 {
 			v.scroll = (v.scroll - f64::from(dx) / f64::from(v.px_per_second))
 				.clamp(0.0, (r.end() + 1.0).max(0.0));
@@ -187,6 +192,22 @@ impl AudioEditorUi {
 			} else {
 				state.view.audio.mode = EditorMode::Waveform;
 			}
+		}
+		let solo = state.track_solo().is_some();
+		if super::arrange::toolbar_chip(
+			ui,
+			solo,
+			tr("Track only"),
+			None,
+			theme::ACCENT_DIM,
+			theme::ACCENT_TEXT,
+		)
+		.on_hover_text(tr(
+			"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)",
+		))
+		.clicked()
+		{
+			state.set_track_solo((!solo).then_some(r.track));
 		}
 		ui.separator();
 		if state.view.audio.mode == EditorMode::Notes {
@@ -713,7 +734,7 @@ impl AudioEditorUi {
 			let s = secs(pos.x).clamp(r.offset, r.end());
 			state.view.audio.selection = Some((s, s));
 			let tick = r.tick_of(state.project(), s);
-			state.seek(tick);
+			state.seek_track(tick, r.track);
 		}
 		if resp.double_clicked() {
 			state.view.audio.selection = Some((r.offset, r.end()));
@@ -861,6 +882,29 @@ fn fade_shape(curve: FadeCurve, t: f64) -> f64 {
 		FadeCurve::EqualPower => (t * std::f64::consts::FRAC_PI_2).sin(),
 		FadeCurve::Exponential => t * t,
 		FadeCurve::SCurve => 0.5 - 0.5 * (std::f64::consts::PI * t).cos(),
+	}
+}
+
+/// A click or drag on the editor ruler moves the playhead there and plays only the
+/// clip's track from then on ([`AppState::seek_track`]).
+pub(crate) fn ruler_seek(ui: &Ui, state: &mut AppState, ruler: Rect, left: f32, r: &Region) {
+	let resp = ui
+		.interact(
+			ruler,
+			egui::Id::new("audio-editor-ruler"),
+			Sense::click_and_drag(),
+		)
+		.on_hover_cursor(egui::CursorIcon::PointingHand);
+	if (resp.clicked() || resp.dragged_by(egui::PointerButton::Primary))
+		&& let Some(pos) = resp.interact_pointer_pos()
+	{
+		let s = state
+			.view
+			.audio
+			.seconds_at(pos.x - left)
+			.clamp(r.offset, r.end());
+		let tick = r.tick_of(state.project(), s);
+		state.seek_track(tick, r.track);
 	}
 }
 

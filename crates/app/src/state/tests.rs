@@ -2044,3 +2044,23 @@ fn midi_learn_takes_the_next_controller_and_mirrors_it_as_one_step() {
 	assert!(s.forget_midi(&cutoff));
 	assert!(s.project().midi_map.is_empty());
 }
+
+#[test]
+fn editor_ruler_seeks_play_only_the_track_until_the_arrange_is_clicked() {
+	let (mut s, keys) = state_with_song();
+	s.view.audio_editor = true;
+	s.seek_track(Tick(PPQ), keys);
+	assert_eq!(s.position(), Tick(PPQ));
+	assert_eq!(s.track_solo(), Some(keys));
+	s.play();
+	assert_eq!(s.transport_config().0.audition, Some(vec![keys]));
+	// Closing the editor gives the song back; reopening it keeps the choice.
+	s.view.audio_editor = false;
+	assert_eq!(s.transport_config().0.audition, None);
+	s.view.audio_editor = true;
+	assert_eq!(s.transport_config().0.audition, Some(vec![keys]));
+	s.seek_song(Tick(PPQ * 2));
+	assert_eq!(s.track_solo(), None);
+	assert_eq!(s.transport_config().0.audition, None);
+	s.stop();
+}

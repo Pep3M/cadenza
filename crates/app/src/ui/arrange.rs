@@ -3204,7 +3204,7 @@ fn ruler(ui: &mut Ui, state: &mut AppState, layout: &Layout, loop_drag: &mut Opt
 		} else {
 			tick
 		};
-		state.seek(tick);
+		state.seek_song(tick);
 	}
 }
 
@@ -3318,7 +3318,7 @@ fn markers(ui: &mut Ui, state: &mut AppState, layout: &Layout) {
 			Sense::click(),
 		);
 		if mr.clicked() {
-			state.seek(m.tick);
+			state.seek_song(m.tick);
 		}
 		mr.context_menu(|ui| {
 			if ui.button(tr("Remove marker")).clicked() {

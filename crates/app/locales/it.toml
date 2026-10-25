@@ -2264,3 +2264,5 @@
 "↑ ↓ (Shift: octave)" = "↑ ↓ (Maiusc: ottava)"
 "Split the note / merge at a boundary" = "Dividi la nota / unisci a un confine"
 "Wheel / Alt+Wheel" = "Rotella / Alt+Rotella"
+"Track only" = "Solo traccia"
+"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Riproduce solo la traccia di questa clip (un clic su questo righello lo attiva, un clic sul righello dell'arrangiamento riproduce tutto il brano)"

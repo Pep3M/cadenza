@@ -2298,9 +2298,17 @@ impl AppState {
 	/// What the player plays for the current mode (second value: pattern mode fell back
 	/// to the song because no clip is open in the piano roll).
 	pub fn transport_config(&self) -> (transport::PlayConfig, bool) {
+		let view = transport::TransportView {
+			track_solo: self
+				.view
+				.transport
+				.track_solo
+				.filter(|_| self.view.audio_editor),
+			..self.view.transport
+		};
 		transport::config(
 			self.project(),
-			&self.view.transport,
+			&view,
 			self.view.piano.clip.filter(|_| !self.view.audio_editor),
 			self.play_intent,
 		)
@@ -2412,6 +2420,37 @@ impl AppState {
 	pub fn seek(&mut self, tick: Tick) {
 		self.cued = true;
 		self.locate(tick);
+	}
+
+	/// A seek from the arrange: the whole song plays again.
+	pub fn seek_song(&mut self, tick: Tick) {
+		self.view.transport.track_solo = None;
+		self.seek(tick);
+		self.sync_transport();
+	}
+
+	/// A seek from the audio / note editor ruler: plays on from there with only `track`
+	/// heard (the song's timeline, its loop) until the arrange is clicked or the editor
+	/// closes.
+	pub fn seek_track(&mut self, tick: Tick, track: TrackId) {
+		self.view.transport.track_solo = Some(track);
+		self.seek(tick);
+		self.sync_transport();
+	}
+
+	/// Song mode with only the open editor's track heard (see [`Self::seek_track`]).
+	pub fn track_solo(&self) -> Option<TrackId> {
+		self.view.transport.track_solo.filter(|t| {
+			self.view.audio_editor
+				&& self.view.transport.mode == transport::PlayMode::Song
+				&& self.project().track(*t).is_some()
+		})
+	}
+
+	/// Back to the whole song (the editor's "Track only" chip).
+	pub fn set_track_solo(&mut self, track: Option<TrackId>) {
+		self.view.transport.track_solo = track;
+		self.sync_transport();
 	}
 
 	/// Moves the playhead without cueing (transport bookkeeping).

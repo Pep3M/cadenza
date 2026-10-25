@@ -2264,3 +2264,5 @@
 "↑ ↓ (Shift: octave)" = "↑ ↓ (Umschalt: Oktave)"
 "Split the note / merge at a boundary" = "Note teilen / an einer Grenze verbinden"
 "Wheel / Alt+Wheel" = "Mausrad / Alt+Mausrad"
+"Track only" = "Nur Spur"
+"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Spielt nur die Spur dieses Clips (ein Klick auf dieses Lineal schaltet es ein, ein Klick auf das Arrangement-Lineal spielt den ganzen Song)"

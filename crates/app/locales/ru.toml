@@ -2265,3 +2265,5 @@
 "↑ ↓ (Shift: octave)" = "↑ ↓ (Shift: октава)"
 "Split the note / merge at a boundary" = "Разделить ноту / объединить на границе"
 "Wheel / Alt+Wheel" = "Колесо / Alt+Колесо"
+"Track only" = "Только дорожка"
+"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "Играть только дорожку этого клипа (щелчок по этой линейке включает, щелчок по линейке аранжировки играет всю песню)"

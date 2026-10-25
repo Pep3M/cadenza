@@ -10,8 +10,8 @@ use cadenza_core::{AudioNoteId, ClipId};
 use cadenza_model::{AudioNoteFlag, NoteEdits};
 use cadenza_theory::Scale;
 use egui::{
-	Align2, Color32, CornerRadius, CursorIcon, Id, Mesh, Pos2, Rect, RichText, Sense, Shape,
-	Stroke, StrokeKind, Ui, pos2, vec2,
+	Align2, Color32, CornerRadius, CursorIcon, Id, Mesh, PointerButton, Pos2, Rect, RichText,
+	Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 
 use crate::i18n::{tr, tr_str, trf, trn};
@@ -97,6 +97,8 @@ impl Layout {
 #[derive(Default)]
 pub struct NoteEditorUi {
 	drag: Option<Drag>,
+	/// Middle-button pan in progress.
+	pan: bool,
 	/// The resulting pitch curve and the edits it was made for.
 	curve: Option<(ClipId, NoteEdits, Vec<Option<f64>>)>,
 	/// Sibilant level while its slider is dragged.
@@ -239,6 +241,7 @@ impl NoteEditorUi {
 			state.view.audio.notes.framed = Some(clip);
 		}
 		self.navigate(ui, state, canvas, r);
+		super::audio_editor::ruler_seek(ui, state, layout.ruler, canvas.left(), r);
 		let analysis = state.note_analyses.get(&r.file);
 		if let Some(a) = &analysis {
 			let fresh = self
@@ -315,9 +318,33 @@ impl NoteEditorUi {
 		}
 	}
 
-	/// Plain wheel = pitch scroll, Shift = time, Ctrl = time zoom, Alt = pitch zoom.
+	/// Plain wheel = pitch scroll, Shift = time, Ctrl = time zoom, Alt = pitch zoom,
+	/// middle-drag pans both ways.
 	fn navigate(&mut self, ui: &Ui, state: &mut AppState, canvas: Rect, r: &Region) {
-		let Some(p) = ui.ctx().pointer_hover_pos() else {
+		let (pressed, down, delta) = ui.input(|i| {
+			(
+				i.pointer.button_pressed(PointerButton::Middle),
+				i.pointer.middle_down(),
+				i.pointer.delta(),
+			)
+		});
+		let hover = ui.ctx().pointer_hover_pos();
+		if pressed && hover.is_some_and(|p| canvas.contains(p)) && ui.ui_contains_pointer() {
+			self.pan = true;
+		}
+		if !down {
+			self.pan = false;
+		}
+		if self.pan {
+			let audio = &mut state.view.audio;
+			let rows = canvas.height() / (audio.notes.high - audio.notes.low).max(1.0) as f32;
+			audio.scroll = (audio.scroll - f64::from(delta.x) / f64::from(audio.px_per_second))
+				.clamp(0.0, (r.end() + 1.0).max(0.0));
+			audio.notes.scroll(f64::from(delta.y / rows));
+			ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+			return;
+		}
+		let Some(p) = hover else {
 			return;
 		};
 		if !canvas.contains(p) || !ui.ui_contains_pointer() {
@@ -712,7 +739,7 @@ impl NoteEditorUi {
 			}
 		}
 		let mods = ui.input(|i| i.modifiers);
-		if resp.drag_started()
+		if resp.drag_started_by(PointerButton::Primary)
 			&& let Some(press) = resp.interact_pointer_pos()
 		{
 			let gesture = match hit(press) {

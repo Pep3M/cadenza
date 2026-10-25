@@ -2265,3 +2265,5 @@
 "↑ ↓ (Shift: octave)" = "↑ ↓ (Shift: 옥타브)"
 "Split the note / merge at a boundary" = "노트 나누기 / 경계에서 합치기"
 "Wheel / Alt+Wheel" = "휠 / Alt+휠"
+"Track only" = "트랙만"
+"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "이 클립의 트랙만 재생합니다(이 눈금자를 클릭하면 켜지고, 편곡 눈금자를 클릭하면 곡 전체를 재생)"

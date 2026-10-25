@@ -2264,3 +2264,5 @@
 "↑ ↓ (Shift: octave)" = "↑ ↓（Shift: オクターブ）"
 "Split the note / merge at a boundary" = "ノートを分割 / 境界で結合"
 "Wheel / Alt+Wheel" = "ホイール / Alt+ホイール"
+"Track only" = "トラックのみ"
+"Play only this clip's track (a click on this ruler turns it on, a click on the arrange ruler plays the whole song)" = "このクリップのトラックだけを再生します（このルーラーをクリックでオン、アレンジのルーラーをクリックで曲全体を再生）"

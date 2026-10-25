@@ -10,8 +10,8 @@ use std::sync::mpsc::{self, Receiver};
 use cadenza_core::{ClipId, TrackId};
 use cadenza_engine::{RecordOptions, RecordedAudio, Recording, record_commands};
 use cadenza_mcp::tools::notes::{
-	AudioToMidiArgs, AudioToMidiOutput, ClipNotes, ConvertMode, analyze_clip, conversion_command,
-	convert, default_cache_dir, midi_options,
+	Algorithm, AudioToMidiArgs, AudioToMidiOutput, ClipNotes, ConvertMode, analyze_clip,
+	conversion_command, convert, default_cache_dir, detect_for, midi_options,
 };
 use cadenza_model::{Command, Document, Project, Track, TrackKind};
 use cadenza_notes::midi::MidiOptions;
@@ -57,6 +57,7 @@ impl ConvertToMidi {
 		self.args = AudioToMidiArgs {
 			clip_id: self.clip,
 			mode,
+			algorithm: self.args.algorithm,
 			track_id: self.args.track_id,
 			sensitivity: self.args.sensitivity,
 			..AudioToMidiArgs::default()
@@ -123,13 +124,22 @@ impl AppState {
 			return;
 		};
 		let clip = c.clip;
+		// The polyphonic notes do not depend on the sensitivity: kept from the last run.
+		let (poly, drums) = match &c.phase {
+			ConvertPhase::Ready(notes) => (notes.poly.clone(), notes.drums.clone()),
+			_ => (None, None),
+		};
 		let (tx, rx) = mpsc::channel();
 		let spawned = std::thread::Builder::new()
 			.name("cadenza-to-midi".into())
 			.spawn(move || {
-				let _ = tx.send(
-					analyze_clip(&project, clip, sensitivity, &cache).map_err(|e| e.to_string()),
-				);
+				let made = analyze_clip(&project, clip, sensitivity, &cache).and_then(|mut n| {
+					n.poly = poly;
+					n.drums = drums;
+					detect_for(&project, &mut n, Algorithm::Auto)?;
+					Ok(n)
+				});
+				let _ = tx.send(made.map_err(|e| e.to_string()));
 				if let Some(w) = &waker {
 					w();
 				}
@@ -155,9 +165,20 @@ impl AppState {
 		};
 		let project = self.project();
 		let made = midi_options(&c.args).and_then(|opts| {
-			let conversion = convert(project, notes, &opts);
-			let (command, summary) =
-				conversion_command(project, notes, &conversion, c.args.track_id)?;
+			let conversion = convert(
+				project,
+				notes,
+				&opts,
+				c.args.algorithm,
+				c.args.drum_note.map(|p| p.0),
+			);
+			let (command, summary) = conversion_command(
+				project,
+				notes,
+				&conversion,
+				c.args.track_id,
+				c.args.algorithm,
+			)?;
 			Ok((conversion, command, summary))
 		});
 		Some(match made {
@@ -293,8 +314,20 @@ pub(super) fn hum_commands(
 			continue;
 		};
 		let made = analyze_clip(doc.project(), clip, 1.0, cache).and_then(|notes| {
-			let conversion = convert(doc.project(), &notes, &MidiOptions::hum());
-			conversion_command(doc.project(), &notes, &conversion, Some(audio.track))
+			let conversion = convert(
+				doc.project(),
+				&notes,
+				&MidiOptions::hum(),
+				Algorithm::Mono,
+				None,
+			);
+			conversion_command(
+				doc.project(),
+				&notes,
+				&conversion,
+				Some(audio.track),
+				Algorithm::Mono,
+			)
 		});
 		match made {
 			Ok((

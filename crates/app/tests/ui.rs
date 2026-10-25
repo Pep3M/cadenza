@@ -9409,3 +9409,77 @@ fn render_note_editor_screens() {
 	h.state_mut().state.view.audio.notes.macros = false;
 	shot(&mut h, &dir, "notes_no_macros");
 }
+
+/// A few seconds of block chords over a bass with harmonics (a stand-in for a piano), or
+/// the file in `CADENZA_POLY_SCREEN_AUDIO`.
+fn chord_recording(dir: &std::path::Path) -> PathBuf {
+	if let Some(path) = std::env::var_os("CADENZA_POLY_SCREEN_AUDIO") {
+		return PathBuf::from(path);
+	}
+	let rate = 44_100u32;
+	let chords: [(&[u8], f64); 4] = [
+		(&[43, 62, 67, 71], 0.0),
+		(&[40, 59, 64, 67], 1.0),
+		(&[36, 60, 64, 67], 2.0),
+		(&[38, 57, 62, 66], 3.0),
+	];
+	let n = (4.5 * f64::from(rate)) as usize;
+	let mut x = vec![0.0f32; n];
+	for (pitches, start) in chords {
+		for &p in pitches {
+			let f = 440.0 * 2f64.powf((f64::from(p) - 69.0) / 12.0);
+			for (i, v) in x.iter_mut().enumerate() {
+				let t = i as f64 / f64::from(rate) - start;
+				if !(0.0..0.95).contains(&t) {
+					continue;
+				}
+				let env = (-t * 2.0).exp() * (t / 0.005).min(1.0);
+				for h in 1..5 {
+					*v += (env * (2.0 * std::f64::consts::PI * f * h as f64 * t).sin() * 0.12
+						/ (h * h) as f64) as f32;
+				}
+			}
+		}
+	}
+	let wav = dir.join("Piano chords.wav");
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(rate, vec![x]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	wav
+}
+
+#[test]
+#[ignore = "writes PNGs; run with CADENZA_SCREENSHOT_DIR"]
+fn render_polyphonic_note_editor_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	note_renders_dir();
+	let wav = chord_recording(tmp.path());
+	let mut state = AppState::headless();
+	state.analysis_cache = Some(tmp.path().join("cache"));
+	state.import_audio(&wav);
+	let clip = state.project().tracks.last().unwrap().clips[0].id;
+	assert!(state.open_note_editor(clip));
+	let file = cadenza_app::state::audio_edit::region(state.project(), clip)
+		.unwrap()
+		.file;
+	let start = std::time::Instant::now();
+	while cadenza_app::state::note_editor::clip_notes(state.project(), clip).is_none()
+		|| state.poly_layers.get(&file).is_none()
+	{
+		assert!(start.elapsed().as_secs() < 60);
+		std::thread::sleep(std::time::Duration::from_millis(5));
+		state.tick(std::time::Instant::now());
+	}
+	assert_eq!(state.poly_layers.polyphonic(&file), Some(true));
+	let mut h = screenshot_harness(CadenzaApp::with_state(state));
+	shot(&mut h, &dir, "notes_polyphonic");
+	h.get_by_label("Polyphonic recording");
+}

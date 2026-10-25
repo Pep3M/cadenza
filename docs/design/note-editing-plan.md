@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-7 shipped** (2026-10-24/25, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -560,6 +560,45 @@ the macros without flattening intentional expression (vibrato depth kept within 
 
 Acceptance: chords from a guitar/keys recording land as MIDI chords (note F1 near the paper's
 numbers for the material); drum loops -> drum pattern clip playable by `drum_machine`.
+
+**Shipped (NE-8).** `cadenza_notes::poly`: Basic Pitch hand-ported to Rust, no tract (it adds
+minutes of build and failed on SwiftF0): the 35,699 weights copied unchanged from the ONNX
+by `tools/basic-pitch/export.py` into `crates/notes/models/basic_pitch.bin` (143 kB,
+`include_bytes!`; Apache-2.0 text + provenance in `models/`, shipped in every release
+package). Front end = the graph's own CQT (9 octaves x 36 bins by half-band decimation with
+its kernels and low-pass), log normalization per 2 s window, batch norm, harmonic stacking,
+six convolutions; outputs equal onnxruntime's within 2e-4 (`one_window_matches_the_onnx_model`
+with `CADENZA_BASIC_PITCH_REFERENCE`). Windows overlap 30 frames like the original, but each
+frame keeps its exact time (the original's drift correction is not needed); windows run on up
+to 8 threads (a 20 s take: 2.1 s; mono: 0.14 s). Note creation = the published algorithm
+(onset peaks >= 0.5 tracked while the activation >= 0.3, 11 low frames tolerated, inferred
+onsets, melodia trick, >= 128 ms); an optional overtone filter (`overtone_ratio`: a note on a
+harmonic of a louder note starting within 40 ms, < 60 % of its activation) is off by default:
+on a real piano loop (`120_G_Piano_412_01_SP`, the user's test) it took real fifths and octaves
+over the bass, and without it the port gives exactly the reference package's 116 notes.
+`poly::polyphony` = share of the sounding time with two or more notes, ghosts excluded (the
+monophonic corpus: <= 0.11; that piano loop: 1.0).
+`cadenza_notes::drums`: per-band onsets (lows 30-150 Hz, mids 150-4k, highs 6-16k; rise >= 9 dB
+in 10 ms, within 35 dB of the band's loudest), grouped within 30 ms and labelled by absolute
+band levels: kick owns the lows, snare/toms own the mids over the highs (crack 1-4k vs body
+150-1k tells snare from tom, the low spectral peak places low/mid/high tom), hats are highs
+alone (ring < 150 ms closed, < 600 ms open, else crash); GM notes, velocity vs the loudest of
+the kind. `midi::{poly_to_midi, drums_to_midi}`. MCP `audio_to_midi { algorithm: auto | mono
+| poly | percussive, drum_note }` (`ClipNotes.{poly, drums}`, `detect_for`; auto = percussive at
+>= 1 hit/s with < 30 % pitched frames, poly at > 20 % chord time, else mono; drum clips go to a
+new `drum_machine` track, chords to keys). App: "Detection" row in Convert to MIDI (Auto /
+Melody / Chords / Drums, preview names it) and the note editor's polyphonic view
+(`state::note_editor::PolyLayers`, per file on a worker for the open clip): a clip that sounds
+chords shows them as the picture (read only, names when rows allow), a side column explains
+that per-note editing works on single lines and offers Convert to MIDI; on single-line clips
+a "Chords" chip overlays them. Found with the piano: a note sounding from the first frame
+started at -2.5 ms and the model refused the whole detection (regions now clamped to the
+audio). CLI `notes to-midi --algorithm
+--drum-note`. Round trips (`mcp/tests/audio_to_midi.rs`): electric piano chords -> poly (F >= 0.9),
+a drum_machine loop -> percussive kick/snare/hats (F >= 0.9), the NE-3 mono line still mono;
+the user's take stays mono. Not done: the piano-specific model, "percussive pitched" (808/tom
+pitch per hit), poly bends / MPE, a measurement on real guitar/piano and drum recordings
+(synthetic sources only), a poly cache on disk.
 
 ## NE-9 — Later
 

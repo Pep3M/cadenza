@@ -427,6 +427,8 @@ pub struct AppState {
 	pub note_renders: note_renders::NoteRenders,
 	/// Pitch analyses of audio files for the note editor.
 	pub note_analyses: note_editor::NoteAnalyses,
+	/// The note editor's read-only polyphonic layer, per file.
+	pub poly_layers: note_editor::PolyLayers,
 	collisions: collisions::CollisionState,
 	/// MIDI learn and the mapped controllers' values (T36).
 	pub midi: midi_learn::MidiLearnState,
@@ -577,6 +579,7 @@ impl AppState {
 			analysis_cache: None,
 			note_renders: note_renders::NoteRenders::new(),
 			note_analyses: note_editor::NoteAnalyses::default(),
+			poly_layers: note_editor::PolyLayers::default(),
 			collisions: collisions::CollisionState::default(),
 			midi: midi_learn::MidiLearnState::default(),
 			start: start::StartScreen::default(),
@@ -4214,6 +4217,7 @@ impl AppState {
 			|| self.jobs.bounce.is_some()
 			|| self.note_renders.busy()
 			|| self.note_analyses.busy()
+			|| self.poly_layers.busy()
 			|| self.ai.busy()
 			|| self.mix.busy()
 			|| self.record_animating()

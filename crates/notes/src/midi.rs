@@ -285,6 +285,166 @@ pub fn to_midi(
 	}
 }
 
+/// Converts polyphonic notes ([`crate::poly`]): chords stay chords. Same options as
+/// [`to_midi`] except `bends` and `merge_repeats` (per-note bends need MPE); a key snap
+/// moves out-of-key notes to the nearest scale tone, and notes of one pitch that end up
+/// overlapping are cut where the later starts. `origin` = song seconds at time 0.
+pub fn poly_to_midi(
+	notes: &[crate::poly::PolyNote],
+	tempo: &TempoMap,
+	origin: f64,
+	opts: &MidiOptions,
+) -> MidiConversion {
+	let mut dropped = 0;
+	let mut picked = Vec::with_capacity(notes.len());
+	for n in notes {
+		let (mut a, mut b) = (n.onset, n.offset);
+		if let Some((lo, hi)) = opts.region {
+			if (b.min(hi) - a.max(lo)) * 2.0 < b - a {
+				continue;
+			}
+			a = a.max(lo);
+			b = b.min(hi);
+		}
+		if b - a < opts.min_length {
+			dropped += 1;
+			continue;
+		}
+		picked.push((a, b, n.pitch, n.amplitude));
+	}
+	let key = match &opts.key {
+		KeySnap::Off => None,
+		KeySnap::Scale(s) => Some(*s),
+		KeySnap::Auto => {
+			let mut hist = [0.0f64; 12];
+			for &(a, b, p, _) in &picked {
+				hist[usize::from(p % 12)] += b - a;
+			}
+			Scale::infer(&hist)
+		}
+	};
+	let beat = |seconds: f64| tempo.seconds_to_tick((origin + seconds).max(0.0)).beats();
+	let snap = |b: f64| match opts.quantize {
+		Some(grid) if grid > 0.0 => {
+			b + opts.quantize_strength.clamp(0.0, 1.0) * ((b / grid).round() * grid - b)
+		}
+		_ => b,
+	};
+	let loudest = picked.iter().map(|n| n.3).fold(0.0f32, f32::max).max(1e-6);
+	let mut out: Vec<MidiNote> = Vec::with_capacity(picked.len());
+	for &(a, b, p, amp) in &picked {
+		let base = match &key {
+			Some(k) => nearest_in_key(k, f64::from(p)),
+			None => p,
+		};
+		let mut pitch = i32::from(base) + 12 * opts.octave_shift;
+		if let Some((low, high)) = opts.range {
+			let (low, high) = (i32::from(low.min(high)), i32::from(low.max(high)));
+			while pitch < low && pitch + 12 <= 127 {
+				pitch += 12;
+			}
+			while pitch > high && pitch - 12 >= 0 && pitch - 12 >= low.min(high - 11) {
+				pitch -= 12;
+			}
+		}
+		let (start, mut end) = (snap(beat(a)), snap(beat(b)));
+		if end <= start {
+			end = start
+				+ opts
+					.quantize
+					.filter(|g| *g > 0.0)
+					.unwrap_or(beat(b) - beat(a))
+					.max(1e-3);
+		}
+		out.push(MidiNote {
+			start,
+			length: end - start,
+			pitch: pitch.clamp(0, 127) as u8,
+			velocity: opts
+				.velocity
+				.unwrap_or_else(|| (0.35 + 0.65 * amp / loudest).clamp(0.25, 1.0)),
+			cents: 0.0,
+		});
+	}
+	out.sort_by(|x, y| x.start.total_cmp(&y.start).then(x.pitch.cmp(&y.pitch)));
+	// One pitch at a time: a repeat cuts the note before it; a duplicate start is dropped.
+	let mut kept: Vec<MidiNote> = Vec::with_capacity(out.len());
+	for n in out {
+		if let Some(prev) = kept.iter_mut().rev().find(|m| m.pitch == n.pitch)
+			&& n.start < prev.start + prev.length
+		{
+			if n.start - prev.start < 1e-6 {
+				dropped += 1;
+				prev.length = prev.length.max(n.length);
+				continue;
+			}
+			prev.length = n.start - prev.start;
+		}
+		kept.push(n);
+	}
+	MidiConversion {
+		notes: kept,
+		bends: Vec::new(),
+		key,
+		dropped,
+	}
+}
+
+/// Converts drum hits ([`crate::drums`]) to General MIDI drum notes (a sixteenth long, or
+/// the grid when quantizing), or every hit to `one_note`. Uses `quantize`,
+/// `quantize_strength`, `velocity` and `region` of `opts`; hits of one note landing on the
+/// same spot become one.
+pub fn drums_to_midi(
+	hits: &[crate::drums::DrumHit],
+	tempo: &TempoMap,
+	origin: f64,
+	opts: &MidiOptions,
+	one_note: Option<u8>,
+) -> MidiConversion {
+	let beat = |seconds: f64| tempo.seconds_to_tick((origin + seconds).max(0.0)).beats();
+	let grid = opts.quantize.filter(|g| *g > 0.0);
+	let snap = |b: f64| match grid {
+		Some(g) => b + opts.quantize_strength.clamp(0.0, 1.0) * ((b / g).round() * g - b),
+		None => b,
+	};
+	let length = grid.unwrap_or(0.25).min(0.25);
+	let mut notes: Vec<MidiNote> = Vec::with_capacity(hits.len());
+	let mut dropped = 0;
+	for h in hits {
+		if let Some((a, b)) = opts.region
+			&& !(a..b).contains(&h.time)
+		{
+			continue;
+		}
+		let start = snap(beat(h.time));
+		let pitch = one_note.unwrap_or_else(|| h.kind.note());
+		if let Some(same) = notes
+			.iter_mut()
+			.rev()
+			.take(16)
+			.find(|n| n.pitch == pitch && (n.start - start).abs() < 1e-6)
+		{
+			same.velocity = same.velocity.max(h.velocity);
+			dropped += 1;
+			continue;
+		}
+		notes.push(MidiNote {
+			start,
+			length,
+			pitch,
+			velocity: opts.velocity.unwrap_or(h.velocity),
+			cents: 0.0,
+		});
+	}
+	notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
+	MidiConversion {
+		notes,
+		bends: Vec::new(),
+		key: None,
+		dropped,
+	}
+}
+
 /// The scale tone nearest to a fractional pitch (the lower one on a tie).
 pub(crate) fn nearest_in_key(key: &Scale, sung: f64) -> u8 {
 	let around = sung.round().clamp(0.0, 127.0) as u8;
@@ -443,5 +603,51 @@ mod tests {
 			m.bends
 		);
 		assert_eq!(m.bends.last().unwrap().value, 0.0);
+	}
+
+	#[test]
+	fn polyphonic_notes_keep_their_chords_snap_and_cut_repeats() {
+		use crate::poly::PolyNote;
+		let n = |onset, offset, pitch, amplitude| PolyNote {
+			onset,
+			offset,
+			pitch,
+			amplitude,
+		};
+		let notes = [
+			n(0.0, 1.0, 60, 0.8),
+			n(0.0, 1.0, 64, 0.8),
+			n(0.0, 1.0, 67, 0.4),
+			n(0.5, 1.5, 60, 0.8),
+			n(1.0, 1.02, 72, 0.9),
+			n(1.0, 2.0, 66, 0.8),
+		];
+		let tempo = TempoMap::constant(120.0);
+		let c = poly_to_midi(&notes, &tempo, 1.0, &MidiOptions::default());
+		assert_eq!(c.dropped, 1, "the 20 ms note");
+		let starts: Vec<(f64, u8)> = c.notes.iter().map(|m| (m.start, m.pitch)).collect();
+		assert_eq!(
+			starts,
+			[(2.0, 60), (2.0, 64), (2.0, 67), (3.0, 60), (4.0, 66)],
+			"song beats: origin 1 s = beat 2"
+		);
+		assert!(
+			(c.notes[0].length - 1.0).abs() < 1e-9,
+			"cut where the repeat starts"
+		);
+		assert!(c.notes[2].velocity < c.notes[1].velocity);
+		let snapped = poly_to_midi(
+			&notes,
+			&tempo,
+			0.0,
+			&MidiOptions {
+				key: KeySnap::Scale(Scale::parse("C major").unwrap()),
+				..MidiOptions::default()
+			},
+		);
+		assert!(
+			snapped.notes.iter().all(|m| m.pitch != 66),
+			"F# snapped into C major"
+		);
 	}
 }

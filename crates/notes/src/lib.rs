@@ -12,12 +12,14 @@
 pub mod analysis;
 pub mod baseline;
 pub mod clip;
+pub mod drums;
 pub mod edit;
 pub mod eval;
 pub mod features;
 pub mod marks;
 pub mod midi;
 mod par;
+pub mod poly;
 pub mod psola;
 pub mod pyin;
 pub mod refine;

@@ -27,6 +27,13 @@ pub struct ToMidiArgs {
 	/// Hum defaults: sixteenth grid, key inferred and snapped, repeats merged.
 	#[arg(long)]
 	hum: bool,
+	/// Detector: auto (drums or chords when the recording is mostly that), mono (one line,
+	/// with bends), poly (chords: piano, guitar, keys) or percussive (drum hits as GM notes).
+	#[arg(long, default_value = "auto", value_parser = ["auto", "mono", "poly", "percussive"])]
+	algorithm: String,
+	/// Percussive: every hit as this note (a name like "C1" or a MIDI number).
+	#[arg(long)]
+	drum_note: Option<String>,
 	/// Grid in beats (0.25 = sixteenths, 0 = none).
 	#[arg(long)]
 	quantize: Option<f64>,
@@ -232,6 +239,17 @@ fn to_midi(args: ToMidiArgs) -> Result<()> {
 			} else {
 				notes::ConvertMode::Audio
 			},
+			algorithm: match args.algorithm.as_str() {
+				"mono" => notes::Algorithm::Mono,
+				"poly" => notes::Algorithm::Poly,
+				"percussive" => notes::Algorithm::Percussive,
+				_ => notes::Algorithm::Auto,
+			},
+			drum_note: args
+				.drum_note
+				.as_deref()
+				.map(|n| cadenza_theory::parse_pitch(n).map(cadenza_mcp::convert::PitchInput))
+				.transpose()?,
 			quantize_beats: args.quantize,
 			key: args.key,
 			bends: args.bends.then_some(true),
@@ -252,7 +270,12 @@ fn to_midi(args: ToMidiArgs) -> Result<()> {
 			..Default::default()
 		},
 	)?;
-	println!("{} notes -> {}", out.note_count, output.display());
+	let kind = match out.algorithm {
+		notes::Algorithm::Poly => "chords",
+		notes::Algorithm::Percussive => "drums",
+		_ => "melody",
+	};
+	println!("{} notes ({kind}) -> {}", out.note_count, output.display());
 	if let Some(key) = &out.key {
 		println!("key: {key}");
 	}

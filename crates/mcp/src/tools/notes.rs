@@ -8,13 +8,17 @@ use cadenza_model::{
 	Project, Track, TrackKind,
 };
 use cadenza_notes::analysis::{Analysis, AnalysisOptions, Cache};
-use cadenza_notes::midi::{KeySnap, MidiConversion, MidiOptions, to_midi};
+use cadenza_notes::drums::DrumHit;
+use cadenza_notes::midi::{
+	KeySnap, MidiConversion, MidiOptions, drums_to_midi, poly_to_midi, to_midi,
+};
+use cadenza_notes::poly::PolyNote;
 use cadenza_notes::segment::{SegmentOptions, Segmentation, segment};
 use cadenza_theory::{Scale, format_pitch, parse_pitch};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::convert::{DeviceSpec, build_device, tick_to_beats};
+use crate::convert::{DeviceSpec, PitchInput, build_device, tick_to_beats};
 use crate::error::McpError;
 use crate::session::Session;
 
@@ -29,6 +33,29 @@ pub enum ConvertMode {
 	Hum,
 }
 
+/// Which detector turns the audio into notes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Algorithm {
+	/// Poly when chords sound a good part of the time, else mono.
+	#[default]
+	Auto,
+	/// One note at a time (voice, bass, lead): exact timing, intonation, pitch bends.
+	Mono,
+	/// Chords and several lines (piano, guitar, keys, ensembles): no pitch bends.
+	Poly,
+	/// Drums and percussion: each hit a General MIDI drum note (kick, snare, hats, toms,
+	/// crash), for drum_machine.
+	Percussive,
+}
+
+/// Share of the sounding time with two or more notes above which `auto` picks poly.
+pub const POLY_SHARE: f64 = 0.2;
+/// `auto` picks percussive with at least this many hits per second and less than
+/// `DRUM_VOICED` of the frames pitched.
+pub const DRUM_RATE: f64 = 1.0;
+pub const DRUM_VOICED: f64 = 0.3;
+
 #[derive(Debug, Default, Clone, Deserialize, JsonSchema)]
 pub struct AudioToMidiArgs {
 	/// Audio clip whose notes to capture (a monophonic part: voice, bass, lead).
@@ -36,6 +63,14 @@ pub struct AudioToMidiArgs {
 	/// audio (default) or hum; the other fields override its defaults.
 	#[serde(default)]
 	pub mode: ConvertMode,
+	/// auto (default), mono (one line: voice, bass, lead), poly (chords: piano, guitar) or
+	/// percussive (drums).
+	#[serde(default)]
+	pub algorithm: Algorithm,
+	/// Percussive: write every hit as this one note (e.g. "C1" for a sample pad) instead of
+	/// the detected kit pieces.
+	#[serde(default)]
+	pub drum_note: Option<PitchInput>,
 	/// Instrument track to write the clip on; omit to create one below the audio track
 	/// (bass, keys or lead sound picked by register).
 	#[serde(default)]
@@ -78,6 +113,8 @@ pub struct AudioToMidiArgs {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct AudioToMidiOutput {
+	/// The detector used: mono or poly.
+	pub algorithm: Algorithm,
 	pub track_id: TrackId,
 	pub created_track: bool,
 	pub clip_id: ClipId,
@@ -108,6 +145,130 @@ pub struct ClipNotes {
 	pub origin: f64,
 	/// File seconds the clip plays.
 	pub region: (f64, f64),
+	/// Polyphonic notes of the region (file seconds), when detected ([`detect_poly`]).
+	pub poly: Option<Vec<PolyNote>>,
+	/// Drum hits of the region (file seconds), when detected ([`detect_drums`]).
+	pub drums: Option<Vec<DrumHit>>,
+}
+
+impl ClipNotes {
+	/// Share of the sounding time with two or more polyphonic notes at once (0 without
+	/// them).
+	pub fn polyphony(&self) -> f64 {
+		self.poly
+			.as_deref()
+			.map_or(0.0, cadenza_notes::poly::polyphony)
+	}
+
+	/// Share of the analysis frames in the clip's region with a pitch.
+	pub fn voiced_share(&self) -> f64 {
+		let (a, b) = self.region;
+		let frames: Vec<bool> = self
+			.analysis
+			.frames
+			.iter()
+			.filter(|f| (a..b).contains(&f.time))
+			.map(|f| f.pitch.is_some())
+			.collect();
+		frames.iter().filter(|v| **v).count() as f64 / frames.len().max(1) as f64
+	}
+
+	/// The detector `algorithm` resolves to for these notes: percussive when hits come
+	/// often and little is pitched, poly when chords sound often, else mono.
+	pub fn resolve(&self, algorithm: Algorithm) -> Algorithm {
+		let seconds = (self.region.1 - self.region.0).max(1e-3);
+		let percussive = self.drums.as_ref().is_some_and(|d| {
+			d.len() as f64 / seconds >= DRUM_RATE && self.voiced_share() < DRUM_VOICED
+		});
+		match algorithm {
+			Algorithm::Auto if percussive => Algorithm::Percussive,
+			Algorithm::Auto if self.poly.is_some() && self.polyphony() > POLY_SHARE => {
+				Algorithm::Poly
+			}
+			Algorithm::Auto => Algorithm::Mono,
+			a => a,
+		}
+	}
+}
+
+/// The mono mix of the part of the file the clip plays, its rate and the file second it
+/// starts at.
+fn region_samples(project: &Project, notes: &ClipNotes) -> Result<(Vec<f32>, u32, f64), McpError> {
+	let (_, clip) = project
+		.find_clip(notes.clip_id)
+		.ok_or(ModelError::ClipNotFound(notes.clip_id))?;
+	let ClipContent::Audio { file, .. } = &clip.content else {
+		return Err(McpError::Invalid(format!(
+			"clip {} is a MIDI clip",
+			notes.clip_id
+		)));
+	};
+	let buffer = cadenza_audio_io::decode_file(file).map_err(|e| McpError::Io {
+		path: file.display().to_string(),
+		message: format!("{e}; relink the clip's file (list_missing_files, relink_files)"),
+	})?;
+	let channels: Vec<&[f32]> = buffer.channels().iter().map(Vec::as_slice).collect();
+	let mono = cadenza_notes::resynth::mono(&channels);
+	let rate = buffer.sample_rate();
+	let from = ((notes.region.0.max(0.0)) * f64::from(rate)) as usize;
+	let to = ((notes.region.1 * f64::from(rate)) as usize).min(mono.len());
+	let from = from.min(to);
+	Ok((mono[from..to].to_vec(), rate, from as f64 / f64::from(rate)))
+}
+
+/// Runs the polyphonic detector (Basic Pitch) over the part of the file the clip plays and
+/// keeps its notes in `notes.poly`. A few seconds per minute of audio.
+pub fn detect_poly(project: &Project, notes: &mut ClipNotes) -> Result<(), McpError> {
+	let (part, rate, shift) = region_samples(project, notes)?;
+	let (_, found) = cadenza_notes::poly::transcribe(
+		&part,
+		rate,
+		&cadenza_notes::poly::PolyOptions::default(),
+		&mut |_| true,
+	)
+	.ok_or_else(|| McpError::Invalid("the analysis was cancelled".into()))?;
+	notes.poly = Some(
+		found
+			.into_iter()
+			.map(|n| PolyNote {
+				onset: n.onset + shift,
+				offset: n.offset + shift,
+				..n
+			})
+			.collect(),
+	);
+	Ok(())
+}
+
+/// Finds the drum hits of the part of the file the clip plays (`notes.drums`). Fast.
+pub fn detect_drums(project: &Project, notes: &mut ClipNotes) -> Result<(), McpError> {
+	let (part, rate, shift) = region_samples(project, notes)?;
+	let hits =
+		cadenza_notes::drums::detect(&part, rate, &cadenza_notes::drums::DrumOptions::default());
+	notes.drums = Some(
+		hits.into_iter()
+			.map(|h| DrumHit {
+				time: h.time + shift,
+				..h
+			})
+			.collect(),
+	);
+	Ok(())
+}
+
+/// Every detector `algorithm` may need (mono is always there).
+pub fn detect_for(
+	project: &Project,
+	notes: &mut ClipNotes,
+	algorithm: Algorithm,
+) -> Result<(), McpError> {
+	if matches!(algorithm, Algorithm::Auto | Algorithm::Percussive) && notes.drums.is_none() {
+		detect_drums(project, notes)?;
+	}
+	if matches!(algorithm, Algorithm::Auto | Algorithm::Poly) && notes.poly.is_none() {
+		detect_poly(project, notes)?;
+	}
+	Ok(())
 }
 
 /// The analysis cache folder in the user cache folder.
@@ -176,6 +337,8 @@ pub fn analyze_clip(
 		segmentation,
 		origin,
 		region,
+		poly: None,
+		drums: None,
 	})
 }
 
@@ -273,19 +436,34 @@ pub fn midi_options(args: &AudioToMidiArgs) -> Result<MidiOptions, McpError> {
 	Ok(o)
 }
 
-/// Converts analyzed clip notes with `opts`, restricted to what the clip plays.
-pub fn convert(project: &Project, notes: &ClipNotes, opts: &MidiOptions) -> MidiConversion {
+/// Converts analyzed clip notes with `opts`, restricted to what the clip plays, with the
+/// detector `algorithm` resolves to (poly needs [`detect_poly`] first, else mono is used).
+pub fn convert(
+	project: &Project,
+	notes: &ClipNotes,
+	opts: &MidiOptions,
+	algorithm: Algorithm,
+	drum_note: Option<u8>,
+) -> MidiConversion {
 	let opts = MidiOptions {
 		region: Some(notes.region),
 		..opts.clone()
 	};
-	to_midi(
-		&notes.segmentation,
-		&notes.analysis,
-		&project.tempo,
-		notes.origin,
-		&opts,
-	)
+	match notes.resolve(algorithm) {
+		Algorithm::Poly if let Some(poly) = &notes.poly => {
+			poly_to_midi(poly, &project.tempo, notes.origin, &opts)
+		}
+		Algorithm::Percussive if let Some(hits) = &notes.drums => {
+			drums_to_midi(hits, &project.tempo, notes.origin, &opts, drum_note)
+		}
+		_ => to_midi(
+			&notes.segmentation,
+			&notes.analysis,
+			&project.tempo,
+			notes.origin,
+			&opts,
+		),
+	}
 }
 
 /// "C major", "F# dorian".
@@ -304,7 +482,10 @@ pub fn conversion_command(
 	notes: &ClipNotes,
 	conversion: &MidiConversion,
 	target: Option<TrackId>,
+	algorithm: Algorithm,
 ) -> Result<(Command, AudioToMidiOutput), McpError> {
+	let algorithm = notes.resolve(algorithm);
+	let drums = algorithm == Algorithm::Percussive;
 	let (_, audio) = project
 		.find_clip(notes.clip_id)
 		.ok_or(ModelError::ClipNotFound(notes.clip_id))?;
@@ -316,6 +497,13 @@ pub fn conversion_command(
 		)));
 	}
 	let start_beat = tick_to_beats(audio.start);
+	// Chords: a note starting while another (of another pitch) still sounds, often.
+	let overlapping = conversion
+		.notes
+		.windows(2)
+		.filter(|w| w[1].start + 1e-6 < w[0].start + w[0].length)
+		.count();
+	let chords = overlapping * 4 >= conversion.notes.len();
 	let mut midi_notes = Vec::with_capacity(conversion.notes.len());
 	let mut end = audio.length;
 	for n in &conversion.notes {
@@ -381,6 +569,8 @@ pub fn conversion_command(
 			let mut sorted: Vec<u8> = conversion.notes.iter().map(|n| n.pitch).collect();
 			sorted.sort_unstable();
 			let (device, preset) = match sorted[sorted.len() / 2] {
+				_ if drums => ("drum_machine", None),
+				_ if chords => ("electric_piano", None),
 				..48 => ("poly_synth", Some("Sub Bass")),
 				48..60 => ("electric_piano", None),
 				_ => ("poly_synth", Some("Night Drive Lead")),
@@ -400,7 +590,12 @@ pub fn conversion_command(
 			let source = project
 				.track(notes.track_id)
 				.ok_or(ModelError::TrackNotFound(notes.track_id))?;
-			let mut track = Track::new(format!("{} MIDI", source.name), TrackKind::Instrument);
+			let name = if drums {
+				format!("{} Drums", source.name)
+			} else {
+				format!("{} MIDI", source.name)
+			};
+			let mut track = Track::new(name, TrackKind::Instrument);
 			track.instrument = Some(instrument);
 			track.color = source.color.clone();
 			track.folder = source.folder;
@@ -448,6 +643,7 @@ pub fn conversion_command(
 	Ok((
 		command,
 		AudioToMidiOutput {
+			algorithm,
 			track_id,
 			created_track: created,
 			clip_id,
@@ -489,8 +685,17 @@ pub fn audio_to_midi(
 		args.sensitivity.unwrap_or(1.0),
 		&default_cache_dir(),
 	)?;
-	let conversion = convert(project, &notes, &opts);
-	let (command, out) = conversion_command(project, &notes, &conversion, args.track_id)?;
+	let mut notes = notes;
+	detect_for(project, &mut notes, args.algorithm)?;
+	let conversion = convert(
+		project,
+		&notes,
+		&opts,
+		args.algorithm,
+		args.drum_note.map(|p| p.0),
+	);
+	let (command, out) =
+		conversion_command(project, &notes, &conversion, args.track_id, args.algorithm)?;
 	session.document_mut().execute(command)?;
 	Ok(out)
 }

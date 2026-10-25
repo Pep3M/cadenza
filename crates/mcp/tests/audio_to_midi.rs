@@ -221,3 +221,234 @@ async fn rendered_midi_comes_back_as_the_same_notes() {
 	.unwrap_err();
 	assert!(err.to_string().contains("A minor"), "{err}");
 }
+
+/// C - F - G - Am - C, block chords of two beats at 120 bpm.
+const CHORDS: [[u8; 3]; 5] = [
+	[60, 64, 67],
+	[60, 65, 69],
+	[59, 62, 67],
+	[57, 60, 64],
+	[55, 60, 64],
+];
+
+#[tokio::test]
+async fn rendered_chords_come_back_as_chords() {
+	let dir = tempfile::tempdir().unwrap();
+	unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path().join("cache")) };
+	let mut session = Session::new();
+	let keys = tracks::create_track(
+		&mut session,
+		tracks::CreateTrackArgs {
+			name: "Keys".into(),
+			kind: TrackKind::Instrument,
+			instrument: Some(DeviceSpec {
+				device: "electric_piano".into(),
+				params: BTreeMap::new(),
+				preset: None,
+			}),
+			color: None,
+			output: None,
+		},
+	)
+	.unwrap()
+	.track_id;
+	clips::add_midi_clip(
+		&mut session,
+		clips::AddMidiClipArgs {
+			track_id: keys,
+			start_beat: 0.0,
+			length_beats: 10.0,
+			name: None,
+			notes: CHORDS
+				.iter()
+				.enumerate()
+				.flat_map(|(i, chord)| {
+					chord.iter().map(move |&p| clips::NoteInput {
+						pitch: PitchInput(p),
+						start: 2.0 * i as f64,
+						length: 1.9,
+						velocity: Some(0.8),
+					})
+				})
+				.collect(),
+		},
+	)
+	.unwrap();
+	let wav = dir.path().join("chords.wav");
+	render::render(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::RenderArgs {
+			path: wav.display().to_string(),
+			start_beat: Some(0.0),
+			end_beat: Some(11.0),
+			sample_rate: Some(44_100),
+			..Default::default()
+		},
+	)
+	.await
+	.unwrap();
+	tracks::delete_track(&mut session, tracks::DeleteTrackArgs { track_id: keys }).unwrap();
+	let imported = audio::import_audio(
+		&mut session,
+		audio::ImportAudioArgs {
+			path: wav.display().to_string(),
+			at_beats: Some(0.0),
+			..Default::default()
+		},
+	)
+	.unwrap();
+	let out = notes::audio_to_midi(
+		&mut session,
+		notes::AudioToMidiArgs {
+			clip_id: imported.clip_id,
+			..Default::default()
+		},
+	)
+	.unwrap();
+	assert_eq!(out.algorithm, notes::Algorithm::Poly, "{out:?}");
+	let found = clip_notes(&session, out.clip_id);
+	// Every chord's notes start at its beat (within 0.1 beat).
+	let wanted: Vec<(u8, f64)> = CHORDS
+		.iter()
+		.enumerate()
+		.flat_map(|(i, c)| c.iter().map(move |&p| (p, 2.0 * i as f64)))
+		.collect();
+	let matched = wanted
+		.iter()
+		.filter(|&&(p, s)| {
+			found
+				.iter()
+				.any(|&(q, t, _)| q == p && (t - s).abs() <= 0.1)
+		})
+		.count();
+	assert!(
+		matched as f64 >= 0.95 * wanted.len() as f64,
+		"{matched} of {}: {found:?}",
+		wanted.len()
+	);
+	// Anything else is an overtone of a note of the chord sounding then (the synthetic
+	// electric piano is bright; the overtone filter is off by default).
+	for &(q, t, _) in &found {
+		let chord = CHORDS[((t + 0.1) / 2.0).floor().clamp(0.0, 4.0) as usize];
+		let overtone = chord
+			.iter()
+			.any(|&p| q > p && [12, 19, 24, 28, 31].contains(&(q - p)));
+		assert!(chord.contains(&q) || overtone, "{q} at {t}: {found:?}");
+	}
+	// Forced mono gives one line.
+	session.document_mut().undo().unwrap();
+	let out = notes::audio_to_midi(
+		&mut session,
+		notes::AudioToMidiArgs {
+			clip_id: imported.clip_id,
+			algorithm: notes::Algorithm::Mono,
+			..Default::default()
+		},
+	)
+	.unwrap();
+	assert_eq!(out.algorithm, notes::Algorithm::Mono);
+}
+
+#[tokio::test]
+async fn a_rendered_drum_loop_comes_back_as_a_drum_clip() {
+	let dir = tempfile::tempdir().unwrap();
+	unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path().join("cache")) };
+	let mut session = Session::new();
+	let drums = tracks::create_track(
+		&mut session,
+		tracks::CreateTrackArgs {
+			name: "Drums".into(),
+			kind: TrackKind::Instrument,
+			instrument: Some(DeviceSpec {
+				device: "drum_machine".into(),
+				params: BTreeMap::new(),
+				preset: None,
+			}),
+			color: None,
+			output: None,
+		},
+	)
+	.unwrap()
+	.track_id;
+	let lanes: BTreeMap<String, String> = [
+		("kick", "x... .... x... ...."),
+		("snare", ".... x... .... x..."),
+		("closed_hat", "..x. ..x. ..x. ..x."),
+	]
+	.into_iter()
+	.map(|(k, v)| (k.to_owned(), v.to_owned()))
+	.collect();
+	cadenza_mcp::tools::compose::write_drum_pattern(
+		&mut session,
+		cadenza_mcp::tools::compose::WriteDrumPatternArgs {
+			track_id: drums,
+			start_beat: 0.0,
+			bars: 2,
+			steps_per_beat: None,
+			swing: None,
+			lanes,
+		},
+	)
+	.unwrap();
+	let wav = dir.path().join("drums.wav");
+	render::render(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::RenderArgs {
+			path: wav.display().to_string(),
+			start_beat: Some(0.0),
+			end_beat: Some(9.0),
+			sample_rate: Some(44_100),
+			..Default::default()
+		},
+	)
+	.await
+	.unwrap();
+	tracks::delete_track(&mut session, tracks::DeleteTrackArgs { track_id: drums }).unwrap();
+	let imported = audio::import_audio(
+		&mut session,
+		audio::ImportAudioArgs {
+			path: wav.display().to_string(),
+			at_beats: Some(0.0),
+			..Default::default()
+		},
+	)
+	.unwrap();
+	let out = notes::audio_to_midi(
+		&mut session,
+		notes::AudioToMidiArgs {
+			clip_id: imported.clip_id,
+			..Default::default()
+		},
+	)
+	.unwrap();
+	assert_eq!(out.algorithm, notes::Algorithm::Percussive, "{out:?}");
+	let project = session.document().project();
+	let track = project.track(out.track_id).unwrap();
+	assert_eq!(
+		track.instrument.as_ref().and_then(|d| d.builtin_id()),
+		Some("drum_machine")
+	);
+	let found = clip_notes(&session, out.clip_id);
+	let mut wanted = Vec::new();
+	for bar in 0..2 {
+		let b = 4.0 * bar as f64;
+		wanted.extend([(36, b), (36, b + 2.0), (38, b + 1.0), (38, b + 3.0)]);
+		wanted.extend((0..4).map(|i| (42, b + 0.5 + i as f64)));
+	}
+	let matched = wanted
+		.iter()
+		.filter(|&&(p, s)| {
+			found
+				.iter()
+				.any(|&(q, t, _)| q == p && (t - s).abs() <= 0.06)
+		})
+		.count();
+	let precision = matched as f64 / found.len() as f64;
+	let recall = matched as f64 / wanted.len() as f64;
+	let f = 2.0 * precision * recall / (precision + recall);
+	assert!(f >= 0.9, "F {f:.3}: {found:?}");
+}

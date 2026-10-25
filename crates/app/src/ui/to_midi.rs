@@ -3,7 +3,7 @@
 
 use egui::{Align, Id, Layout, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
-use cadenza_mcp::tools::notes::{ConvertMode, midi_options};
+use cadenza_mcp::tools::notes::{Algorithm, ConvertMode, midi_options};
 use cadenza_notes::midi::KeySnap;
 
 use crate::i18n::{tr, trn};
@@ -116,6 +116,30 @@ fn options(ui: &mut Ui, state: &mut AppState) {
 		return;
 	};
 	let effective = midi_options(&c.args).unwrap_or_default();
+	row(ui, tr("Detection"), |ui| {
+		let kinds = [
+			(Algorithm::Auto, tr("Auto")),
+			(Algorithm::Mono, tr("Melody (one note)")),
+			(Algorithm::Poly, tr("Chords (polyphonic)")),
+			(Algorithm::Percussive, tr("Drums")),
+		];
+		let labels: Vec<&str> = kinds.iter().map(|k| k.1).collect();
+		let selected = kinds
+			.iter()
+			.position(|k| k.0 == c.args.algorithm)
+			.unwrap_or(0);
+		if let Some(i) = widgets::segmented_sized(ui, &labels, selected, 480.0) {
+			c.args.algorithm = kinds[i].0;
+		}
+	});
+	ui.label(
+		RichText::new(tr(
+			"Melody: voice, bass or lead, with exact timing and pitch bends. Chords: piano, guitar or keys, several notes at once (no bends). Drums: kick, snare, hats, toms and cymbals as drum notes. Auto picks drums or chords when the recording is mostly that",
+		))
+		.font(theme::small())
+		.color(theme::TEXT_FAINT),
+	);
+	ui.add_space(4.0);
 	row(ui, tr("Material"), |ui| {
 		let modes = [
 			tr("Recording (as played)"),
@@ -257,6 +281,12 @@ fn options(ui: &mut Ui, state: &mut AppState) {
 fn preview_panel(ui: &mut Ui, p: &ConvertPreview) {
 	let s = &p.summary;
 	let mut line = trn("{n} note", "{n} notes", s.note_count);
+	line.push_str(" · ");
+	line.push_str(match s.algorithm {
+		Algorithm::Poly => tr("chords"),
+		Algorithm::Percussive => tr("drums"),
+		_ => tr("melody"),
+	});
 	if let Some(key) = &s.key {
 		line.push_str(&format!(" · {key}"));
 	}

@@ -105,6 +105,8 @@ pub struct NoteEditorUi {
 	sibilants: Option<f32>,
 	/// Canvas in the last frame (tests).
 	pub canvas: Option<Rect>,
+	/// Clip whose pitch range was fitted to its polyphonic notes.
+	poly_framed: Option<ClipId>,
 }
 
 struct View<'a> {
@@ -141,6 +143,19 @@ fn scale_label(s: &Scale) -> String {
 impl NoteEditorUi {
 	/// The notes part of the toolbar: tools, key, snap, macros toggle, status.
 	pub fn toolbar(&mut self, ui: &mut Ui, state: &mut AppState, r: &Region) {
+		if state.poly_layers.polyphonic(&r.file) == Some(true) {
+			let count = state.poly_layers.get(&r.file).map_or(0, |p| p.len());
+			ui.label(
+				RichText::new(format!(
+					"{} · {}",
+					trn("{n} note", "{n} notes", count),
+					tr("chords")
+				))
+				.font(theme::small())
+				.color(theme::TEXT_DIM),
+			);
+			return;
+		}
 		let tool = state.view.audio.notes.tool;
 		for t in NoteTool::ALL {
 			let label = format!("{} {}", t.glyph(), tr_str(t.label()));
@@ -209,6 +224,22 @@ impl NoteEditorUi {
 				"The edited sound is being rendered; playback uses it as soon as it is ready",
 			));
 		}
+		let chords = state.view.audio.notes.chords;
+		if super::arrange::toolbar_chip(
+			ui,
+			chords,
+			tr("Chords"),
+			None,
+			theme::BG_WIDGET,
+			theme::TEXT,
+		)
+		.on_hover_text(tr(
+			"Show every note the polyphonic detector hears (chords, other voices, bleed) behind the notes, read only; Convert to MIDI can turn them into a MIDI clip",
+		))
+		.clicked()
+		{
+			state.view.audio.notes.chords = !chords;
+		}
 		let macros = state.view.audio.notes.macros;
 		if super::arrange::toolbar_chip(
 			ui,
@@ -263,8 +294,52 @@ impl NoteEditorUi {
 		let key = state.view.audio.notes.scale(&edits);
 		super::audio_editor::ruler_paint(ui, state, layout.ruler);
 		self.keys(ui, &v, layout.keys, key.as_ref());
+		if state.poly_layers.polyphonic(&r.file) == Some(true)
+			&& self.poly_framed != Some(clip)
+			&& let Some(poly) = state.poly_layers.get(&r.file)
+		{
+			let lo = poly.iter().map(|n| n.pitch).min().unwrap_or(48);
+			let hi = poly.iter().map(|n| n.pitch).max().unwrap_or(72);
+			let v = &mut state.view.audio.notes;
+			v.low = (f64::from(lo) - 3.0).max(0.0);
+			v.high = (f64::from(hi) + 3.0).max(v.low + 12.0).min(127.0);
+			self.poly_framed = Some(clip);
+		}
 		let p = ui.painter_at(canvas);
 		grid(&p, &v, key.as_ref());
+		if state.poly_layers.polyphonic(&r.file) == Some(true)
+			&& let Some(poly) = state.poly_layers.get(&r.file)
+		{
+			// Chords: the polyphonic notes are the picture, read only.
+			chord_layer(&p, &v, &poly, state, true);
+			let s = r.seconds_of(state.project(), state.position());
+			let x = v.x(s);
+			if (canvas.left()..=canvas.right()).contains(&x) {
+				ui.painter().vline(
+					x,
+					layout.ruler.top()..=canvas.bottom(),
+					Stroke::new(1.5, theme::PLAYHEAD),
+				);
+			}
+			match layout.macros {
+				Some(m) => polyphonic_column(ui, state, m, clip),
+				None => status(ui, canvas, tr("Chords detected: notes shown read only")),
+			}
+			return;
+		}
+		if state.view.audio.notes.chords {
+			match state.poly_layers.get(&r.file) {
+				Some(poly) => chord_layer(&p, &v, &poly, state, false),
+				None if state.poly_layers.loading(&r.file) => {
+					status(ui, canvas, tr("finding the chords…"));
+				}
+				None => {
+					if let Some(e) = state.poly_layers.failure(&r.file) {
+						status(ui, canvas, &format!("⚠ {e}"));
+					}
+				}
+			}
+		}
 		let preview = self.preview(ui, state, &v, &edits, key.as_ref());
 		self.paint_notes(ui, state, &v, &edits, analysis.as_deref(), &preview);
 		self.interact(ui, state, &v, &edits, key.as_ref());
@@ -1209,6 +1284,83 @@ fn note_tip(n: &cadenza_model::AudioNote) -> String {
 		});
 	}
 	lines.join("\n")
+}
+
+/// The macros column of a polyphonic clip: what can be done instead.
+fn polyphonic_column(ui: &mut Ui, state: &mut AppState, rect: Rect, clip: ClipId) {
+	ui.painter().rect_filled(rect, 0.0, theme::BG_PANEL);
+	ui.painter().vline(
+		rect.left() + 0.5,
+		rect.y_range(),
+		Stroke::new(1.0, theme::BORDER),
+	);
+	let mut child = ui.new_child(
+		egui::UiBuilder::new()
+			.max_rect(rect.shrink2(vec2(10.0, 10.0)))
+			.layout(egui::Layout::top_down(egui::Align::Min)),
+	);
+	theme::section_label(&mut child, tr("Polyphonic recording"));
+	child.label(
+		RichText::new(tr(
+			"Several notes sound at once here (piano, guitar, chords). They are shown as detected, for reading and for MIDI. Retuning and moving single notes works on recordings of one voice or instrument line: editing one note inside a chord is not available.",
+		))
+		.font(theme::small())
+		.color(theme::TEXT_DIM),
+	);
+	child.add_space(8.0);
+	if theme::primary_button(&mut child, tr("Convert to MIDI…")).clicked() {
+		state.start_convert_to_midi(clip);
+	}
+}
+
+/// The polyphonic detector's notes on their semitone rows (read only), brighter for
+/// stronger notes; `primary` draws them as the main picture, with names.
+fn chord_layer(
+	p: &egui::Painter,
+	v: &View,
+	poly: &[cadenza_notes::poly::PolyNote],
+	state: &AppState,
+	primary: bool,
+) {
+	let color = state
+		.project()
+		.track(v.r.track)
+		.and_then(|t| t.color.as_deref())
+		.map_or(theme::ACCENT, |c| theme::track_color(Some(c)));
+	let (from, to) = (v.s(v.canvas.left()), v.s(v.canvas.right()));
+	let row = v.row();
+	for n in poly.iter().filter(|n| n.offset > from && n.onset < to) {
+		let y = v.y(f64::from(n.pitch));
+		if y < v.canvas.top() - row || y > v.canvas.bottom() + row {
+			continue;
+		}
+		let rect = Rect::from_x_y_ranges(
+			v.x(n.onset)..=v.x(n.offset).max(v.x(n.onset) + 2.0),
+			(y - 0.45 * row.max(6.0))..=(y + 0.45 * row.max(6.0)),
+		);
+		let alpha = 0.25 + 0.5 * n.amplitude.clamp(0.0, 1.0);
+		let fill = if primary {
+			0.55 + 0.45 * alpha
+		} else {
+			0.18 * alpha
+		};
+		p.rect_filled(rect, 2.0, color.gamma_multiply(fill));
+		p.rect_stroke(
+			rect,
+			2.0,
+			Stroke::new(1.0, color.gamma_multiply(if primary { 1.0 } else { alpha })),
+			egui::StrokeKind::Inside,
+		);
+		if primary && rect.width() > 30.0 && row >= 11.0 {
+			p.text(
+				rect.left_center() + vec2(4.0, 0.0),
+				egui::Align2::LEFT_CENTER,
+				cadenza_theory::format_pitch(n.pitch, false),
+				theme::small(),
+				theme::TEXT_ON_ACCENT,
+			);
+		}
+	}
 }
 
 fn status(ui: &Ui, canvas: Rect, text: &str) {

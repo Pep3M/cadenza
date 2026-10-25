@@ -148,6 +148,8 @@ pub struct NoteEditorView {
 	pub sensitivity: f32,
 	/// Show the macros column.
 	pub macros: bool,
+	/// Show the polyphonic detector's notes behind (read only).
+	pub chords: bool,
 }
 
 impl Default for NoteEditorView {
@@ -168,6 +170,7 @@ impl Default for NoteEditorView {
 			leveling: 0.5,
 			sensitivity: 1.0,
 			macros: true,
+			chords: false,
 		}
 	}
 }
@@ -708,6 +711,86 @@ impl NoteAnalyses {
 	}
 }
 
+type PolyJob = Job<Result<Vec<cadenza_notes::poly::PolyNote>, String>>;
+
+/// The notes the polyphonic detector hears in a file (file seconds), per file, made on a
+/// worker once: the note editor's read-only "Chords" layer.
+#[derive(Default)]
+pub struct PolyLayers {
+	ready: HashMap<PathBuf, Arc<Vec<cadenza_notes::poly::PolyNote>>>,
+	failed: HashMap<PathBuf, String>,
+	job: Option<(PathBuf, PolyJob)>,
+}
+
+impl PolyLayers {
+	/// Whether `file` sounds chords a good part of the time (the polyphonic notes are shown
+	/// instead of the single-voice ones); `None` until detected.
+	pub fn polyphonic(&self, file: &Path) -> Option<bool> {
+		self.get(file)
+			.map(|p| cadenza_notes::poly::polyphony(&p) > cadenza_mcp::tools::notes::POLY_SHARE)
+	}
+
+	pub fn get(&self, file: &Path) -> Option<Arc<Vec<cadenza_notes::poly::PolyNote>>> {
+		self.ready.get(file).cloned()
+	}
+
+	pub fn loading(&self, file: &Path) -> bool {
+		self.job.as_ref().is_some_and(|(f, _)| f == file)
+	}
+
+	pub fn failure(&self, file: &Path) -> Option<&str> {
+		self.failed.get(file).map(String::as_str)
+	}
+
+	pub fn busy(&self) -> bool {
+		self.job.is_some()
+	}
+
+	/// Starts detecting `file` unless it is known or something runs.
+	pub fn request(&mut self, file: &Path, waker: Option<Waker>) {
+		if self.ready.contains_key(file) || self.failed.contains_key(file) || self.job.is_some() {
+			return;
+		}
+		let path = file.to_path_buf();
+		let job = Job::spawn("poly-notes", waker, move || poly_notes(&path));
+		self.job = Some((file.to_path_buf(), job));
+	}
+
+	pub fn poll(&mut self) {
+		let Some(r) = self.job.as_ref().and_then(|(_, j)| j.poll()) else {
+			return;
+		};
+		let (file, _) = self.job.take().expect("a running detection");
+		match r {
+			Some(Ok(n)) => {
+				self.ready.insert(file, Arc::new(n));
+			}
+			Some(Err(e)) => {
+				self.failed.insert(file, e);
+			}
+			None => {
+				self.failed
+					.insert(file, "the detection stopped unexpectedly".into());
+			}
+		}
+	}
+}
+
+/// The polyphonic notes of `file`'s mono mix.
+pub fn poly_notes(file: &Path) -> Result<Vec<cadenza_notes::poly::PolyNote>, String> {
+	let buffer = cadenza_audio_io::decode_file(file).map_err(|e| e.to_string())?;
+	let channels: Vec<&[f32]> = buffer.channels().iter().map(Vec::as_slice).collect();
+	let mono = cadenza_notes::resynth::mono(&channels);
+	cadenza_notes::poly::transcribe(
+		&mono,
+		buffer.sample_rate(),
+		&cadenza_notes::poly::PolyOptions::default(),
+		&mut |_| true,
+	)
+	.map(|(_, n)| n)
+	.ok_or_else(|| "the detection was cancelled".into())
+}
+
 /// Decodes `file` and analyzes its mono mix through the content cache in `cache`.
 pub fn analyze_file(file: &Path, cache: &Path) -> Result<Analysis, String> {
 	cadenza_mcp::tools::tuning::analyze_file(file, cache).map_err(|e| e.to_string())
@@ -765,6 +848,16 @@ impl super::AppState {
 
 	/// Per frame: lands analyses, runs queued detections, keeps the open clip analyzed.
 	pub(super) fn poll_note_analyses(&mut self) {
+		self.poly_layers.poll();
+		// Always for the open clip: a polyphonic recording is shown as its chords.
+		if self.view.audio_editor
+			&& self.view.audio.mode == EditorMode::Notes
+			&& let Some(clip) = self.view.audio.clip
+			&& let Some(r) = audio_edit::region(self.project(), clip)
+		{
+			let waker = self.waker.clone();
+			self.poly_layers.request(&r.file, waker);
+		}
 		if self.note_analyses.poll().is_some() {
 			let queued = std::mem::take(&mut self.note_analyses.detect);
 			for clip in queued {

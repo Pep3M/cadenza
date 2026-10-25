@@ -171,8 +171,11 @@ pub fn segment(analysis: &Analysis, opts: &SegmentOptions, splits: &[f64]) -> Se
 	if let Some(r) = &opts.refine {
 		refine::drop_blips(analysis, &mut notes, r);
 	}
-	// Boundaries from glide crossings can land a hair inside the core's frame edge.
+	// Boundaries from glide crossings can land a hair inside the core's frame edge, and a
+	// note sounding from the first (last) frame reaches half a hop past the audio.
 	for n in &mut notes {
+		n.onset = n.onset.max(0.0);
+		n.offset = n.offset.min(analysis.duration).max(n.onset + 1e-6);
 		n.core_start = n.core_start.clamp(n.onset, n.offset);
 		n.core_end = n.core_end.clamp(n.core_start, n.offset);
 	}
@@ -1039,6 +1042,23 @@ mod tests {
 		assert!(r.samples.len() > start);
 		let s = run(&r, &[]);
 		assert_eq!(s.notes.len(), 2, "{:?}", s.notes);
+	}
+
+	#[test]
+	fn a_note_sounding_from_the_first_sample_stays_inside_the_audio() {
+		let samples: Vec<f32> = (0..RATE as usize)
+			.map(|i| {
+				let t = i as f64 / f64::from(RATE);
+				(0.3 * (std::f64::consts::TAU * 220.0 * t).sin()) as f32
+			})
+			.collect();
+		let analysis = analyze(&samples, RATE, &AnalysisOptions::default(), &mut |_| true)
+			.expect("not cancelled");
+		let s = segment(&analysis, &SegmentOptions::default(), &[]);
+		assert_eq!(s.notes.len(), 1, "{:?}", s.notes);
+		let n = &s.notes[0];
+		assert!(n.onset >= 0.0 && n.offset <= analysis.duration, "{n:?}");
+		assert!(n.onset <= n.core_start && n.core_end <= n.offset, "{n:?}");
 	}
 
 	#[test]

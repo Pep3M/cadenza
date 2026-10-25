@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-4 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-5 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -379,6 +379,49 @@ listening test.
 
 Acceptance: undo/redo of every edit, save/load round trip, relative paths, `collect_files`
 copies renders, offline render == realtime playback of the rendered copy, `no_alloc` untouched.
+
+**Shipped (NE-5).** `cadenza-model::audio_notes`: `ClipContent::Audio.notes: Option<Box<NoteEdits
+{ notes: [AudioNote { id: AudioNoteId, start, end, core_start, core_end (seconds of the file),
+center (detected, fractional MIDI), pitch: Option (new center), drift, modulation (shares kept,
+-1..2, default 1), formant_cents, gain_db, time: Option<NoteSpan>, confidence, flags:
+[MaybeTwoNotes { at, cents } | ShortCore | WeakVoicing] }], sibilants: [NoteSpan],
+sibilant_gain_db, sensitivity, user_splits, user_merges }>>` (every field optional in JSON,
+defaults omitted, format_version 1; `validate`: time order without overlaps, core inside the
+region, unique ids, ranges, ≤ 24 st from the sung pitch, ≤ 20 000 notes; errors name the note).
+Commands `SetAudioNotes { clip, notes: Option }` (replace; "Detect notes" / "Remove note
+edits") and `UpdateAudioNotes { clip, patches: [AudioNotePatch { id, pitch (double option),
+drift, modulation, formant_cents, gain_db, time (double option) }], sibilant_gain_db? }` ("Edit n
+audio notes"; inverse patches restore exactly). Summary: `audio_notes { count, edited,
+avg_error_cents, flagged }`. Split/merge are not commands: `cadenza_notes::clip::{split,
+merge_with_next}` record the user's separation / joined boundary and re-detect (`clip::detect`:
+segmentation with `user_splits`, `user_merges` re-joined with the center measured over the
+joined core; notes whose core lies mostly over a previous note's core keep its id and edits,
+the rest get new ids from the caller), the result goes in with one `SetAudioNotes`; `to_segmentation`
+/ `to_edits` feed the resynthesis. `cadenza-notes` now depends on `cadenza-model`.
+
+Renders are derived data, not project content (a deliberate change from the plan's
+`NoteRender { file, source }` + `.cadenza/notes/` + `collect_files`): `engine::note_render`
+keys a 32-bit float WAV by sha256 (render version, file path, size, modification time, the
+`NoteEdits` JSON) in `$CADENZA_NOTE_RENDERS` or `<user cache>/note-renders/`. So undo/redo never
+writes the history to point at a render, undoing an edit finds its earlier render again, a
+project folder stays small and portable, and another machine renders anew; there is nothing for
+`collect_files` to copy. `render(file, edits)` = decode, analysis through the shared cache, the
+closed loop (`render_verified`), atomic write. Engine compile: a clip whose edits change the
+audio plays its render; offline renders/exports/freezes/bounces (ProcessMode::Offline) make a
+missing one on the spot (so they always hear the edits); the realtime player plays the clip as
+recorded with the warning `PENDING_WARNING`. `pending(project)` lists what is missing. App
+(`state::note_renders`): after every change the missing renders are made one at a time on a
+worker, each landing schedules a reload; the pending warning is kept out of the notices, a
+failure is one notice and is not retried until the edits change. The audio editor's reverse /
+stretch / transpose (new file with other times or pitches) drop the clip's notes in the same
+undo step; normalize and gain keep them. Tests: model `audio_notes_are_set_edited_undone_and_saved`
+(round trip of both commands, JSON with only the non-default fields, errors), notes
+`clip::tests` (re-detection keeps ids/edits/splits/merges), engine `tests/note_render.rs`
+(pending warning live, offline render makes it, offline == a plain clip of the render file
+bit for bit == realtime playback, every note +2 st within 5 c, unedited = the file itself),
+app `edited_clips_render_in_the_background_and_reload`; `no_alloc` unchanged (nothing new on the
+audio thread). Not done: re-rendering only the changed range (a whole take renders: seconds),
+per-note fades, a UI (NE-6), AI tools (NE-7).
 
 ## NE-6 — Note editor UI
 

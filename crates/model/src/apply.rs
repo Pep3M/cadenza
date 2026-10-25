@@ -758,6 +758,92 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetAudioNotes { clip, notes } => {
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			if c.is_midi() {
+				return Err(ModelError::NotAnAudioClip(*clip));
+			}
+			if let Some(n) = notes {
+				crate::audio_notes::validate(n)?;
+			}
+			let target = project
+				.find_clip_mut(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			let ClipContent::Audio { notes: slot, .. } = &mut target.content else {
+				return Err(ModelError::NotAnAudioClip(*clip));
+			};
+			let old = std::mem::replace(slot, notes.clone());
+			Ok(vec![Command::SetAudioNotes {
+				clip: *clip,
+				notes: old,
+			}])
+		}
+
+		Command::UpdateAudioNotes {
+			clip,
+			patches,
+			sibilant_gain_db,
+		} => {
+			if patches.is_empty() && sibilant_gain_db.is_none()
+				|| patches.iter().any(|p| p.is_empty())
+			{
+				return Err(empty_patch(
+					"update_audio_notes",
+					"pitch, drift, modulation, formant_cents, gain_db and/or time per note, or sibilant_gain_db",
+				));
+			}
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			let ClipContent::Audio {
+				notes: Some(edits), ..
+			} = &c.content
+			else {
+				return Err(if c.is_midi() {
+					ModelError::NotAnAudioClip(*clip)
+				} else {
+					ModelError::invalid(
+						"update_audio_notes clip",
+						clip,
+						"the clip has no detected notes; detect them first",
+					)
+				});
+			};
+			let mut edits = edits.clone();
+			let mut undo = Vec::with_capacity(patches.len());
+			for p in patches {
+				let n = edits
+					.notes
+					.iter_mut()
+					.find(|n| n.id == p.id)
+					.ok_or_else(|| {
+						ModelError::invalid(
+							"update_audio_notes note",
+							p.id,
+							"no such note in the clip; use an id from its notes",
+						)
+					})?;
+				undo.push(p.apply(n));
+			}
+			undo.reverse();
+			let old_sibilants =
+				sibilant_gain_db.map(|g| std::mem::replace(&mut edits.sibilant_gain_db, g));
+			crate::audio_notes::validate(&edits)?;
+			let target = project
+				.find_clip_mut(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			if let ClipContent::Audio { notes, .. } = &mut target.content {
+				*notes = Some(edits);
+			}
+			Ok(vec![Command::UpdateAudioNotes {
+				clip: *clip,
+				patches: undo,
+				sibilant_gain_db: old_sibilants,
+			}])
+		}
+
 		Command::AddNotes { clip, notes } => {
 			if notes.is_empty() {
 				return Err(ModelError::invalid(

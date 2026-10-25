@@ -333,6 +333,9 @@ pub enum ClipContent {
 		/// Fade at the clip end (missing = none).
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		fade_out: Option<ClipFade>,
+		/// Notes detected in the recording and their edits (missing = none).
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		notes: Option<Box<crate::audio_notes::NoteEdits>>,
 	},
 }
 
@@ -762,6 +765,7 @@ impl Clip {
 				gain_db: 0.0,
 				fade_in: None,
 				fade_out: None,
+				notes: None,
 			},
 			take: None,
 			muted: false,

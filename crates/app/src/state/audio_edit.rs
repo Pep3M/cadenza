@@ -148,6 +148,7 @@ pub fn region(project: &Project, clip: ClipId) -> Option<Region> {
 		gain_db,
 		fade_in,
 		fade_out,
+		..
 	} = &c.content
 	else {
 		return None;
@@ -576,6 +577,18 @@ pub fn swap_in(project: &Project, done: &Rendered) -> Option<Command> {
 			..Default::default()
 		},
 	}];
+	// Detected notes are times and pitches of the old file: after a reverse, stretch or
+	// transpose they no longer describe it (normalize and gain keep them).
+	let reshaped = matches!(
+		done.op,
+		Process::Reverse | Process::Stretch(_) | Process::Pitch(_)
+	);
+	if reshaped && let ClipContent::Audio { notes: Some(_), .. } = &r.clip.content {
+		commands.push(Command::SetAudioNotes {
+			clip: done.clip,
+			notes: None,
+		});
+	}
 	if done.extra_seconds.abs() > 1e-6 {
 		let end = project
 			.tempo

@@ -22,6 +22,7 @@ mod meter;
 pub mod metronome;
 mod midi_map;
 pub mod modulation;
+pub mod note_render;
 mod pdc;
 mod player;
 mod probe;

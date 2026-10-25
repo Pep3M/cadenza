@@ -58,3 +58,4 @@ typed_id!(DeviceId);
 typed_id!(TakeGroupId);
 typed_id!(LinkId);
 typed_id!(ModulatorId);
+typed_id!(AudioNoteId);

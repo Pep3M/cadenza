@@ -153,6 +153,7 @@
 "Audio off" = "Аудио выключено"
 "Audio operation failed: the worker thread stopped" = "Ошибка аудиооперации: рабочий поток остановился"
 "Audio operation failed: {e}" = "Ошибка аудиооперации: {e}"
+"Rendering the note edits failed: {e}" = "Не удалось отрендерить правки нот: {e}"
 "Audio settings" = "Настройки аудио"
 "Audio thread: {t}" = "Аудиопоток: {t}"
 "Audio: {e}" = "Аудио: {e}"

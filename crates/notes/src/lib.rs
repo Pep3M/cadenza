@@ -11,6 +11,7 @@
 
 pub mod analysis;
 pub mod baseline;
+pub mod clip;
 pub mod edit;
 pub mod eval;
 pub mod features;

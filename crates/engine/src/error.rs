@@ -25,4 +25,6 @@ pub enum EngineError {
 	Record(String),
 	#[error("track render: {0}")]
 	Bounce(String),
+	#[error("rendering the note edits of '{file}': {message}")]
+	NoteRender { file: PathBuf, message: String },
 }

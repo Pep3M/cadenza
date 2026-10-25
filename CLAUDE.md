@@ -20,9 +20,9 @@ text documents). We take ideas, never code or assets (clean-room).
 | `cadenza-audio-io` | audio decoding (symphonia), rubato resampling, `AudioCache`, waveform peaks, realtime clip DSP (fades/regions), export WAV/FLAC (+MP3 `mp3` feature) with metadata (`tags`: WAV LIST/INFO, FLAC Vorbis comments, MP3 ID3v2.4), stretch (`stretch` feature) | — |
 | `cadenza-library` | style library: packs of style guides, forms, progressions, grooves, MIDI patterns (embedded `core` pack + user packs), validator, search, `realize` | core, theory |
 | `cadenza-analysis` | offline mix analysis: levels/BS.1770 loudness/true peak/bands (`Analyzer`, `LevelStats`), FFT third-octave spectrum + stereo image + octave timeline (`detail`), masking, issues with fix moves, mix targets, roles, reference comparison | core |
-| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, note segmentation (`segment`, `vibrato`), notes -> MIDI (`midi`), resynthesis of note edits (`edit`, `marks`, `psola`, `timemap`, `resynth`: PSOLA + closed loop), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics) | core, theory |
+| `cadenza-notes` | note detection on audio (roadmap `docs/design/note-editing-plan.md`, NE-n): frame analysis (`analysis`: pYIN pitch track + level/flux/sibilance features, on-disk `Cache`), FFT YIN, note segmentation (`segment`, `vibrato`), notes -> MIDI (`midi`), resynthesis of note edits (`edit`, `marks`, `psola`, `timemap`, `resynth`: PSOLA + closed loop), `NoteDetector` + naive `baseline`, evaluation harness `eval` (synthetic corpus with exact truth, labeled recordings, note and frame metrics), stored clip notes <-> detection (`clip`) | core, model, theory |
 | `cadenza-midi-io` | SMF import (-> undoable `Batch`) / export, hardware MIDI input (midir -> rtrb), recorder | core, model, theory, dsp |
-| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in | core, model, dsp, audio-io, midi-io, analysis |
+| `cadenza-engine` | compiles a `Project` into a render graph; offline render/export (mixdown + stems jobs with progress/cancel), mix analysis (`analyze_mix`, `analyze_mix_detailed`), realtime playback (cpal) + live MIDI monitoring, audio input + input monitoring, recording (WAV takes, MIDI), metronome + count-in, rendered copies of audio clips with note edits (`note_render`) | core, model, dsp, audio-io, midi-io, analysis, notes |
 | `cadenza-mcp` | MCP server (rmcp, stdio) exposing the command API as AI tools | model, theory, engine, dsp, audio-io, midi-io |
 | `cadenza-plugin-host` | CLAP (clack) + VST3 hosting, out-of-process scanner, catalog, per-plugin sandbox process (Unix: shm + futex / macOS `os_sync`), plugin editor windows (X11) | dsp |
 | `cadenza-agent` | embedded AI producer: provider-agnostic `LlmProvider` tool loop (OpenRouter + generic OpenAI-compatible), budget cap, JSONL transcript; `Agent` (compose from a brief) and `SessionAgent` (in-app chat on a shared session) | model, mcp |
@@ -187,7 +187,7 @@ pub struct Clip { id: ClipId, name: String, start: Tick, length: Tick, content: 
 	link: Option<LinkId> /* linked MIDI copies (FL pattern instances), optional */ }
 pub enum ClipContent { Midi { notes: Vec<Note>, controllers: Vec<ControllerLane { controller: Controller /* "cc0".."cc127" | "pitch_bend" | "channel_pressure" */,
 	points: Vec<ControllerPoint { tick /* clip-relative */, value: f32 /* CC/pressure 0..1, bend -1..1 */ }> }> /* optional */ }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32,
-	fade_in: Option<ClipFade>, fade_out: Option<ClipFade> } }
+	fade_in: Option<ClipFade>, fade_out: Option<ClipFade>, notes: Option<Box<NoteEdits>> /* NE-5, model::audio_notes */ } }
 pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
 pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick }
 pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32,
@@ -214,6 +214,8 @@ existence is the caller's check like SetParam; summary `modulators: ["LFO sine 1
 SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
 (instrument only), SetClipFades { clip, fade_in, fade_out } (replaces both; audio clips only),
 UpdateAudioClip { clip, file?, offset_seconds?, gain_db? } (audio clips; swaps in processed copies),
+SetAudioNotes { clip, notes: Option<Box<NoteEdits>> } (replace the detected notes + edits of an audio clip),
+UpdateAudioNotes { clip, patches: [AudioNotePatch { id, pitch?? , drift?, modulation?, formant_cents?, gain_db?, time?? }], sibilant_gain_db? },
 Batch { label, commands }.
 `ParamAddress` also names send levels: `track/{id}/send/{send_id}` (dB; SetParam, automation);
 removing a send (or the bus it feeds) drops its lanes. `model::automation_value(points, tick,
@@ -489,8 +491,18 @@ reshaped notes leveled back to their core RMS), verify (re-analyze + re-segment,
 mapped core), render_verified (<= 2 extra passes, integrating the error vs the original target,
 tolerance 2 c)}`. `tests/resynth.rs`: corpus moves 0..±3 st all within ±5 c (22.05 + 44.1 kHz),
 ±12 st p95 <= 3 c on clean cases, null < -80 dB, no clicks, level ±0.5 dB, LPC envelope kept /
-formant ×1.18 for +300 c, time edits, stereo, sibilant gain, vibrato flattening, noise. Not in the
-model/engine/app yet (NE-5/NE-6).
+formant ×1.18 for +300 c, time edits, stereo, sibilant gain, vibrato flattening, noise.
+NE-5: `cadenza-model::audio_notes` (`NoteEdits { notes: [AudioNote { id, start, end, core_start,
+core_end (file seconds), center, pitch?, drift, modulation, formant_cents, gain_db, time?,
+confidence, flags }], sibilants, sibilant_gain_db, sensitivity, user_splits, user_merges }`,
+`validate`, `summary` -> `ClipSummary.audio_notes { count, edited, avg_error_cents, flagged }`);
+`clip::{detect (re-detection keeps ids + edits of matching notes, splits, merges), split,
+merge_with_next, to_segmentation, to_edits}`. Renders are derived data:
+`engine::note_render::{render_path (sha256 of version + file path/size/mtime + edits JSON, in
+$CADENZA_NOTE_RENDERS or <cache>/note-renders), ready, render (closed loop), pending}`; compile
+plays the render, offline mode renders a missing one, realtime plays as recorded with
+`PENDING_WARNING`; the app renders missing ones on a worker (`state::note_renders`) and
+reloads; audio editor reverse/stretch/transpose drop the notes.
 
 ### cadenza-dsp
 

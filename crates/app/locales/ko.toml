@@ -152,6 +152,7 @@
 "Audio off" = "오디오 꺼짐"
 "Audio operation failed: the worker thread stopped" = "오디오 작업 실패: 작업 스레드가 멈췄어요"
 "Audio operation failed: {e}" = "오디오 작업 실패: {e}"
+"Rendering the note edits failed: {e}" = "노트 편집 렌더링 실패: {e}"
 "Audio settings" = "오디오 설정"
 "Audio thread: {t}" = "오디오 스레드: {t}"
 "Audio: {e}" = "오디오: {e}"

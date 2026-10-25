@@ -205,7 +205,12 @@ pub fn verify(
 
 /// Center of `start..end` seconds like the segmentation computes it: the mean of the
 /// voiced frames with vibrato removed.
-fn center_over(analysis: &Analysis, start: f64, end: f64, opts: &SegmentOptions) -> Option<f64> {
+pub(crate) fn center_over(
+	analysis: &Analysis,
+	start: f64,
+	end: f64,
+	opts: &SegmentOptions,
+) -> Option<f64> {
 	let cents: Vec<f64> = analysis
 		.frames
 		.iter()

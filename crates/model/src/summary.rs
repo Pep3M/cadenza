@@ -182,6 +182,10 @@ pub struct ClipSummary {
 	/// -1.00..0.50)".
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub controllers: Vec<String>,
+	/// Notes detected in an audio clip: how many, how many edited, the mean distance of
+	/// the resulting pitches from the nearest semitone, and how many the detection doubts.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio_notes: Option<crate::audio_notes::AudioNotesSummary>,
 }
 
 impl Project {
@@ -400,7 +404,12 @@ fn clip_summary(project: &crate::Project, clip: &Clip) -> ClipSummary {
 			Some(parts.join(", "))
 		}
 	};
+	let audio_notes = match &clip.content {
+		ClipContent::Audio { notes: Some(n), .. } => Some(n.summary()),
+		_ => None,
+	};
 	ClipSummary {
+		audio_notes,
 		id: clip.id,
 		name: clip.name.clone(),
 		kind,

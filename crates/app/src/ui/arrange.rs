@@ -3411,6 +3411,7 @@ fn paint_clip(
 				gain_db,
 				fade_in,
 				fade_out,
+				..
 			} => {
 				// Draw what plays: crossfaded clips are shaped by the crossfade gain and the
 				// earlier clip stops at the crossfade end.

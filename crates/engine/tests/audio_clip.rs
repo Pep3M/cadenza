@@ -38,6 +38,7 @@ fn mono_44k_clip_is_resampled_positioned_and_panned() {
 		gain_db: -6.0,
 		fade_in: None,
 		fade_out: None,
+		notes: None,
 	};
 	let out = render_offline(&project(vec![audio_track(clip)]), &opts(4.0)).unwrap();
 	assert!(

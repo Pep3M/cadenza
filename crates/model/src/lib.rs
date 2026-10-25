@@ -4,6 +4,7 @@
 //! Only this crate mutates [`Project`]; every other crate goes through [`Document::execute`].
 
 mod apply;
+pub mod audio_notes;
 pub mod command;
 pub mod controller;
 pub mod document;
@@ -20,6 +21,9 @@ pub mod summary;
 pub mod takes;
 pub mod validate;
 
+pub use audio_notes::{
+	AudioNote, AudioNoteFlag, AudioNotePatch, AudioNotesSummary, NoteEdits, NoteSpan,
+};
 pub use command::{
 	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
 };

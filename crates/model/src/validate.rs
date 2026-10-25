@@ -395,7 +395,11 @@ pub(crate) fn clip_within(clip: &Clip, span: Tick) -> Result<(), ModelError> {
 			gain_db,
 			fade_in,
 			fade_out,
+			notes,
 		} => {
+			if let Some(n) = notes {
+				crate::audio_notes::validate(n)?;
+			}
 			for (what, fade) in [("fade_in", fade_in), ("fade_out", fade_out)] {
 				if let Some(f) = fade
 					&& !(f.seconds.is_finite() && f.seconds > 0.0)

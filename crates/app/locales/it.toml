@@ -152,6 +152,7 @@
 "Audio off" = "Audio disattivato"
 "Audio operation failed: the worker thread stopped" = "Operazione audio non riuscita: il thread worker si è interrotto"
 "Audio operation failed: {e}" = "Operazione audio non riuscita: {e}"
+"Rendering the note edits failed: {e}" = "Il rendering delle modifiche alle note non è riuscito: {e}"
 "Audio settings" = "Impostazioni audio"
 "Audio thread: {t}" = "Thread audio: {t}"
 "Audio: {e}" = "Audio: {e}"

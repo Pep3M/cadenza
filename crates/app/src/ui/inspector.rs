@@ -1034,6 +1034,7 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 			gain_db,
 			fade_in,
 			fade_out,
+			..
 		} => {
 			let file_name = file.file_name().map_or_else(
 				|| file.display().to_string(),
@@ -1175,6 +1176,7 @@ fn clip_preview(
 			gain_db,
 			fade_in,
 			fade_out,
+			..
 		} => {
 			let peaks = state.peaks.get(file);
 			let project = state.project();

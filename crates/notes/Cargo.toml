@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 cadenza-core.workspace = true
+cadenza-model.workspace = true
 cadenza-theory.workspace = true
 serde.workspace = true
 serde_json.workspace = true

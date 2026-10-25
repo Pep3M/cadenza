@@ -152,6 +152,7 @@
 "Audio off" = "オーディオオフ"
 "Audio operation failed: the worker thread stopped" = "オーディオ処理に失敗しました：ワーカースレッドが停止しました"
 "Audio operation failed: {e}" = "オーディオ処理に失敗しました: {e}"
+"Rendering the note edits failed: {e}" = "ノート編集のレンダリングに失敗しました: {e}"
 "Audio settings" = "オーディオ設定"
 "Audio thread: {t}" = "オーディオスレッド: {t}"
 "Audio: {e}" = "オーディオ: {e}"

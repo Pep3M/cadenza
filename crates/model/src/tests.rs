@@ -2961,3 +2961,145 @@ fn midi_map_validates_round_trips_and_follows_removed_targets() {
 	doc.undo().unwrap();
 	assert_eq!(doc.project(), &mapped);
 }
+
+fn detected_notes() -> NoteEdits {
+	NoteEdits {
+		notes: vec![
+			AudioNote {
+				core_start: 0.15,
+				core_end: 0.45,
+				..AudioNote::new(cadenza_core::AudioNoteId::new(), 0.1, 0.5, 60.23)
+			},
+			AudioNote {
+				flags: vec![AudioNoteFlag::MaybeTwoNotes {
+					at: 0.8,
+					cents: 120.0,
+				}],
+				..AudioNote::new(cadenza_core::AudioNoteId::new(), 0.5, 1.1, 62.9)
+			},
+		],
+		sibilants: vec![NoteSpan {
+			start: 1.1,
+			end: 1.2,
+		}],
+		sibilant_gain_db: 0.0,
+		sensitivity: 1.0,
+		user_splits: Vec::new(),
+		user_merges: Vec::new(),
+	}
+}
+
+#[test]
+fn audio_notes_are_set_edited_undone_and_saved() {
+	let fx = fixture();
+	let notes = detected_notes();
+	let (a, b) = (notes.notes[0].id, notes.notes[1].id);
+	let set = Command::SetAudioNotes {
+		clip: fx.vox,
+		notes: Some(Box::new(notes.clone())),
+	};
+	assert_eq!(set.label(), "Detect notes");
+	let detected = round_trip(&fx.project, set.clone());
+	let summary = detected.summary();
+	let clip = summary
+		.tracks
+		.iter()
+		.flat_map(|t| &t.clips)
+		.find(|c| c.id == fx.vox)
+		.unwrap();
+	let s = clip.audio_notes.as_ref().unwrap();
+	assert_eq!((s.count, s.edited, s.flagged), (2, 0, 1));
+	assert!((s.avg_error_cents - 16.5).abs() < 0.1, "{s:?}");
+
+	let edit = Command::UpdateAudioNotes {
+		clip: fx.vox,
+		patches: vec![
+			AudioNotePatch {
+				id: a,
+				pitch: Some(Some(60.0)),
+				modulation: Some(0.5),
+				..Default::default()
+			},
+			AudioNotePatch {
+				id: b,
+				time: Some(Some(NoteSpan {
+					start: 0.55,
+					end: 1.1,
+				})),
+				..Default::default()
+			},
+		],
+		sibilant_gain_db: Some(-6.0),
+	};
+	assert_eq!(edit.label(), "Edit 2 audio notes");
+	let edited = round_trip(&detected, edit);
+	let (_, c) = edited.find_clip(fx.vox).unwrap();
+	let ClipContent::Audio { notes: Some(e), .. } = &c.content else {
+		panic!("notes");
+	};
+	assert!(e.is_edited());
+	assert_eq!(e.notes[0].pitch, Some(60.0));
+	assert_eq!(e.sibilant_gain_db, -6.0);
+	assert_eq!(e.summary().edited, 2);
+
+	// Saved and loaded unchanged, with only the non-default fields in the file.
+	let json = edited.to_json_string().unwrap();
+	assert!(json.contains("\"modulation\": 0.5") && !json.contains("\"drift\""));
+	assert_eq!(Project::from_json_str(&json).unwrap(), edited);
+	// And removing them is one step too.
+	round_trip(
+		&edited,
+		Command::SetAudioNotes {
+			clip: fx.vox,
+			notes: None,
+		},
+	);
+
+	// Actionable errors.
+	let err = exec_err(
+		&fx.project,
+		Command::UpdateAudioNotes {
+			clip: fx.vox,
+			patches: vec![AudioNotePatch {
+				id: a,
+				gain_db: Some(1.0),
+				..Default::default()
+			}],
+			sibilant_gain_db: None,
+		},
+	);
+	assert!(err.to_string().contains("detect them first"), "{err}");
+	let err = exec_err(
+		&detected,
+		Command::UpdateAudioNotes {
+			clip: fx.vox,
+			patches: vec![AudioNotePatch {
+				id: a,
+				pitch: Some(Some(99.0)),
+				..Default::default()
+			}],
+			sibilant_gain_db: None,
+		},
+	);
+	assert!(err.to_string().contains("semitones"), "{err}");
+	let err = exec_err(
+		&detected,
+		Command::UpdateAudioNotes {
+			clip: fx.vox,
+			patches: vec![AudioNotePatch {
+				id: a,
+				..Default::default()
+			}],
+			sibilant_gain_db: None,
+		},
+	);
+	assert!(err.to_string().contains("gain_db"), "{err}");
+	let err = exec_err(
+		&fx.project,
+		Command::SetAudioNotes {
+			clip: fx.riff,
+			notes: Some(Box::new(notes)),
+		},
+	);
+	assert!(matches!(err, ModelError::NotAnAudioClip(_)), "{err}");
+}

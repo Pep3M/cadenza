@@ -553,10 +553,18 @@ impl<'a> Compiler<'a> {
 						gain_db,
 						fade_in,
 						fade_out,
+						notes,
 					} = &clip.content
 					else {
 						continue;
 					};
+					let file = &crate::note_render::playable(
+						file,
+						notes.as_deref(),
+						self.mode == ProcessMode::Offline,
+						&format!("clip '{}' on {owner}", clip.name),
+						&mut self.warnings,
+					);
 					let Some(source) = self.audio(file, owner) else {
 						continue;
 					};

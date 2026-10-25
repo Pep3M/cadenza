@@ -50,6 +50,7 @@ pub mod midi_learn;
 pub mod mix;
 pub mod mixer;
 pub mod modulation;
+pub mod note_renders;
 pub mod notices;
 pub mod piano;
 pub mod playlist;
@@ -421,6 +422,8 @@ pub struct AppState {
 	to_midi: Option<to_midi::ConvertToMidi>,
 	/// Note-analysis cache folder; `None` = the user cache folder (tests use a temp dir).
 	pub analysis_cache: Option<std::path::PathBuf>,
+	/// Background renders of clips with note edits.
+	pub note_renders: note_renders::NoteRenders,
 	collisions: collisions::CollisionState,
 	/// MIDI learn and the mapped controllers' values (T36).
 	pub midi: midi_learn::MidiLearnState,
@@ -569,6 +572,7 @@ impl AppState {
 			match_eq: match_eq::MatchEqState::default(),
 			to_midi: None,
 			analysis_cache: None,
+			note_renders: note_renders::NoteRenders::new(),
 			collisions: collisions::CollisionState::default(),
 			midi: midi_learn::MidiLearnState::default(),
 			start: start::StartScreen::default(),
@@ -1079,6 +1083,7 @@ impl AppState {
 	/// reload (which cuts sounding notes).
 	fn after_edit(&mut self, before: Option<&Project>) {
 		self.dirty = true;
+		self.note_renders.invalidate();
 		self.selection.prune(&self.doc.project);
 		self.view.piano.prune(&self.doc.project);
 		self.view.automation.prune(&self.doc.project);
@@ -4138,6 +4143,7 @@ impl AppState {
 		self.poll_mix();
 		self.poll_match_eq();
 		self.poll_convert_to_midi();
+		self.poll_note_renders();
 		self.poll_collisions();
 		self.poll_file_jobs();
 		self.tick_autosave(now);
@@ -4162,6 +4168,7 @@ impl AppState {
 			|| self.files_jobs.busy()
 			|| self.jobs.process.is_some()
 			|| self.jobs.bounce.is_some()
+			|| self.note_renders.busy()
 			|| self.ai.busy()
 			|| self.mix.busy()
 			|| self.record_animating()
@@ -4217,6 +4224,11 @@ impl AppState {
 							}
 						}
 					}
+					// Missing note renders are being made in the background.
+					let warnings: Vec<String> = warnings
+						.into_iter()
+						.filter(|w| !w.contains(cadenza_engine::note_render::PENDING_WARNING))
+						.collect();
 					if warnings != self.load_warnings {
 						for w in &warnings {
 							self.notices.warn(w.clone());
@@ -4260,6 +4272,17 @@ impl AppState {
 				AudioEvent::RecordFailed(e) => self.record_event(record::RecordEvent::Failed(e)),
 				AudioEvent::Error(e) => self.notices.error(trf("Audio: {e}", &[("e", &e)])),
 			}
+		}
+	}
+
+	fn poll_note_renders(&mut self) {
+		let waker = self.waker.clone();
+		match self.note_renders.tick(&self.doc.project, waker) {
+			Some(note_renders::Finished::Rendered) => self.schedule_reload(),
+			Some(note_renders::Finished::Failed(e)) => self
+				.notices
+				.error(trf("Rendering the note edits failed: {e}", &[("e", &e)])),
+			None => {}
 		}
 	}
 

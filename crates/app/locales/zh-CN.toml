@@ -148,6 +148,7 @@
 "Audio off" = "音频已关闭"
 "Audio operation failed: the worker thread stopped" = "音频操作失败：工作线程已停止"
 "Audio operation failed: {e}" = "音频操作失败：{e}"
+"Rendering the note edits failed: {e}" = "渲染音符编辑失败：{e}"
 "Audio settings" = "音频设置"
 "Audio thread: {t}" = "音频线程：{t}"
 "Audio: {e}" = "音频：{e}"

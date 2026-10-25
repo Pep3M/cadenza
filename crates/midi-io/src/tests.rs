@@ -467,3 +467,94 @@ fn meter_changes_snap_to_bar_lines() {
 	assert_eq!(first, Some(ts(4, 4)));
 	assert_eq!(changes, vec![MeterChange::new(1, ts(3, 4))]);
 }
+
+#[test]
+fn mpe_export_gives_each_note_its_channel_and_bend() {
+	use crate::smf_export::{MPE_BEND_RANGE, MpeNote, export_mpe};
+	let note = |pitch, start: i64, len: i64, curve: Vec<(Tick, f32)>| MpeNote {
+		start: Tick(start),
+		length: Tick(len),
+		pitch,
+		velocity: 0.8,
+		curve,
+	};
+	// A chord whose top note bends up a whole tone, then a note after it.
+	let notes = [
+		note(60, 0, 960, vec![(Tick(0), 0.0)]),
+		note(64, 0, 960, vec![(Tick(0), 0.0)]),
+		note(67, 0, 960, vec![(Tick(0), 0.0), (Tick(480), 2.0)]),
+		note(62, 960, 960, vec![(Tick(960), -0.25)]),
+	];
+	let out = export_mpe(
+		&notes,
+		&TempoMap::constant(120.0),
+		&TimeSignature::default(),
+		"Chords",
+	)
+	.unwrap();
+	assert_eq!(out.shared, 0);
+	let smf = Smf::parse(&out.bytes).unwrap();
+	let mut tick = 0u32;
+	let mut on: Vec<(u32, u8, u8)> = Vec::new();
+	let mut bends: Vec<(u32, u8, f32)> = Vec::new();
+	let mut rpn6 = None;
+	let mut last_cc = [[0u8; 128]; 16];
+	for e in &smf.tracks[1] {
+		tick += e.delta.as_int();
+		if let TrackEventKind::Midi { channel, message } = e.kind {
+			let ch = channel.as_int();
+			match message {
+				MidiMessage::NoteOn { key, vel } if vel.as_int() > 0 => {
+					on.push((tick, ch, key.as_int()))
+				}
+				MidiMessage::PitchBend { bend } => {
+					bends.push((tick, ch, bend.as_f32() * MPE_BEND_RANGE))
+				}
+				MidiMessage::Controller { controller, value } => {
+					let (c, v) = (controller.as_int(), value.as_int());
+					if c == 6 && last_cc[ch as usize][100] == 6 && ch == 0 {
+						rpn6 = Some(v);
+					}
+					last_cc[ch as usize][c as usize] = v;
+				}
+				_ => {}
+			}
+		}
+	}
+	assert_eq!(rpn6, Some(15), "MPE configuration: 15 member channels");
+	let channels: Vec<u8> = on.iter().map(|o| o.1).collect();
+	assert!(channels.iter().all(|c| (1..=15).contains(c)), "{on:?}");
+	assert_eq!(
+		channels[..3]
+			.iter()
+			.collect::<std::collections::BTreeSet<_>>()
+			.len(),
+		3,
+		"one channel per chord note: {on:?}"
+	);
+	let top = on.iter().find(|o| o.2 == 67).unwrap().1;
+	assert!(
+		bends
+			.iter()
+			.any(|b| b.0 == 480 && b.1 == top && (b.2 - 2.0).abs() < 0.01),
+		"{bends:?}"
+	);
+	// The later note takes a channel the chord did not use last, starting at its bend.
+	let later = on.iter().find(|o| o.2 == 62).unwrap();
+	assert!(!channels[..3].contains(&later.1), "{on:?}");
+	assert!(
+		bends
+			.iter()
+			.any(|b| b.0 == 960 && b.1 == later.1 && (b.2 + 0.25).abs() < 0.01)
+	);
+	// 16 notes at once: one shares a channel.
+	let crowd: Vec<MpeNote> = (0..16).map(|i| note(40 + i, 0, 960, Vec::new())).collect();
+	let out = export_mpe(
+		&crowd,
+		&TempoMap::constant(120.0),
+		&TimeSignature::default(),
+		"Crowd",
+	)
+	.unwrap();
+	assert_eq!(out.shared, 1);
+}

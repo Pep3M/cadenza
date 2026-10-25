@@ -11,10 +11,10 @@ use cadenza_core::{ClipId, TrackId};
 use cadenza_engine::{RecordOptions, RecordedAudio, Recording, record_commands};
 use cadenza_mcp::tools::notes::{
 	Algorithm, AudioToMidiArgs, AudioToMidiOutput, ClipNotes, ConvertMode, analyze_clip,
-	conversion_command, convert, default_cache_dir, detect_for, midi_options,
+	conversion_command, convert, default_cache_dir, detect_for, midi_options, write_mpe,
 };
 use cadenza_model::{Command, Document, Project, Track, TrackKind};
-use cadenza_notes::midi::MidiOptions;
+use cadenza_notes::midi::{MidiConversion, MidiOptions};
 
 use super::AppState;
 use crate::i18n::{tr, trf, trn};
@@ -38,6 +38,7 @@ pub struct ConvertPreview {
 	/// The audio clip's span, song beats.
 	pub span: (f64, f64),
 	command: Command,
+	conversion: MidiConversion,
 }
 
 pub struct ConvertToMidi {
@@ -200,6 +201,7 @@ impl AppState {
 						.collect(),
 					span,
 					command,
+					conversion,
 				})
 			}
 			Err(e) => Err(e.to_string()),
@@ -224,6 +226,43 @@ impl AppState {
 			preview.summary.note_count,
 		));
 		true
+	}
+
+	/// Asks where to write the preview as an MPE file (each note its own channel and pitch
+	/// curve); the dialog stays open.
+	pub fn export_convert_mpe(&mut self) {
+		if matches!(self.convert_preview(), Some(Ok(_))) {
+			self.file_dialog(crate::jobs::FileAction::ExportMpe);
+		}
+	}
+
+	pub(super) fn finish_export_mpe(&mut self, path: &Path) {
+		let Some(Ok(preview)) = self.convert_preview() else {
+			return;
+		};
+		let name = self
+			.to_midi
+			.as_ref()
+			.map_or_else(String::new, |c| c.clip_name.clone());
+		match write_mpe(
+			self.project(),
+			&preview.conversion,
+			&name,
+			&path.display().to_string(),
+		) {
+			Ok((file, shared)) => {
+				self.notices
+					.info(trf("MPE file written: {file}", &[("file", &file)]));
+				if shared.is_some() {
+					self.notices.warn(tr(
+						"More than 15 notes sound at once: some share an MPE channel and bend together",
+					));
+				}
+			}
+			Err(e) => self
+				.notices
+				.error(trf("Cannot write the MPE file: {e}", &[("e", &e)])),
+		}
 	}
 
 	pub fn cancel_convert_to_midi(&mut self) {

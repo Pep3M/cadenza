@@ -112,6 +112,11 @@ pub struct AudioToMidiArgs {
 	/// Note detection sensitivity: above 1 finds more notes, below 1 fewer (default 1).
 	#[serde(default)]
 	pub sensitivity: Option<f64>,
+	/// Also write the notes to this .mid as MPE: every note on its own channel with its own
+	/// pitch curve (chord notes bend independently: guitar bends, slides, vibrato), for MPE
+	/// synths in other programs. The project clip is written as usual.
+	#[serde(default)]
+	pub mpe_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -134,6 +139,9 @@ pub struct AudioToMidiOutput {
 	/// The first notes: "E4 @2.00 x0.50 (-12 c)" = pitch, beat in the song, length, sung
 	/// intonation.
 	pub notes: Vec<String>,
+	/// The MPE file written (`mpe_path`).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub mpe_file: Option<String>,
 	pub warnings: Vec<String>,
 }
 
@@ -250,6 +258,7 @@ pub fn detect_poly(project: &Project, notes: &mut ClipNotes) -> Result<(), McpEr
 			.map(|n| PolyNote {
 				onset: n.onset + shift,
 				offset: n.offset + shift,
+				bend: n.bend.iter().map(|&(t, v)| (t + shift, v)).collect(),
 				..n
 			})
 			.collect(),
@@ -715,9 +724,78 @@ pub fn conversion_command(
 			)),
 			bend_points: conversion.bends.len(),
 			notes: preview,
+			mpe_file: None,
 			warnings,
 		},
 	))
+}
+
+/// A conversion as an MPE file ([`cadenza_midi_io::export_mpe`]): song ticks, each note's
+/// curve as its own channel's pitch bend. Pure.
+pub fn mpe_export(
+	project: &Project,
+	conversion: &MidiConversion,
+	name: &str,
+) -> Result<cadenza_midi_io::MpeExport, McpError> {
+	let notes: Vec<cadenza_midi_io::MpeNote> = conversion
+		.notes
+		.iter()
+		.map(|n| {
+			let start = Tick::from_beats(n.start).max(Tick::ZERO);
+			cadenza_midi_io::MpeNote {
+				start,
+				length: Tick::from_beats(n.start + n.length) - start,
+				pitch: n.pitch,
+				velocity: n.velocity,
+				curve: n
+					.curve
+					.iter()
+					.map(|&(beat, v)| (Tick::from_beats(beat).max(start), v))
+					.collect(),
+			}
+		})
+		.collect();
+	let first = notes.iter().map(|n| n.start).min().unwrap_or(Tick::ZERO);
+	cadenza_midi_io::export_mpe(
+		&notes,
+		&project.tempo,
+		&project.meter().signature_at(first),
+		name,
+	)
+	.map_err(|e| McpError::Invalid(e.to_string()))
+}
+
+/// Writes [`mpe_export`] to `path` (.mid); returns the path and a warning when notes had to
+/// share channels.
+pub fn write_mpe(
+	project: &Project,
+	conversion: &MidiConversion,
+	name: &str,
+	path: &str,
+) -> Result<(String, Option<String>), McpError> {
+	let path = std::path::PathBuf::from(path.trim());
+	let ext_ok = path
+		.extension()
+		.and_then(|e| e.to_str())
+		.is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
+	if !ext_ok {
+		return Err(McpError::Invalid(format!(
+			"mpe_path '{}' must end in .mid",
+			path.display()
+		)));
+	}
+	let out = mpe_export(project, conversion, name)?;
+	std::fs::write(&path, &out.bytes).map_err(|e| McpError::Io {
+		path: path.display().to_string(),
+		message: e.to_string(),
+	})?;
+	let warning = (out.shared > 0).then(|| {
+		format!(
+			"{} notes sounded with 15 others and share an MPE channel: their bends move each other",
+			out.shared
+		)
+	});
+	Ok((path.display().to_string(), warning))
 }
 
 /// Keys written with flats (F major and the flat keys, their relative minors).
@@ -751,8 +829,16 @@ pub fn audio_to_midi(
 		args.algorithm,
 		args.drum_note.map(|p| p.0),
 	);
-	let (command, out) =
+	let (command, mut out) =
 		conversion_command(project, &notes, &conversion, args.track_id, args.algorithm)?;
+	if let Some(path) = &args.mpe_path {
+		let name = project
+			.find_clip(args.clip_id)
+			.map_or_else(|| "MPE".to_owned(), |(_, c)| c.name.clone());
+		let (file, warning) = write_mpe(project, &conversion, &name, path)?;
+		out.mpe_file = Some(file);
+		out.warnings.extend(warning);
+	}
 	session.document_mut().execute(command)?;
 	Ok(out)
 }

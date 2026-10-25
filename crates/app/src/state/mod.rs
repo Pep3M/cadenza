@@ -4101,6 +4101,12 @@ impl AppState {
 			.unwrap_or_else(|| self.project().name.clone());
 		let name = match action {
 			FileAction::PackArchive => format!("{stem}.cdzpack"),
+			FileAction::ExportMpe => format!(
+				"{} MPE.mid",
+				self.to_midi
+					.as_ref()
+					.map_or(stem.as_str(), |c| &c.clip_name)
+			),
 			_ => format!("{stem}.cdz"),
 		};
 		let dir = match action {
@@ -4133,6 +4139,7 @@ impl AppState {
 			FileAction::MixReference => self.mix.reference = Some(path),
 			FileAction::MatchReference => self.finish_match_file(path),
 			FileAction::ImportMidi => self.import_midi(&path),
+			FileAction::ExportMpe => self.finish_export_mpe(&path),
 			FileAction::PadSample | FileAction::PadLayer | FileAction::KitFolder => {
 				self.finish_sample_dialog(action, &path);
 			}

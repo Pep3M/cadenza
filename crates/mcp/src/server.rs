@@ -915,8 +915,10 @@ impl CadenzaServer {
 			semitone; mode hum quantizes to sixteenths, infers and snaps to the key and merges \
 			repeats. Override with quantize_beats, key (\"auto\", \"off\", \"A minor\"), \
 			bends (pitch-bend lane replaying slides/vibrato), octave_shift, lowest/highest \
-			(fold into a range), velocity, sensitivity. Returns the clip, key, range and the \
-			first notes with their sung intonation in cents."
+			(fold into a range), velocity, sensitivity. mpe_path also writes an MPE .mid (each \
+			note its own channel and pitch curve: chord notes bend independently) for other \
+			programs. Returns the clip, key, range and the first notes with their sung \
+			intonation in cents."
 	)]
 	fn audio_to_midi(
 		&self,

@@ -299,15 +299,32 @@ async fn rendered_chords_come_back_as_chords() {
 		},
 	)
 	.unwrap();
+	let mpe = dir.path().join("chords mpe.mid");
 	let out = notes::audio_to_midi(
 		&mut session,
 		notes::AudioToMidiArgs {
 			clip_id: imported.clip_id,
+			mpe_path: Some(mpe.display().to_string()),
 			..Default::default()
 		},
 	)
 	.unwrap();
 	assert_eq!(out.algorithm, notes::Algorithm::Poly, "{out:?}");
+	// The MPE file: the same notes, the notes of a chord each on a channel of its own.
+	assert_eq!(
+		out.mpe_file.as_deref(),
+		Some(mpe.display().to_string().as_str())
+	);
+	let parsed = cadenza_midi_io::parse_smf(&std::fs::read(&mpe).unwrap()).unwrap();
+	let mpe_notes: Vec<_> = parsed.tracks.iter().flat_map(|t| t.notes.clone()).collect();
+	assert_eq!(mpe_notes.len(), out.note_count);
+	for a in &mpe_notes {
+		assert!((1..=15).contains(&a.channel), "{a:?}");
+		for b in &mpe_notes {
+			let overlap = a.start < b.start + b.length && b.start < a.start + a.length;
+			assert!(!overlap || a == b || a.channel != b.channel, "{a:?} {b:?}");
+		}
+	}
 	let found = clip_notes(&session, out.clip_id);
 	// Every chord's notes start at its beat (within 0.1 beat).
 	let wanted: Vec<(u8, f64)> = CHORDS

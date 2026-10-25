@@ -50,6 +50,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 	let preview = state.convert_preview();
 	let mut close = false;
 	let mut convert = false;
+	let mut mpe = false;
 	let modal = egui::Modal::new(Id::new("to-midi-dialog"))
 		.frame(theme::dialog_frame())
 		.show(ctx, |ui| {
@@ -96,6 +97,15 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 						if theme::primary_button(ui, tr("Convert")).clicked() {
 							convert = true;
 						}
+						if ui
+							.button(tr("Export MPE…"))
+							.on_hover_text(tr(
+								"A .mid file with every note on its own channel and its own pitch curve: chord notes bend independently in MPE synths of other programs",
+							))
+							.clicked()
+						{
+							mpe = true;
+						}
 					});
 					if ui.button(tr("Cancel")).clicked() {
 						close = true;
@@ -103,6 +113,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 				});
 			});
 		});
+	if mpe {
+		state.export_convert_mpe();
+	}
 	if convert {
 		state.apply_convert_to_midi();
 	} else if close || modal.should_close() {

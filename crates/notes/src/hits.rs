@@ -494,6 +494,10 @@ mod tests {
 			.map(|b| b.value)
 			.fold(f32::MAX, f32::min);
 		assert!((f64::from(lowest) * 12.0 + 3.0).abs() < 0.3, "{lowest}");
+		// The same slide as the note's own curve (MPE).
+		let own = slide.curve.iter().map(|c| c.1).fold(f32::MAX, f32::min);
+		assert!((own + 3.0).abs() < 0.3, "{:?}", slide.curve);
+		assert!(midi.notes[0].curve.iter().all(|c| c.1.abs() < 0.2));
 		// Steady notes get no bend worth hearing.
 		assert!(
 			midi.bends

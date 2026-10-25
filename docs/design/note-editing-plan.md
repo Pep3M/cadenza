@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct) and NE-9f (pitched percussion) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion) and NE-9g (MPE export) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -731,8 +731,30 @@ bend), noise hits unpitched; a `poly_synth` "808 Clean" line rendered by the eng
 note for note (cent-exact, starts within 30 ms: notes struck over the last one's release
 swell in over its attack). Not done: kick + 808 layered on one track (the kick reads as a
 note), auto detection of 808 parts.
+**Shipped (NE-9g, MPE export).** Each detected note keeps its own pitch curve and can be written
+as MPE, so the notes of a chord bend independently in MPE synths elsewhere. Polyphonic: the
+Basic Pitch contour output (264 bins, 3 per semitone) now feeds `PolyNote.bend` (`poly::
+note_bend`: per frame the strongest contour bin within 25 bins of the key under a Gaussian of
+std 5, the published method, refined with a parabola; points every 5 c of movement). Measured
+on steady tones 40-84: a key's peak is bin `3 (key - 21) + 1`, not `3 (key - 21)` (a +0.29 st
+offset otherwise). The activation cache stores the contour as bytes (`ACTIVATIONS_VERSION` 2;
+a fresh run reads back what it stored, so cached and fresh notes are identical). The model
+still makes a bend past half a semitone the next key's note, so wide guitar bends split.
+`MidiNote.curve` (song beats, semitones from the note as sung) is filled by `to_midi` (mono and
+pitched hits: the frame pitch track) and `poly_to_midi` (the bend plus the key-snap move).
+`cadenza_midi_io::export_mpe(&[MpeNote], tempo, signature, name) -> MpeExport { bytes, shared }`:
+lower zone, MCM on channel 1 (RPN 6 = 15), member channels 2-16 at a 48-semitone bend range
+(RPN 0), each note on the least recently used free member channel with its curve as that
+channel's bend (initial value before the note-on); notes beyond 15 at once share a channel
+(`shared`, warned). MCP `audio_to_midi { mpe_path }` (also writes the .mid; the agent's path
+policy keeps it in the session folder; `mcp::tools::notes::{mpe_export, write_mpe}`), CLI
+`notes to-midi --mpe`, app Convert to MIDI "Export MPE…" (save dialog, the dialog stays open).
+The user's piano loop: 116 notes over the 15 channels, curves within 24 c (median 2 c), 168
+bend events. Tests: MPE writer (MCM, channels, bends, sharing), a 40 c bend read from the
+contour, the 808 slide as a note curve, rendered chords -> MPE file with every overlapping note
+on its own channel. Not done: per-note expression inside the project (the piano roll and the
+engine play one bend lane per clip), importing MPE files (channel 10 reads as drums).
 - Polyphonic per-note editing after legal review / patent expiry.
-- MPE export of polyphonic bends.
 
 ## Order and dependencies
 

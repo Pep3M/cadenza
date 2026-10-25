@@ -85,6 +85,35 @@ pub struct MidiNote {
 	pub velocity: f32,
 	/// Sung center minus `pitch`, cents (before any octave shift or fold).
 	pub cents: f64,
+	/// The note's own pitch curve, for per-note bends (MPE): (song beat, semitones from
+	/// `pitch` as sung, octave moves aside), a point where it moved 5 cents or more, the
+	/// first at the start; empty for drum hits.
+	pub curve: Vec<(f64, f32)>,
+}
+
+/// Smallest movement kept in a [`MidiNote::curve`], semitones.
+pub const CURVE_STEP: f32 = 0.05;
+
+/// `points` (any time unit, semitones) thinned to moves of [`CURVE_STEP`], kept inside
+/// `start..end` with the first one moved to `start`.
+fn thin_curve(
+	points: impl IntoIterator<Item = (f64, f32)>,
+	start: f64,
+	end: f64,
+) -> Vec<(f64, f32)> {
+	let mut out: Vec<(f64, f32)> = Vec::new();
+	for (t, v) in points {
+		if t >= end {
+			break;
+		}
+		if out
+			.last()
+			.is_none_or(|&(_, last)| (v - last).abs() >= CURVE_STEP)
+		{
+			out.push((if out.is_empty() { start } else { t.max(start) }, v));
+		}
+	}
+	out
 }
 
 /// One pitch-bend event (MIDI semantics: holds until the next).
@@ -215,6 +244,7 @@ pub fn to_midi(
 				pitch: pitch.clamp(0, 127) as u8,
 				velocity,
 				cents: (sung - f64::from(base)) * 100.0,
+				curve: Vec::new(),
 			},
 			base: f64::from(base),
 			onset: n.onset,
@@ -239,6 +269,23 @@ pub fn to_midi(
 			last.note.length = p.note.start - last.note.start;
 		}
 		kept.push(p);
+	}
+	for p in &mut kept {
+		let (Some(first), Some(end)) = (analysis.frame_at(p.onset), analysis.frame_at(p.offset))
+		else {
+			continue;
+		};
+		let span = (p.offset - p.onset).max(1e-9);
+		let (start, length) = (p.note.start, p.note.length);
+		let frames = &analysis.frames[first..end.max(first)];
+		p.note.curve = thin_curve(
+			frames.iter().filter_map(|f| {
+				let u = ((f.time - p.onset) / span).clamp(0.0, 1.0);
+				Some((start + u * length, (f.pitch? - p.base) as f32))
+			}),
+			start,
+			start + length,
+		);
 	}
 	let mut bends = Vec::new();
 	if opts.bends && opts.bend_range > 0.0 {
@@ -310,14 +357,14 @@ pub fn poly_to_midi(
 			dropped += 1;
 			continue;
 		}
-		picked.push((a, b, n.pitch, n.amplitude));
+		picked.push((a, b, n.pitch, n.amplitude, &n.bend));
 	}
 	let key = match &opts.key {
 		KeySnap::Off => None,
 		KeySnap::Scale(s) => Some(*s),
 		KeySnap::Auto => {
 			let mut hist = [0.0f64; 12];
-			for &(a, b, p, _) in &picked {
+			for &(a, b, p, ..) in &picked {
 				hist[usize::from(p % 12)] += b - a;
 			}
 			Scale::infer(&hist)
@@ -332,7 +379,7 @@ pub fn poly_to_midi(
 	};
 	let loudest = picked.iter().map(|n| n.3).fold(0.0f32, f32::max).max(1e-6);
 	let mut out: Vec<MidiNote> = Vec::with_capacity(picked.len());
-	for &(a, b, p, amp) in &picked {
+	for &(a, b, p, amp, bend) in &picked {
 		let base = match &key {
 			Some(k) => nearest_in_key(k, f64::from(p)),
 			None => p,
@@ -364,6 +411,20 @@ pub fn poly_to_midi(
 				.velocity
 				.unwrap_or_else(|| (0.35 + 0.65 * amp / loudest).clamp(0.25, 1.0)),
 			cents: 0.0,
+			// From the detected key to the snapped one, plus the note's own movement.
+			curve: {
+				let moved = f32::from(p) - f32::from(base);
+				let span = (b - a).max(1e-9);
+				let (bs, be) = (snap(beat(a)), snap(beat(a)) + (end - start));
+				thin_curve(
+					bend.iter().map(|&(t, v)| {
+						let u = ((t - a) / span).clamp(0.0, 1.0);
+						(bs + u * (be - bs), v + moved)
+					}),
+					bs,
+					be,
+				)
+			},
 		});
 	}
 	out.sort_by(|x, y| x.start.total_cmp(&y.start).then(x.pitch.cmp(&y.pitch)));
@@ -379,6 +440,8 @@ pub fn poly_to_midi(
 				continue;
 			}
 			prev.length = n.start - prev.start;
+			let end = prev.start + prev.length;
+			prev.curve.retain(|&(t, _)| t < end);
 		}
 		kept.push(n);
 	}
@@ -434,6 +497,7 @@ pub fn drums_to_midi(
 			pitch,
 			velocity: opts.velocity.unwrap_or(h.velocity),
 			cents: 0.0,
+			curve: Vec::new(),
 		});
 	}
 	notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
@@ -613,6 +677,7 @@ mod tests {
 			offset,
 			pitch,
 			amplitude,
+			bend: Vec::new(),
 		};
 		let notes = [
 			n(0.0, 1.0, 60, 0.8),

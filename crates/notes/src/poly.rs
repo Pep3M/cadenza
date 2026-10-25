@@ -403,7 +403,7 @@ pub fn activations(samples: &[f32], progress: &mut dyn FnMut(f64) -> bool) -> Op
 }
 
 /// A detected note of a polyphonic recording.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PolyNote {
 	/// Seconds.
 	pub onset: f64,
@@ -412,7 +412,17 @@ pub struct PolyNote {
 	pub pitch: u8,
 	/// Mean activation 0..1 (a loudness proxy).
 	pub amplitude: f32,
+	/// The note's own pitch curve: (seconds, semitones from `pitch`), a point where it moved
+	/// by [`BEND_STEP`] or more; empty without the contour output ([`note_bend`]).
+	pub bend: Vec<(f64, f32)>,
 }
+
+/// Smallest pitch movement kept in a [`PolyNote::bend`], semitones.
+pub const BEND_STEP: f32 = 0.05;
+/// Contour bins per semitone.
+const CONTOUR_PER_SEMITONE: usize = 3;
+/// How far a note's bend is looked for, contour bins (the published value: 25 = 8⅓ st).
+const BEND_REACH: usize = 25;
 
 /// Note creation settings (Basic Pitch's defaults).
 #[derive(Debug, Clone, PartialEq)]
@@ -584,6 +594,7 @@ pub fn notes(a: &Activations, o: &PolyOptions) -> Vec<PolyNote> {
 			offset: a.times[b.min(n - 1)],
 			pitch: LOWEST_NOTE + k as u8,
 			amplitude: amp,
+			bend: note_bend(a, a_..b.min(n - 1), k),
 		})
 		.collect();
 	out.sort_by(|x, y| x.onset.total_cmp(&y.onset).then(x.pitch.cmp(&y.pitch)));
@@ -591,6 +602,53 @@ pub fn notes(a: &Activations, o: &PolyOptions) -> Vec<PolyNote> {
 		Some(ratio) => without_overtones(&out, ratio),
 		None => out,
 	}
+}
+
+/// The pitch curve of the note on key `k` over `frames` from the contour output, Basic
+/// Pitch's published way: per frame the strongest contour bin within [`BEND_REACH`] of the
+/// key, weighted by a Gaussian (std 5 bins) around it; refined between bins here (a
+/// parabola through the peak) instead of whole thirds of a semitone. Empty without a
+/// contour.
+pub fn note_bend(a: &Activations, frames: std::ops::Range<usize>, k: usize) -> Vec<(f64, f32)> {
+	if a.contour.len() < a.frames() * CONTOUR_BINS {
+		return Vec::new();
+	}
+	// Measured on steady tones from 40 to 84: a key's contour peak is the middle of its
+	// three bins (bin 0 sits a third of a semitone below A0).
+	let center = k * CONTOUR_PER_SEMITONE + 1;
+	let lo = center.saturating_sub(BEND_REACH);
+	let hi = (center + BEND_REACH).min(CONTOUR_BINS - 1);
+	let weight = |b: usize| {
+		let d = b as f64 - center as f64;
+		(-0.5 * (d / 5.0).powi(2)).exp() as f32
+	};
+	let mut out: Vec<(f64, f32)> = Vec::new();
+	for t in frames {
+		let row = &a.contour[t * CONTOUR_BINS..(t + 1) * CONTOUR_BINS];
+		let w = |b: usize| row[b] * weight(b);
+		let peak = (lo..=hi)
+			.max_by(|x, y| w(*x).total_cmp(&w(*y)))
+			.unwrap_or(center);
+		let shift = if peak > lo && peak < hi {
+			let (l, c, r) = (w(peak - 1), w(peak), w(peak + 1));
+			let den = l - 2.0 * c + r;
+			if den.abs() > 1e-9 {
+				(0.5 * (l - r) / den).clamp(-0.5, 0.5)
+			} else {
+				0.0
+			}
+		} else {
+			0.0
+		};
+		let semitones = (peak as f32 + shift - center as f32) / CONTOUR_PER_SEMITONE as f32;
+		if out
+			.last()
+			.is_none_or(|&(_, last)| (semitones - last).abs() >= BEND_STEP)
+		{
+			out.push((a.times[t], semitones));
+		}
+	}
+	out
 }
 
 /// `notes` without the likely overtone ghosts: a note on a harmonic of a louder note that
@@ -606,7 +664,7 @@ pub fn without_overtones(notes: &[PolyNote], ratio: f32) -> Vec<PolyNote> {
 				&& g.amplitude < ratio * f.amplitude
 		})
 	};
-	notes.iter().filter(|g| !ghost(g)).copied().collect()
+	notes.iter().filter(|g| !ghost(g)).cloned().collect()
 }
 
 /// A ghost starts with its fundamental, seconds.
@@ -666,7 +724,7 @@ pub fn transcribe(
 /// [`transcribe`] through an on-disk cache of the model's activations in `dir` (by the
 /// content of `samples`, the rate and [`ACTIVATIONS_VERSION`]): the network runs once per
 /// recording, the notes are made again from the stored activations (other options cost
-/// nothing). The contour output is not stored (`contour` comes back empty from a hit).
+/// nothing).
 pub fn transcribe_cached(
 	samples: &[f32],
 	rate: u32,
@@ -683,18 +741,28 @@ pub fn transcribe_cached(
 		let n = notes(&a, o);
 		return Some((a, n));
 	}
-	let (a, n) = transcribe(samples, rate, o, progress)?;
+	let resampled;
+	let x = if rate == SAMPLE_RATE {
+		samples
+	} else {
+		resampled = resample(samples, rate);
+		&resampled
+	};
+	let bytes = encode_activations(&activations(x, progress)?);
 	// A failed store only costs the next run its time.
 	let _ = std::fs::create_dir_all(dir).and_then(|()| {
 		let temp = dir.join(format!(".{}.tmp", std::process::id()));
-		std::fs::write(&temp, encode_activations(&a))?;
+		std::fs::write(&temp, &bytes)?;
 		std::fs::rename(&temp, &path)
 	});
+	// What a later hit reads (the contour stored as bytes): the same notes either way.
+	let a = decode_activations(&bytes)?;
+	let n = notes(&a, o);
 	Some((a, n))
 }
 
 /// Bumped when the activations the model gives change (old cache entries are ignored).
-pub const ACTIVATIONS_VERSION: u32 = 1;
+pub const ACTIVATIONS_VERSION: u32 = 2;
 const ACTIVATIONS_MAGIC: &[u8; 8] = b"CDZBPA\0\0";
 
 fn activations_key(samples: &[f32], rate: u32) -> String {
@@ -708,10 +776,11 @@ fn activations_key(samples: &[f32], rate: u32) -> String {
 	h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Magic, version, frame count, then the frame times (f64) and the note and onset
-/// activations (f32), little-endian.
+/// Magic, version, frame count, then the frame times (f64), the note and onset
+/// activations (f32), little-endian, and the contour as bytes (0..255 = 0..1: only its
+/// peaks are read, for bends).
 fn encode_activations(a: &Activations) -> Vec<u8> {
-	let mut out = Vec::with_capacity(16 + a.frames() * (8 + 8 * KEYS));
+	let mut out = Vec::with_capacity(16 + a.frames() * (8 + 8 * KEYS + CONTOUR_BINS));
 	out.extend_from_slice(ACTIVATIONS_MAGIC);
 	out.extend_from_slice(&ACTIVATIONS_VERSION.to_le_bytes());
 	out.extend_from_slice(&(a.frames() as u32).to_le_bytes());
@@ -721,6 +790,11 @@ fn encode_activations(a: &Activations) -> Vec<u8> {
 	for v in a.note.iter().chain(&a.onset) {
 		out.extend_from_slice(&v.to_le_bytes());
 	}
+	out.extend(
+		a.contour
+			.iter()
+			.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
+	);
 	out
 }
 
@@ -737,9 +811,10 @@ fn decode_activations(bytes: &[u8]) -> Option<Activations> {
 	}
 	let frames = word(count) as usize;
 	let (times, rest) = rest.split_at_checked(frames * 8)?;
-	if rest.len() != frames * KEYS * 8 {
+	if rest.len() != frames * (KEYS * 8 + CONTOUR_BINS) {
 		return None;
 	}
+	let (rest, contour) = rest.split_at(frames * KEYS * 8);
 	let floats: Vec<f32> = rest
 		.as_chunks::<4>()
 		.0
@@ -756,7 +831,7 @@ fn decode_activations(bytes: &[u8]) -> Option<Activations> {
 			.collect(),
 		note: note.to_vec(),
 		onset: onset.to_vec(),
-		contour: Vec::new(),
+		contour: contour.iter().map(|&b| f32::from(b) / 255.0).collect(),
 	})
 }
 
@@ -829,8 +904,8 @@ mod tests {
 		.unwrap();
 		assert_eq!(calls, [1.0]);
 		assert_eq!(first, again);
-		assert_eq!((a.times, a.note, a.onset), (b.times, b.note, b.onset));
-		assert!(b.contour.is_empty());
+		assert_eq!(a, b);
+		assert_eq!(b.contour.len(), b.frames() * CONTOUR_BINS);
 		// Other options reuse the activations.
 		let fewer = PolyOptions {
 			onset_threshold: 0.9,
@@ -839,6 +914,35 @@ mod tests {
 		let (_, strict) = transcribe_cached(&x, SAMPLE_RATE, &fewer, &dir, &mut |_| true).unwrap();
 		assert!(strict.len() <= first.len());
 		std::fs::remove_dir_all(&dir).unwrap();
+	}
+
+	#[test]
+	fn a_bent_note_carries_its_bend() {
+		// C4 held, bent up 40 cents between 0.8 and 1.1 s, held there (a bend past half a
+		// semitone becomes the next key's note: the model's own note rule).
+		let rate = f64::from(SAMPLE_RATE);
+		let mut phase = 0.0f64;
+		let x: Vec<f32> = (0..(1.8 * rate) as usize)
+			.map(|i| {
+				let t = i as f64 / rate;
+				if !(0.1..1.6).contains(&t) {
+					return 0.0;
+				}
+				let up = 0.4 * ((t - 0.8) / 0.3).clamp(0.0, 1.0);
+				phase += 2.0 * std::f64::consts::PI * crate::midi_to_hz(60.0 + up) / rate;
+				let env = ((t - 0.1) / 0.01).min(1.0) * (-(t - 0.1) * 0.8).exp();
+				(1..5)
+					.map(|h| (phase * h as f64).sin() * 0.25 / h as f64)
+					.sum::<f64>() as f32
+					* env as f32
+			})
+			.collect();
+		let (_, found) =
+			transcribe(&x, SAMPLE_RATE, &PolyOptions::default(), &mut |_| true).unwrap();
+		let n = found.iter().find(|n| n.pitch == 60).expect("the C4");
+		let at = |t: f64| n.bend.iter().rev().find(|b| b.0 <= t).map_or(0.0, |b| b.1);
+		assert!(at(0.6).abs() < 0.08, "{:?}", n.bend);
+		assert!((at(1.4) - 0.4).abs() < 0.1, "{:?}", n.bend);
 	}
 
 	#[test]

@@ -32,6 +32,10 @@ pub struct ToMidiArgs {
 	/// pitched (808, toms: a note per hit at its pitch).
 	#[arg(long, default_value = "auto", value_parser = ["auto", "mono", "poly", "percussive", "pitched"])]
 	algorithm: String,
+	/// Write the output as MPE: every note on its own channel with its own pitch curve
+	/// (chord notes bend independently).
+	#[arg(long)]
+	mpe: bool,
 	/// Percussive: every hit as this note (a name like "C1" or a MIDI number).
 	#[arg(long)]
 	drum_note: Option<String>,
@@ -260,25 +264,34 @@ fn to_midi(args: ToMidiArgs) -> Result<()> {
 			highest: args.highest,
 			sensitivity: args.sensitivity,
 			min_length_seconds: args.min_length,
+			mpe_path: args.mpe.then(|| output.display().to_string()),
 			..Default::default()
 		},
 	)?;
-	// The MIDI clip starts where the audio does, so beat 0 of the file is the recording's start.
-	midi::export_midi(
-		&session,
-		midi::ExportMidiArgs {
-			path: output.display().to_string(),
-			clip_id: Some(out.clip_id),
-			..Default::default()
-		},
-	)?;
+	// The MIDI clip starts where the audio does, so beat 0 of the file is the recording's
+	// start (the MPE file was written by the tool with the same positions).
+	if !args.mpe {
+		midi::export_midi(
+			&session,
+			midi::ExportMidiArgs {
+				path: output.display().to_string(),
+				clip_id: Some(out.clip_id),
+				..Default::default()
+			},
+		)?;
+	}
 	let kind = match out.algorithm {
 		notes::Algorithm::Poly => "chords",
 		notes::Algorithm::Percussive => "drums",
 		notes::Algorithm::PitchedPercussive => "pitched hits",
 		_ => "melody",
 	};
-	println!("{} notes ({kind}) -> {}", out.note_count, output.display());
+	let mpe = if args.mpe { ", MPE" } else { "" };
+	println!(
+		"{} notes ({kind}{mpe}) -> {}",
+		out.note_count,
+		output.display()
+	);
 	if let Some(key) = &out.key {
 		println!("key: {key}");
 	}

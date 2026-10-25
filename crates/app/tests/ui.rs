@@ -1518,6 +1518,7 @@ fn linked_paste_shares_note_edits_and_make_unique_splits_them() {
 					velocity: None,
 					start: None,
 					length: None,
+					bend: None,
 				}],
 			})
 	);
@@ -1557,6 +1558,7 @@ fn linked_paste_shares_note_edits_and_make_unique_splits_them() {
 					velocity: None,
 					start: None,
 					length: None,
+					bend: None,
 				}],
 			})
 	);
@@ -3279,6 +3281,24 @@ fn render_piano_roll_screens() {
 				);
 				if bar == 1 && ri == 0 {
 					selected.push(n.id);
+				}
+				let mut n = n;
+				// A bend up a whole tone on one chord's top note, vibrato on the last one's.
+				if ri == 2 && k == 2 && bar >= 2 {
+					n.bend = (0..32)
+						.map(|i| {
+							let at = i as f64 / 16.0;
+							let semitones = if bar == 2 {
+								(at.min(1.0) * 2.0) as f32
+							} else {
+								(0.35 * (at * std::f64::consts::TAU * 3.0).sin()) as f32
+							};
+							cadenza_model::NoteBendPoint {
+								tick: Tick::from_beats(at),
+								semitones,
+							}
+						})
+						.collect();
 				}
 				notes.push(n);
 			}

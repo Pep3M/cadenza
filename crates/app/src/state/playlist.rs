@@ -586,6 +586,7 @@ pub fn stretch(project: &Project, clip: ClipId, length: Tick) -> Option<Command>
 				velocity: None,
 				start: Some(start),
 				length: Some(Tick(scale(n.length).0.max(1))),
+				bend: (!n.bend.is_empty()).then(|| n.scaled_bend(ratio)),
 			}
 		})
 		.collect();

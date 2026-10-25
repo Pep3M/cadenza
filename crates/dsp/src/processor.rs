@@ -109,6 +109,13 @@ pub enum MidiEvent {
 		offset: u32,
 		value: f32,
 	},
+	/// One key's own pitch offset (a note's curve, MPE-style), semitones; sent before its
+	/// note-on for the starting value and while it sounds. A note-on without one starts at 0.
+	NoteBend {
+		offset: u32,
+		pitch: u8,
+		semitones: f32,
+	},
 }
 
 /// MIDI controller numbers with a meaning in the built-in instruments.
@@ -128,7 +135,8 @@ impl MidiEvent {
 			| MidiEvent::AllNotesOff { offset }
 			| MidiEvent::ControlChange { offset, .. }
 			| MidiEvent::PitchBend { offset, .. }
-			| MidiEvent::ChannelPressure { offset, .. } => offset,
+			| MidiEvent::ChannelPressure { offset, .. }
+			| MidiEvent::NoteBend { offset, .. } => offset,
 		}
 	}
 
@@ -155,6 +163,13 @@ impl MidiEvent {
 			MidiEvent::ChannelPressure { value, .. } => {
 				MidiEvent::ChannelPressure { offset, value }
 			}
+			MidiEvent::NoteBend {
+				pitch, semitones, ..
+			} => MidiEvent::NoteBend {
+				offset,
+				pitch,
+				semitones,
+			},
 		}
 	}
 

@@ -36,9 +36,9 @@ pub use modulation::{EnvelopeSource, LfoShape, ModTarget, Modulator, ModulatorKi
 pub use persist::{backup_path, write_atomic};
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
-	FORMAT_VERSION, FadeCurve, Freeze, Marker, MonitorMode, Note, Output, OutputRoute, PointShape,
-	Project, ProjectMeta, Send, SidechainSource, Take, Track, TrackInput, TrackKind,
-	automation_value,
+	FORMAT_VERSION, FadeCurve, Freeze, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, Marker, MonitorMode,
+	Note, NoteBendPoint, Output, OutputRoute, PointShape, Project, ProjectMeta, Send,
+	SidechainSource, Take, Track, TrackInput, TrackKind, automation_value,
 };
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{

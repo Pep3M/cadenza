@@ -506,6 +506,7 @@ pub fn move_notes(
 				velocity: None,
 				start: (dt.0 != 0).then_some(n.start + dt),
 				length: None,
+				bend: None,
 			})
 			.collect(),
 	});
@@ -540,6 +541,7 @@ pub fn resize_notes(
 						velocity: None,
 						start: None,
 						length: Some(length),
+						bend: None,
 					},
 					n.start + length,
 				)
@@ -636,6 +638,7 @@ pub fn quantize_notes(
 				velocity: None,
 				start: Some(start),
 				length: None,
+				bend: None,
 			})
 		})
 		.collect();
@@ -675,6 +678,7 @@ pub fn set_velocities(
 				velocity: Some(v),
 				start: None,
 				length: None,
+				bend: None,
 			})
 		})
 		.collect();
@@ -1006,6 +1010,7 @@ pub fn resize_start_notes(
 				velocity: None,
 				start: Some(start),
 				length: Some(end - start),
+				bend: None,
 			})
 		})
 		.collect();
@@ -1035,6 +1040,7 @@ pub fn glue_notes(project: &Project, clip: ClipId, ids: &BTreeSet<NoteId>) -> Op
 			velocity: None,
 			start: None,
 			length: Some(end - first.start),
+			bend: None,
 		});
 		removed.extend(notes[1..].iter().map(|n| n.id));
 	}
@@ -1073,6 +1079,7 @@ pub fn legato_notes(project: &Project, clip: ClipId, ids: &BTreeSet<NoteId>) -> 
 				velocity: None,
 				start: None,
 				length: Some(length),
+				bend: None,
 			})
 		})
 		.collect();
@@ -1115,6 +1122,7 @@ pub fn slice_notes(project: &Project, clip: ClipId, at: Tick, lo: u8, hi: u8) ->
 						velocity: None,
 						start: None,
 						length: Some(at - n.start),
+						bend: (!n.bend.is_empty()).then(|| n.split_bend(at - n.start).0),
 					})
 					.collect(),
 			},
@@ -1125,6 +1133,7 @@ pub fn slice_notes(project: &Project, clip: ClipId, at: Tick, lo: u8, hi: u8) ->
 					.map(|n| Note {
 						id: NoteId::new(),
 						start: at,
+						bend: n.split_bend(at - n.start).1,
 						length: n.end() - at,
 						..(*n).clone()
 					})
@@ -1225,11 +1234,13 @@ pub fn set_note(project: &Project, clip: ClipId, note: &Note) -> Option<Command>
 		velocity: ((velocity - old.velocity).abs() > 1e-4).then_some(velocity),
 		start: (start != old.start).then_some(start),
 		length: (length != old.length).then_some(length),
+		bend: (note.bend != old.bend).then(|| note.bend.clone()),
 	};
 	if patch.pitch.is_none()
 		&& patch.velocity.is_none()
 		&& patch.start.is_none()
 		&& patch.length.is_none()
+		&& patch.bend.is_none()
 	{
 		return None;
 	}

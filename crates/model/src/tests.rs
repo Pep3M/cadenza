@@ -396,6 +396,7 @@ fn every_command_round_trips() {
 					velocity: None,
 					start: Some(beats(3.5)),
 					length: None,
+					bend: None,
 				},
 				NotePatch {
 					id: fx.riff_notes[1],
@@ -403,6 +404,7 @@ fn every_command_round_trips() {
 					velocity: Some(0.1),
 					start: None,
 					length: Some(beats(0.25)),
+					bend: None,
 				},
 			],
 		},
@@ -1111,6 +1113,7 @@ fn notes_and_clips_stay_sorted() {
 			velocity: None,
 			start: Some(beats(0.5)),
 			length: None,
+			bend: None,
 		}],
 	})
 	.unwrap();
@@ -1308,6 +1311,7 @@ fn command_json_shape_is_stable() {
 					velocity: 0.5,
 					start: Tick(0),
 					length: Tick(PPQ),
+					bend: Vec::new(),
 				}],
 			},
 			json!({"op": "add_notes", "clip": t(3), "notes": [
@@ -2679,6 +2683,7 @@ fn linked_clips_share_note_and_controller_edits_in_one_undo_step() {
 			velocity: None,
 			start: None,
 			length: None,
+			bend: None,
 		}],
 	})
 	.unwrap();
@@ -3166,4 +3171,81 @@ fn midi_inputs_round_trip_validate_and_follow_their_track() {
 		loaded.device(Some(fx.audio), tuner_id).unwrap().midi_input,
 		Some(fx.lead)
 	);
+}
+
+#[test]
+fn note_bends_validate_split_and_undo() {
+	let mut doc = Document::new(Project::new("Bends"));
+	let track = Track::new("Lead", TrackKind::Instrument);
+	let track_id = track.id;
+	doc.execute(Command::AddTrack { track, index: None })
+		.unwrap();
+	let mut note = Note::new(60, beats(0.0), beats(2.0), 0.8);
+	let point = |b: f64, semitones: f32| NoteBendPoint {
+		tick: beats(b),
+		semitones,
+	};
+	note.bend = vec![point(0.0, 0.0), point(1.0, 2.0), point(1.5, 1.0)];
+	let note_id = note.id;
+	let clip = Clip::midi("Lead", beats(0.0), beats(4.0)).with_notes([note.clone()]);
+	let clip_id = clip.id;
+	doc.execute(Command::AddClip {
+		track: track_id,
+		clip,
+	})
+	.unwrap();
+	// Held values; past the note's end they are kept but never played.
+	assert_eq!(note.bend_at(beats(0.5)), 0.0);
+	assert_eq!(note.bend_at(beats(1.2)), 2.0);
+	// A split carries the value in effect at the cut to the right part.
+	let (left, right) = note.split_bend(beats(1.2));
+	assert_eq!(left, vec![point(0.0, 0.0), point(1.0, 2.0)]);
+	assert_eq!(right, vec![point(0.0, 2.0), point(0.3, 1.0)]);
+	assert_eq!(note.scaled_bend(2.0)[1], point(2.0, 2.0));
+	// Out of order, too wide or before the note: rejected with a reason.
+	let patch = |bend: Vec<NoteBendPoint>| Command::UpdateNotes {
+		clip: clip_id,
+		notes: vec![NotePatch {
+			id: note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: None,
+			bend: Some(bend),
+		}],
+	};
+	for bad in [
+		vec![point(1.0, 0.0), point(0.5, 1.0)],
+		vec![point(0.0, 60.0)],
+		vec![NoteBendPoint {
+			tick: Tick(-1),
+			semitones: 0.0,
+		}],
+	] {
+		let err = doc.execute(patch(bad)).unwrap_err();
+		assert!(matches!(err, ModelError::InvalidNoteBend { .. }), "{err}");
+	}
+	// Shortening keeps the points; replacing the bend is undoable.
+	doc.execute(Command::UpdateNotes {
+		clip: clip_id,
+		notes: vec![NotePatch {
+			id: note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: Some(beats(0.5)),
+			bend: None,
+		}],
+	})
+	.unwrap();
+	doc.execute(patch(Vec::new())).unwrap();
+	let get = |doc: &Document| doc.project().find_clip(clip_id).unwrap().1.notes()[0].clone();
+	assert!(get(&doc).bend.is_empty());
+	doc.undo().unwrap();
+	assert_eq!(get(&doc).bend, note.bend);
+	// JSON: absent when straight, round trips when bent.
+	let json = serde_json::to_value(get(&doc)).unwrap();
+	assert_eq!(json["bend"][1]["semitones"], 2.0);
+	let straight = serde_json::to_value(Note::new(60, beats(0.0), beats(1.0), 0.8)).unwrap();
+	assert!(straight.get("bend").is_none());
 }

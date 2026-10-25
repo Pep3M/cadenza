@@ -39,6 +39,10 @@ pub(crate) struct EventList {
 	/// Channel-wide pitch bend (semitones) and pressure applied to new notes too.
 	tuning: f64,
 	pressure: f64,
+	/// Each key's own bend (`MidiEvent::NoteBend`, semitones) and whether one came since
+	/// its last note-off (else its next note starts at 0).
+	key_bend: [f64; 128],
+	bend_set: u128,
 }
 
 /// Pitch bend range used when bends become CLAP tuning expressions (semitones).
@@ -51,6 +55,8 @@ impl EventList {
 			held: 0,
 			tuning: 0.0,
 			pressure: 0.0,
+			key_bend: [0.0; 128],
+			bend_set: 0,
 		}
 	}
 
@@ -61,6 +67,12 @@ impl EventList {
 		while held != 0 {
 			let key = held.trailing_zeros() as u16;
 			held &= held - 1;
+			// Tuning = the channel bend plus the key's own.
+			let value = if kind == NoteExpressionType::Tuning {
+				value + self.key_bend[usize::from(key)]
+			} else {
+				value
+			};
 			ok &= self.push(HostEvent::Expression(NoteExpressionEvent::new(
 				time,
 				Pckn::new(0u16, 0u16, key, Match::All),
@@ -153,6 +165,31 @@ impl EventList {
 		midi_dialect: bool,
 		controllers: ControllerRoute,
 	) -> bool {
+		// A key's own bend: a tuning expression on CLAP note ports (none in MIDI 1.0 bytes).
+		if let MidiEvent::NoteBend {
+			pitch, semitones, ..
+		} = *e
+		{
+			let k = pitch.min(127);
+			self.key_bend[usize::from(k)] = f64::from(semitones.clamp(-48.0, 48.0));
+			self.bend_set |= 1u128 << k;
+			if midi_dialect || self.held & (1u128 << k) == 0 {
+				return true;
+			}
+			let time = e.offset().min(frames.saturating_sub(1));
+			let tuning = self.key_bend[usize::from(k)]
+				+ if controllers == ControllerRoute::Expressions {
+					self.tuning
+				} else {
+					0.0
+				};
+			return self.push(HostEvent::Expression(NoteExpressionEvent::new(
+				time,
+				Pckn::new(0u16, 0u16, u16::from(k), Match::All),
+				NoteExpressionType::Tuning,
+				tuning,
+			)));
+		}
 		if !e.is_note() {
 			return self.push_controller(e, frames, controllers);
 		}
@@ -167,12 +204,25 @@ impl EventList {
 				)))
 			});
 		}
-		if !midi_dialect {
-			match *e {
-				MidiEvent::NoteOn { pitch, .. } => self.held |= 1u128 << pitch.min(127),
-				MidiEvent::NoteOff { pitch, .. } => self.held &= !(1u128 << pitch.min(127)),
-				_ => {}
+		match *e {
+			MidiEvent::NoteOn { pitch, .. } => {
+				let bit = 1u128 << pitch.min(127);
+				if self.bend_set & bit == 0 {
+					self.key_bend[usize::from(pitch.min(127))] = 0.0;
+				}
+				self.bend_set &= !bit;
+				if !midi_dialect {
+					self.held |= bit;
+				}
 			}
+			MidiEvent::NoteOff { pitch, .. } => {
+				let bit = 1u128 << pitch.min(127);
+				self.bend_set &= !bit;
+				if !midi_dialect {
+					self.held &= !bit;
+				}
+			}
+			_ => {}
 		}
 		let event = match (*e, midi_dialect) {
 			(
@@ -209,19 +259,26 @@ impl EventList {
 			_ => return true,
 		};
 		let ok = self.push(event);
-		// A note starting while the channel is bent / pressed gets the same expression.
-		if let (MidiEvent::NoteOn { pitch, .. }, false) = (*e, midi_dialect)
-			&& controllers == ControllerRoute::Expressions
-		{
+		// A note starting while the channel is bent / pressed (or with its own bend) gets the
+		// same expression.
+		if let (MidiEvent::NoteOn { pitch, .. }, false) = (*e, midi_dialect) {
 			let pckn = Pckn::new(0u16, 0u16, u16::from(pitch.min(127)), Match::All);
-			if self.tuning != 0.0 {
+			let channel = controllers == ControllerRoute::Expressions;
+			let tuning = self.key_bend[usize::from(pitch.min(127))]
+				+ if channel { self.tuning } else { 0.0 };
+			if tuning != 0.0 {
 				self.push(HostEvent::Expression(NoteExpressionEvent::new(
 					time,
 					pckn,
 					NoteExpressionType::Tuning,
-					self.tuning,
+					tuning,
 				)));
 			}
+		}
+		if let (MidiEvent::NoteOn { pitch, .. }, false) = (*e, midi_dialect)
+			&& controllers == ControllerRoute::Expressions
+		{
+			let pckn = Pckn::new(0u16, 0u16, u16::from(pitch.min(127)), Match::All);
 			if self.pressure != 0.0 {
 				self.push(HostEvent::Expression(NoteExpressionEvent::new(
 					time,
@@ -368,6 +425,41 @@ mod tests {
 			Some(CoreEventSpace::Midi(e)) => assert_eq!(e.data(), [0x90, 64, 127]),
 			_ => panic!("expected midi"),
 		}
+	}
+
+	#[test]
+	fn a_key_bend_is_that_notes_tuning() {
+		let mut list = EventList::with_capacity(16);
+		let bend = |offset, semitones| MidiEvent::NoteBend {
+			offset,
+			pitch: 60,
+			semitones,
+		};
+		let on = MidiEvent::NoteOn {
+			offset: 0,
+			pitch: 60,
+			velocity: 0.8,
+		};
+		for e in [bend(0, 0.5), on, bend(10, 1.5)] {
+			assert!(list.push_event(&e, 64, false, ControllerRoute::Midi));
+		}
+		let tunings: Vec<(u32, f64)> = list
+			.events
+			.iter()
+			.filter_map(|e| match e {
+				HostEvent::Expression(x) => Some((x.header().time(), x.value())),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(
+			tunings,
+			[(0, 0.5), (10, 1.5)],
+			"before the note-on: carried to it"
+		);
+		// MIDI 1.0 bytes have no per-note bend.
+		let mut midi = EventList::with_capacity(16);
+		assert!(midi.push_event(&bend(0, 1.0), 64, true, ControllerRoute::Midi));
+		assert_eq!(midi.len(), 0);
 	}
 
 	#[test]

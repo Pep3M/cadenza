@@ -385,7 +385,25 @@ pub struct Note {
 	/// Relative to the clip start.
 	pub start: Tick,
 	pub length: Tick,
+	/// The note's own pitch curve (per-note bend, MPE-style): each point holds until the
+	/// next, none = straight. Optional in JSON.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub bend: Vec<NoteBendPoint>,
 }
+
+/// A point of a [`Note::bend`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteBendPoint {
+	/// From the note's start, increasing; points past the note's end are not played.
+	pub tick: Tick,
+	/// Pitch offset, -48..=48 semitones.
+	pub semitones: f32,
+}
+
+/// Most points one note's bend may have.
+pub const MAX_NOTE_BEND_POINTS: usize = 4096;
+/// Largest bend either way, semitones.
+pub const MAX_NOTE_BEND: f32 = 48.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AutomationLane {
@@ -886,11 +904,61 @@ impl Note {
 			velocity,
 			start,
 			length,
+			bend: Vec::new(),
 		}
 	}
 
 	pub fn end(&self) -> Tick {
 		self.start + self.length
+	}
+
+	/// The bend in effect `tick` after the note's start, semitones (0 before the first point).
+	pub fn bend_at(&self, tick: Tick) -> f32 {
+		let i = self.bend.partition_point(|p| p.tick <= tick);
+		if i == 0 {
+			0.0
+		} else {
+			self.bend[i - 1].semitones
+		}
+	}
+
+	/// The note cut at `at` ticks after its start: the left part's bend up to there, the
+	/// right part's from there (the value in effect at the cut becomes its first point).
+	pub fn split_bend(&self, at: Tick) -> (Vec<NoteBendPoint>, Vec<NoteBendPoint>) {
+		if self.bend.is_empty() {
+			return (Vec::new(), Vec::new());
+		}
+		let left: Vec<NoteBendPoint> = self.bend.iter().copied().filter(|p| p.tick < at).collect();
+		let mut right = vec![NoteBendPoint {
+			tick: Tick::ZERO,
+			semitones: self.bend_at(at),
+		}];
+		right.extend(
+			self.bend
+				.iter()
+				.filter(|p| p.tick > at)
+				.map(|p| NoteBendPoint {
+					tick: p.tick - at,
+					..*p
+				}),
+		);
+		if right.iter().all(|p| p.semitones == 0.0) {
+			right.clear();
+		}
+		(left, right)
+	}
+
+	/// The bend with its ticks scaled by `factor` (a stretched note).
+	pub fn scaled_bend(&self, factor: f64) -> Vec<NoteBendPoint> {
+		let mut out: Vec<NoteBendPoint> = Vec::with_capacity(self.bend.len());
+		for p in &self.bend {
+			let tick = Tick((p.tick.0 as f64 * factor).round() as i64);
+			match out.last_mut() {
+				Some(last) if last.tick >= tick => last.semitones = p.semitones,
+				_ => out.push(NoteBendPoint { tick, ..*p }),
+			}
+		}
+		out
 	}
 }
 

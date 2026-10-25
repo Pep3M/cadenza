@@ -74,6 +74,7 @@ const EV_ALL_OFF: u32 = 3;
 const EV_CC: u32 = 4;
 const EV_BEND: u32 = 5;
 const EV_PRESSURE: u32 = 6;
+const EV_NOTE_BEND: u32 = 7;
 
 /// Upper bounds a child accepts from a header (the host never exceeds them).
 pub(crate) const MAX_CAPACITY: u32 = 1 << 16;
@@ -333,6 +334,11 @@ impl<'a> Block<'a> {
 				} => (EV_CC, offset, controller, value),
 				MidiEvent::PitchBend { offset, value } => (EV_BEND, offset, 0, value),
 				MidiEvent::ChannelPressure { offset, value } => (EV_PRESSURE, offset, 0, value),
+				MidiEvent::NoteBend {
+					offset,
+					pitch,
+					semitones,
+				} => (EV_NOTE_BEND, offset, pitch, semitones),
 			};
 			self.store(w, kind);
 			self.store(w + 1, offset.saturating_sub(shift));
@@ -382,6 +388,11 @@ impl<'a> Block<'a> {
 				EV_PRESSURE => MidiEvent::ChannelPressure {
 					offset,
 					value: finite(velocity).clamp(0.0, 1.0),
+				},
+				EV_NOTE_BEND => MidiEvent::NoteBend {
+					offset,
+					pitch,
+					semitones: finite(velocity).clamp(-48.0, 48.0),
 				},
 				_ => MidiEvent::NoteOff { offset, pitch: 0 },
 			};

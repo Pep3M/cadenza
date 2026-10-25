@@ -137,13 +137,18 @@ fn survives_random_params_blocks_and_events() {
 				for _ in 0..(rng.next_u32() % 5) {
 					offset = (offset + rng.next_u32() % 64).min(n as u32 + 2);
 					let pitch = 24 + (rng.next_u32() % 72) as u8;
-					events.push(match rng.next_u32() % 6 {
+					events.push(match rng.next_u32() % 7 {
 						0..=2 => MidiEvent::NoteOn {
 							offset,
 							pitch,
 							velocity: rng.unipolar(),
 						},
 						3 | 4 => MidiEvent::NoteOff { offset, pitch },
+						5 => MidiEvent::NoteBend {
+							offset,
+							pitch,
+							semitones: rng.bipolar() * 60.0,
+						},
 						_ => MidiEvent::AllNotesOff { offset },
 					});
 				}
@@ -469,6 +474,47 @@ fn pitch_bend_and_mod_wheel_move_the_pitch() {
 			(ratio - 2.0_f32.powf(2.0 / 12.0)).abs() < 0.02,
 			"{id}: full bend = +2 semitones ({base} -> {up} Hz)"
 		);
+	}
+}
+
+#[test]
+fn a_note_bend_moves_only_its_own_key_and_the_next_note_starts_straight() {
+	use crate::util::pitch::detect_pitch;
+	for id in ["poly_synth", "electric_piano", "sampler"] {
+		let mut p = prepared(id, SR, 256);
+		let on = |pitch| MidiEvent::NoteOn {
+			offset: 0,
+			pitch,
+			velocity: 1.0,
+		};
+		let off = |pitch| MidiEvent::NoteOff { offset: 0, pitch };
+		let bend = |semitones| MidiEvent::NoteBend {
+			offset: 0,
+			pitch: 57,
+			semitones,
+		};
+		let (plain, _) = render(&mut *p, 4800, 256, &[on(57)]);
+		let base = detect_pitch(&plain[1200..], SR).unwrap();
+		p.reset();
+		// Bent before its note-on: starts a whole tone up.
+		let (bent, _) = render(&mut *p, 4800, 256, &[bend(2.0), on(57)]);
+		let up = detect_pitch(&bent[1200..], SR).unwrap();
+		assert!(
+			(up / base - 2.0_f32.powf(2.0 / 12.0)).abs() < 0.02,
+			"{id}: {base} -> {up} Hz"
+		);
+		// Moved while it sounds.
+		let (down, _) = render(&mut *p, 4800, 256, &[bend(-1.0)]);
+		let low = detect_pitch(&down[1200..], SR).unwrap();
+		assert!(
+			(low / base - 2.0_f32.powf(-1.0 / 12.0)).abs() < 0.02,
+			"{id}: {base} -> {low} Hz"
+		);
+		// The next note on that key has no bend of its own: it starts at 0.
+		render(&mut *p, 9600, 256, &[off(57)]);
+		let (again, _) = render(&mut *p, 4800, 256, &[on(57)]);
+		let straight = detect_pitch(&again[1200..], SR).unwrap();
+		assert!((straight / base - 1.0).abs() < 0.01, "{id}: {straight}");
 	}
 }
 

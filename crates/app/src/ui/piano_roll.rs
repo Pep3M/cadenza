@@ -1253,6 +1253,9 @@ impl PianoUi {
 				pitch,
 				(v.row_height, flats),
 			);
+			if !n.bend.is_empty() {
+				paint_bend(&pr, v, area, clip.start + start, length, r, &n.bend);
+			}
 		}
 		match &self.gesture {
 			// The note being placed.
@@ -1354,6 +1357,7 @@ impl PianoUi {
 						});
 					});
 					let n = &mut props.note;
+					let mut straighten = false;
 					let mut done = |r: egui::Response| {
 						commit |= (r.changed() && !r.dragged()) || r.drag_stopped();
 					};
@@ -1406,7 +1410,20 @@ impl PianoUi {
 							n.length = Tick::from_beats(length);
 							done(r);
 							ui.end_row();
+							if !n.bend.is_empty() {
+								ui.label(tr("Bend"));
+								if ui
+									.small_button(tr("Straighten"))
+									.on_hover_text(tr("Remove this note's own pitch curve"))
+									.clicked()
+								{
+									n.bend.clear();
+									straighten = true;
+								}
+								ui.end_row();
+							}
 						});
+					commit |= straighten;
 				});
 			});
 		let outside = ui.input(|i| i.pointer.any_pressed())
@@ -2274,6 +2291,36 @@ fn paint_note(
 			theme::text_on(fill),
 		);
 	}
+}
+
+/// A note's own bend (NE-9h) drawn over it: the held values as steps from the note's
+/// middle, a semitone per row, cut at the note's end.
+fn paint_bend(
+	p: &Painter,
+	v: &PianoView,
+	area: Rect,
+	start: Tick,
+	length: Tick,
+	r: Rect,
+	bend: &[cadenza_model::NoteBendPoint],
+) {
+	let x = |tick: Tick| area.left() + v.timeline.tick_to_x(start + tick);
+	let y = |semitones: f32| r.center().y - semitones * v.row_height;
+	let end = x(length);
+	let mut points = vec![pos2(r.left(), y(0.0))];
+	for b in bend.iter().take_while(|b| b.tick < length) {
+		let at = x(b.tick).max(r.left());
+		let last = points.last().map_or(y(0.0), |q| q.y);
+		points.push(pos2(at, last));
+		points.push(pos2(at, y(b.semitones)));
+	}
+	let last = points.last().map_or(y(0.0), |q| q.y);
+	points.push(pos2(end, last));
+	p.add(egui::Shape::line(
+		points.clone(),
+		Stroke::new(3.0, Color32::from_black_alpha(110)),
+	));
+	p.add(egui::Shape::line(points, Stroke::new(1.5, theme::TEXT)));
 }
 
 /// Row fill (design 04): with scale rows, in-scale rows one step lighter than the

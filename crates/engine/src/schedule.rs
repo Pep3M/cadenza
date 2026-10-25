@@ -15,9 +15,22 @@ use crate::QUANTUM;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EventKind {
-	NoteOff { pitch: u8 },
-	Control { controller: Controller, value: f32 },
-	NoteOn { pitch: u8, velocity: f32 },
+	NoteOff {
+		pitch: u8,
+	},
+	Control {
+		controller: Controller,
+		value: f32,
+	},
+	/// A note's own bend (before its note-on at its start, then at each point).
+	NoteBend {
+		pitch: u8,
+		semitones: f32,
+	},
+	NoteOn {
+		pitch: u8,
+		velocity: f32,
+	},
 }
 
 /// The realtime event of a controller value.
@@ -60,7 +73,7 @@ impl ScheduledEvent {
 	fn sort_key(&self) -> (i64, u8, u8) {
 		match self.kind {
 			EventKind::NoteOff { pitch } => (self.sample, 0, pitch),
-			EventKind::Control { .. } => (self.sample, 1, 0),
+			EventKind::Control { .. } | EventKind::NoteBend { .. } => (self.sample, 1, 0),
 			EventKind::NoteOn { pitch, .. } => (self.sample, 2, pitch),
 		}
 	}
@@ -74,6 +87,8 @@ struct NoteSpan {
 	end: i64,
 	pitch: u8,
 	velocity: f32,
+	/// Its bend points in [`MidiSchedule::bends`]: (first index, count).
+	bend: (u32, u32),
 }
 
 #[derive(Debug, Default)]
@@ -84,6 +99,8 @@ pub(crate) struct MidiSchedule {
 	notes: Vec<NoteSpan>,
 	/// Controller values per controller, for chasing (sorted by controller).
 	controls: Vec<ControlLane>,
+	/// Every note's bend points (absolute sample, semitones), each note's run sorted.
+	bends: Vec<(i64, f32)>,
 }
 
 impl MidiSchedule {
@@ -91,6 +108,7 @@ impl MidiSchedule {
 		let mut events = Vec::new();
 		let mut spans = Vec::new();
 		let mut controls: Vec<ControlLane> = Vec::new();
+		let mut bends: Vec<(i64, f32)> = Vec::new();
 		for clip in clips.iter().filter(|c| c.sounds()) {
 			let ClipContent::Midi { notes, controllers } = &clip.content else {
 				continue;
@@ -157,6 +175,25 @@ impl MidiSchedule {
 				let off = (tempo.tick_to_sample(clip.start + end, sample_rate) as i64).max(on + 1);
 				let pitch = note.pitch.min(127);
 				let velocity = note.velocity.clamp(0.0, 1.0);
+				// The bend from the note-on (the value in effect there) to its end.
+				let first = bends.len() as u32;
+				let played = end - note.start;
+				let start_bend = note.bend_at(cadenza_core::Tick::ZERO);
+				if !note.bend.is_empty() {
+					bends.push((on, start_bend));
+				}
+				for p in note.bend.iter().filter(|p| p.tick.0 > 0 && p.tick < played) {
+					let at = (tempo.tick_to_sample(clip.start + note.start + p.tick, sample_rate)
+						as i64)
+						.clamp(on, off - 1);
+					bends.push((at, p.semitones));
+				}
+				for &(sample, semitones) in &bends[first as usize..] {
+					events.push(ScheduledEvent {
+						sample,
+						kind: EventKind::NoteBend { pitch, semitones },
+					});
+				}
 				events.push(ScheduledEvent {
 					sample: on,
 					kind: EventKind::NoteOn { pitch, velocity },
@@ -170,6 +207,7 @@ impl MidiSchedule {
 					end: off,
 					pitch,
 					velocity,
+					bend: (first, bends.len() as u32 - first),
 				});
 			}
 		}
@@ -183,6 +221,7 @@ impl MidiSchedule {
 			cursor: 0,
 			notes: spans,
 			controls,
+			bends,
 		}
 	}
 
@@ -213,7 +252,9 @@ impl MidiSchedule {
 	/// Worst case of [`Self::chase`]'s output (controllers + notes sounding at once), so
 	/// its caller can size its buffer once.
 	pub fn max_chase_notes(&self) -> usize {
-		self.controls.len() + self.max_sounding()
+		// A bent note is chased with its bend before its note-on.
+		let per_note = if self.bends.is_empty() { 1 } else { 2 };
+		self.controls.len() + per_note * self.max_sounding()
 	}
 
 	fn max_sounding(&self) -> usize {
@@ -259,6 +300,19 @@ impl MidiSchedule {
 				break;
 			}
 			if n.end > sample {
+				let (first, count) = (n.bend.0 as usize, n.bend.1 as usize);
+				if count > 0 {
+					let run = &self.bends[first..first + count];
+					let i = run.partition_point(|p| p.0 <= sample).max(1);
+					if out.len() == out.capacity() {
+						break;
+					}
+					out.push(MidiEvent::NoteBend {
+						offset,
+						pitch: n.pitch,
+						semitones: run[i - 1].1,
+					});
+				}
 				if out.len() == out.capacity() {
 					break;
 				}
@@ -330,6 +384,11 @@ impl MidiSchedule {
 				EventKind::Control { controller, value } => {
 					control_event(controller, value, offset)
 				}
+				EventKind::NoteBend { pitch, semitones } => MidiEvent::NoteBend {
+					offset,
+					pitch,
+					semitones,
+				},
 			});
 		}
 	}

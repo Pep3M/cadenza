@@ -524,6 +524,7 @@ pub fn build_import_command(
 						velocity: n.velocity,
 						start: n.start,
 						length: n.length,
+						bend: Vec::new(),
 					})
 					.collect();
 				let clip = Clip {
@@ -571,6 +572,7 @@ pub fn build_import_command(
 					velocity: n.velocity,
 					start: n.start,
 					length: n.length,
+					bend: Vec::new(),
 				})
 				.collect();
 			let all_events: Vec<ParsedOtherEvent> = parsed

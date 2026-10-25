@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion) and NE-9g (MPE export) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export) and NE-9h (per-note bends in the project) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -754,6 +754,30 @@ bend events. Tests: MPE writer (MCM, channels, bends, sharing), a 40 c bend read
 contour, the 808 slide as a note curve, rendered chords -> MPE file with every overlapping note
 on its own channel. Not done: per-note expression inside the project (the piano roll and the
 engine play one bend lane per clip), importing MPE files (channel 10 reads as drums).
+**Shipped (NE-9h, per-note bends in the project).** NE-9g's curves now live in the song.
+Model: `Note.bend: Vec<NoteBendPoint { tick (from the note's start), semitones }>` (each point
+holds until the next; optional in JSON, format_version 1; `NotePatch.bend` replaces it, undo
+restores; validation: ticks from 0 increasing, ±48 st, <= 4096 points; points past the note's
+end are kept and not played, so shortening a note never fails and growing it back restores the
+curve); `Note::{bend_at, split_bend, scaled_bend}`. DSP: `MidiEvent::NoteBend { offset, pitch,
+semitones }`; `Expression` keeps a bend per key (set by NoteBend, reset by a note-on that had
+none since the key's last note-off, kept through the release) added to each voice of
+`poly_synth`, `electric_piano` and `sampler`; the sandbox carries it (`EV_NOTE_BEND`); CLAP note
+ports get it as that key's tuning expression (plus the channel bend on expression-only ports),
+MIDI 1.0 ports and VST3 drop it. Engine: `MidiSchedule` writes each bent note's value at its
+note-on (before it) and every point inside the note, and a chase re-triggers the note at its
+current bend (`max_chase_notes` doubles when there are bends); no allocation (test). Editing:
+slicing a note splits its curve (the right part starts at the value in effect), clip stretch
+scales it, copies/paste/clone/linked copies/duplicate keep it; the piano roll draws it as white
+steps over the note (a semitone per row), the note popover "Straighten" removes it. AI: notes in
+`add_notes`/`add_midi_clip` take `bend: [{at_beats, semitones}]` joined by straight lines
+(written as held steps every 1/64 beat); `set_note_bend` replaces one note's curve;
+`get_clip_notes` shows it by its turns; `audio_to_midi` with `bends` on chords stores each
+note's curve; `export_midi { mpe }` writes a clip or track as MPE with the notes' own bends
+(plain export warns that it drops them). Tests: model (validation, split, undo, JSON), DSP
+(the bent key alone, the next note straight, fuzzing), engine (poly_synth and electric_piano
+renders, chased mid-bend, no-alloc), CLAP tuning expressions, MCP round trip through MPE.
+Not done: drawing or reshaping curves in the piano roll (only straighten), MPE import.
 - Polyphonic per-note editing after legal review / patent expiry.
 
 ## Order and dependencies

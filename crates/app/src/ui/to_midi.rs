@@ -148,7 +148,7 @@ fn options(ui: &mut Ui, state: &mut AppState) {
 	});
 	ui.label(
 		RichText::new(tr(
-			"Melody: voice, bass or lead, with exact timing and pitch bends. Chords: piano, guitar or keys, several notes at once (no bends). Drums: kick, snare, hats, toms and cymbals as drum notes. Pitched hits: an 808, toms or a plucked bass, each hit a note at its pitch (slides as bends). Auto picks drums or chords when the recording is mostly that",
+			"Melody: voice, bass or lead, with exact timing and pitch bends. Chords: piano, guitar or keys, several notes at once (each note bends on its own). Drums: kick, snare, hats, toms and cymbals as drum notes. Pitched hits: an 808, toms or a plucked bass, each hit a note at its pitch (slides as bends). Auto picks drums or chords when the recording is mostly that",
 		))
 		.font(theme::small())
 		.color(theme::TEXT_FAINT),

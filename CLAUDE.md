@@ -190,7 +190,8 @@ pub enum ClipContent { Midi { notes: Vec<Note>, controllers: Vec<ControllerLane 
 	points: Vec<ControllerPoint { tick /* clip-relative */, value: f32 /* CC/pressure 0..1, bend -1..1 */ }> }> /* optional */ }, Audio { file: PathBuf, offset_seconds: f64, gain_db: f32,
 	fade_in: Option<ClipFade>, fade_out: Option<ClipFade>, notes: Option<Box<NoteEdits>> /* NE-5, model::audio_notes */ } }
 pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
-pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick }
+pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick,
+	bend: Vec<NoteBendPoint { tick /* from the note start */, semitones }> /* per-note bend (NE-9h), optional */ }
 pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32,
 	shape: PointShape /* linear (default, omitted in JSON) | hold | smooth: segment to the next point */ }> }
 pub struct Marker { tick: Tick, name: String }
@@ -529,6 +530,10 @@ NE-9g MPE export: per-note curves `PolyNote.bend` (`poly::note_bend` from the co
 cache v2 stores the contour as bytes) and `MidiNote.curve` (beats, semitones; `to_midi` and `poly_to_midi` fill it)
 -> `cadenza_midi_io::export_mpe` (MCM lower zone, 15 members, bend range 48, LRU channel per note, `shared` count);
 MCP `audio_to_midi { mpe_path }` (`write_mpe`), CLI `notes to-midi --mpe`, app Convert to MIDI "Export MPE…".
+NE-9h per-note bends: `Note.bend: Vec<NoteBendPoint { tick (from the note start), semitones }>` (held steps, optional
+in JSON, `NotePatch.bend`, points past the end kept unplayed; `bend_at/split_bend/scaled_bend`) -> `MidiEvent::NoteBend`
+(per-key bend in `Expression`: poly_synth/electric_piano/sampler; sandbox `EV_NOTE_BEND`; CLAP tuning expression) from
+`MidiSchedule` (chased); piano roll draws it + "Straighten"; MCP `bend` on notes, `set_note_bend`, `export_midi { mpe }`.
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

@@ -378,6 +378,9 @@ pub struct NotePatch {
 	pub start: Option<Tick>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub length: Option<Tick>,
+	/// Replaces the note's own bend (empty = straight).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub bend: Option<Vec<crate::NoteBendPoint>>,
 }
 
 /// Distinguishes an explicit `null` (`Some(None)`) from an absent field (`None`).

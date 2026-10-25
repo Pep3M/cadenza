@@ -293,6 +293,7 @@ fn round_trips_project_export_and_import() {
 						velocity: 0.8,
 						start: Tick::ZERO,
 						length: Tick(cadenza_core::PPQ),
+						bend: Vec::new(),
 					},
 					Note {
 						id: cadenza_core::NoteId::new(),
@@ -300,6 +301,7 @@ fn round_trips_project_export_and_import() {
 						velocity: 0.6,
 						start: Tick(cadenza_core::PPQ),
 						length: Tick(cadenza_core::PPQ),
+						bend: Vec::new(),
 					},
 				],
 				controllers: vec![

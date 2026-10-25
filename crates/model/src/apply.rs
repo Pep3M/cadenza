@@ -982,6 +982,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					velocity: patch.velocity.unwrap_or(old.velocity),
 					start: patch.start.unwrap_or(old.start),
 					length: patch.length.unwrap_or(old.length),
+					bend: patch.bend.clone().unwrap_or_else(|| old.bend.clone()),
 				};
 				validate::note_within(c.id, span, &new)?;
 				inverse.push(NotePatch {
@@ -990,6 +991,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					velocity: patch.velocity.map(|_| old.velocity),
 					start: patch.start.map(|_| old.start),
 					length: patch.length.map(|_| old.length),
+					bend: patch.bend.as_ref().map(|_| old.bend.clone()),
 				});
 				updated.push(new);
 			}

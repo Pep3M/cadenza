@@ -49,7 +49,9 @@ with voicing and comping pattern) and `write_drum_pattern` (ASCII step grids on 
 like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_notes`. Use \
 `scale_info`/`snap_to_scale` to keep melodies in key, `quantize_notes`/`humanize_notes`/\
 `transpose_notes` to shape them. Add expression with `set_controller_events`/\
-`draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend).\n\
+`draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend); a \
+bend on one note only (a guitar bend in a chord, a slide, a fall) is that note's own `bend` \
+(`add_notes` or `set_note_bend`).\n\
 Style library: for a genre request, `library_search` kind style for it and `library_get` \
 the guide before deciding the song (tempo, form, progressions, pattern ids per role and \
 section, sounds, mix, do/don't); prefer `apply_form` + `apply_pattern` from the guide over \
@@ -725,6 +727,22 @@ impl CadenzaServer {
 	}
 
 	#[tool(
+		description = "Sets one note's own pitch curve (per-note bend, MPE-style): guitar bends, \
+			slides into or out of a note, vibrato or a fall on one note of a chord while the others \
+			stay. points [{at_beats (from the note's start), semitones (-48..48)}] are joined by \
+			straight lines; [] makes the note straight again. Notes can also carry `bend` in \
+			add_notes/add_midi_clip; get_clip_notes shows it. Played by the built-in poly_synth, \
+			electric_piano and sampler and by CLAP plugins with note expressions (other plugins \
+			ignore it). One undo step."
+	)]
+	fn set_note_bend(
+		&self,
+		Parameters(args): Parameters<clips::SetNoteBendArgs>,
+	) -> Result<Json<clips::SetNoteBendOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| clips::set_note_bend(s, args))?))
+	}
+
+	#[tool(
 		description = "Removes notes from a clip by id, or every note with all: true. On a linked clip (get_project `link`) every note/controller edit applies to all its linked copies."
 	)]
 	fn remove_notes(
@@ -914,7 +932,7 @@ impl CadenzaServer {
 			with bends true; an 808 gets the 808 Clean synth). mode audio (default) keeps the sung timing and nearest \
 			semitone; mode hum quantizes to sixteenths, infers and snaps to the key and merges \
 			repeats. Override with quantize_beats, key (\"auto\", \"off\", \"A minor\"), \
-			bends (pitch-bend lane replaying slides/vibrato), octave_shift, lowest/highest \
+			bends (pitch-bend lane replaying slides/vibrato; with poly each note gets its own bend), octave_shift, lowest/highest \
 			(fold into a range), velocity, sensitivity. mpe_path also writes an MPE .mid (each \
 			note its own channel and pitch curve: chord notes bend independently) for other \
 			programs. Returns the clip, key, range and the first notes with their sung \
@@ -1041,7 +1059,9 @@ impl CadenzaServer {
 	#[tool(
 		description = "Writes the project's MIDI to a standard MIDI file (.mid): every \
 			instrument track with notes, or only track_id, or only one clip (clip_id). \
-			Includes the tempo map, time signature and markers."
+			Includes the tempo map, time signature and markers. mpe true (with track_id or \
+			clip_id) writes MPE instead: each note on its own channel, keeping the notes' own \
+			bends."
 	)]
 	fn export_midi(
 		&self,

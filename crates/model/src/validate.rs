@@ -255,6 +255,7 @@ pub(crate) fn note_within(clip: ClipId, span: Tick, note: &Note) -> Result<(), M
 	velocity(note.velocity)?;
 	length("note", note.length)?;
 	start("note", note.start)?;
+	note_bend(note)?;
 	if note.start >= span {
 		return Err(ModelError::NoteOutsideClip {
 			clip,
@@ -262,6 +263,46 @@ pub(crate) fn note_within(clip: ClipId, span: Tick, note: &Note) -> Result<(), M
 			start: note.start.0,
 			clip_length: span.0,
 		});
+	}
+	Ok(())
+}
+
+/// A note's bend: at most [`crate::MAX_NOTE_BEND_POINTS`] points, ticks from 0 increasing,
+/// values within ±[`crate::MAX_NOTE_BEND`] semitones. Points past the note's end are kept
+/// (a shortened note keeps its curve for when it grows back) and never played.
+pub(crate) fn note_bend(note: &Note) -> Result<(), ModelError> {
+	let bad = |reason: String| ModelError::InvalidNoteBend {
+		note: note.id,
+		reason,
+	};
+	if note.bend.len() > crate::MAX_NOTE_BEND_POINTS {
+		return Err(bad(format!(
+			"{} points; at most {} (thin the curve)",
+			note.bend.len(),
+			crate::MAX_NOTE_BEND_POINTS
+		)));
+	}
+	let mut last: Option<Tick> = None;
+	for p in &note.bend {
+		if p.tick < Tick::ZERO {
+			return Err(bad(format!(
+				"a point at tick {} is before the note; ticks count from its start (0)",
+				p.tick.0
+			)));
+		}
+		if last.is_some_and(|l| p.tick <= l) {
+			return Err(bad(
+				"points must be in increasing tick order, one per tick".into()
+			));
+		}
+		if !(p.semitones.is_finite() && p.semitones.abs() <= crate::MAX_NOTE_BEND) {
+			return Err(bad(format!(
+				"{} semitones; use -{max}..={max}",
+				p.semitones,
+				max = crate::MAX_NOTE_BEND
+			)));
+		}
+		last = Some(p.tick);
 	}
 	Ok(())
 }

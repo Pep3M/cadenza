@@ -1,5 +1,6 @@
 //! Channel-wide performance controls shared by the built-in instruments: pitch bend,
-//! mod wheel (vibrato), channel pressure and the sustain pedal.
+//! mod wheel (vibrato), channel pressure and the sustain pedal, plus each key's own bend
+//! ([`MidiEvent::NoteBend`]: a note's pitch curve).
 
 use crate::processor::{MidiEvent, cc};
 
@@ -30,6 +31,10 @@ pub struct Expression {
 	pub sustain: bool,
 	pub bend_range: f32,
 	phase: f32,
+	/// Each key's own bend, semitones; kept through the release.
+	note_bend: [f32; 128],
+	/// A bend came for the key since its last note-off (its next note-on starts there).
+	bend_set: [bool; 128],
 }
 
 impl Default for Expression {
@@ -41,14 +46,37 @@ impl Default for Expression {
 			sustain: false,
 			bend_range: BEND_RANGE,
 			phase: 0.0,
+			note_bend: [0.0; 128],
+			bend_set: [false; 128],
 		}
 	}
 }
 
 impl Expression {
-	/// Applies a controller event (note events are ignored).
+	/// Applies a controller event or a key's bend; note-ons and note-offs only update which
+	/// key bends are fresh (call it for every event).
 	pub fn apply(&mut self, ev: &MidiEvent) -> ExpressionAction {
 		match *ev {
+			MidiEvent::NoteBend {
+				pitch, semitones, ..
+			} => {
+				let k = usize::from(pitch.min(127));
+				self.note_bend[k] = semitones.clamp(-48.0, 48.0);
+				self.bend_set[k] = true;
+				ExpressionAction::None
+			}
+			MidiEvent::NoteOn { pitch, .. } => {
+				let k = usize::from(pitch.min(127));
+				if !self.bend_set[k] {
+					self.note_bend[k] = 0.0;
+				}
+				self.bend_set[k] = false;
+				ExpressionAction::None
+			}
+			MidiEvent::NoteOff { pitch, .. } => {
+				self.bend_set[usize::from(pitch.min(127))] = false;
+				ExpressionAction::None
+			}
 			MidiEvent::PitchBend { value, .. } => {
 				self.bend = value.clamp(-1.0, 1.0);
 				ExpressionAction::None
@@ -90,7 +118,6 @@ impl Expression {
 				self.sustain = false;
 				ExpressionAction::None
 			}
-			_ => ExpressionAction::None,
 		}
 	}
 
@@ -98,8 +125,15 @@ impl Expression {
 		*self = Self {
 			bend_range: self.bend_range,
 			phase: self.phase,
+			note_bend: self.note_bend,
+			bend_set: self.bend_set,
 			..Self::default()
 		};
+	}
+
+	/// Key `pitch`'s own bend, semitones.
+	pub fn note_bend(&self, pitch: u8) -> f32 {
+		self.note_bend[usize::from(pitch.min(127))]
 	}
 
 	/// Pitch offset from the bend wheel, semitones.

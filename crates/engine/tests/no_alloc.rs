@@ -769,3 +769,36 @@ fn effects_fed_midi_do_not_allocate() {
 	TRACKING.with(|t| t.set(false));
 	assert_no_allocations();
 }
+
+#[test]
+fn note_bends_do_not_allocate() {
+	let mut p = mini_song();
+	// Every note of the first track bent up and back, chased by the loop and a seek.
+	for clip in &mut p.tracks[0].clips {
+		if let cadenza_model::ClipContent::Midi { notes, .. } = &mut clip.content {
+			for n in notes.iter_mut() {
+				n.bend = (0..8)
+					.map(|i| cadenza_model::NoteBendPoint {
+						tick: cadenza_core::Tick(n.length.0 * i / 8),
+						semitones: if i % 2 == 0 { 0.0 } else { 1.5 },
+					})
+					.collect();
+			}
+		}
+	}
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	graph.set_loop(Some((beats(1.0), beats(3.0))));
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	graph.play();
+	TRACKING.with(|t| t.set(true));
+	for block in [1usize, 37, 512, 1024].into_iter().cycle().take(400) {
+		graph.process(&mut left[..block], &mut right[..block]);
+	}
+	graph.seek(beats(2.5));
+	graph.process(&mut left, &mut right);
+	graph.stop();
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+	assert_no_allocations();
+}

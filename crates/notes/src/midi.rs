@@ -133,6 +133,9 @@ pub struct MidiConversion {
 	pub key: Option<Scale>,
 	/// Notes left out: shorter than `min_length`, or lost to an overlap after quantizing.
 	pub dropped: usize,
+	/// Write each note's [`MidiNote::curve`] into the clip as its own bend (per-note bends:
+	/// chords); off by default (a melody's bends go to the pitch-bend lane).
+	pub note_bends: bool,
 }
 
 /// Converts a segmentation. `origin` = song seconds at analysis time 0 (an audio clip's
@@ -329,6 +332,7 @@ pub fn to_midi(
 		bends,
 		key,
 		dropped,
+		note_bends: false,
 	}
 }
 
@@ -450,6 +454,7 @@ pub fn poly_to_midi(
 		bends: Vec::new(),
 		key,
 		dropped,
+		note_bends: false,
 	}
 }
 
@@ -506,6 +511,7 @@ pub fn drums_to_midi(
 		bends: Vec::new(),
 		key: None,
 		dropped,
+		note_bends: false,
 	}
 }
 

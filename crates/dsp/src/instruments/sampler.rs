@@ -569,8 +569,11 @@ impl Sampler {
 			v.pitch = v.target;
 		}
 		let zone = &self.zones[v.zone];
-		let semis =
-			v.pitch - f32::from(zone.root_key) + zone.tune + p.get(P_TRANSPOSE) + self.pitch_offset;
+		let semis = v.pitch - f32::from(zone.root_key)
+			+ zone.tune
+			+ p.get(P_TRANSPOSE)
+			+ self.pitch_offset
+			+ self.expr.note_bend(v.note);
 		v.ratio = 2.0_f64.powf(f64::from(semis) / 12.0) * f64::from(self.rt[v.zone].sample_rate)
 			/ f64::from(self.sample_rate);
 		if p.choice(P_FILTER_TYPE) != 0 {
@@ -682,6 +685,9 @@ impl Processor for Sampler {
 			self.render(&mut left[start..end], &mut right[start..end]);
 			if let Some(ev) = ev {
 				self.held.apply(ev);
+				if matches!(ev, MidiEvent::NoteOn { .. } | MidiEvent::NoteOff { .. }) {
+					self.expr.apply(ev);
+				}
 			}
 			match ev {
 				Some(&MidiEvent::NoteOn {

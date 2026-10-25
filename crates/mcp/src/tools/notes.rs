@@ -87,7 +87,8 @@ pub struct AudioToMidiArgs {
 	/// "off", "auto" (infer) or a scale like "A minor" / "F# dorian": pitches snap into it.
 	#[serde(default)]
 	pub key: Option<String>,
-	/// Write a pitch-bend lane replaying the sung pitch curve (slides, vibrato, intonation).
+	/// Replay the sung pitch curve (slides, vibrato, intonation): a pitch-bend lane for a
+	/// melody, each note's own bend for chords (poly).
 	#[serde(default)]
 	pub bends: Option<bool>,
 	/// Semitones of a full bend on the target instrument (default 2).
@@ -491,9 +492,11 @@ pub fn convert(
 		..opts.clone()
 	};
 	match notes.resolve(algorithm) {
-		Algorithm::Poly if let Some(poly) = &notes.poly => {
-			poly_to_midi(poly, &project.tempo, notes.origin, &opts)
-		}
+		Algorithm::Poly if let Some(poly) = &notes.poly => MidiConversion {
+			// Chords bend per note (a pitch-bend lane would bend the whole chord).
+			note_bends: opts.bends,
+			..poly_to_midi(poly, &project.tempo, notes.origin, &opts)
+		},
 		Algorithm::Percussive if let Some(hits) = &notes.drums => {
 			drums_to_midi(hits, &project.tempo, notes.origin, &opts, drum_note)
 		}
@@ -518,6 +521,26 @@ pub fn convert(
 			&opts,
 		),
 	}
+}
+
+/// A converted note's curve as its own bend (ticks from its start); none when it stays at 0.
+fn note_bend(n: &cadenza_notes::midi::MidiNote) -> Vec<cadenza_model::NoteBendPoint> {
+	let start = Tick::from_beats(n.start);
+	let mut out: Vec<cadenza_model::NoteBendPoint> = Vec::with_capacity(n.curve.len());
+	for &(beat, semitones) in &n.curve {
+		let tick = (Tick::from_beats(beat) - start).max(Tick::ZERO);
+		let semitones =
+			semitones.clamp(-cadenza_model::MAX_NOTE_BEND, cadenza_model::MAX_NOTE_BEND);
+		match out.last_mut() {
+			Some(last) if last.tick >= tick => last.semitones = semitones,
+			_ => out.push(cadenza_model::NoteBendPoint { tick, semitones }),
+		}
+	}
+	out.truncate(cadenza_model::MAX_NOTE_BEND_POINTS);
+	if out.iter().all(|p| p.semitones == 0.0) {
+		out.clear();
+	}
+	out
 }
 
 /// "C major", "F# dorian".
@@ -567,7 +590,11 @@ pub fn conversion_command(
 			continue;
 		}
 		end = end.max(b);
-		midi_notes.push(Note::new(n.pitch, a, b - a, n.velocity));
+		let mut note = Note::new(n.pitch, a, b - a, n.velocity);
+		if conversion.note_bends {
+			note.bend = note_bend(n);
+		}
+		midi_notes.push(note);
 	}
 	let mut controllers = Vec::new();
 	if !conversion.bends.is_empty() {

@@ -119,6 +119,34 @@ fn edited_clips_play_their_render_offline_and_live() {
 		.fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
 	assert!(diff < 1e-5, "offline and live differ by {diff}");
 
+	// One more note moved: live plays the render before it meanwhile, then a render
+	// made around that note alone lands it.
+	let mut more = notes.clone();
+	let k = more.notes.len() / 2;
+	more.notes[k].pitch = more.notes[k].pitch.map(|p| p + 1.0);
+	let mut changed = p.clone();
+	if let ClipContent::Audio { notes: Some(e), .. } = &mut changed.tracks[0].clips[0].content {
+		**e = more.clone();
+	}
+	let (mut player, _) = Player::virtual_device(SR, 0);
+	let warnings = player.load(&changed).unwrap();
+	assert!(
+		warnings
+			.iter()
+			.any(|w| w.contains("plays the previous render")),
+		"{warnings:?}"
+	);
+	drop(player);
+	let r = note_render::render(&wav, &more).unwrap();
+	assert!(r.local, "re-rendered around the note");
+	assert_eq!(r.residuals.len(), 1);
+	assert!(
+		r.residuals[0].cents().unwrap().abs() <= 5.0,
+		"{:?}",
+		r.residuals
+	);
+	assert_eq!(note_render::ready(&wav, &more), Some(r.path));
+
 	// Undoing the edit (no edits) plays the file itself again.
 	let mut undone = p.clone();
 	if let ClipContent::Audio { notes: Some(e), .. } = &mut undone.tracks[0].clips[0].content {

@@ -503,6 +503,15 @@ $CADENZA_NOTE_RENDERS or <cache>/note-renders), ready, render (closed loop), pen
 plays the render, offline mode renders a missing one, realtime plays as recorded with
 `PENDING_WARNING`; the app renders missing ones on a worker (`state::note_renders`) and
 reloads; audio editor reverse/stretch/transpose drop the notes.
+NE-9b local re-renders: `psola::{plan (grain layout, cheap), psola_range (any window, bit-identical
+to the whole render), changed_span}`; identity renders resync on the source grid at the third mark
+of each unpitched run. `resynth::{verified_with -> Verified { render, residuals, effective },
+rerender_verified(.., Previous { channels, asked, effective }, edits) -> Option}` (re-render +
+closed loop only around the changed notes, spliced; `None` = whole render: time edits, other
+sibilant gain, > 60 % of the take). `note_render` v2 keeps `<render>.json` (asked + effective
+edits) and `<file key>.renders` (last 8): renders start from the closest earlier one
+(`NoteRender.local`; one note on a 20 s take 1.7 s -> 30-70 ms), and the player plays it while
+the new one is pending.
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

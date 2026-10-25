@@ -5,7 +5,7 @@ use cadenza_notes::analysis::{Analysis, AnalysisOptions, analyze};
 use cadenza_notes::edit::{self, Edits, NoteEdit, TimeEdit};
 use cadenza_notes::eval::synth;
 use cadenza_notes::marks::pitch_marks;
-use cadenza_notes::psola::psola;
+use cadenza_notes::psola::{self, psola};
 use cadenza_notes::resynth::{self, Residual, VerifyOptions};
 use cadenza_notes::segment::{SegmentOptions, Segmentation, segment};
 use cadenza_notes::timemap::TimeMap;
@@ -522,4 +522,115 @@ fn a_noisy_take_stays_voiced_when_moved() {
 	let (b, _) = prepare(&r.channels[0], case.sample_rate);
 	let kept = voiced(&b) as f64 / voiced(&a) as f64;
 	assert!(kept >= 0.75, "{kept:.2} of the voiced frames kept");
+}
+
+/// The corpus case with the most notes (and rests between some of them).
+fn busy_case() -> cadenza_notes::eval::Case {
+	synth::corpus(22_050)
+		.into_iter()
+		.max_by_key(|c| c.truth.len())
+		.unwrap()
+}
+
+#[test]
+fn a_window_of_the_render_is_the_same_samples() {
+	let case = busy_case();
+	let (a, seg) = prepare(&case.samples, case.sample_rate);
+	let marks = pitch_marks(&case.samples, &a);
+	let curves = edit::curves(&a, &seg, &moved(&seg));
+	let map = TimeMap::identity();
+	let len = case.samples.len();
+	let whole = psola(&[&case.samples], case.sample_rate, &marks, &curves, &map);
+	let grains = psola::plan(case.sample_rate, &marks, &curves, &map, len);
+	for (from, to) in [(0, len), (len / 3, len / 2), (1234, 9876), (len - 500, len)] {
+		let part = psola::psola_range(
+			&[&case.samples],
+			case.sample_rate,
+			&marks,
+			&curves,
+			&map,
+			&grains,
+			from..to,
+		);
+		assert_eq!(part[0], whole[0][from..to], "{from}..{to}");
+	}
+}
+
+#[test]
+fn a_local_change_re_renders_only_around_its_note() {
+	let case = busy_case();
+	let rate = case.sample_rate;
+	let (a, seg) = prepare(&case.samples, rate);
+	assert!(seg.notes.len() >= 6, "{}", seg.notes.len());
+	let marks = pitch_marks(&case.samples, &a);
+	let opts = VerifyOptions::default();
+	let first = moved(&seg);
+	let before = resynth::verified_with(&[&case.samples], &a, &seg, &marks, &first, &opts).unwrap();
+	assert_eq!(before.effective.notes.len(), seg.notes.len());
+	// Move one note in the middle a whole tone more.
+	let k = seg.notes.len() / 2;
+	let mut second = first.clone();
+	second.notes[k].pitch = second.notes[k].pitch.map(|p| p + 2.0);
+	let previous = resynth::Previous {
+		channels: &before.render.channels,
+		asked: &first,
+		effective: &before.effective,
+	};
+	let after =
+		resynth::rerender_verified(&[&case.samples], &a, &seg, &marks, previous, &second, &opts)
+			.unwrap()
+			.expect("a local change");
+	// Only the moved note was measured, and it landed.
+	assert_eq!(after.residuals.len(), 1, "{:?}", after.residuals);
+	let cents = after.residuals[0].cents().unwrap();
+	assert!(cents.abs() <= 5.0, "{cents} c");
+	// Notes far from it kept what they followed.
+	assert_eq!(after.effective.notes[0], before.effective.notes[0]);
+	assert_eq!(
+		after.effective.notes[seg.notes.len() - 1],
+		before.effective.notes[seg.notes.len() - 1]
+	);
+	// The spliced result is exactly a whole render of what it followed.
+	let whole = psola(
+		&[&case.samples],
+		rate,
+		&marks,
+		&edit::curves(&a, &seg, &after.effective),
+		&TimeMap::identity(),
+	);
+	let worst = whole[0]
+		.iter()
+		.zip(&after.render.channels[0])
+		.map(|(x, y)| (x - y).abs())
+		.fold(0.0f32, f32::max);
+	assert!(worst < 1e-6, "{worst}");
+	// And it changed nothing far from the note.
+	let n = &seg.notes[k];
+	let r = f64::from(rate);
+	let (lo, hi) = ((n.onset * r) as usize, (n.offset * r) as usize);
+	let margin = (0.5 * r) as usize;
+	let away = |i: usize| i + margin < lo || i > hi + margin;
+	let differ = (0..case.samples.len())
+		.filter(|&i| away(i) && after.render.channels[0][i] != before.render.channels[0][i])
+		.count();
+	assert_eq!(differ, 0);
+	// A time edit is a whole render.
+	let mut timed = second.clone();
+	let gap = (0..seg.notes.len() - 1)
+		.find(|&i| seg.notes[i + 1].onset - seg.notes[i].offset > 0.02)
+		.expect("a rest");
+	timed.notes[gap].time = Some(TimeEdit {
+		onset: seg.notes[gap].onset,
+		offset: seg.notes[gap].offset + 0.01,
+	});
+	let previous = resynth::Previous {
+		channels: &before.render.channels,
+		asked: &first,
+		effective: &before.effective,
+	};
+	assert!(
+		resynth::rerender_verified(&[&case.samples], &a, &seg, &marks, previous, &timed, &opts)
+			.unwrap()
+			.is_none()
+	);
 }

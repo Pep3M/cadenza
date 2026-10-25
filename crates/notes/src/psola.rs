@@ -14,6 +14,17 @@ use crate::edit::Curves;
 use crate::marks::Marks;
 use crate::timemap::TimeMap;
 
+/// One grain of a render: mark `mark` laid at output sample `o`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grain {
+	pub o: f64,
+	pub mark: usize,
+}
+
+/// No grain reaches further than this from its center, seconds (two periods read at half
+/// speed).
+pub const REACH_SECONDS: f64 = 0.1;
+
 /// Renders every channel of `channels` (same length) through the grains of `marks`.
 pub fn psola(
 	channels: &[&[f32]],
@@ -22,39 +33,163 @@ pub fn psola(
 	curves: &Curves,
 	map: &TimeMap,
 ) -> Vec<Vec<f32>> {
+	let out_len = output_len(channels, rate, map);
+	let grains = plan(rate, marks, curves, map, out_len);
+	synth(channels, rate, marks, curves, map, &grains, 0..out_len)
+}
+
+/// Samples `range` of the render laid out by `grains` (its [`plan`]): the same samples as
+/// [`psola`] gives.
+pub fn psola_range(
+	channels: &[&[f32]],
+	rate: u32,
+	marks: &Marks,
+	curves: &Curves,
+	map: &TimeMap,
+	grains: &[Grain],
+	range: std::ops::Range<usize>,
+) -> Vec<Vec<f32>> {
+	synth(channels, rate, marks, curves, map, grains, range)
+}
+
+/// Length of the render of `channels` through `map`, samples.
+pub fn output_len(channels: &[&[f32]], rate: u32, map: &TimeMap) -> usize {
 	let len = channels.first().map_or(0, |c| c.len());
-	let rate = f64::from(rate);
-	let out_len = if map.is_identity() {
+	if map.is_identity() {
 		len
 	} else {
-		(map.to_output(len as f64 / rate) * rate).round().max(0.0) as usize
-	};
-	let mut out = vec![vec![0.0f64; out_len]; channels.len()];
-	let pos = &marks.positions;
-	if pos.is_empty() || out_len == 0 {
-		return out
-			.into_iter()
-			.map(|c| c.into_iter().map(|x| x as f32).collect())
-			.collect();
+		(map.to_output(len as f64 / f64::from(rate)) * f64::from(rate))
+			.round()
+			.max(0.0) as usize
 	}
+}
+
+/// Marks where an identity render falls back on the source's own grid: the third of a run
+/// of unpitched marks. Two renders that differ only before such a mark lay the same grains
+/// after it, so an edit changes the render only up to the next run.
+fn resync(marks: &Marks, k: usize) -> bool {
+	k >= 2 && !marks.voiced[k] && !marks.voiced[k - 1] && !marks.voiced[k - 2]
+}
+
+/// Where every grain of the render goes (cheap: no audio is touched). Grains sit one
+/// source period / pitch ratio apart, each taken from the mark nearest to the source
+/// position its output position maps to.
+pub fn plan(
+	rate: u32,
+	marks: &Marks,
+	curves: &Curves,
+	map: &TimeMap,
+	out_len: usize,
+) -> Vec<Grain> {
+	let rate = f64::from(rate);
+	let pos = &marks.positions;
+	let mut grains = Vec::new();
+	if pos.is_empty() || out_len == 0 {
+		return grains;
+	}
+	let identity = map.is_identity();
 	let last = pos.len() - 1;
 	let mut o = 0.0f64;
 	loop {
-		let source = if map.is_identity() {
+		let source = if identity {
 			o
 		} else {
 			map.to_source(o / rate) * rate
 		};
 		let k = marks.nearest(source);
-		let at = pos[k] as f64;
-		let (ratio, formant) = if marks.voiced[k] {
-			(
-				2f64.powf(curves.shift_at(at) / 12.0),
-				2f64.powf(curves.formant_at(at) / 1200.0),
-			)
+		if identity && resync(marks, k) {
+			o = pos[k] as f64;
+		}
+		grains.push(Grain { o, mark: k });
+		let (ratio, _) = factors(marks, curves, k);
+		let right = if k < last {
+			(pos[k + 1] - pos[k]) as f64
 		} else {
-			(1.0, 1.0)
+			0.0
 		};
+		let left = if k > 0 {
+			(pos[k] - pos[k - 1]) as f64
+		} else {
+			0.0
+		};
+		let step = if right > 0.0 { right } else { left.max(1.0) };
+		o += step / ratio;
+		if o >= out_len as f64 {
+			break;
+		}
+	}
+	grains
+}
+
+/// Output samples (start, end) where two plans of the same audio lay different grains,
+/// widened by the grains' reach; `None` when they are the same.
+pub fn changed_span(rate: u32, old: &[Grain], new: &[Grain]) -> Option<(f64, f64)> {
+	let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+	if prefix == old.len() && prefix == new.len() {
+		return None;
+	}
+	let suffix = old
+		.iter()
+		.rev()
+		.zip(new.iter().rev())
+		.take_while(|(a, b)| a == b)
+		.count()
+		.min(old.len() - prefix)
+		.min(new.len() - prefix);
+	let reach = REACH_SECONDS * f64::from(rate);
+	let at = |g: &[Grain], i: usize| g.get(i).map(|g| g.o);
+	let first = [at(old, prefix), at(new, prefix)]
+		.into_iter()
+		.flatten()
+		.fold(f64::INFINITY, f64::min);
+	let last = [
+		at(old, old.len() - suffix - 1),
+		at(new, new.len() - suffix - 1),
+		at(old, old.len() - suffix),
+		at(new, new.len() - suffix),
+	]
+	.into_iter()
+	.flatten()
+	.fold(f64::NEG_INFINITY, f64::max);
+	Some(((first - reach).max(0.0), last + reach))
+}
+
+fn factors(marks: &Marks, curves: &Curves, k: usize) -> (f64, f64) {
+	if marks.voiced[k] {
+		let at = marks.positions[k] as f64;
+		(
+			2f64.powf(curves.shift_at(at) / 12.0),
+			2f64.powf(curves.formant_at(at) / 1200.0),
+		)
+	} else {
+		(1.0, 1.0)
+	}
+}
+
+/// Output samples `range` of the render laid out by `grains`.
+fn synth(
+	channels: &[&[f32]],
+	rate: u32,
+	marks: &Marks,
+	curves: &Curves,
+	map: &TimeMap,
+	grains: &[Grain],
+	range: std::ops::Range<usize>,
+) -> Vec<Vec<f32>> {
+	let rate = f64::from(rate);
+	let from = range.start;
+	let len = range.end.saturating_sub(range.start);
+	let mut out = vec![vec![0.0f64; len]; channels.len()];
+	let pos = &marks.positions;
+	let reach = REACH_SECONDS * rate;
+	let last = pos.len().saturating_sub(1);
+	let first = grains.partition_point(|g| g.o + reach < from as f64);
+	for g in &grains[first..] {
+		if g.o - reach > range.end as f64 {
+			break;
+		}
+		let k = g.mark;
+		let (_, formant) = factors(marks, curves, k);
 		let left = if k > 0 {
 			(pos[k] - pos[k - 1]) as f64
 		} else {
@@ -66,26 +201,33 @@ pub fn psola(
 			0.0
 		};
 		for (ch, buf) in channels.iter().zip(out.iter_mut()) {
-			add_grain(buf, ch, o, at, left, right, formant);
-		}
-		let step = if right > 0.0 { right } else { left.max(1.0) };
-		o += step / ratio;
-		if o >= out_len as f64 {
-			break;
+			add_grain(
+				buf,
+				ch,
+				g.o - from as f64,
+				pos[k] as f64,
+				left,
+				right,
+				formant,
+			);
 		}
 	}
-	let gains: Vec<f64> = (0..out_len)
-		.map(|n| {
-			let source = if map.is_identity() {
-				n as f64
-			} else {
-				map.to_source(n as f64 / rate) * rate
-			};
-			curves.gain_at(source)
-		})
-		.collect();
+	let identity = map.is_identity();
 	out.into_iter()
-		.map(|c| c.iter().zip(&gains).map(|(x, g)| (x * g) as f32).collect())
+		.map(|c| {
+			c.iter()
+				.enumerate()
+				.map(|(i, x)| {
+					let n = (from + i) as f64;
+					let source = if identity {
+						n
+					} else {
+						map.to_source(n / rate) * rate
+					};
+					(x * curves.gain_at(source)) as f32
+				})
+				.collect()
+		})
 		.collect()
 }
 
@@ -93,7 +235,11 @@ pub fn psola(
 /// source samples) centered on output sample `o`, read `formant` times faster.
 fn add_grain(out: &mut [f64], src: &[f32], o: f64, at: f64, left: f64, right: f64, formant: f64) {
 	let from = (o - left / formant).ceil().max(0.0) as usize;
-	let to = ((o + right / formant).floor() as usize).min(out.len().saturating_sub(1));
+	let end = (o + right / formant).floor();
+	if end < 0.0 || out.is_empty() {
+		return;
+	}
+	let to = (end as usize).min(out.len() - 1);
 	for (n, y) in out.iter_mut().enumerate().take(to + 1).skip(from) {
 		let u = (n as f64 - o) * formant;
 		let w = if u < 0.0 {

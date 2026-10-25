@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction) and NE-9b (local re-renders) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -603,7 +603,7 @@ pitch per hit), poly bends / MPE, a measurement on real guitar/piano and drum re
 ## NE-9 — Later
 
 - Realtime rendering of edits (no render step; streaming PSOLA per clip in the engine with
-  lookahead, `no_alloc`).
+  lookahead, `no_alloc`): NE-9b made renders local instead, see below.
 - Live tuner device (Auto-Tune-style retune speed + humanize; prior art expired) reusing the
   NE-1 detector in a realtime form.
 - Learned boundary model trained on our corpus if DP + evidence plateaus.
@@ -638,6 +638,37 @@ their level, transpose / reference, retune speed, humanize keeps vibrato, melody
 without clicks), registry / no-alloc / random-params suites, app click test and screenshots.
 Not done: MIDI-driven targets (effects get no MIDI yet), formant shift, a stereo-aware or
 polyphonic mode.
+
+**Shipped (NE-9b, local re-renders instead of a streaming engine path).** Measured first: on
+the user's 20 s take a whole closed-loop render took 1.4-1.7 s (render 0.14 s, each
+verification pass re-analyzes the whole take, 0.3 s, three passes), so about 13 s on a
+3-minute take after every edit. Instead of a realtime PSOLA in the engine (a second
+resynthesis path that could drift from the offline one, and no closed loop), a render now
+re-renders only around what changed:
+- `psola` = `plan` (where every grain goes: cheap, no audio) + `psola_range` (any window of
+  output samples, bit-identical to the same samples of the whole render; test). Identity
+  renders fall back on the source grid at the third mark of every unpitched run (`resync`),
+  so two renders that differ before such a point lay the same grains after it (before this
+  a moved note left the rest of the take offset by a fraction of a period).
+- `resynth::{verified_with -> Verified { render, residuals, effective }, rerender_verified(
+  .., Previous { channels, asked, effective }, edits)}`: unchanged notes keep what the
+  previous render followed (its closed-loop pitch corrections and level fixes); the window =
+  where the grain plans differ (`changed_span`) + where the curves differ + the changed notes,
+  widened by the grains' reach (0.1 s); level fix and closed loop (shared `closed_loop`,
+  `measure` on the window's own analysis) on the changed notes alone; the window is spliced
+  into the previous render. `None` (whole render) on a time edit either side, another
+  sibilant gain or a window over 60 % of the take. Test: the spliced result is exactly a
+  whole render of the edits it followed (< 1e-6), nothing changes 0.5 s away from the note,
+  the moved note lands within 5 c.
+- Engine `note_render` (`RENDER_VERSION` 2): every render writes `<render>.json` (edits asked
+  and followed) and `<file key>.renders` lists the file's last 8; a render starts from the
+  earlier one with the same notes and fewest changed notes (`local` in `NoteRender`); edits
+  are compared as JSON reads them back (serde_json does not round-trip every f64 to the bit);
+  the pitch marks of the last file stay in memory. While a render is pending the player plays
+  that closest earlier render (at most a quarter of the notes changed, at least one) instead
+  of the recording.
+On the user's take: whole render 1.67 s, then one note moved: 26-70 ms, the note within 2 c.
+The realtime streaming path stays open for when edits must sound during a drag.
 - Polyphonic per-note editing after legal review / patent expiry.
 - MPE export of polyphonic bends.
 

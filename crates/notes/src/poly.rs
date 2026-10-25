@@ -663,6 +663,103 @@ pub fn transcribe(
 	Some((a, n))
 }
 
+/// [`transcribe`] through an on-disk cache of the model's activations in `dir` (by the
+/// content of `samples`, the rate and [`ACTIVATIONS_VERSION`]): the network runs once per
+/// recording, the notes are made again from the stored activations (other options cost
+/// nothing). The contour output is not stored (`contour` comes back empty from a hit).
+pub fn transcribe_cached(
+	samples: &[f32],
+	rate: u32,
+	o: &PolyOptions,
+	dir: &std::path::Path,
+	progress: &mut dyn FnMut(f64) -> bool,
+) -> Option<(Activations, Vec<PolyNote>)> {
+	let path = dir.join(format!("{}.cdzbp", activations_key(samples, rate)));
+	if let Some(a) = std::fs::read(&path)
+		.ok()
+		.and_then(|b| decode_activations(&b))
+	{
+		progress(1.0);
+		let n = notes(&a, o);
+		return Some((a, n));
+	}
+	let (a, n) = transcribe(samples, rate, o, progress)?;
+	// A failed store only costs the next run its time.
+	let _ = std::fs::create_dir_all(dir).and_then(|()| {
+		let temp = dir.join(format!(".{}.tmp", std::process::id()));
+		std::fs::write(&temp, encode_activations(&a))?;
+		std::fs::rename(&temp, &path)
+	});
+	Some((a, n))
+}
+
+/// Bumped when the activations the model gives change (old cache entries are ignored).
+pub const ACTIVATIONS_VERSION: u32 = 1;
+const ACTIVATIONS_MAGIC: &[u8; 8] = b"CDZBPA\0\0";
+
+fn activations_key(samples: &[f32], rate: u32) -> String {
+	use sha2::{Digest, Sha256};
+	let mut h = Sha256::new();
+	h.update(ACTIVATIONS_VERSION.to_le_bytes());
+	h.update(rate.to_le_bytes());
+	for s in samples {
+		h.update(s.to_le_bytes());
+	}
+	h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Magic, version, frame count, then the frame times (f64) and the note and onset
+/// activations (f32), little-endian.
+fn encode_activations(a: &Activations) -> Vec<u8> {
+	let mut out = Vec::with_capacity(16 + a.frames() * (8 + 8 * KEYS));
+	out.extend_from_slice(ACTIVATIONS_MAGIC);
+	out.extend_from_slice(&ACTIVATIONS_VERSION.to_le_bytes());
+	out.extend_from_slice(&(a.frames() as u32).to_le_bytes());
+	for t in &a.times {
+		out.extend_from_slice(&t.to_le_bytes());
+	}
+	for v in a.note.iter().chain(&a.onset) {
+		out.extend_from_slice(&v.to_le_bytes());
+	}
+	out
+}
+
+fn decode_activations(bytes: &[u8]) -> Option<Activations> {
+	let (magic, rest) = bytes.split_at_checked(8)?;
+	if magic != ACTIVATIONS_MAGIC {
+		return None;
+	}
+	let word = |b: &[u8]| u32::from_le_bytes(b.try_into().unwrap_or_default());
+	let (version, rest) = rest.split_at_checked(4)?;
+	let (count, rest) = rest.split_at_checked(4)?;
+	if word(version) != ACTIVATIONS_VERSION {
+		return None;
+	}
+	let frames = word(count) as usize;
+	let (times, rest) = rest.split_at_checked(frames * 8)?;
+	if rest.len() != frames * KEYS * 8 {
+		return None;
+	}
+	let floats: Vec<f32> = rest
+		.as_chunks::<4>()
+		.0
+		.iter()
+		.map(|b| f32::from_le_bytes(*b))
+		.collect();
+	let (note, onset) = floats.split_at(frames * KEYS);
+	Some(Activations {
+		times: times
+			.as_chunks::<8>()
+			.0
+			.iter()
+			.map(|b| f64::from_le_bytes(*b))
+			.collect(),
+		note: note.to_vec(),
+		onset: onset.to_vec(),
+		contour: Vec::new(),
+	})
+}
+
 /// Windowed-sinc resampling to [`SAMPLE_RATE`] (band-limited to the lower Nyquist).
 fn resample(x: &[f32], rate: u32) -> Vec<f32> {
 	let ratio = f64::from(SAMPLE_RATE) / f64::from(rate);
@@ -713,6 +810,35 @@ mod tests {
 			}
 		}
 		x
+	}
+
+	#[test]
+	fn the_cache_gives_the_same_notes_without_running_the_model() {
+		let x = tone(&[(60, 0.1, 0.9), (64, 0.1, 0.9)], 1.0);
+		let dir = std::env::temp_dir().join(format!("cadenza-bp-cache-{}", std::process::id()));
+		let o = PolyOptions::default();
+		let (a, first) = transcribe_cached(&x, SAMPLE_RATE, &o, &dir, &mut |_| true).unwrap();
+		let stored: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+		assert_eq!(stored.len(), 1);
+		// A hit never asks for progress past the start: a run would report fractions.
+		let mut calls = Vec::new();
+		let (b, again) = transcribe_cached(&x, SAMPLE_RATE, &o, &dir, &mut |p| {
+			calls.push(p);
+			true
+		})
+		.unwrap();
+		assert_eq!(calls, [1.0]);
+		assert_eq!(first, again);
+		assert_eq!((a.times, a.note, a.onset), (b.times, b.note, b.onset));
+		assert!(b.contour.is_empty());
+		// Other options reuse the activations.
+		let fewer = PolyOptions {
+			onset_threshold: 0.9,
+			..o
+		};
+		let (_, strict) = transcribe_cached(&x, SAMPLE_RATE, &fewer, &dir, &mut |_| true).unwrap();
+		assert!(strict.len() <= first.len());
+		std::fs::remove_dir_all(&dir).unwrap();
 	}
 
 	#[test]

@@ -149,6 +149,8 @@ pub struct ClipNotes {
 	pub poly: Option<Vec<PolyNote>>,
 	/// Drum hits of the region (file seconds), when detected ([`detect_drums`]).
 	pub drums: Option<Vec<DrumHit>>,
+	/// The analysis cache folder (the polyphonic model's activations are kept there too).
+	pub cache_dir: std::path::PathBuf,
 }
 
 impl ClipNotes {
@@ -217,13 +219,15 @@ fn region_samples(project: &Project, notes: &ClipNotes) -> Result<(Vec<f32>, u32
 }
 
 /// Runs the polyphonic detector (Basic Pitch) over the part of the file the clip plays and
-/// keeps its notes in `notes.poly`. A few seconds per minute of audio.
+/// keeps its notes in `notes.poly`. A few seconds per minute of audio the first time, then
+/// read from the cache.
 pub fn detect_poly(project: &Project, notes: &mut ClipNotes) -> Result<(), McpError> {
 	let (part, rate, shift) = region_samples(project, notes)?;
-	let (_, found) = cadenza_notes::poly::transcribe(
+	let (_, found) = cadenza_notes::poly::transcribe_cached(
 		&part,
 		rate,
 		&cadenza_notes::poly::PolyOptions::default(),
+		&notes.cache_dir,
 		&mut |_| true,
 	)
 	.ok_or_else(|| McpError::Invalid("the analysis was cancelled".into()))?;
@@ -339,6 +343,7 @@ pub fn analyze_clip(
 		region,
 		poly: None,
 		drums: None,
+		cache_dir: cache_dir.to_path_buf(),
 	})
 }
 

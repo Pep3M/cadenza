@@ -535,7 +535,8 @@ NE-8: `poly` = Basic Pitch in plain Rust (weights `models/basic_pitch.bin` from 
 `tools/basic-pitch/export.py`, Apache-2.0, `include_bytes!`; == onnxruntime within 2e-4;
 `transcribe(samples, rate, &PolyOptions, progress) -> (Activations, Vec<PolyNote { onset,
 offset, pitch, amplitude }>)`, published note creation (overtone filter optional, off),
-`polyphony` (ghosts excluded));
+`polyphony` (ghosts excluded); `transcribe_cached` keeps the note/onset activations in the
+analysis cache as `<sha256>.cdzbp`, used by MCP `detect_poly` (`ClipNotes.cache_dir`) and the app);
 `drums::detect` (per-band onsets -> `DrumHit { time, kind: DrumKind (GM note), velocity }`);
 `midi::{poly_to_midi, drums_to_midi}`. MCP `audio_to_midi { algorithm: auto|mono|poly|
 percussive, drum_note }` (`notes::{detect_for, detect_poly, detect_drums}`, `ClipNotes::resolve`:

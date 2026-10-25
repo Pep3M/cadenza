@@ -747,12 +747,12 @@ impl PolyLayers {
 	}
 
 	/// Starts detecting `file` unless it is known or something runs.
-	pub fn request(&mut self, file: &Path, waker: Option<Waker>) {
+	pub fn request(&mut self, file: &Path, cache: PathBuf, waker: Option<Waker>) {
 		if self.ready.contains_key(file) || self.failed.contains_key(file) || self.job.is_some() {
 			return;
 		}
 		let path = file.to_path_buf();
-		let job = Job::spawn("poly-notes", waker, move || poly_notes(&path));
+		let job = Job::spawn("poly-notes", waker, move || poly_notes(&path, &cache));
 		self.job = Some((file.to_path_buf(), job));
 	}
 
@@ -776,15 +776,16 @@ impl PolyLayers {
 	}
 }
 
-/// The polyphonic notes of `file`'s mono mix.
-pub fn poly_notes(file: &Path) -> Result<Vec<cadenza_notes::poly::PolyNote>, String> {
+/// The polyphonic notes of `file`'s mono mix (the model's activations cached in `cache`).
+pub fn poly_notes(file: &Path, cache: &Path) -> Result<Vec<cadenza_notes::poly::PolyNote>, String> {
 	let buffer = cadenza_audio_io::decode_file(file).map_err(|e| e.to_string())?;
 	let channels: Vec<&[f32]> = buffer.channels().iter().map(Vec::as_slice).collect();
 	let mono = cadenza_notes::resynth::mono(&channels);
-	cadenza_notes::poly::transcribe(
+	cadenza_notes::poly::transcribe_cached(
 		&mono,
 		buffer.sample_rate(),
 		&cadenza_notes::poly::PolyOptions::default(),
+		cache,
 		&mut |_| true,
 	)
 	.map(|(_, n)| n)
@@ -856,7 +857,8 @@ impl super::AppState {
 			&& let Some(r) = audio_edit::region(self.project(), clip)
 		{
 			let waker = self.waker.clone();
-			self.poly_layers.request(&r.file, waker);
+			let cache = self.note_cache();
+			self.poly_layers.request(&r.file, cache, waker);
 		}
 		if self.note_analyses.poll().is_some() {
 			let queued = std::mem::take(&mut self.note_analyses.detect);

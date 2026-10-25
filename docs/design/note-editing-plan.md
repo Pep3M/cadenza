@@ -598,7 +598,10 @@ audio). CLI `notes to-midi --algorithm
 a drum_machine loop -> percussive kick/snare/hats (F >= 0.9), the NE-3 mono line still mono;
 the user's take stays mono. Not done: the piano-specific model, "percussive pitched" (808/tom
 pitch per hit), poly bends / MPE, a measurement on real guitar/piano and drum recordings
-(synthetic sources only), a poly cache on disk.
+(synthetic sources only). Later (NE-9c): the model's note and onset activations are cached
+on disk by content (`poly::transcribe_cached`, `<sha256>.cdzbp` in the analysis cache, note
+creation rerun from them): the user's piano loop converts in 0.14 s instead of 0.91 s the
+second time, a 3-minute take skips ~20 s.
 
 ## NE-9 — Later
 

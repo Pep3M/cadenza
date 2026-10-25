@@ -533,7 +533,7 @@ MCP `audio_to_midi { mpe_path }` (`write_mpe`), CLI `notes to-midi --mpe`, app C
 NE-9h per-note bends: `Note.bend: Vec<NoteBendPoint { tick (from the note start), semitones }>` (held steps, optional
 in JSON, `NotePatch.bend`, points past the end kept unplayed; `bend_at/split_bend/scaled_bend`) -> `MidiEvent::NoteBend`
 (per-key bend in `Expression`: poly_synth/electric_piano/sampler; sandbox `EV_NOTE_BEND`; CLAP tuning expression) from
-`MidiSchedule` (chased); piano roll draws it + "Straighten"; MCP `bend` on notes, `set_note_bend`, `export_midi { mpe }`.
+`MidiSchedule` (chased); piano roll draws it + "Straighten", Bend tool (G) draws it freehand (NE-9i, `piano::draw_bend`); MCP `bend` on notes, `set_note_bend`, `export_midi { mpe }`.
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,
@@ -1257,7 +1257,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   edges over the lanes), playhead flag cap; marker chips sized to the name (amber bar + tint).
 - Piano roll (`state::piano` pure builders + `ui::piano_roll`), FL Studio parity (phase 13b):
   absolute song time axis with the clip span marked and outside shaded, keyboard (click
-  plays, drag glides), tools Draw (P) / Paint (B) / Select (E) / Slice (C). Draw does nearly
+  plays, drag glides), tools Draw (P) / Paint (B) / Select (E) / Slice (C) / Bend (G: drag over a note draws its pitch curve, Shift whole semitones, double-click straightens). Draw does nearly
   everything: click on empty grid adds a note with the last length/velocity and keeps
   dragging it (pitch + snapped time, auditioned on press and pitch change); drag a note =
   move it (or the selection), its right/left edge = resize end/start; Shift+drag duplicates;

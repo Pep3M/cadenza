@@ -949,8 +949,8 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	),
 	sc(
 		mark("Piano roll"),
-		"P / B / E / C",
-		mark("Draw / paint / select / slice tool"),
+		"P / B / E / C / G",
+		mark("Draw / paint / select / slice / bend tool"),
 	),
 	sc(
 		mark("Piano roll"),
@@ -992,6 +992,16 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		mark("Piano roll"),
 		mark("Click / drag (slice tool)"),
 		mark("Split notes at the snapped line"),
+	),
+	sc(
+		mark("Piano roll"),
+		mark("Drag a note (bend tool)"),
+		mark("Draw its pitch curve (Shift: whole semitones)"),
+	),
+	sc(
+		mark("Piano roll"),
+		mark("Double-click a note (bend tool)"),
+		mark("Straighten its pitch curve"),
 	),
 	sc(
 		mark("Piano roll"),

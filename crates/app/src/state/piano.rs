@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use cadenza_core::{ClipId, Meter, NoteId, PPQ, Tick, TimeSignature, TrackId};
 use cadenza_model::controller::splice;
 use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project, TrackKind};
-use cadenza_model::{Controller, ControllerPoint};
+use cadenza_model::{
+	Controller, ControllerPoint, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, NoteBendPoint,
+};
 use cadenza_theory::{Scale, ScaleKind};
 use serde::{Deserialize, Serialize};
 
@@ -40,10 +42,18 @@ pub enum Tool {
 	Select,
 	/// Click or drag vertically across notes to split them at the snapped position.
 	Slice,
+	/// Drag over a note to draw its own pitch curve (NE-9h bends).
+	Bend,
 }
 
 impl Tool {
-	pub const ALL: [Tool; 4] = [Tool::Draw, Tool::Paint, Tool::Select, Tool::Slice];
+	pub const ALL: [Tool; 5] = [
+		Tool::Draw,
+		Tool::Paint,
+		Tool::Select,
+		Tool::Slice,
+		Tool::Bend,
+	];
 
 	pub fn name(self) -> &'static str {
 		match self {
@@ -51,6 +61,7 @@ impl Tool {
 			Tool::Paint => tr("Paint"),
 			Tool::Select => tr("Select"),
 			Tool::Slice => tr("Slice"),
+			Tool::Bend => tr("Bend"),
 		}
 	}
 
@@ -61,6 +72,7 @@ impl Tool {
 			Tool::Paint => "▦",
 			Tool::Select => "↖",
 			Tool::Slice => "✂",
+			Tool::Bend => "⤴",
 		}
 	}
 
@@ -70,6 +82,7 @@ impl Tool {
 			Tool::Paint => "B",
 			Tool::Select => "E",
 			Tool::Slice => "C",
+			Tool::Bend => "G",
 		}
 	}
 
@@ -82,6 +95,10 @@ impl Tool {
 			Tool::Paint => tr("Drag to paint notes at every snap step"),
 			Tool::Select => tr("Click selects, drag a rubber band (Shift/Ctrl adds)"),
 			Tool::Slice => tr("Click or drag vertically across notes to split them"),
+			Tool::Bend => tr(
+				"Drag over a note to draw its pitch curve (Shift: whole semitones), \
+				 double-click to straighten it",
+			),
 		}
 	}
 }
@@ -1254,6 +1271,91 @@ pub fn set_note(project: &Project, clip: ClipId, note: &Note) -> Option<Command>
 	labelled("Edit note", commands)
 }
 
+/// Grid of drawn bends: 1/64 of a beat (~8 ms at 120 BPM), fine enough for vibrato.
+pub const BEND_STEP: Tick = Tick(PPQ / 64);
+
+/// A note's bend after a freehand stroke: `stroke` is the pointer's path in pointer
+/// order as (ticks from the note start, semitones). The stretch it covers is replaced by
+/// the stroke (straight lines between samples, held steps on [`BEND_STEP`]); before it the
+/// old curve stays, after it the old curve resumes with the value it had there.
+pub fn draw_bend(note: &Note, stroke: &[(Tick, f32)]) -> Vec<NoteBendPoint> {
+	let last = (note.length.0 - 1).max(0);
+	let cell = |t: Tick| t.0.clamp(0, last) / BEND_STEP.0;
+	let value = |s: f32| s.clamp(-MAX_NOTE_BEND, MAX_NOTE_BEND);
+	let mut drawn: BTreeMap<i64, f32> = BTreeMap::new();
+	for (i, &(t, s)) in stroke.iter().enumerate() {
+		let (t0, s0) = if i == 0 { (t, s) } else { stroke[i - 1] };
+		let (a, b) = (cell(t0), cell(t));
+		let n = (b - a).abs();
+		for k in 0..=n {
+			let f = if n == 0 { 1.0 } else { k as f32 / n as f32 };
+			drawn.insert(a + (b - a).signum() * k, value(s0 + (s - s0) * f));
+		}
+	}
+	let (Some(&lo), Some(&hi)) = (drawn.keys().next(), drawn.keys().next_back()) else {
+		return note.bend.clone();
+	};
+	let (lo, after) = (Tick(lo * BEND_STEP.0), Tick((hi + 1) * BEND_STEP.0));
+	let mut points: Vec<NoteBendPoint> =
+		note.bend.iter().copied().filter(|p| p.tick < lo).collect();
+	points.extend(drawn.iter().map(|(&k, &semitones)| NoteBendPoint {
+		tick: Tick(k * BEND_STEP.0),
+		semitones,
+	}));
+	if after.0 <= last {
+		points.push(NoteBendPoint {
+			tick: after,
+			semitones: note.bend_at(after),
+		});
+		points.extend(note.bend.iter().copied().filter(|p| p.tick > after));
+	}
+	tidy_bend(points)
+}
+
+/// Drops points that repeat the value before them (the curve starts at 0), and the whole
+/// curve when it never leaves 0; keeps at most [`MAX_NOTE_BEND_POINTS`].
+fn tidy_bend(points: Vec<NoteBendPoint>) -> Vec<NoteBendPoint> {
+	let mut out: Vec<NoteBendPoint> = Vec::with_capacity(points.len());
+	let mut held = 0.0f32;
+	for p in points {
+		if (p.semitones - held).abs() > 1e-3 {
+			held = p.semitones;
+			out.push(p);
+		}
+	}
+	out.truncate(MAX_NOTE_BEND_POINTS);
+	out
+}
+
+/// One stroke of the bend tool on `note` = one "Bend note" step.
+pub fn bend_note(
+	project: &Project,
+	clip: ClipId,
+	note: NoteId,
+	stroke: &[(Tick, f32)],
+) -> Option<Command> {
+	let c = midi_clip(project, clip)?;
+	let old = c.notes().iter().find(|n| n.id == note)?;
+	let bend = draw_bend(old, stroke);
+	if bend == old.bend {
+		return None;
+	}
+	labelled(
+		"Bend note",
+		vec![Command::UpdateNotes {
+			clip,
+			notes: vec![NotePatch {
+				id: note,
+				pitch: None,
+				velocity: None,
+				start: None,
+				length: None,
+				bend: Some(bend),
+			}],
+		}],
+	)
+}
+
 /// Black keys of the piano.
 pub fn is_black(pitch: u8) -> bool {
 	matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
@@ -1347,6 +1449,67 @@ mod tests {
 
 	fn set(ids: &[NoteId]) -> BTreeSet<NoteId> {
 		ids.iter().copied().collect()
+	}
+
+	#[test]
+	fn a_bend_stroke_replaces_only_the_stretch_it_covers() {
+		let mut fx = fixture();
+		let note = clip(&fx).notes()[0].clone();
+		let step = BEND_STEP;
+		// A ramp from 0 to +2 over the first half of the beat.
+		let half = Tick(PPQ / 2);
+		let cmd = bend_note(
+			fx.doc.project(),
+			fx.clip,
+			note.id,
+			&[(Tick::ZERO, 0.0), (half, 2.0)],
+		)
+		.unwrap();
+		fx.doc.execute(cmd).unwrap();
+		let n = clip(&fx).notes()[0].clone();
+		assert!((n.bend_at(half) - 2.0).abs() < 1e-4);
+		assert!(
+			(n.bend_at(Tick(PPQ / 4)) - 1.0).abs() < 0.05,
+			"a straight line"
+		);
+		assert_eq!(
+			n.bend_at(half + step),
+			0.0,
+			"the old curve (straight) resumes"
+		);
+		assert_eq!(n.bend[0].tick, step, "no leading point repeating 0");
+
+		// A second stroke later on keeps the ramp.
+		let late = draw_bend(&n, &[(Tick(PPQ * 3 / 4), -1.0)]);
+		let later = Note {
+			bend: late,
+			..n.clone()
+		};
+		assert!((later.bend_at(half) - 2.0).abs() < 1e-4);
+		assert!((later.bend_at(Tick(PPQ * 3 / 4)) + 1.0).abs() < 1e-4);
+
+		// Drawn backwards, past the note and beyond the range: clamped, same result.
+		let back = draw_bend(&note, &[(b(5.0), 60.0), (Tick(-50), 60.0)]);
+		assert!(
+			back.iter()
+				.all(|p| p.tick < note.length && p.semitones == MAX_NOTE_BEND)
+		);
+		assert_eq!(back.len(), 1, "one held value from the start");
+
+		// Drawing 0 over a curve straightens it.
+		let flat = draw_bend(&n, &[(Tick::ZERO, 0.0), (note.length, 0.0)]);
+		assert!(flat.is_empty());
+		assert!(
+			bend_note(
+				fx.doc.project(),
+				fx.clip,
+				note.id,
+				&[(Tick::ZERO, 0.0), (half, 2.0)]
+			)
+			.is_none(),
+			"same curve = no step"
+		);
+		assert_eq!(fx.doc.history_labels().last().copied(), Some("Bend note"));
 	}
 
 	#[test]

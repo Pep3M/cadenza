@@ -95,6 +95,18 @@ enum Gesture {
 	},
 	/// Slice tool: a vertical cut at `at` (absolute) from the press row to the pointer.
 	Slice { at: Tick, from_y: f32, to: Pos2 },
+	/// Bend tool: the pointer's path over `note` as (ticks from its start, semitones from
+	/// its row); committed only when the pointer moved (a click or double-click is not a
+	/// stroke).
+	Bend {
+		note: NoteId,
+		/// Absolute start and row of the note.
+		start: Tick,
+		pitch: u8,
+		stroke: Vec<(Tick, f32)>,
+		press: Pos2,
+		moved: bool,
+	},
 }
 
 /// Right button held on the grid: every note the pointer passes over is deleted on
@@ -848,9 +860,9 @@ impl PianoUi {
 		{
 			let icon = match (hit(pos), v.tool) {
 				_ if mods.command => CursorIcon::Default,
-				(Some(_), Tool::Slice) | (None, Tool::Draw | Tool::Paint | Tool::Slice) => {
-					CursorIcon::Crosshair
-				}
+				(Some(_), Tool::Slice | Tool::Bend)
+				| (None, Tool::Draw | Tool::Paint | Tool::Slice) => CursorIcon::Crosshair,
+				(None, Tool::Bend) => CursorIcon::Default,
 				(Some((_, Edge::Start | Edge::End)), _) => CursorIcon::ResizeHorizontal,
 				(Some(_), _) if mods.shift => CursorIcon::Copy,
 				(Some(_), _) => CursorIcon::Move,
@@ -859,16 +871,30 @@ impl PianoUi {
 			ui.ctx().set_cursor_icon(icon);
 		}
 
-		// Double-click a note: its properties.
+		// Double-click a note: its properties (bend tool: straighten its curve).
 		if response.double_clicked()
 			&& let Some(pos) = response.interact_pointer_pos()
 			&& let Some((n, _)) = hit(pos)
 		{
 			self.gesture = None;
-			self.props = Some(Props {
-				note: n,
-				pos: pos + vec2(12.0, 12.0),
-			});
+			if v.tool == Tool::Bend {
+				if !n.bend.is_empty()
+					&& let Some(cmd) = piano::set_note(
+						state.project(),
+						clip.id,
+						&Note {
+							bend: Vec::new(),
+							..n
+						},
+					) {
+					state.apply(cmd);
+				}
+			} else {
+				self.props = Some(Props {
+					note: n,
+					pos: pos + vec2(12.0, 12.0),
+				});
+			}
 		}
 
 		// Press: start a gesture.
@@ -895,6 +921,18 @@ impl PianoUi {
 					from_y: pos.y - area.top() + v.scroll_y,
 					to: pos,
 				});
+			} else if v.tool == Tool::Bend {
+				if let Some((n, _)) = under {
+					self.gesture = Some(Gesture::Bend {
+						note: n.id,
+						start: clip.start + n.start,
+						pitch: n.pitch,
+						stroke: Vec::new(),
+						press: pos,
+						moved: false,
+					});
+					self.sound(state, t.track, n.pitch, n.velocity);
+				}
 			} else if let Some((n, edge)) = under {
 				let in_sel = v.selected.contains(&n.id);
 				if !in_sel {
@@ -954,7 +992,7 @@ impl PianoUi {
 						});
 						self.sound(state, t.track, pitch, v.last_velocity);
 					}
-					Tool::Select | Tool::Slice => {
+					Tool::Select | Tool::Slice | Tool::Bend => {
 						self.gesture = Some(Gesture::Rubber {
 							from: (abs, pos.y - area.top() + v.scroll_y),
 							to: pos,
@@ -1026,6 +1064,28 @@ impl PianoUi {
 					*delta = at - *anchor;
 				}
 				Gesture::Rubber { to, .. } | Gesture::Slice { to, .. } => *to = pos,
+				Gesture::Bend {
+					start,
+					pitch,
+					stroke,
+					press,
+					moved,
+					..
+				} => {
+					*moved |= pos.distance(*press) > 3.0;
+					if *moved {
+						let row = area.top() + v.pitch_to_y(*pitch) + v.row_height * 0.5;
+						let mut semitones = (row - pos.y) / v.row_height;
+						if mods.shift {
+							semitones = semitones.round();
+						}
+						if stroke.is_empty() {
+							let first = tl.x_to_tick(press.x - area.left()) - *start;
+							stroke.push((first, semitones));
+						}
+						stroke.push((abs - *start, semitones));
+					}
+				}
 				Gesture::Paint {
 					first,
 					spacing,
@@ -1103,6 +1163,17 @@ impl PianoUi {
 						state.apply(cmd);
 					}
 				}
+				Gesture::Bend {
+					note,
+					stroke,
+					moved: true,
+					..
+				} => {
+					if let Some(cmd) = piano::bend_note(state.project(), clip.id, note, &stroke) {
+						state.apply(cmd);
+					}
+				}
+				Gesture::Bend { .. } => {}
 				gesture => commit(state, clip, gesture, &v),
 			}
 		}
@@ -1158,6 +1229,14 @@ impl PianoUi {
 			_ => (None, None),
 		};
 		let erased = self.erase.as_ref().map(|e| &e.hits);
+		let drawing = match &self.gesture {
+			Some(Gesture::Bend { note, stroke, .. }) if !stroke.is_empty() => clip
+				.notes()
+				.iter()
+				.find(|n| n.id == *note)
+				.map(|n| (n.id, piano::draw_bend(n, stroke))),
+			_ => None,
+		};
 		let rubber = match &self.gesture {
 			Some(Gesture::Rubber { from, to, .. }) => {
 				let a = pos2(
@@ -1253,8 +1332,12 @@ impl PianoUi {
 				pitch,
 				(v.row_height, flats),
 			);
-			if !n.bend.is_empty() {
-				paint_bend(&pr, v, area, clip.start + start, length, r, &n.bend);
+			let bend = match &drawing {
+				Some((id, bend)) if *id == n.id => bend,
+				_ => &n.bend,
+			};
+			if !bend.is_empty() {
+				paint_bend(&pr, v, area, clip.start + start, length, r, bend);
 			}
 		}
 		match &self.gesture {
@@ -1981,6 +2064,7 @@ impl PianoUi {
 				Tool::Paint => Key::B,
 				Tool::Select => Key::E,
 				Tool::Slice => Key::C,
+				Tool::Bend => Key::G,
 			};
 			if pressed(Modifiers::NONE, key) {
 				state.view.piano.tool = tool;
@@ -2191,7 +2275,7 @@ fn commit(state: &mut AppState, clip: &Clip, gesture: Gesture, v: &PianoView) {
 				state.view.piano.last_length = n.length;
 			}
 		}
-		Gesture::Rubber { .. } | Gesture::Slice { .. } => {}
+		Gesture::Rubber { .. } | Gesture::Slice { .. } | Gesture::Bend { .. } => {}
 	}
 }
 
@@ -2474,7 +2558,7 @@ fn piano_fold(ui: &Ui, width: f32) -> PianoFold {
 	let reserve = if compact { 260.0 } else { 520.0 };
 	let available = (width - reserve).max(0.0);
 	let spacing = ui.spacing().item_spacing.x.max(2.0);
-	let tools: [(&str, &str, &str); 4] = Tool::ALL.map(|t| (t.glyph(), t.name(), t.key()));
+	let tools: [(&str, &str, &str); 5] = Tool::ALL.map(|t| (t.glyph(), t.name(), t.key()));
 	for tools_fold in [arrange::ToolFold::Full, arrange::ToolFold::NoKey] {
 		let w: f32 = tools
 			.iter()

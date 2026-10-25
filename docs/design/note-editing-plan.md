@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export) and NE-9h (per-note bends in the project) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note bends in the project) and NE-9i (drawing bends in the piano roll) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -777,7 +777,18 @@ note's curve; `export_midi { mpe }` writes a clip or track as MPE with the notes
 (plain export warns that it drops them). Tests: model (validation, split, undo, JSON), DSP
 (the bent key alone, the next note straight, fuzzing), engine (poly_synth and electric_piano
 renders, chased mid-bend, no-alloc), CLAP tuning expressions, MCP round trip through MPE.
-Not done: drawing or reshaping curves in the piano roll (only straighten), MPE import.
+
+**Shipped (NE-9i, drawing bends in the piano roll).** Piano roll tool Bend (G, `⤴`): dragging
+over a note draws its curve freehand (pointer height from the note's row = semitones, Shift
+rounds to whole semitones; ±48), previewed while dragging and committed as one step "Bend note"
+(`piano::bend_note`). `piano::draw_bend` rasterizes the stroke in pointer order on
+`BEND_STEP` (1/64 beat) cells with straight lines between samples (later passes over a cell
+win, so going back redraws), keeps the old curve before the stroke and resumes it after (a
+point with the value it had there), clamps to the note, drops points repeating the held value
+and the whole curve when it never leaves 0. A click or double-click is not a stroke (only a
+pointer that moved > 3 px commits); double-click with the tool straightens the note. Tests:
+builder (ramp, later stroke keeps the earlier one, backwards / out of range, straighten, no
+step when unchanged), UI (drag C4 up two rows, double-click). Not done: MPE import.
 - Polyphonic per-note editing after legal review / patent expiry.
 
 ## Order and dependencies

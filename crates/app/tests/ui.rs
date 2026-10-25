@@ -457,6 +457,74 @@ fn piano_roll_double_click_opens_note_properties() {
 }
 
 #[test]
+fn piano_roll_bend_tool_draws_a_notes_curve_and_double_click_straightens_it() {
+	let (mut h, clip) = fl_piano();
+	h.key_press(Key::G);
+	h.run_steps(1);
+	assert_eq!(
+		h.state().state.view.piano.tool,
+		cadenza_app::state::piano::Tool::Bend
+	);
+	// Drag over C4 from its row up to D4's row: a rise of two semitones.
+	let a = note_pos(&h, clip, 0.1, 60);
+	let b = note_pos(&h, clip, 0.8, 62);
+	h.hover_at(a);
+	h.run_steps(1);
+	h.drag_at(a);
+	h.run_steps(1);
+	for i in 1..=6 {
+		h.hover_at(a + (b - a) * (i as f32 / 6.0));
+		h.run_steps(1);
+	}
+	h.drop_at(b);
+	h.run_steps(2);
+	let c4 = |h: &Harness<'_, CadenzaApp>| {
+		clip_notes(h, clip)
+			.into_iter()
+			.find(|n| n.pitch == 60)
+			.unwrap()
+	};
+	let n = c4(&h);
+	assert!(
+		(n.bend_at(Tick::from_beats(0.8)) - 2.0).abs() < 0.1,
+		"{:?}",
+		n.bend
+	);
+	assert!(
+		n.bend_at(Tick::from_beats(0.05)).abs() < 1e-6,
+		"before the stroke"
+	);
+	assert!(n.bend_at(Tick::from_beats(0.45)) > 0.5, "rising in between");
+	assert!(
+		clip_notes(&h, clip)
+			.iter()
+			.all(|m| m.pitch == 60 || m.bend.is_empty()),
+		"only that note bends"
+	);
+	assert_eq!(clip_notes(&h, clip).len(), 3);
+	assert_eq!(h.state().state.undo_label(), Some("Bend note"));
+
+	// Double-click it: straight again, and no properties popover.
+	let mid = note_pos(&h, clip, 0.5, 60);
+	h.hover_at(mid);
+	h.run_steps(1);
+	for _ in 0..2 {
+		for pressed in [true, false] {
+			h.event(egui::Event::PointerButton {
+				pos: mid,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: Modifiers::NONE,
+			});
+		}
+		h.run_steps(1);
+	}
+	h.run_steps(2);
+	assert!(c4(&h).bend.is_empty());
+	assert!(h.query_by_label("Pitch").is_none());
+}
+
+#[test]
 fn piano_roll_keys_clone_transpose_and_nudge_like_fl() {
 	let (mut h, clip) = fl_piano();
 	// Ctrl+A, Ctrl+B: the 3-beat phrase is cloned right after itself, selected; again

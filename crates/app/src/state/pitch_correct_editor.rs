@@ -18,6 +18,14 @@ pub const HUMANIZE: &str = "humanize";
 pub const AMOUNT: &str = "amount";
 pub const TRANSPOSE: &str = "transpose";
 pub const REFERENCE: &str = "reference";
+pub const MIDI: &str = "midi";
+
+/// The `midi` param's modes, by value.
+pub const MIDI_MODES: [&str; 3] = [
+	mark("Ignore MIDI"),
+	mark("Held note, else the scale"),
+	mark("Only while a note is held"),
+];
 
 /// Seconds of pitch history drawn.
 pub const TRACE_SECONDS: f64 = 4.0;
@@ -65,6 +73,7 @@ pub struct PcValues {
 	pub amount: f32,
 	pub transpose: f32,
 	pub reference: f32,
+	pub midi: u8,
 }
 
 impl Default for PcValues {
@@ -83,6 +92,7 @@ impl PcValues {
 			amount: f(param(AMOUNT)),
 			transpose: f(param(TRANSPOSE)),
 			reference: f(param(REFERENCE)),
+			midi: (f(param(MIDI)).round() as u8).min(2),
 		}
 	}
 

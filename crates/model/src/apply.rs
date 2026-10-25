@@ -461,6 +461,28 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetMidiInput {
+			track,
+			device,
+			source,
+		} => {
+			existing_device_mut(project, *track, *device)?;
+			if let Some(source) = source {
+				let instrument = track
+					.and_then(|t| project.track(t))
+					.and_then(|t| t.instrument.as_ref())
+					.is_some_and(|d| d.id == *device);
+				validate::midi_input(project, *device, *source, instrument)?;
+			}
+			let d = existing_device_mut(project, *track, *device)?;
+			let old = std::mem::replace(&mut d.midi_input, *source);
+			Ok(vec![Command::SetMidiInput {
+				track: *track,
+				device: *device,
+				source: old,
+			}])
+		}
+
 		Command::SetOutputRoutes { track, routes } => {
 			let t = project
 				.track(*track)
@@ -1416,7 +1438,8 @@ fn take_lanes(project: &mut Project, pred: impl Fn(&ParamAddress) -> bool) -> Ve
 	restore
 }
 
-/// Disconnects `device`'s sidechain if it is keyed by `source`, recording the undo.
+/// Disconnects `device`'s sidechain and MIDI input when they come from `source`, recording
+/// the undo.
 fn unkey(
 	device: &mut crate::Device,
 	source: TrackId,
@@ -1428,6 +1451,13 @@ fn unkey(
 			track: owner,
 			device: device.id,
 			source: device.sidechain.take(),
+		});
+	}
+	if device.midi_input == Some(source) {
+		inverse.push(Command::SetMidiInput {
+			track: owner,
+			device: device.id,
+			source: device.midi_input.take(),
 		});
 	}
 }

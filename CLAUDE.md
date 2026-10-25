@@ -167,6 +167,7 @@ pub struct Device { id: DeviceId, kind: DeviceKind, name: String, bypass: bool,
 	params: BTreeMap<String, f32> /* plain (unnormalized) values by param id */,
 	state: Option<String> /* opaque plugin state, base64; params apply on top */,
 	sidechain: Option<SidechainSource { track: TrackId, pre_fader: bool }> /* key input */,
+	midi_input: Option<TrackId> /* effects only: an instrument track's MIDI notes (NE-9e), optional */,
 	aux_outputs: Vec<OutputRoute { port: u32 /* 1-based extra output */, bus: Option<TrackId> /* None = own track */ }>,
 	zones: Vec<SampleZone> /* built-in sampler / drum_sampler only */,
 	modulators: Vec<Modulator> /* built-ins only, optional in JSON */ }
@@ -211,7 +212,7 @@ SetSampleZones { track, device, zones } (replaces the zone map; built-ins only),
 SetModulators { track, device, modulators } (replace; built-ins only; <= 8 modulators, <= 16 targets,
 unique ids/params, ranges in `model::modulation`, sidechain source needs `Device.sidechain`; param
 existence is the caller's check like SetParam; summary `modulators: ["LFO sine 1/8 -> filter_cutoff +0.30"]`),
-SetSidechain { track, device, source: Option<SidechainSource> }, SetOutputRoutes { track, routes }
+SetSidechain { track, device, source: Option<SidechainSource> }, SetMidiInput { track, device, source: Option<TrackId> } (effects only, instrument-track source; removing the source track disconnects it), SetOutputRoutes { track, routes }
 (instrument only), SetClipFades { clip, fade_in, fade_out } (replaces both; audio clips only),
 UpdateAudioClip { clip, file?, offset_seconds?, gain_db? } (audio clips; swaps in processed copies),
 SetAudioNotes { clip, notes: Option<Box<NoteEdits>> } (replace the detected notes + edits of an audio clip),
@@ -516,6 +517,10 @@ NE-9d hearing while dragging: note editor Main drag -> `AppState::audition_notes
 `NoteEditorView.audition`, toolbar "♪ Hear") -> `state::note_audition` worker (take + analysis + marks
 per file, newest request wins) -> `resynth::audition` (open-loop window render) -> engine
 `Player::play_snippet` (`snippet::Snippet`, handover + garbage rings, 5 ms fades, monitoring only).
+NE-9e MIDI-guided Pitch Correct: `Device.midi_input` -> engine `graph::DeviceMidi` (the source track's
+clips scheduled for the insert, `QuantumMidi::fill`; live edits of a feeding track recompile) ->
+`pitch_correct` `midi` param (0 ignore / 1 held note else scale / 2 only while held, `nearest_held` in the
+singer's octave); MCP `set_midi_input`; editor "MIDI: <track>" menu; `cadenza_dsp::effect_takes_midi`.
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

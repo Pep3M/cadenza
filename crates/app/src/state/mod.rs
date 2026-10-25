@@ -1901,6 +1901,16 @@ impl AppState {
 		self.set_param(address, value);
 	}
 
+	/// Feeds effect `r` the MIDI notes of instrument track `source` (`None` disconnects):
+	/// one undo step.
+	pub fn set_midi_input(&mut self, r: DeviceRef, source: Option<TrackId>) -> bool {
+		self.apply(Command::SetMidiInput {
+			track: r.track,
+			device: r.device,
+			source,
+		})
+	}
+
 	/// Forgets a parameter preview without committing it (a gesture that ended where it
 	/// started).
 	pub fn drop_param_preview(&mut self, device: DeviceId, param: &str) {

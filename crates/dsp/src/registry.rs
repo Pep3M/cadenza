@@ -39,6 +39,12 @@ pub fn param_changes_latency(device: &str, param: &str) -> bool {
 	matches!((device, param), ("limiter", "oversample"))
 }
 
+/// Whether the built-in effect `device` uses MIDI notes fed to it (a MIDI input from
+/// another track): `pitch_correct` takes its target notes from them.
+pub fn effect_takes_midi(device: &str) -> bool {
+	device == "pitch_correct"
+}
+
 /// Instantiates a built-in device by id. Call `prepare` before `process`.
 pub fn create(id: &str) -> Option<Box<dyn Processor>> {
 	Some(match id {

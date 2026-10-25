@@ -613,6 +613,43 @@ pub fn set_sidechain(session: &mut Session, args: SetSidechainArgs) -> Result<()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetMidiInputArgs {
+	/// Track holding the effect; omit for a master insert.
+	#[serde(default)]
+	pub track_id: Option<TrackId>,
+	/// The effect fed the notes, e.g. a pitch_correct on the lead vocal.
+	pub device_id: DeviceId,
+	/// Instrument track whose MIDI clips feed it (e.g. the melody); null or omitted
+	/// disconnects it.
+	#[serde(default)]
+	pub source_track_id: Option<TrackId>,
+}
+
+pub fn set_midi_input(session: &mut Session, args: SetMidiInputArgs) -> Result<(), McpError> {
+	let device = session
+		.document()
+		.project()
+		.device(args.track_id, args.device_id)
+		.cloned();
+	if let Some(device) = &device
+		&& args.source_track_id.is_some()
+		&& let cadenza_model::DeviceKind::Builtin { id } = &device.kind
+		&& !cadenza_dsp::effect_takes_midi(id)
+	{
+		return Err(McpError::Invalid(format!(
+			"built-in '{id}' does not use MIDI notes; among the built-ins only pitch_correct \
+			 does (insert one with insert_device on the vocal track)"
+		)));
+	}
+	session.document_mut().execute(Command::SetMidiInput {
+		track: args.track_id,
+		device: args.device_id,
+		source: args.source_track_id,
+	})?;
+	Ok(())
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct OutputRouteArg {
 	/// Extra output of the instrument, 1-based (as numbered by get_device_info's
 	/// aux_outputs); the main output is always mixed into the track.

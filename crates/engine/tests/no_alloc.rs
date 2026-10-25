@@ -742,3 +742,30 @@ fn note_audition_snippets_do_not_allocate() {
 	dev.process(&mut out, &[]);
 	assert!(out.iter().all(|x| *x == 0.0));
 }
+
+#[test]
+fn effects_fed_midi_do_not_allocate() {
+	let mut p = mini_song();
+	let melody = p.tracks[0].id;
+	let mut tune = cadenza_model::Device::builtin("pitch_correct", "Tune");
+	tune.midi_input = Some(melody);
+	p.tracks[1].channel.inserts.push(tune.clone());
+	let mut master_tune = tune;
+	master_tune.id = cadenza_core::DeviceId::new();
+	p.master.inserts.push(master_tune);
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	graph.set_loop(Some((beats(1.0), beats(3.0))));
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	graph.play();
+	TRACKING.with(|t| t.set(true));
+	for block in [1usize, 37, 512, 1024].into_iter().cycle().take(400) {
+		graph.process(&mut left[..block], &mut right[..block]);
+	}
+	graph.seek(beats(2.5));
+	graph.process(&mut left, &mut right);
+	graph.stop();
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+	assert_no_allocations();
+}

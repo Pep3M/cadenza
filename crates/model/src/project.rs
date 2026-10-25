@@ -234,6 +234,10 @@ pub struct Device {
 	/// compressor. Missing = no sidechain.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sidechain: Option<SidechainSource>,
+	/// Effects only: the instrument track whose MIDI notes this device receives (e.g. a
+	/// melody guiding `pitch_correct`'s target notes). Missing = none.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub midi_input: Option<TrackId>,
 	/// Instruments only: extra output ports to mix in (default: only the main output).
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<OutputRoute>,
@@ -694,6 +698,7 @@ impl Device {
 			params: BTreeMap::new(),
 			state: None,
 			sidechain: None,
+			midi_input: None,
 			aux_outputs: Vec::new(),
 			zones: Vec::new(),
 			modulators: Vec::new(),

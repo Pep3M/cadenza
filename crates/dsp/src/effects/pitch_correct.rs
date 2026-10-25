@@ -22,7 +22,8 @@ const P_HUMANIZE: usize = 3;
 const P_AMOUNT: usize = 4;
 const P_TRANSPOSE: usize = 5;
 const P_REFERENCE: usize = 6;
-const N_PARAMS: usize = 7;
+const P_MIDI: usize = 7;
+const N_PARAMS: usize = 8;
 
 /// Lowest fundamental tracked.
 pub const MIN_HZ: f32 = 50.0;
@@ -157,6 +158,17 @@ static PARAMS: [ParamInfo; N_PARAMS] = [
 		"Hz",
 		"Tuning of A4 the notes are measured against (440 standard, 432 / 442 alternatives).",
 	),
+	ParamInfo::new(
+		"midi",
+		"MIDI",
+		0.0,
+		2.0,
+		1.0,
+		"",
+		"Target notes from the MIDI input (a melody track, set_midi_input): 0 = ignore it, \
+		 1 = the note held (in the singer's octave), else the scale, 2 = only while a note is \
+		 held (no correction between notes).",
+	),
 ];
 
 pub static INFO: DeviceInfo = DeviceInfo {
@@ -170,9 +182,29 @@ pub static INFO: DeviceInfo = DeviceInfo {
 		retune 15, humanize 20. HARD TUNE EFFECT: retune 0, humanize 0. Set key and scale to \
 		the song's (chromatic when unsure). A singer who is consistently sharp or flat everywhere (e.g. +30 cents) is pulled to the \
 		nearest notes of that tuning when reference is set to match (448 Hz for +30 c), instead \
-		of flipping between neighbours. Adds about 20 ms of latency (compensated).",
+		of flipping between neighbours. With a MIDI input (set_midi_input from the melody's \
+		instrument track) each sung note goes to the note the melody holds, in the singer's \
+		octave. Adds about 20 ms of latency (compensated).",
 	params: &PARAMS,
 };
+
+/// The held key (bit per key in `keys`) nearest to `pitch` once moved to `pitch`'s octave:
+/// a melody an octave or two off still names the notes. `None` when no key is held.
+pub fn nearest_held(pitch: f32, keys: [u64; 2]) -> Option<f32> {
+	let mut best: Option<(f32, f32)> = None;
+	for k in 0..128u8 {
+		if keys[usize::from(k >> 6)] & (1 << (k & 63)) == 0 {
+			continue;
+		}
+		let note = f32::from(k);
+		let folded = note + 12.0 * ((pitch - note) / 12.0).round();
+		let d = (pitch - folded).abs();
+		if best.is_none_or(|(bd, _)| d < bd) {
+			best = Some((d, folded));
+		}
+	}
+	best.map(|(_, n)| n)
+}
 
 /// The nearest note of `key` / `mask` to `pitch` (MIDI, fractional).
 pub fn nearest_in_scale(pitch: f32, key: u8, mask: u16) -> f32 {
@@ -234,6 +266,8 @@ pub struct PitchCorrect {
 	target: f32,
 	/// Shift applied now, semitones.
 	shift: f32,
+	/// Keys held on the MIDI input (bit per key).
+	keys: [u64; 2],
 	// Synthesis marks (absolute input sample positions).
 	s_cur: f64,
 	s_next: f64,
@@ -277,6 +311,7 @@ impl PitchCorrect {
 			held: 0.0,
 			target: f32::NAN,
 			shift: 0.0,
+			keys: [0; 2],
 			s_cur: 0.0,
 			s_next: 0.0,
 			a_cur: 0.0,
@@ -462,15 +497,23 @@ impl PitchCorrect {
 		let transpose = self.params.get(P_TRANSPOSE);
 		let detected = 69.0 + 12.0 * (self.sample_rate / period as f32 / reference).log2();
 		let starting = !self.voiced;
+		let midi = self.params.get(P_MIDI).round() as u8;
 		let mut target = self.target;
-		let nearest = nearest_in_scale(detected, key, mask);
-		if target.is_nan()
-			|| !allowed(target, key, mask)
-			|| (detected - target).abs() > (detected - nearest).abs() + HYSTERESIS
-		{
-			target = nearest;
+		if let Some(note) = nearest_held(detected, self.keys).filter(|_| midi > 0) {
+			target = note;
+		} else if midi == 2 {
+			// Between the melody's notes: the voice as sung.
+			target = f32::NAN;
+		} else {
+			let nearest = nearest_in_scale(detected, key, mask);
+			if target.is_nan()
+				|| !allowed(target, key, mask)
+				|| (detected - target).abs() > (detected - nearest).abs() + HYSTERESIS
+			{
+				target = nearest;
+			}
 		}
-		if starting || target != self.target {
+		if starting || target.to_bits() != self.target.to_bits() {
 			self.held = 0.0;
 			self.anchor = detected;
 		} else {
@@ -483,7 +526,12 @@ impl PitchCorrect {
 			}
 		}
 		let amount = self.params.get(P_AMOUNT) * 0.01;
-		let desired = (amount * (target - self.anchor) + transpose).clamp(-MAX_SHIFT, MAX_SHIFT);
+		let correction = if target.is_nan() {
+			0.0
+		} else {
+			amount * (target - self.anchor)
+		};
+		let desired = (correction + transpose).clamp(-MAX_SHIFT, MAX_SHIFT);
 		if starting {
 			self.shift = transpose;
 		}
@@ -542,9 +590,24 @@ impl Processor for PitchCorrect {
 		&mut self,
 		left: &mut [f32],
 		right: &mut [f32],
-		_events: &[MidiEvent],
+		events: &[MidiEvent],
 		_transport: &Transport,
 	) {
+		// Held keys change at most once per engine step: a block's events apply at its start.
+		for e in events {
+			match *e {
+				MidiEvent::NoteOn {
+					pitch, velocity, ..
+				} if velocity > 0.0 => {
+					self.keys[usize::from(pitch >> 6) & 1] |= 1 << (pitch & 63);
+				}
+				MidiEvent::NoteOn { pitch, .. } | MidiEvent::NoteOff { pitch, .. } => {
+					self.keys[usize::from(pitch >> 6) & 1] &= !(1 << (pitch & 63));
+				}
+				MidiEvent::AllNotesOff { .. } => self.keys = [0; 2],
+				_ => {}
+			}
+		}
 		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
 			let idx = self.write as usize & self.mask;
 			let mono = 0.5 * (*l + *r);
@@ -584,6 +647,7 @@ impl Processor for PitchCorrect {
 		self.target = f32::NAN;
 		self.held = 0.0;
 		self.shift = 0.0;
+		self.keys = [0; 2];
 		let t = (self.write - self.latency as u64) as f64;
 		self.s_cur = t;
 		self.s_next = t;
@@ -600,7 +664,11 @@ impl Processor for PitchCorrect {
 			[
 				self.detected,
 				self.detected + self.shift,
-				self.target + self.params.get(P_TRANSPOSE),
+				if self.target.is_nan() {
+					-1.0
+				} else {
+					self.target + self.params.get(P_TRANSPOSE)
+				},
 			]
 		} else {
 			[-1.0; 3]
@@ -660,6 +728,64 @@ mod tests {
 
 	fn rms(x: &[f32]) -> f32 {
 		(x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+	}
+
+	#[test]
+	fn a_held_melody_note_is_the_target_in_the_singers_octave() {
+		let mut keys = [0u64; 2];
+		assert_eq!(nearest_held(60.3, keys), None);
+		keys[0] |= 1 << 50; // D3, an octave and more below
+		keys[1] |= 1 << (76 - 64); // E5
+		assert_eq!(nearest_held(61.7, keys), Some(62.0), "D4");
+		assert_eq!(nearest_held(63.6, keys), Some(64.0), "E4");
+		// A sung C# held by the melody stays C# in C major.
+		let input = voice(1.0, |_| 61.3);
+		let mut p = device(&[(P_SCALE, 1.0), (P_RETUNE, 0.0)]);
+		let on = [MidiEvent::NoteOn {
+			offset: 0,
+			pitch: 49,
+			velocity: 0.8,
+		}];
+		let mut l = input.clone();
+		let mut r = input.clone();
+		for (i, (a, b)) in l.chunks_mut(32).zip(r.chunks_mut(32)).enumerate() {
+			let ev: &[MidiEvent] = if i == 0 { &on } else { &[] };
+			p.process(a, b, ev, &Transport::default());
+		}
+		let got = pitch_of(&l, 0.4, 0.9);
+		assert!((got - 61.0).abs() < 0.03, "{got}");
+		let mut reading = [0.0; 3];
+		p.readings(&mut reading);
+		assert_eq!(reading[2], 61.0);
+		// Released: back to the scale (D). Notes only: as sung.
+		for (mode, expected) in [(1.0, 62.0), (2.0, 61.3)] {
+			let mut p = device(&[(P_SCALE, 1.0), (P_RETUNE, 0.0), (P_MIDI, mode)]);
+			let mut l = input.clone();
+			let mut r = input.clone();
+			let off = [MidiEvent::NoteOff {
+				offset: 0,
+				pitch: 49,
+			}];
+			for (i, (a, b)) in l.chunks_mut(32).zip(r.chunks_mut(32)).enumerate() {
+				let ev: &[MidiEvent] = match i {
+					0 => &on,
+					200 => &off,
+					_ => &[],
+				};
+				p.process(a, b, ev, &Transport::default());
+			}
+			let got = pitch_of(&l, 0.5, 0.9);
+			assert!((got - expected).abs() < 0.04, "mode {mode}: {got}");
+		}
+		// Ignored when MIDI is off.
+		let mut p = device(&[(P_SCALE, 1.0), (P_RETUNE, 0.0), (P_MIDI, 0.0)]);
+		let mut l = input.clone();
+		let mut r = input.clone();
+		for (i, (a, b)) in l.chunks_mut(32).zip(r.chunks_mut(32)).enumerate() {
+			let ev: &[MidiEvent] = if i == 0 { &on } else { &[] };
+			p.process(a, b, ev, &Transport::default());
+		}
+		assert!((pitch_of(&l, 0.4, 0.9) - 62.0).abs() < 0.03);
 	}
 
 	#[test]

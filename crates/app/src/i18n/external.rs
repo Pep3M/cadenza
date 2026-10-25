@@ -161,6 +161,7 @@ pub const PARAM_NAMES: &[&str] = &[
 	mark("Humanize"),
 	mark("Amount"),
 	mark("Reference"),
+	mark("MIDI"),
 ];
 
 /// `cadenza_dsp::PRESET_CATEGORIES`.

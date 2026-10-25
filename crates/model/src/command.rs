@@ -117,6 +117,15 @@ pub enum Command {
 		#[serde(default)]
 		source: Option<SidechainSource>,
 	},
+	/// Feeds an effect the MIDI notes of an instrument track (`source: null` disconnects
+	/// it).
+	SetMidiInput {
+		#[serde(default)]
+		track: Option<TrackId>,
+		device: DeviceId,
+		#[serde(default)]
+		source: Option<TrackId>,
+	},
 	/// Replaces which extra outputs of a track's (multi-output) instrument are used and
 	/// where they go; an empty list means main output only.
 	SetOutputRoutes {
@@ -398,6 +407,7 @@ impl Command {
 			Self::SetSampleZones { .. } => "set_sample_zones",
 			Self::SetModulators { .. } => "set_modulators",
 			Self::SetSidechain { .. } => "set_sidechain",
+			Self::SetMidiInput { .. } => "set_midi_input",
 			Self::SetOutputRoutes { .. } => "set_output_routes",
 			Self::SetParam { .. } => "set_param",
 			Self::ResetParam { .. } => "reset_param",
@@ -489,6 +499,10 @@ impl Command {
 				source: Some(_), ..
 			} => "Set sidechain".into(),
 			Self::SetSidechain { source: None, .. } => "Remove sidechain".into(),
+			Self::SetMidiInput {
+				source: Some(_), ..
+			} => "Set MIDI input".into(),
+			Self::SetMidiInput { source: None, .. } => "Remove MIDI input".into(),
 			Self::SetOutputRoutes { routes, .. } if routes.is_empty() => {
 				"Use main instrument output only".into()
 			}

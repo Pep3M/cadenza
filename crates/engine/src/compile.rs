@@ -417,11 +417,34 @@ impl<'a> Compiler<'a> {
 			},
 		)
 		.map(Box::new);
+		let midi = model
+			.midi_input
+			.filter(|_| !instrument)
+			.and_then(|source| {
+				let track = self.project.track(source);
+				if track.is_none() {
+					self.warnings.push(format!(
+						"{owner}: device '{}' takes MIDI from a track that no longer exists; it gets none",
+						model.name
+					));
+				}
+				track
+			})
+			.map(|track| {
+				let schedule = MidiSchedule::from_clips(
+					&track.clips,
+					&self.project.tempo,
+					self.sample_rate as f64,
+				);
+				let events = Vec::with_capacity(event_capacity(&schedule));
+				Box::new(crate::graph::DeviceMidi { schedule, events })
+			});
 		Device {
 			id: model.id,
 			processor,
 			sidechain: None,
 			modulation,
+			midi,
 		}
 	}
 

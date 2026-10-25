@@ -1336,6 +1336,7 @@ fn command_json_shape_is_stable() {
 					params: [("gain".to_owned(), 1.5)].into(),
 					state: None,
 					sidechain: None,
+					midi_input: None,
 					aux_outputs: Vec::new(),
 					zones: Vec::new(),
 					modulators: Vec::new(),
@@ -3102,4 +3103,67 @@ fn audio_notes_are_set_edited_undone_and_saved() {
 		},
 	);
 	assert!(matches!(err, ModelError::NotAnAudioClip(_)), "{err}");
+}
+
+#[test]
+fn midi_inputs_round_trip_validate_and_follow_their_track() {
+	let fx = fixture();
+	let tuner = Device::builtin("pitch_correct", "Pitch Correct");
+	let tuner_id = tuner.id;
+	let mut doc = Document::new(fx.project.clone());
+	doc.execute(Command::InsertDevice {
+		track: Some(fx.audio),
+		device: tuner,
+		index: None,
+	})
+	.unwrap();
+	let p = doc.project().clone();
+	let feed = |source| Command::SetMidiInput {
+		track: Some(fx.audio),
+		device: tuner_id,
+		source,
+	};
+	let fed = round_trip(&p, feed(Some(fx.lead)));
+	assert_eq!(
+		fed.device(Some(fx.audio), tuner_id).unwrap().midi_input,
+		Some(fx.lead)
+	);
+	assert_eq!(feed(Some(fx.lead)).label(), "Set MIDI input");
+	round_trip(&fed, feed(None));
+	// Notes come from instrument tracks, and only effects take them.
+	for bad in [fx.audio, fx.reverb] {
+		let err = exec_err(&p, feed(Some(bad)));
+		assert!(matches!(err, ModelError::InvalidMidiInput { .. }), "{err}");
+	}
+	let err = exec_err(
+		&p,
+		Command::SetMidiInput {
+			track: Some(fx.lead),
+			device: fx.synth,
+			source: Some(fx.drums),
+		},
+	);
+	assert!(err.to_string().contains("own track's notes"), "{err}");
+	// Removing the melody track disconnects it; undo connects it again.
+	let mut doc = Document::new(fed.clone());
+	doc.execute(Command::RemoveTrack { track: fx.lead })
+		.unwrap();
+	assert_eq!(
+		doc.project()
+			.device(Some(fx.audio), tuner_id)
+			.unwrap()
+			.midi_input,
+		None
+	);
+	doc.undo().unwrap();
+	assert_eq!(doc.project(), &fed);
+	// Saved and loaded with the project.
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("song.cdz");
+	fed.save_json(&path).unwrap();
+	let loaded = Project::load_json(&path).unwrap();
+	assert_eq!(
+		loaded.device(Some(fx.audio), tuner_id).unwrap().midi_input,
+		Some(fx.lead)
+	);
 }

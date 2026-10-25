@@ -95,6 +95,8 @@ pub enum ModelError {
 	RoutingCycle { from: TrackId, to: TrackId },
 	#[error("cannot key device {device} from that sidechain source: {reason}")]
 	InvalidSidechain { device: DeviceId, reason: String },
+	#[error("cannot feed device {device} that MIDI input: {reason}")]
+	InvalidMidiInput { device: DeviceId, reason: String },
 	#[error("invalid instrument output route on track {track}: {reason}")]
 	InvalidOutputRoute { track: TrackId, reason: String },
 	#[error(

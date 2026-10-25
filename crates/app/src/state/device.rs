@@ -587,6 +587,7 @@ pub fn param_choices(device: &str, param: &str) -> Option<&'static [&'static str
 		("sampler", "filter_type") => &const { [mark("Off"), "LP", "HP", "BP"] },
 		("pitch_correct", "key") => &crate::state::pitch_correct_editor::KEY_NAMES,
 		("pitch_correct", "scale") => &crate::state::pitch_correct_editor::SCALE_LABELS,
+		("pitch_correct", "midi") => &crate::state::pitch_correct_editor::MIDI_MODES,
 		_ => return None,
 	})
 }

@@ -592,6 +592,31 @@ pub(crate) fn sidechain(
 	Ok(())
 }
 
+/// A MIDI input on `device` (an instrument when `instrument`) from track `source`.
+pub(crate) fn midi_input(
+	project: &Project,
+	device: DeviceId,
+	source: TrackId,
+	instrument: bool,
+) -> Result<(), ModelError> {
+	let fail = |reason: String| ModelError::InvalidMidiInput { device, reason };
+	if instrument {
+		return Err(fail(
+			"an instrument already plays its own track's notes; MIDI inputs feed effects".into(),
+		));
+	}
+	let Some(t) = project.track(source) else {
+		return Err(ModelError::TrackNotFound(source));
+	};
+	if t.kind != TrackKind::Instrument {
+		return Err(fail(format!(
+			"track '{}' is a {:?} track; MIDI notes come from instrument tracks (the one holding the melody's MIDI clips)",
+			t.name, t.kind
+		)));
+	}
+	Ok(())
+}
+
 /// Structural checks of instrument output routes (ports, duplicates, own track).
 fn output_route_shape(track: TrackId, routes: &[OutputRoute]) -> Result<(), ModelError> {
 	let fail = |reason: String| ModelError::InvalidOutputRoute { track, reason };
@@ -664,6 +689,9 @@ pub(crate) fn device_links(
 ) -> Result<(), ModelError> {
 	if let Some(source) = device.sidechain {
 		sidechain(project, owner, device.id, source)?;
+	}
+	if let Some(source) = device.midi_input {
+		midi_input(project, device.id, source, instrument)?;
 	}
 	if device.aux_outputs.is_empty() {
 		return Ok(());
@@ -1079,6 +1107,13 @@ pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	crate::midi_map::validate_loaded(project)?;
 	for d in &project.master.inserts {
 		device_links(project, None, d, false)?;
+	}
+	for t in &project.tracks {
+		for (i, d) in t.devices().enumerate() {
+			if let Some(source) = d.midi_input {
+				midi_input(project, d.id, source, i == 0 && t.instrument.is_some())?;
+			}
+		}
 	}
 	for t in &project.tracks {
 		for target in consumers(project, t) {

@@ -549,6 +549,22 @@ impl CadenzaServer {
 	}
 
 	#[tool(
+		description = "Feeds an effect the MIDI notes of an instrument track: a pitch_correct \
+			on a vocal then tunes each sung note to the note the melody track holds (in the \
+			singer's octave; its `midi` param: 1 = held note else the scale, 2 = only while a \
+			note is held). track_id + device_id select the effect (omit track_id for a master \
+			insert); source_track_id is the melody's instrument track (omit/null to \
+			disconnect). The melody can be a silent guide (no instrument, or muted). Removing \
+			that track disconnects it."
+	)]
+	fn set_midi_input(
+		&self,
+		Parameters(args): Parameters<tracks::SetMidiInputArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| tracks::set_midi_input(s, args))
+	}
+
+	#[tool(
 		description = "Adds movement to a built-in device: LFOs and envelope followers that \
 			move parameters around their set (or automated) value, e.g. a slow sine on a pad's \
 			filter_cutoff, a 1/8 tremolo (sync_beats 0.5) on gain, a kick-keyed envelope \

@@ -114,6 +114,9 @@ pub struct DeviceSummary {
 	/// Track keying this device's sidechain input.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub sidechain: Option<SidechainSource>,
+	/// Instrument track whose MIDI notes this effect receives.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub midi_input: Option<TrackId>,
 	/// Extra instrument outputs in use (main output only when empty).
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<OutputRoute>,
@@ -309,6 +312,7 @@ fn device_summary(device: &Device) -> DeviceSummary {
 		params: device.params.clone(),
 		has_state: device.state.is_some(),
 		sidechain: device.sidechain,
+		midi_input: device.midi_input,
 		aux_outputs: device.aux_outputs.clone(),
 		zones: zone_summaries(&device.zones),
 		modulators: device.modulators.iter().map(|m| m.describe()).collect(),

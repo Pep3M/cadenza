@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache) and NE-9d (hear while dragging) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging) and NE-9e (MIDI-guided Pitch Correct) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -687,6 +687,26 @@ to the output rate) handed over through its own ring + garbage ring, `Player::{p
 stop_snippet}` (`Cmd::Snippet` replaces the playing one, which fades out over 5 ms), mixed
 after the graph and before the monitor switches, never in renders; `no_alloc` test. The
 committed edit still renders locally (NE-9b) when the drag ends.
+
+**Shipped (NE-9e, Pitch Correct guided by a melody track).** The "not done" of NE-9a: effects
+now take MIDI. Model: `Device.midi_input: Option<TrackId>` (effects only, from an instrument
+track; optional in JSON), `Command::SetMidiInput { track, device, source }` ("Set MIDI input"),
+validated (`ModelError::InvalidMidiInput`: an instrument device, a non-instrument source),
+removing the source track disconnects it (undo restores), checked on load, summary
+`midi_input`. Engine: an insert (track or master) with a MIDI input compiles its own
+`MidiSchedule` from the source track's clips (`graph::DeviceMidi`) and collects it per quantum
+like an instrument (`QuantumMidi::fill`: notes off + chase after a reset/seek, loop wraps, none
+while previewing); live MIDI edits on a track feeding an effect recompile (`live::feeds_midi`).
+No PDC offset for the notes (inserts before it shift the audio by their latency, a few ms
+against held notes). DSP: `pitch_correct` param `midi` (0 ignore, 1 held note else the scale =
+default, 2 only while a note is held), held keys from the block's events, target = the held
+key nearest the sung pitch after moving it to the singer's octave (`nearest_held`).
+`cadenza_dsp::effect_takes_midi`. MCP `set_midi_input { track_id?, device_id, source_track_id? }`
+(rejects built-ins that ignore notes). App: the editor's "MIDI: <track> ▾" menu (instrument
+tracks, none, the three modes; `AppState::set_midi_input`). Agent prompt line. Tests: model
+round trip/validation/removal/save, DSP held-note targets per mode, engine offline render
+following a silent guide track (chased after a seek), no-alloc with track and master inserts,
+MCP tool, UI menu.
 - Polyphonic per-note editing after legal review / patent expiry.
 - MPE export of polyphonic bends.
 

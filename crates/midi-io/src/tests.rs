@@ -275,6 +275,7 @@ fn round_trips_project_export_and_import() {
 			params: Default::default(),
 			state: None,
 			sidechain: None,
+			midi_input: None,
 			aux_outputs: Vec::new(),
 			zones: Vec::new(),
 			modulators: Vec::new(),

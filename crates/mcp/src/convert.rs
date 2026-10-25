@@ -449,6 +449,7 @@ pub fn build_device(
 		params,
 		state: None,
 		sidechain: None,
+		midi_input: None,
 		aux_outputs: Vec::new(),
 		zones,
 		modulators,

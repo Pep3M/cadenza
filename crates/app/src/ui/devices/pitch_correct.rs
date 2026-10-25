@@ -228,7 +228,15 @@ fn hint(p: &egui::Painter, plot: Rect) {
 
 // --- Readout, key strip, scale grid -----------------------------------------------------
 
-fn readout(ui: &mut Ui, values: &PcValues, v: &PcView, rect: Rect) {
+fn readout(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	values: &PcValues,
+	v: &PcView,
+	rect: Rect,
+) {
+	let menu_left = midi_menu(ui, state, cx, values, rect);
 	let p = ui.painter_at(rect);
 	let mut x = rect.left();
 	let mut put = |text: String, color: Color32, font: egui::FontId| {
@@ -275,7 +283,7 @@ fn readout(ui: &mut Ui, values: &PcValues, v: &PcView, rect: Rect) {
 		),
 	}
 	p.text(
-		rect.right_center(),
+		pos2(menu_left - 12.0, rect.center().y),
 		Align2::RIGHT_CENTER,
 		format!(
 			"{} \u{b7} A4 {}",
@@ -285,6 +293,69 @@ fn readout(ui: &mut Ui, values: &PcValues, v: &PcView, rect: Rect) {
 		theme::medium(12.0),
 		theme::TEXT_DIM,
 	);
+}
+
+/// The MIDI input menu at the right end of `rect` (the melody track whose held notes are
+/// the targets, and how they are used); returns its left edge.
+fn midi_menu(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, values: &PcValues, rect: Rect) -> f32 {
+	let source = state
+		.project()
+		.device(cx.r.track, cx.r.device)
+		.and_then(|d| d.midi_input);
+	let tracks: Vec<(cadenza_core::TrackId, String)> = state
+		.project()
+		.tracks
+		.iter()
+		.filter(|t| t.kind == cadenza_model::TrackKind::Instrument)
+		.map(|t| (t.id, t.name.clone()))
+		.collect();
+	let name = source
+		.and_then(|s| tracks.iter().find(|(id, _)| *id == s))
+		.map_or_else(|| tr("none").to_owned(), |(_, n)| n.clone());
+	let mut child = ui.new_child(
+		UiBuilder::new()
+			.max_rect(rect)
+			.layout(egui::Layout::right_to_left(egui::Align::Center)),
+	);
+	let label = crate::i18n::trf("MIDI: {track}", &[("track", &name)]);
+	let response = child
+		.menu_button(label, |ui| {
+			ui.label(tr("Target notes from the melody track"));
+			if ui
+				.selectable_label(source.is_none(), tr("No MIDI input"))
+				.clicked()
+			{
+				state.set_midi_input(cx.r, None);
+				ui.close();
+			}
+			for (id, track) in &tracks {
+				if ui
+					.selectable_label(source == Some(*id), track.as_str())
+					.clicked()
+				{
+					state.set_midi_input(cx.r, Some(*id));
+					ui.close();
+				}
+			}
+			if tracks.is_empty() {
+				ui.label(tr("Add an instrument track with the melody's MIDI first"));
+			}
+			ui.separator();
+			for (i, mode) in pc::MIDI_MODES.iter().enumerate() {
+				if ui
+					.selectable_label(values.midi == i as u8, tr_str(mode))
+					.clicked()
+				{
+					state.commit_param(cx.r.track, cx.r.device, pc::MIDI, i as f32);
+					ui.close();
+				}
+			}
+		})
+		.response
+		.on_hover_text(tr(
+			"Tune each sung note to the note a melody track holds (in the singer's octave)",
+		));
+	response.rect.left()
 }
 
 /// One octave of notes: click = key; lit = in the scale, the key outlined.
@@ -395,6 +466,8 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut PcView) {
 	);
 	readout(
 		ui,
+		state,
+		cx,
 		&values,
 		v,
 		Rect::from_min_size(area.min, vec2(area.width(), READOUT_H)),
@@ -476,7 +549,7 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut PcView, rect:
 	let values = values(state, cx.r);
 	let w = rect.width();
 	let read = Rect::from_min_size(rect.min, vec2(w, READOUT_H));
-	readout(ui, &values, v, read);
+	readout(ui, state, cx, &values, v, read);
 	let display = Rect::from_min_size(pos2(rect.left(), read.bottom()), vec2(w, DISPLAY_COMPACT_H));
 	pitch_display(ui, cx, &values, v, display);
 	let mut y = display.bottom() + 8.0 + 14.0;

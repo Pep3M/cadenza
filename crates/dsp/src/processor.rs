@@ -354,6 +354,14 @@ pub mod readings {
 	pub const DRUM_PAD_TRIGGERS_START: usize = 0;
 	/// Number of `drum_sampler` pad trigger counters.
 	pub const DRUM_PADS: usize = 16;
+	/// `pitch_correct`: the detected pitch (fractional MIDI against the reference tuning),
+	/// -1 while unpitched.
+	pub const PITCH_DETECTED: usize = 0;
+	/// `pitch_correct`: the pitch played now (detected + shift), -1 while unpitched.
+	pub const PITCH_OUTPUT: usize = 1;
+	/// `pitch_correct`: the note it is pulling to (scale note + transpose), -1 while
+	/// unpitched.
+	pub const PITCH_TARGET: usize = 2;
 
 	// Live voice state of the built-in instruments (`poly_synth`, `electric_piano`,
 	// `sampler`, `drum_sampler`); encoded and decoded by `instruments::voice_readings`.

@@ -486,6 +486,29 @@ static REVERB: [FactoryPreset; 2] = [
 	),
 ];
 
+static PITCH_CORRECT: [FactoryPreset; 4] = [
+	preset(
+		"Natural",
+		"Transparent tuning for a lead vocal: notes settle in tune, scoops and vibrato stay.",
+		&[("retune", 50.0), ("humanize", 40.0), ("amount", 100.0)],
+	),
+	preset(
+		"Modern Pop",
+		"Tight, polished tuning heard in current pop and R&B, still human on long notes.",
+		&[("retune", 15.0), ("humanize", 20.0), ("amount", 100.0)],
+	),
+	preset(
+		"Hard Tune",
+		"Instant correction: the stepped, robotic tuned-vocal effect.",
+		&[("retune", 0.0), ("humanize", 0.0), ("amount", 100.0)],
+	),
+	preset(
+		"Gentle",
+		"Light touch for a good singer or backing vocals: pulls halfway, slowly.",
+		&[("retune", 120.0), ("humanize", 50.0), ("amount", 60.0)],
+	),
+];
+
 /// Factory presets of the built-in device `id` (empty for unknown ids).
 pub fn factory_presets(id: &str) -> &'static [FactoryPreset] {
 	match id {
@@ -496,6 +519,7 @@ pub fn factory_presets(id: &str) -> &'static [FactoryPreset] {
 		"drum_sampler" => &DRUM_SAMPLER,
 		"compressor" => &COMPRESSOR,
 		"reverb" => &REVERB,
+		"pitch_correct" => &PITCH_CORRECT,
 		_ => &[],
 	}
 }

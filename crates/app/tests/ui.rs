@@ -6798,6 +6798,99 @@ fn render_mod_effects_screens() {
 	}
 }
 
+/// A sung phrase a little sharp with vibrato (`detected`) and its correction to E
+/// phrygian, for the Pitch Correct display.
+fn pitch_trace() -> Vec<cadenza_app::state::pitch_correct_editor::PitchPoint> {
+	use cadenza_app::state::pitch_correct_editor::PitchPoint;
+	let notes = [64.0, 65.0, 67.0, 69.0, 67.0, 64.0];
+	(0..400)
+		.map(|i| {
+			let t = i as f32 * 0.01;
+			let n = (t / 0.62) as usize;
+			let in_note = t - n as f32 * 0.62;
+			if n >= notes.len() || in_note > 0.55 {
+				return PitchPoint::from_readings(t as f64, -1.0, -1.0, -1.0);
+			}
+			let target = notes[n];
+			let scoop = (-in_note / 0.05).exp() * -0.6;
+			let sung = target + 0.3 + scoop + 0.25 * (std::f32::consts::TAU * 5.5 * t).sin();
+			let out = target + 0.25 * (std::f32::consts::TAU * 5.5 * t).sin() * 0.2 + scoop * 0.2;
+			PitchPoint::from_readings(t as f64, sung, out, target)
+		})
+		.collect()
+}
+
+#[test]
+fn the_pitch_correct_scale_and_key_are_one_click_each() {
+	let (mut a, r) = effect_dock_app("Lead", "pitch_correct", "Pitch Correct");
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	let mut h = app_harness(a, vec2(1920.0, 1000.0), false);
+	h.run_steps(3);
+	let before = h.state().state.document().history_labels().len();
+	h.get_by_label("Phrygian").click();
+	h.run_steps(2);
+	h.get_by_label("Key E").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert_eq!(builtin_param(s, r, "pitch_correct", "scale"), 6.0);
+	assert_eq!(builtin_param(s, r, "pitch_correct", "key"), 4.0);
+	assert_eq!(s.document().history_labels().len(), before + 2);
+}
+
+#[test]
+fn render_pitch_correct_screens() {
+	use cadenza_app::ui::devices::pitch_correct;
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let params = [
+		("key", 4.0),
+		("scale", 6.0),
+		("retune", 20.0),
+		("humanize", 30.0),
+		("reference", 448.0),
+	];
+	let trace = pitch_trace();
+	for (width, name) in [
+		(1920.0, "pitch_correct_dock"),
+		(1100.0, "pitch_correct_dock_narrow"),
+	] {
+		let (mut a, r) = effect_dock_app("Lead", "pitch_correct", "Pitch Correct");
+		a.state.commit_params(r.track, r.device, &params, "Tune");
+		let mut h = app_harness(a, vec2(width, 1000.0), true);
+		h.run_steps(2);
+		pitch_correct::set_display(&h.ctx, "dock", r, &trace);
+		h.run_steps(4);
+		h.render()
+			.unwrap()
+			.save(dir.join(format!("{name}.png")))
+			.unwrap();
+	}
+	let (mut a, _) = effect_dock_app("Lead", "pitch_correct", "Pitch Correct");
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	let mut h = app_harness(a, vec2(1920.0, 1000.0), true);
+	h.run_steps(4);
+	h.render()
+		.unwrap()
+		.save(dir.join("pitch_correct_dock_idle.png"))
+		.unwrap();
+	let mut a = app();
+	let r = insert_builtin(&mut a.state, "Lead", "pitch_correct", "Pitch Correct");
+	a.state.commit_params(r.track, r.device, &params, "Tune");
+	a.state.selection.select_device(r);
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	a.state.view.panels.set(PanelKind::Inspector, true);
+	let mut h = app_harness(a, vec2(1920.0, 1100.0), true);
+	h.run_steps(2);
+	pitch_correct::set_display(&h.ctx, "inspector", r, &trace);
+	h.run_steps(4);
+	h.render()
+		.unwrap()
+		.save(dir.join("pitch_correct_inspector_compact.png"))
+		.unwrap();
+}
+
 /// The app with the Lead track's Poly Synth open in the dock (inspector and browser
 /// hidden).
 fn synth_dock_app() -> (CadenzaApp, DeviceRef) {

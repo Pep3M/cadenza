@@ -6,5 +6,6 @@ pub mod delay;
 pub mod eq;
 pub mod gain;
 pub mod limiter;
+pub mod pitch_correct;
 pub mod reverb;
 pub mod saturator;

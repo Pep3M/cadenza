@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -607,6 +607,37 @@ pitch per hit), poly bends / MPE, a measurement on real guitar/piano and drum re
 - Live tuner device (Auto-Tune-style retune speed + humanize; prior art expired) reusing the
   NE-1 detector in a realtime form.
 - Learned boundary model trained on our corpus if DP + evidence plateaus.
+
+**Shipped (NE-9a, live tuner).** Built-in effect `pitch_correct` ("Pitch Correct",
+`cadenza_dsp::effects::pitch_correct`): YIN every 4 ms over 40 ms on a mono copy decimated to
+about 12 kHz (2 x 12 dB/oct low-pass at a quarter of that rate), refined on the full-rate
+difference function around the coarse lag (parabola), voicing hysteresis (CMND 0.2 on /
+0.35 keep, -55 dBFS gate), 50 Hz-1.1 kHz. Target = nearest note of key + scale (12 scales,
+0.15 st hysteresis) measured against `reference` (A4 415-466 Hz); shift = amount x (target -
+anchor) + transpose, followed with time constant `retune` (0 = instant); `humanize` makes
+the anchor a slow average (up to 0.5 s) on notes held over 100 ms, so vibrato and slow
+movement inside sustained notes stay while their average is corrected (the expired 1998
+Antares idea). Shifting = streaming TD-PSOLA: synthesis marks spaced period / ratio, each
+reading the input around the analysis mark (on the input's period train) nearest to it; two
+read heads crossfade cos²/sin² between consecutive marks (partition of unity: ratio 1 is
+bit-exact delay, formants stay); Hermite reads; unpitched audio passes in 5 ms grains.
+Latency = half the detection window (20 ms, reported, PDC): with half the longest period
+(10 ms) the estimate lagged the audio and, on the user's real take (E phrygian, singer
++31 c, reference 448.5 Hz, retune 0), notes measured by `segment` were median 6.2 c / p90 38 c
+from the scale; aligned: median 2.2 c / p90 7.8 c, long notes <= 6 c (dry take: median 27 c,
+p90 82 c). Without matching `reference`, a singer 30 c sharp flips between neighbours on
+some notes: the device description and the editor footer say so. Readings `PITCH_DETECTED /
+OUTPUT / TARGET`; factory presets Natural, Modern Pop, Hard Tune, Gentle. Editor
+(`ui::devices::pitch_correct` + `state::pitch_correct_editor`): readout (note now + cents,
+target, correction; scale and reference), live 4 s pitch display (sung faint, corrected in the
+track colour over semitone rows, scale rows and the target lit), key strip (click = key,
+scale notes lit), scale grid, Retune / Humanize / Amount / Transpose / Reference; compact form
+in the inspector. Agent prompt: the insert is the live alternative to the per-note tools.
+Tests: `pitch_correct` unit tests (identity at amount 0, sharp notes land within 3 c with
+their level, transpose / reference, retune speed, humanize keeps vibrato, melody + noise
+without clicks), registry / no-alloc / random-params suites, app click test and screenshots.
+Not done: MIDI-driven targets (effects get no MIDI yet), formant shift, a stereo-aware or
+polyphonic mode.
 - Polyphonic per-note editing after legal review / patent expiry.
 - MPE export of polyphonic bends.
 

@@ -585,6 +585,8 @@ pub fn param_choices(device: &str, param: &str) -> Option<&'static [&'static str
 		("poly_synth", "filter_slope") => &["12 dB", "24 dB"],
 		("sampler", "mode") => &const { [mark("Gate"), mark("One-shot")] },
 		("sampler", "filter_type") => &const { [mark("Off"), "LP", "HP", "BP"] },
+		("pitch_correct", "key") => &crate::state::pitch_correct_editor::KEY_NAMES,
+		("pitch_correct", "scale") => &crate::state::pitch_correct_editor::SCALE_LABELS,
 		_ => return None,
 	})
 }

@@ -54,6 +54,7 @@ pub mod note_editor;
 pub mod note_renders;
 pub mod notices;
 pub mod piano;
+pub mod pitch_correct_editor;
 pub mod playlist;
 pub mod poly_synth_editor;
 pub mod project_io;

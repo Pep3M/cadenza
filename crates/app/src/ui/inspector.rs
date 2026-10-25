@@ -1361,7 +1361,7 @@ fn device_body(ui: &mut Ui, state: &mut AppState, r: DeviceRef) -> bool {
 		compact_delay(ui, state, r);
 		return true;
 	}
-	if let Some(id @ ("chorus" | "saturator" | "gain")) = d.builtin_id() {
+	if let Some(id @ ("chorus" | "saturator" | "gain" | "pitch_correct")) = d.builtin_id() {
 		compact_modulation(ui, state, r, id);
 		return true;
 	}
@@ -1593,10 +1593,10 @@ fn compact_delay(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 	delay::delay_body(ui, state, &cx);
 }
 
-/// The Chorus, Saturator and Gain compact editors (design 16d-16f) instead of the slider
-/// list.
+/// The Chorus, Saturator, Gain (design 16d-16f) and Pitch Correct compact editors
+/// instead of the slider list.
 fn compact_modulation(ui: &mut Ui, state: &mut AppState, r: DeviceRef, id: &str) {
-	use crate::ui::devices::{chorus, gain, saturator};
+	use crate::ui::devices::{chorus, gain, pitch_correct, saturator};
 	const SALT: &str = "inspector";
 	let Some(info) = cadenza_dsp::device_info(id) else {
 		return;
@@ -1605,6 +1605,7 @@ fn compact_modulation(ui: &mut Ui, state: &mut AppState, r: DeviceRef, id: &str)
 	let height = match id {
 		"chorus" => chorus::compact_height(width),
 		"saturator" => saturator::compact_height(width),
+		"pitch_correct" => pitch_correct::compact_height(width),
 		_ => gain::compact_height(width),
 	};
 	let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
@@ -1625,6 +1626,7 @@ fn compact_modulation(ui: &mut Ui, state: &mut AppState, r: DeviceRef, id: &str)
 	match id {
 		"chorus" => chorus::chorus_body(ui, state, &cx),
 		"saturator" => saturator::saturator_body(ui, state, &cx),
+		"pitch_correct" => pitch_correct::pitch_correct_body(ui, state, &cx),
 		_ => gain::gain_body(ui, state, &cx),
 	}
 }

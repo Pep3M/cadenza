@@ -409,7 +409,7 @@ refinement passes; RBJ shapes at 48 kHz (`band_response_db`). moves. Engine: `an
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
 (cancellable).
 
-### cadenza-notes (NE-0..NE-8; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
+### cadenza-notes (NE-0..NE-9a; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
 
 Pure, offline. Times in seconds of the analyzed audio, pitches fractional MIDI. `Note { onset,
 offset, center }`; `NoteDetector { name, detect(samples, rate) }`, registry `detector(id)` /
@@ -534,6 +534,15 @@ percussive >= 1 hit/s and < 30 % pitched, poly > 20 % chord time, else mono). Ap
 MIDI "Detection" row, note editor polyphonic view (chords as the read-only picture of a polyphonic
 clip, `PolyLayers`, Convert to MIDI in the side column; "Chords" overlay chip otherwise); CLI `notes to-midi
 --algorithm --drum-note`.
+NE-9a live tuner: built-in effect `pitch_correct` (cadenza-dsp, Effect): YIN on a ~12 kHz
+mono copy every 4 ms (40 ms window, full-rate refinement) -> nearest note of `key` + `scale`
+(12 scales, `SCALE_MASKS`, against `reference` A4 Hz) -> shift = `amount` x (target - anchor)
++ `transpose`, followed with time constant `retune` ms; `humanize` = anchor averaged on held
+notes (vibrato kept); streaming TD-PSOLA (cos²/sin² heads between synthesis marks, ratio 1 =
+exact delay, formants kept); latency 20 ms (half the window: estimate centered on the audio,
+p90 38 -> 8 c on a real take). Readings `readings::PITCH_DETECTED/OUTPUT/TARGET`; presets
+Natural / Modern Pop / Hard Tune / Gentle; editor `ui::devices::pitch_correct` (live sung vs
+corrected pitch, key strip, scale grid, knobs; compact in the inspector).
 
 ### cadenza-dsp
 

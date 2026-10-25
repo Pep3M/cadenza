@@ -50,6 +50,7 @@ pub mod midi_learn;
 pub mod mix;
 pub mod mixer;
 pub mod modulation;
+pub mod note_editor;
 pub mod note_renders;
 pub mod notices;
 pub mod piano;
@@ -424,6 +425,8 @@ pub struct AppState {
 	pub analysis_cache: Option<std::path::PathBuf>,
 	/// Background renders of clips with note edits.
 	pub note_renders: note_renders::NoteRenders,
+	/// Pitch analyses of audio files for the note editor.
+	pub note_analyses: note_editor::NoteAnalyses,
 	collisions: collisions::CollisionState,
 	/// MIDI learn and the mapped controllers' values (T36).
 	pub midi: midi_learn::MidiLearnState,
@@ -573,6 +576,7 @@ impl AppState {
 			to_midi: None,
 			analysis_cache: None,
 			note_renders: note_renders::NoteRenders::new(),
+			note_analyses: note_editor::NoteAnalyses::default(),
 			collisions: collisions::CollisionState::default(),
 			midi: midi_learn::MidiLearnState::default(),
 			start: start::StartScreen::default(),
@@ -4144,6 +4148,7 @@ impl AppState {
 		self.poll_match_eq();
 		self.poll_convert_to_midi();
 		self.poll_note_renders();
+		self.poll_note_analyses();
 		self.poll_collisions();
 		self.poll_file_jobs();
 		self.tick_autosave(now);
@@ -4169,6 +4174,7 @@ impl AppState {
 			|| self.jobs.process.is_some()
 			|| self.jobs.bounce.is_some()
 			|| self.note_renders.busy()
+			|| self.note_analyses.busy()
 			|| self.ai.busy()
 			|| self.mix.busy()
 			|| self.record_animating()

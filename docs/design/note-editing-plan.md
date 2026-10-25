@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-5 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-6 shipped** (2026-10-24, branch `feat/note-editing`): see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -446,6 +446,44 @@ In the audio editor dock (`view.audio_editor`), a "Notes" mode beside the wavefo
 
 Acceptance: a pitched vocal take can be fully tuned with the macros + a few manual touches;
 flagged notes are rare (< 2 % on real material) and each has a one-click fix.
+
+**Shipped (NE-6).** The audio editor's toolbar has a Waveform | Notes switch
+(`AudioEditorView.mode`); Notes mode = `ui::note_editor` over the pure `state::note_editor`.
+Opening it (switch, audio clip menu "Edit notes…", inspector Clip tab "Edit notes") loads the
+file's analysis on a worker (`NoteAnalyses`, per file, through the shared analysis cache) and,
+when the clip has no notes yet, detects them as one undo step "Detect notes". Picture: key
+column + semitone rows (scale rows when a key is chosen), notes as blobs whose thickness is the
+level over time, center line, name + cents when there is room, the sung place outlined when a
+note was retuned or moved, the resulting pitch curve (`edited_curve`: analysis pitch +
+`edit::curves` shift, cached per edits) over everything, sibilants hatched along the bottom,
+doubtful notes outlined amber with a ✂ at the suspected boundary (click = split there; tooltip
+says why), the clip region with the outside dimmed, playhead. Tools (chips + keys 1–6): Main
+(drag ⇕ retunes, snapped to the key's tones unless Alt or Snap is off; ⇔ moves in time, refused
+with the reason when it would cross a neighbour; double-click splits, on a boundary merges),
+Vibrato / Drift (shares), Formant (cents), Level (dB) (drag ⇕, double-click resets), Split
+(click splits, double-click a boundary merges). Selection: click, Shift/Ctrl toggles, rubber
+band, Ctrl+A, Esc; ↑ ↓ retune (Shift: octave), Del resets to as sung; right-click menu: Correct
+pitch, Reset to as sung, Merge with the next note, Select all. Wheel scrolls the pitch range,
+Alt+wheel zooms it, Shift+wheel / Ctrl+wheel scroll / zoom time. Toolbar: Snap, key
+(Chromatic, "<key> (detected)" from `Scale::infer` over the notes, 24 keys), "n notes · k
+edited · avg x c off", "rendering…" while the background render runs, Macros toggle. Macros
+column (selection, else all notes): Correct pitch (center %, drift %, leave within n cents),
+Quantize time (grid 1/4–1/32 of the song, strength; notes that would cross stay), Leveling
+(evenness %: gain toward the mean core level, ±12 dB), Sibilants (dB, committed on release),
+Detection (sensitivity, Detect again keeping edits/splits/merges, Remove notes). Every gesture
+is one labelled step ("Retune notes", "Move notes", "Edit vibrato", "Correct pitch", "Quantize
+note timing", "Level notes", "Split note", "Merge notes", "Detect notes again"...). Arrange:
+clips with edited notes show ♪ before the name. F1 lists the note editor keys. Strings in all
+10 languages. Tests: `state::note_editor` (snap/free retune, macros, time moves never cross,
+tools + reset, hit tests, detect/split/merge/remove/undo through `AppState`), `tests/ui.rs`
+`note_editor_detects_and_corrects_through_the_ui` (detection lands, the Correct pitch button
+retunes all 8 notes to semitones, back to Waveform) and `render_note_editor_screens`
+(detected, corrected in the detected key with one vibrato flattened, no macros column).
+
+Not done: an instant local preview of the note being dragged (the edit is heard after the
+background render, a fraction of a second for a phrase, seconds for a long take), attack-speed
+and fade tools, a piano-roll ghost of the detected notes, an algorithm choice (mono only until
+NE-8), and any measurement on real vocals (the < 2 % flagged target is unverified).
 
 ## NE-7 — AI tuning engineer
 

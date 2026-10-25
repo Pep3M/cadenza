@@ -826,6 +826,36 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		mark("Select all / clear"),
 	),
 	sc(
+		mark("Note editor"),
+		mark("Drag a note ↕ / ↔"),
+		mark("Retune (snapped; Alt free) / move it"),
+	),
+	sc(
+		mark("Note editor"),
+		mark("Double-click"),
+		mark("Split the note / merge at a boundary"),
+	),
+	sc(
+		mark("Note editor"),
+		"1–6",
+		mark("Main, vibrato, drift, formant, level, split tools"),
+	),
+	sc(
+		mark("Note editor"),
+		mark("↑ ↓ (Shift: octave)"),
+		mark("Retune the selected notes"),
+	),
+	sc(
+		mark("Note editor"),
+		"Del",
+		mark("Reset the selected notes to as sung"),
+	),
+	sc(
+		mark("Note editor"),
+		mark("Wheel / Alt+Wheel"),
+		mark("Scroll / zoom the pitch range"),
+	),
+	sc(
 		mark("Device editor"),
 		"A / Shift+A",
 		mark("Switch the A/B compare (Shift+A where A–K play notes)"),

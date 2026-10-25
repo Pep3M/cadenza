@@ -15,6 +15,7 @@ use egui::{
 use crate::jobs::{Peaks, Samples};
 use crate::state::AppState;
 use crate::state::audio_edit::{self as ae, FADE_CURVES, Process, Region};
+use crate::state::note_editor::EditorMode;
 use crate::theme;
 
 const TOOLBAR: f32 = 30.0;
@@ -46,6 +47,8 @@ struct Drag {
 #[derive(Default)]
 pub struct AudioEditorUi {
 	drag: Option<Drag>,
+	/// The Notes mode (NE-6).
+	pub notes: super::note_editor::NoteEditorUi,
 	/// Waveform area in the last frame (headless tests).
 	pub wave_rect: Option<Rect>,
 }
@@ -68,6 +71,22 @@ impl AudioEditorUi {
 			.clip
 			.and_then(|c| ae::region(state.project(), c));
 		self.toolbar(ui, state, toolbar, region.as_ref());
+		if let Some(r) = &region
+			&& state.view.audio.mode == EditorMode::Notes
+		{
+			let area = Rect::from_min_max(pos2(full.left(), toolbar.bottom()), full.max);
+			let layout = super::note_editor::Layout::of(area, RULER, state.view.audio.notes.macros);
+			self.wave_rect = Some(layout.canvas);
+			if state.view.audio.framed != Some(r.clip.id) {
+				state
+					.view
+					.audio
+					.frame(r.offset, r.end(), layout.canvas.width());
+				state.view.audio.framed = Some(r.clip.id);
+			}
+			self.notes.show(ui, state, layout, r);
+			return;
+		}
 		let Some(r) = region else {
 			ui.painter().text(
 				wave.center(),
@@ -155,6 +174,45 @@ impl AudioEditorUi {
 		)
 		.on_hover_text(r.file.display().to_string());
 		ui.separator();
+		let modes = [tr("Waveform"), tr("Notes")];
+		let mode = state.view.audio.mode;
+		if let Some(i) = super::widgets::segmented_sized(
+			ui,
+			&modes,
+			usize::from(mode == EditorMode::Notes),
+			150.0,
+		) {
+			if i == 1 {
+				state.open_note_editor(r.clip.id);
+			} else {
+				state.view.audio.mode = EditorMode::Waveform;
+			}
+		}
+		ui.separator();
+		if state.view.audio.mode == EditorMode::Notes {
+			self.notes.toolbar(ui, state, r);
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				if ui
+					.add(
+						egui::Button::new(RichText::new("×").size(15.0).color(theme::TEXT_DIM))
+							.frame(false),
+					)
+					.on_hover_text(tr("Close the audio editor (F7)"))
+					.clicked()
+				{
+					state.close_piano_roll();
+				}
+				if ui
+					.small_button(tr("Fit"))
+					.on_hover_text(tr("Show the whole clip"))
+					.clicked()
+				{
+					state.view.audio.framed = None;
+					state.view.audio.notes.framed = None;
+				}
+			});
+			return;
+		}
 		let clip = r.clip.id;
 		let sel = state.view.audio.selection.map(|s| r.clamp(s));
 		let has_sel = sel.is_some_and(|(a, b)| b - a > 1e-6);
@@ -673,6 +731,10 @@ impl AudioEditorUi {
 	/// Keyboard shortcuts while the audio editor has the focus. Returns true when a
 	/// key was handled.
 	pub fn shortcuts(&mut self, ctx: &egui::Context, state: &mut AppState) {
+		if state.view.audio.mode == EditorMode::Notes {
+			self.notes.shortcuts(ctx, state);
+			return;
+		}
 		let Some(clip) = state.view.audio.clip else {
 			return;
 		};
@@ -803,7 +865,7 @@ fn fade_shape(curve: FadeCurve, t: f64) -> f64 {
 }
 
 /// Seconds ruler of the audio editor.
-fn ruler_paint(ui: &Ui, state: &AppState, r: Rect) {
+pub(crate) fn ruler_paint(ui: &Ui, state: &AppState, r: Rect) {
 	let p = ui.painter_at(r);
 	p.rect_filled(r, 0.0, theme::BG_RAISED);
 	p.hline(

@@ -2958,6 +2958,16 @@ fn clip_menu(ui: &mut Ui, state: &mut AppState, track: TrackId, clip: &Clip) {
 			state.open_audio_editor(clip.id);
 			ui.close();
 		}
+		if ui
+			.button(tr("Edit notes…"))
+			.on_hover_text(tr(
+				"Retune, move and reshape the notes of the recording (detects them first)",
+			))
+			.clicked()
+		{
+			state.open_note_editor(clip.id);
+			ui.close();
+		}
 		if ui.button(tr("Convert to MIDI…")).clicked() {
 			state.start_convert_to_midi(clip.id);
 			ui.close();
@@ -3384,6 +3394,23 @@ fn paint_clip(
 				StrokeKind::Inside,
 			);
 		}
+	}
+	// Edited notes: the clip plays a tuned render.
+	if let ClipContent::Audio { notes: Some(n), .. } = &clip.content
+		&& n.is_edited()
+	{
+		p.text(
+			pos2(text_x, header.center().y + 1.0),
+			Align2::LEFT_CENTER,
+			"♪",
+			theme::semibold(10.5),
+			if selected {
+				Color32::WHITE
+			} else {
+				theme::mix(color, Color32::WHITE, 0.35)
+			},
+		);
+		text_x += 11.0;
 	}
 	p.with_clip_rect(header.intersect(area)).text(
 		pos2(text_x, header.center().y + 1.0),

@@ -20,6 +20,7 @@ pub mod library;
 pub mod midi_learn;
 pub mod mix_assistant;
 pub mod mixer;
+pub mod note_editor;
 pub mod piano_roll;
 pub mod project_dialogs;
 pub mod record;

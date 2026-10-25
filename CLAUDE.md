@@ -1660,6 +1660,17 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   the track and shows an "H" header toggle; `record_plan` gives it audio input 1 and
   `finish_recording` runs `to_midi::hum_commands` (last pass on a scratch audio track ->
   `MidiOptions::hum()` -> AddClip on the instrument track) inside the same "Record" batch.
+- Note editor (NE-6, `state::note_editor` pure builders + `ui::note_editor`): audio editor
+  Waveform | Notes switch (`AudioEditorView.mode`, `.notes: NoteEditorView`), clip menu "Edit
+  notes…", inspector "Edit notes". `open_note_editor` -> `NoteAnalyses` (file analysis on a
+  worker, shared cache) -> "Detect notes" (`cadenza_notes::clip::detect`) when the clip has none.
+  Blobs (level = thickness) on semitone rows, resulting pitch curve (`edited_curve`), sibilants
+  hatched, flagged notes amber with a ✂ split; tools Main (⇕ retune snapped to the key / Alt free,
+  ⇔ move, double-click split/merge), Vibrato, Drift, Formant, Level, Split (keys 1–6); macros
+  column Correct pitch / Quantize time / Leveling / Sibilants / Detection; builders
+  `move_pitch`, `move_time` (crossing refused), `tool_edit`, `correct_pitch`, `quantize_time`,
+  `leveling`, `reset`, `sibilant_gain`, `replace`; `AppState::{detect_notes, split_audio_note,
+  merge_audio_notes, remove_audio_notes, note_edit}`. Arrange "♪" on clips with edited notes.
 - AI producer chat (phase 12; `state::ai` logic, `ui::chat` view): F10 / View / AI menu / F1.
   Docked right (`PanelKind::Chat`). `ai::worker` is a thread with its own tokio runtime that
   owns the `SessionAgent` (conversation kept across requests) and everything that may block

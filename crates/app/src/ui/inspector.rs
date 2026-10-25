@@ -1109,8 +1109,26 @@ fn clip(ui: &mut Ui, state: &mut AppState, id: cadenza_core::ClipId) {
 				{
 					state.open_audio_editor(id);
 				}
+				if ui
+					.button(RichText::new(tr("Edit notes")).font(theme::small()))
+					.clicked()
+				{
+					state.open_note_editor(id);
+				}
 				delete_clip_button(ui, state, id);
 			});
+			if let Some((n, _)) = crate::state::note_editor::clip_notes(state.project(), id) {
+				let s = n.summary();
+				ui.label(
+					RichText::new(format!(
+						"{} · {}",
+						trn("{n} note", "{n} notes", s.count),
+						trf("{n} edited", &[("n", &s.edited)])
+					))
+					.font(theme::small())
+					.color(theme::TEXT_DIM),
+				);
+			}
 		}
 	}
 }

@@ -907,8 +907,11 @@ impl CadenzaServer {
 			on track_id (an instrument track) or on a new instrument track below the audio \
 			track (bass, keys or lead sound by register; keys for chords), aligned with the \
 			audio. algorithm: auto (default: poly when chords sound a good part of the time), \
-			mono (one line: voice, hum, bass, lead; exact timing, intonation, bends) or poly \
-			(chords: piano, guitar, keys, ensembles; no bends). mode audio (default) keeps the sung timing and nearest \
+			mono (one line: voice, hum, bass, lead; exact timing, intonation, bends), poly \
+			(chords: piano, guitar, keys, ensembles; no bends), percussive (drum loops -> \
+			drum_machine notes; drum_note writes every hit as one note) or pitched_percussive \
+			(808s, toms, plucked bass: a note per hit at its pitch down to B0, slides as bends \
+			with bends true; an 808 gets the 808 Clean synth). mode audio (default) keeps the sung timing and nearest \
 			semitone; mode hum quantizes to sixteenths, infers and snaps to the key and merges \
 			repeats. Override with quantize_beats, key (\"auto\", \"off\", \"A minor\"), \
 			bends (pitch-bend lane replaying slides/vibrato), octave_shift, lowest/highest \

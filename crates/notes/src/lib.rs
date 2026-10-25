@@ -16,6 +16,7 @@ pub mod drums;
 pub mod edit;
 pub mod eval;
 pub mod features;
+pub mod hits;
 pub mod marks;
 pub mod midi;
 mod par;

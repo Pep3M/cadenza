@@ -125,9 +125,11 @@ impl AppState {
 		};
 		let clip = c.clip;
 		// The polyphonic notes do not depend on the sensitivity: kept from the last run.
-		let (poly, drums) = match &c.phase {
-			ConvertPhase::Ready(notes) => (notes.poly.clone(), notes.drums.clone()),
-			_ => (None, None),
+		let (poly, drums, hits) = match &c.phase {
+			ConvertPhase::Ready(notes) => {
+				(notes.poly.clone(), notes.drums.clone(), notes.hits.clone())
+			}
+			_ => (None, None, None),
 		};
 		let (tx, rx) = mpsc::channel();
 		let spawned = std::thread::Builder::new()
@@ -136,7 +138,10 @@ impl AppState {
 				let made = analyze_clip(&project, clip, sensitivity, &cache).and_then(|mut n| {
 					n.poly = poly;
 					n.drums = drums;
+					n.hits = hits;
 					detect_for(&project, &mut n, Algorithm::Auto)?;
+					// Fast: ready for the "Pitched hits" choice.
+					detect_for(&project, &mut n, Algorithm::PitchedPercussive)?;
 					Ok(n)
 				});
 				let _ = tx.send(made.map_err(|e| e.to_string()));

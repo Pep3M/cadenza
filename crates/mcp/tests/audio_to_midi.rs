@@ -452,3 +452,105 @@ async fn a_rendered_drum_loop_comes_back_as_a_drum_clip() {
 	let f = 2.0 * precision * recall / (precision + recall);
 	assert!(f >= 0.9, "F {f:.3}: {found:?}");
 }
+
+#[tokio::test]
+async fn a_rendered_808_line_comes_back_note_for_note() {
+	let dir = tempfile::tempdir().unwrap();
+	unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path().join("cache")) };
+	let mut session = Session::new();
+	let bass = tracks::create_track(
+		&mut session,
+		tracks::CreateTrackArgs {
+			name: "808".into(),
+			kind: TrackKind::Instrument,
+			instrument: Some(DeviceSpec {
+				device: "poly_synth".into(),
+				params: BTreeMap::new(),
+				preset: Some("808 Clean".into()),
+			}),
+			color: None,
+			output: None,
+		},
+	)
+	.unwrap()
+	.track_id;
+	// (pitch, start beat, length): E1 .. D2 and a B0, 120 bpm.
+	let line: [(u8, f64, f64); 8] = [
+		(28, 0.0, 1.0),
+		(31, 1.0, 0.5),
+		(34, 1.5, 0.5),
+		(38, 2.0, 1.5),
+		(23, 4.0, 1.0),
+		(33, 5.0, 0.5),
+		(36, 5.5, 0.5),
+		(28, 6.0, 1.5),
+	];
+	clips::add_midi_clip(
+		&mut session,
+		clips::AddMidiClipArgs {
+			track_id: bass,
+			start_beat: 0.0,
+			length_beats: 8.0,
+			name: None,
+			notes: line
+				.iter()
+				.map(|&(p, start, length)| clips::NoteInput {
+					pitch: PitchInput(p),
+					start,
+					length,
+					velocity: Some(0.9),
+				})
+				.collect(),
+		},
+	)
+	.unwrap();
+	let wav = dir.path().join("808.wav");
+	render::render(
+		session.document().project().clone(),
+		None,
+		cadenza_engine::PluginHosting::default(),
+		render::RenderArgs {
+			path: wav.display().to_string(),
+			start_beat: Some(0.0),
+			end_beat: Some(9.0),
+			sample_rate: Some(44_100),
+			..Default::default()
+		},
+	)
+	.await
+	.unwrap();
+	tracks::delete_track(&mut session, tracks::DeleteTrackArgs { track_id: bass }).unwrap();
+	let imported = audio::import_audio(
+		&mut session,
+		audio::ImportAudioArgs {
+			path: wav.display().to_string(),
+			at_beats: Some(0.0),
+			..Default::default()
+		},
+	)
+	.unwrap();
+	let out = notes::audio_to_midi(
+		&mut session,
+		notes::AudioToMidiArgs {
+			clip_id: imported.clip_id,
+			algorithm: notes::Algorithm::PitchedPercussive,
+			..Default::default()
+		},
+	)
+	.unwrap();
+	assert_eq!(out.algorithm, notes::Algorithm::PitchedPercussive);
+	let project = session.document().project();
+	let track = project.track(out.track_id).unwrap();
+	assert_eq!(
+		track.instrument.as_ref().and_then(|d| d.builtin_id()),
+		Some("poly_synth")
+	);
+	let found = clip_notes(&session, out.clip_id);
+	let got: Vec<u8> = found.iter().map(|n| n.0).collect();
+	let want: Vec<u8> = line.iter().map(|n| n.0).collect();
+	assert_eq!(got, want, "{found:?} {out:?}");
+	// Within 30 ms: a note struck over the last one's release swells in over its attack.
+	for (f, w) in found.iter().zip(&line) {
+		assert!((f.1 - w.1).abs() <= 0.06, "{found:?}");
+	}
+}

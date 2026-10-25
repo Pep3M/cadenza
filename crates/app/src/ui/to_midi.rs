@@ -122,19 +122,20 @@ fn options(ui: &mut Ui, state: &mut AppState) {
 			(Algorithm::Mono, tr("Melody (one note)")),
 			(Algorithm::Poly, tr("Chords (polyphonic)")),
 			(Algorithm::Percussive, tr("Drums")),
+			(Algorithm::PitchedPercussive, tr("Pitched hits")),
 		];
 		let labels: Vec<&str> = kinds.iter().map(|k| k.1).collect();
 		let selected = kinds
 			.iter()
 			.position(|k| k.0 == c.args.algorithm)
 			.unwrap_or(0);
-		if let Some(i) = widgets::segmented_sized(ui, &labels, selected, 480.0) {
+		if let Some(i) = widgets::segmented_sized(ui, &labels, selected, 600.0) {
 			c.args.algorithm = kinds[i].0;
 		}
 	});
 	ui.label(
 		RichText::new(tr(
-			"Melody: voice, bass or lead, with exact timing and pitch bends. Chords: piano, guitar or keys, several notes at once (no bends). Drums: kick, snare, hats, toms and cymbals as drum notes. Auto picks drums or chords when the recording is mostly that",
+			"Melody: voice, bass or lead, with exact timing and pitch bends. Chords: piano, guitar or keys, several notes at once (no bends). Drums: kick, snare, hats, toms and cymbals as drum notes. Pitched hits: an 808, toms or a plucked bass, each hit a note at its pitch (slides as bends). Auto picks drums or chords when the recording is mostly that",
 		))
 		.font(theme::small())
 		.color(theme::TEXT_FAINT),
@@ -285,6 +286,7 @@ fn preview_panel(ui: &mut Ui, p: &ConvertPreview) {
 	line.push_str(match s.algorithm {
 		Algorithm::Poly => tr("chords"),
 		Algorithm::Percussive => tr("drums"),
+		Algorithm::PitchedPercussive => tr("pitched hits"),
 		_ => tr("melody"),
 	});
 	if let Some(key) = &s.key {

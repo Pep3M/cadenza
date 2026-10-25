@@ -6841,7 +6841,13 @@ fn the_pitch_correct_scale_and_key_are_one_click_each() {
 	h.get_by_label("Bass").click();
 	h.run_steps(2);
 	let s = &h.state().state;
-	let bass = s.project().tracks.iter().find(|t| t.name == "Bass").unwrap().id;
+	let bass = s
+		.project()
+		.tracks
+		.iter()
+		.find(|t| t.name == "Bass")
+		.unwrap()
+		.id;
 	let device = s.project().device(r.track, r.device).unwrap();
 	assert_eq!(device.midi_input, Some(bass));
 	assert_eq!(s.undo_label(), Some("Set MIDI input"));
@@ -6849,7 +6855,10 @@ fn the_pitch_correct_scale_and_key_are_one_click_each() {
 	h.run_steps(2);
 	h.get_by_label("Only while a note is held").click();
 	h.run_steps(2);
-	assert_eq!(builtin_param(&h.state().state, r, "pitch_correct", "midi"), 2.0);
+	assert_eq!(
+		builtin_param(&h.state().state, r, "pitch_correct", "midi"),
+		2.0
+	);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging) and NE-9e (MIDI-guided Pitch Correct) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct) and NE-9f (pitched percussion) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -707,6 +707,30 @@ tracks, none, the three modes; `AppState::set_midi_input`). Agent prompt line. T
 round trip/validation/removal/save, DSP held-note targets per mode, engine offline render
 following a silent guide track (chased after a seek), no-alloc with track and master inserts,
 MCP tool, UI menu.
+**Shipped (NE-9f, pitched percussion).** NE-8's "percussive pitched": an 808, toms or a
+plucked bass, one note per hit at the pitch it rings at. The voice path misses them (pYIN's
+46 ms window stops at 50 Hz; the attack is a click or a fast sweep; notes decay instead of
+holding). `cadenza_notes::hits::detect(samples, rate, &HitOptions) -> HitTrack { analysis,
+segmentation, unpitched }`: hits start where the slow level (50 ms window, longer than any
+period) rises >= 3 dB over its window (within 40 dB of the loudest; the window turns a step
+into a ramp, so the start is the quarter crossing + a quarter window = attack + A/4), or where
+the pitch steps >= 0.7 st between two steady 30 ms stretches less than 80 ms apart (a note
+struck while the last still rings barely raises the level; slides take longer and stay one
+note); they end 30 dB below their peak (minus half the window) or at the next hit. Pitch =
+YIN with a window as long as the lowest period (28-500 Hz) on a copy low-passed twice and
+decimated to ~4 kHz, on the body after a 25 ms settle with the window inside the hit; the
+note's pitch is the median of its first 150 ms, the rest of the curve stays in the frames.
+The result is an ordinary `Analysis` + `Segmentation` (pitch only on hit bodies), so `to_midi`
+writes it with every melody option: key snap, quantize, fold, bends (808 slides). Hits with no
+steady pitch are counted and left out. MCP `audio_to_midi { algorithm: pitched_percussive }`
+(`ClipNotes.hits: RegionHits { start, track }`, `detect_hits`; never picked by auto; a part
+below C3 gets a new `poly_synth` "808 Clean" track; warning for unpitched hits); app
+Convert to MIDI "Pitched hits"; CLI `notes to-midi --algorithm pitched`. Tests: a synthetic
+808 line E1..D2 + B0 + a slide (pitches within 0.15 st, onsets 12 ms, the slide as a -3 st
+bend), noise hits unpitched; a `poly_synth` "808 Clean" line rendered by the engine comes back
+note for note (cent-exact, starts within 30 ms: notes struck over the last one's release
+swell in over its attack). Not done: kick + 808 layered on one track (the kick reads as a
+note), auto detection of 808 parts.
 - Polyphonic per-note editing after legal review / patent expiry.
 - MPE export of polyphonic bends.
 

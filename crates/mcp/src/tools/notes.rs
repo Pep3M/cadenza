@@ -47,6 +47,9 @@ pub enum Algorithm {
 	/// Drums and percussion: each hit a General MIDI drum note (kick, snare, hats, toms,
 	/// crash), for drum_machine.
 	Percussive,
+	/// 808s, toms, plucked or slapped bass: each hit one note at the pitch it rings at, down
+	/// to B0 (slides become pitch bends when `bends` is on).
+	PitchedPercussive,
 }
 
 /// Share of the sounding time with two or more notes above which `auto` picks poly.
@@ -63,8 +66,8 @@ pub struct AudioToMidiArgs {
 	/// audio (default) or hum; the other fields override its defaults.
 	#[serde(default)]
 	pub mode: ConvertMode,
-	/// auto (default), mono (one line: voice, bass, lead), poly (chords: piano, guitar) or
-	/// percussive (drums).
+	/// auto (default), mono (one line: voice, bass, lead), poly (chords: piano, guitar),
+	/// percussive (drums) or pitched_percussive (808, toms: a note per hit).
 	#[serde(default)]
 	pub algorithm: Algorithm,
 	/// Percussive: write every hit as this one note (e.g. "C1" for a sample pad) instead of
@@ -149,6 +152,8 @@ pub struct ClipNotes {
 	pub poly: Option<Vec<PolyNote>>,
 	/// Drum hits of the region (file seconds), when detected ([`detect_drums`]).
 	pub drums: Option<Vec<DrumHit>>,
+	/// Pitched hits of the region, when detected ([`detect_hits`]).
+	pub hits: Option<Box<RegionHits>>,
 	/// The analysis cache folder (the polyphonic model's activations are kept there too).
 	pub cache_dir: std::path::PathBuf,
 }
@@ -191,6 +196,14 @@ impl ClipNotes {
 			a => a,
 		}
 	}
+}
+
+/// Pitched hits ([`cadenza_notes::hits`]) of a clip's region.
+#[derive(Debug, Clone)]
+pub struct RegionHits {
+	/// File seconds at the hit track's time 0.
+	pub start: f64,
+	pub track: cadenza_notes::hits::HitTrack,
 }
 
 /// The mono mix of the part of the file the clip plays, its rate and the file second it
@@ -260,6 +273,16 @@ pub fn detect_drums(project: &Project, notes: &mut ClipNotes) -> Result<(), McpE
 	Ok(())
 }
 
+/// Finds the pitched hits (808, toms) of the part of the file the clip plays
+/// (`notes.hits`). Fast.
+pub fn detect_hits(project: &Project, notes: &mut ClipNotes) -> Result<(), McpError> {
+	let (part, rate, start) = region_samples(project, notes)?;
+	let track =
+		cadenza_notes::hits::detect(&part, rate, &cadenza_notes::hits::HitOptions::default());
+	notes.hits = Some(Box::new(RegionHits { start, track }));
+	Ok(())
+}
+
 /// Every detector `algorithm` may need (mono is always there).
 pub fn detect_for(
 	project: &Project,
@@ -271,6 +294,9 @@ pub fn detect_for(
 	}
 	if matches!(algorithm, Algorithm::Auto | Algorithm::Poly) && notes.poly.is_none() {
 		detect_poly(project, notes)?;
+	}
+	if algorithm == Algorithm::PitchedPercussive && notes.hits.is_none() {
+		detect_hits(project, notes)?;
 	}
 	Ok(())
 }
@@ -343,6 +369,7 @@ pub fn analyze_clip(
 		region,
 		poly: None,
 		drums: None,
+		hits: None,
 		cache_dir: cache_dir.to_path_buf(),
 	})
 }
@@ -461,6 +488,19 @@ pub fn convert(
 		Algorithm::Percussive if let Some(hits) = &notes.drums => {
 			drums_to_midi(hits, &project.tempo, notes.origin, &opts, drum_note)
 		}
+		Algorithm::PitchedPercussive if let Some(h) = &notes.hits => {
+			let opts = MidiOptions {
+				region: Some((notes.region.0 - h.start, notes.region.1 - h.start)),
+				..opts
+			};
+			to_midi(
+				&h.track.segmentation,
+				&h.track.analysis,
+				&project.tempo,
+				notes.origin + h.start,
+				&opts,
+			)
+		}
 		_ => to_midi(
 			&notes.segmentation,
 			&notes.analysis,
@@ -545,6 +585,15 @@ pub fn conversion_command(
 	let low = conversion.notes.iter().map(|n| n.pitch).min().unwrap_or(60);
 	let high = conversion.notes.iter().map(|n| n.pitch).max().unwrap_or(60);
 	let mut warnings = Vec::new();
+	if algorithm == Algorithm::PitchedPercussive
+		&& let Some(h) = &notes.hits
+		&& h.track.unpitched > 0
+	{
+		warnings.push(format!(
+			"{} hits without a steady pitch were left out (algorithm percussive writes them as drum notes)",
+			h.track.unpitched
+		));
+	}
 	if conversion.dropped > 0 {
 		warnings.push(format!(
 			"{} very short or overlapping notes were left out (min_length_seconds)",
@@ -575,6 +624,9 @@ pub fn conversion_command(
 			sorted.sort_unstable();
 			let (device, preset) = match sorted[sorted.len() / 2] {
 				_ if drums => ("drum_machine", None),
+				..48 if algorithm == Algorithm::PitchedPercussive => {
+					("poly_synth", Some("808 Clean"))
+				}
 				_ if chords => ("electric_piano", None),
 				..48 => ("poly_synth", Some("Sub Bass")),
 				48..60 => ("electric_piano", None),

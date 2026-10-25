@@ -28,8 +28,9 @@ pub struct ToMidiArgs {
 	#[arg(long)]
 	hum: bool,
 	/// Detector: auto (drums or chords when the recording is mostly that), mono (one line,
-	/// with bends), poly (chords: piano, guitar, keys) or percussive (drum hits as GM notes).
-	#[arg(long, default_value = "auto", value_parser = ["auto", "mono", "poly", "percussive"])]
+	/// with bends), poly (chords: piano, guitar, keys), percussive (drum hits as GM notes) or
+	/// pitched (808, toms: a note per hit at its pitch).
+	#[arg(long, default_value = "auto", value_parser = ["auto", "mono", "poly", "percussive", "pitched"])]
 	algorithm: String,
 	/// Percussive: every hit as this note (a name like "C1" or a MIDI number).
 	#[arg(long)]
@@ -243,6 +244,7 @@ fn to_midi(args: ToMidiArgs) -> Result<()> {
 				"mono" => notes::Algorithm::Mono,
 				"poly" => notes::Algorithm::Poly,
 				"percussive" => notes::Algorithm::Percussive,
+				"pitched" => notes::Algorithm::PitchedPercussive,
 				_ => notes::Algorithm::Auto,
 			},
 			drum_note: args
@@ -273,6 +275,7 @@ fn to_midi(args: ToMidiArgs) -> Result<()> {
 	let kind = match out.algorithm {
 		notes::Algorithm::Poly => "chords",
 		notes::Algorithm::Percussive => "drums",
+		notes::Algorithm::PitchedPercussive => "pitched hits",
 		_ => "melody",
 	};
 	println!("{} notes ({kind}) -> {}", out.note_count, output.display());

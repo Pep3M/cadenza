@@ -2748,11 +2748,16 @@ pub fn add_track_buttons(ui: &mut Ui, state: &mut AppState) {
 	}
 }
 
+/// Adds a new track of `kind` at the very end of the track list (top level, after every
+/// other track including any folder's contents), regardless of what is selected. Every
+/// "+ Instrument/Audio/Bus/Folder" affordance (below the tracks, the Track menu, the mixer's
+/// "+ Bus") is a generic "add a track" action, not "insert after the selected track", so it
+/// must not depend on `state.selection.track`.
 pub fn add_track(state: &mut AppState, kind: TrackKind) {
 	let project = state.project();
 	let track = edits::new_track(project, kind);
 	let id = track.id;
-	let cmd = edits::add_track(project, track, state.selection.track);
+	let cmd = edits::add_track_at_end(project, track);
 	if state.apply(cmd) {
 		state.selection.select_track(id);
 		state.selection.clear_clips();

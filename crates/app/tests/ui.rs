@@ -100,6 +100,7 @@ fn function_keys_toggle_panels_help_and_maximize() {
 		Some(PanelKind::Browser)
 	);
 	h.key_press(Key::F11);
+	h.run_steps(2);
 	h.state_mut().state.view.panels.focus = Some(PanelKind::Arrange);
 	h.key_press(Key::F11);
 	h.run_steps(2);
@@ -3766,10 +3767,18 @@ fn transport_record_button_arm_and_record_mode() {
 			.is_some(),
 		"armed audio tracks get an input"
 	);
-	// R: record mode; the record button (no audio device here) says why it cannot.
+	// R: record mode. Clicking the lit button while idle turns the mode off (that is
+	// what "lit with nothing recording" means) instead of trying to record.
 	h.key_press(Key::R);
 	h.run_steps(2);
 	assert!(h.state().state.record.mode);
+	h.get_by_label("Record (Ctrl+R)").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert!(!s.is_recording());
+	assert!(!s.record.mode, "the click clears the lit mode");
+	// Mode off and idle: the same button now tries to record (no audio device here)
+	// and says why it cannot.
 	h.get_by_label("Record (Ctrl+R)").click();
 	h.run_steps(2);
 	let s = &h.state().state;

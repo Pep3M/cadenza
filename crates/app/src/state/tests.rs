@@ -281,6 +281,48 @@ fn transport_without_audio_keeps_a_position() {
 	assert_eq!(s.notices.count(notices::Level::Warning), 1);
 }
 
+/// Reviewer-reported cause C: the player thread behind `self.audio` exits on a failed
+/// reopen (`AudioEvent::Unavailable`), but `self.clock` used to stay `Some`, so a later
+/// `record()` would pass its "is there a device" guard, send to the now-dead channel
+/// (silently dropped) and sit in `Phase::Starting` forever with nothing left to ever
+/// move it on. Clearing the clock in the `Unavailable` handler must make `record()` stop
+/// at the guard instead, with a notice, leaving the app usable without sound.
+#[test]
+fn a_dead_audio_thread_leaves_record_refusing_instead_of_stuck() {
+	let (mut s, vox) = {
+		let mut s = AppState::headless();
+		let mut p = Project::new("rec");
+		let vox = cadenza_model::Track::new("Vox", TrackKind::Audio);
+		let id = vox.id;
+		p.tracks.push(vox);
+		s.load_document(Document::new(p), None);
+		(s, id)
+	};
+	s.toggle_arm(vox);
+	assert!(
+		s.record_plan().is_ok(),
+		"ready to record before the device dies"
+	);
+
+	// A clock as if the (now dead) audio thread had answered `Ready` earlier.
+	let (player, _dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	s.clock = Some(player.clock());
+	assert!(s.clock.is_some());
+
+	s.handle_audio_unavailable("device disconnected".into());
+	assert!(s.clock.is_none(), "the dead thread's clock must be cleared");
+
+	// With no real audio engine (headless), `record()` would otherwise proceed past
+	// its device guard and get stuck in `Phase::Starting`; the cleared clock must stop
+	// it there instead.
+	s.record();
+	assert!(!s.is_recording(), "refused, not started and stuck");
+	assert_eq!(
+		s.notices.last().map(|n| n.text.clone()),
+		Some("No audio device: recording is unavailable (see the audio settings)".into())
+	);
+}
+
 /// Stop while already stopped rewinds to the start (song tick 0, pattern mode its
 /// pattern start), like most DAWs; Stop while playing just stops where it was.
 #[test]
@@ -2021,8 +2063,50 @@ fn device_undo_hint_follows_the_step_and_a_b_flips_with_undo() {
 	s.pop_out_device_editor();
 	assert!(!s.view.device_editor && s.view.windows.is_open(windows::WindowItem::Device(synth)));
 	assert_eq!(s.probe_target(), Some(synth.device));
-	s.close_piano_roll();
+	// No clip was open behind the device editor: popping it out closes the dock
+	// outright instead of falling back to an empty piano roll (and never reveals the
+	// mixer in its place).
+	assert!(!s.view.panels.visible(PanelKind::PianoRoll));
+	assert!(!s.view.panels.visible(PanelKind::Mixer));
 	assert_eq!(s.device_editor_target(), Some(synth), "the dock can hide");
+}
+
+/// Leaving the dock's device editor (pop-out or close) falls back to the piano roll /
+/// audio editor only when one has a clip open; otherwise it closes the dock rather
+/// than show an empty editor, and never reveals the mixer in its place.
+#[test]
+fn leaving_the_dock_editor_closes_it_when_empty_but_not_with_a_clip_open() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+
+	// No clip open behind it: close and pop-out both close the dock.
+	assert!(s.open_device_in_dock(synth));
+	assert!(s.view.panels.visible(PanelKind::PianoRoll));
+	s.close_device_editor();
+	assert!(!s.view.panels.visible(PanelKind::PianoRoll));
+	assert!(
+		!s.view.panels.visible(PanelKind::Mixer),
+		"not revealed either"
+	);
+
+	assert!(s.open_device_in_dock(synth));
+	s.pop_out_device_editor();
+	assert!(!s.view.panels.visible(PanelKind::PianoRoll));
+	assert!(!s.view.panels.visible(PanelKind::Mixer));
+
+	// A clip open behind it: closing the device editor falls back to it, not to an
+	// empty dock.
+	let clip = s.project().track(keys).unwrap().clips[0].id;
+	assert!(s.open_piano_roll(clip));
+	assert!(s.open_device_in_dock(synth));
+	s.close_device_editor();
+	assert!(
+		s.view.panels.visible(PanelKind::PianoRoll) && !s.view.device_editor,
+		"falls back to the clip's piano roll"
+	);
 }
 
 #[test]

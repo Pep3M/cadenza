@@ -148,6 +148,31 @@ pub enum Phase {
 	Stopping,
 }
 
+/// What a click on the record button (or Ctrl+R) does, given whether record mode is
+/// on and whether a recording/count-in is already running. Pure so the decision is
+/// unit-tested without an `AppState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordButtonAction {
+	/// Starts a recording.
+	Start,
+	/// Stops the recording (or count-in) in progress.
+	Stop,
+	/// Nothing is recording and record mode is on: turn it off. This is the fix for
+	/// the button staying lit forever — mode on, Play never pressed again — with no
+	/// recording to show for it.
+	ModeOff,
+}
+
+pub(crate) fn record_button_action(mode: bool, recording: bool) -> RecordButtonAction {
+	if recording {
+		RecordButtonAction::Stop
+	} else if mode {
+		RecordButtonAction::ModeOff
+	} else {
+		RecordButtonAction::Start
+	}
+}
+
 /// The audio settings dialog: a draft of the preferences until "Apply".
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioDialog {
@@ -365,12 +390,15 @@ impl AppState {
 		self.record.mode = !self.record.mode;
 	}
 
-	/// Ctrl+R and the record button: start recording, or stop a running one.
+	/// Ctrl+R and the record button: start recording, stop a running one, or (record
+	/// mode on, nothing recording yet) turn record mode off. That third case is what a
+	/// user sees as the button "staying lit" — mode on, nothing actually happening — so
+	/// a click there clears the mode instead of starting an unwanted recording.
 	pub fn toggle_record(&mut self) {
-		if self.is_recording() {
-			self.stop_recording();
-		} else {
-			self.record();
+		match record_button_action(self.record.mode, self.is_recording()) {
+			RecordButtonAction::Stop => self.stop_recording(),
+			RecordButtonAction::ModeOff => self.record.mode = false,
+			RecordButtonAction::Start => self.record(),
 		}
 	}
 
@@ -995,6 +1023,53 @@ mod tests {
 		s.abort_stuck_recording();
 		assert!(!s.is_recording());
 		assert!(!s.play_intent());
+	}
+
+	/// The button's three states: start, stop, and (mode on, idle) turn the mode off.
+	#[test]
+	fn record_button_action_covers_start_stop_and_mode_off() {
+		assert_eq!(
+			record_button_action(false, false),
+			RecordButtonAction::Start
+		);
+		assert_eq!(
+			record_button_action(true, false),
+			RecordButtonAction::ModeOff
+		);
+		// Recording wins over mode either way: a click always stops a running capture.
+		assert_eq!(record_button_action(false, true), RecordButtonAction::Stop);
+		assert_eq!(record_button_action(true, true), RecordButtonAction::Stop);
+	}
+
+	/// Reviewer-reported cause A: record mode (R) left lit with nothing recording.
+	/// Clicking the record button (or Ctrl+R) in that state must turn the mode off
+	/// instead of starting a recording the user did not ask for; while a recording (or
+	/// its count-in) is running, the same click still stops it as before.
+	#[test]
+	fn toggle_record_turns_off_a_lit_mode_with_nothing_recording() {
+		let (mut s, _vox) = state_with_vox();
+		s.toggle_record_mode();
+		assert!(s.record.mode);
+		assert!(!s.is_recording());
+
+		s.toggle_record();
+		assert!(!s.record.mode, "the button click clears the lit mode");
+		assert!(!s.is_recording());
+
+		// Mode on and a recording already running: click still stops the recording,
+		// not the mode.
+		s.toggle_record_mode();
+		assert!(s.record.mode);
+		s.record.phase = Phase::Starting;
+		s.toggle_record();
+		assert!(
+			!s.is_recording(),
+			"click stops a running recording/count-in"
+		);
+		assert!(
+			s.record.mode,
+			"stopping a recording must not also clear record mode"
+		);
 	}
 
 	#[test]

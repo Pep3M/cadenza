@@ -149,6 +149,52 @@ fn latency_compensation_moves_the_recording_back_exactly() {
 	loopback(137);
 }
 
+/// Reviewer-reported cause B: if the audio side never hands the tap back (a stuck
+/// output device, or one that died without unwinding), `finish_recording`'s timeout
+/// used to return `Err` while leaving `self.recording` set — `start_recording` would
+/// then refuse every later attempt as "already recording" and `Configure` would be
+/// refused too. The timeout path must abandon the recording instead, so the player is
+/// usable again right after.
+#[test]
+fn a_finish_recording_timeout_unsticks_the_player() {
+	let dir = folder("timeout-wedge");
+	let (p, track) = vox_project(MonitorMode::Off);
+	let (mut player, mut dev) = Player::virtual_device(SR, 2);
+	player.load(&p).unwrap();
+	player.set_armed(track, true).unwrap();
+	player
+		.start_recording(&audio_setup(&dir, track, BEAT))
+		.unwrap();
+	let mut stream = 0;
+	run(&mut dev, &mut stream, 20, &|_| 0.0);
+	player.request_stop_recording().unwrap();
+	// No further `process()` call: unlike every other test here, the (virtual) audio
+	// side never answers, standing in for a stuck output device.
+	assert!(
+		player
+			.finish_recording(std::time::Duration::from_millis(20))
+			.is_err(),
+		"nothing answered in time"
+	);
+	assert!(
+		!player.is_recording(),
+		"must not stay stuck in Starting/Recording forever"
+	);
+
+	// The player is usable again: a new recording is accepted, not refused as
+	// "already recording". (The abandoned recording's own tap is still unconsumed on
+	// the virtual device's side, standing in for the stuck audio thread — the test
+	// does not drive it any further, which would entangle a second recording's
+	// finish with the first abandoned one's leftover tap.)
+	assert!(
+		player
+			.start_recording(&audio_setup(&dir, track, BEAT * 2))
+			.is_ok(),
+		"must accept a new recording instead of refusing it as already in progress"
+	);
+	let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn punch_range_records_only_inside_it() {
 	let dir = folder("punch");

@@ -4259,6 +4259,23 @@ impl AppState {
 			|| self.midi.learning.is_some()
 	}
 
+	/// The player thread behind `self.audio` has exited (its command receiver is
+	/// dropped), so every later send to it is silently lost. Clears the recording
+	/// phase and the clock so `record()`'s "no audio device" guard fires instead of
+	/// starting a recording that would sit in `Phase::Starting` forever with no
+	/// `Ready`/`Unavailable` ever following it; the app otherwise stays usable
+	/// without sound. Pure state change, unit-tested directly.
+	pub(crate) fn handle_audio_unavailable(&mut self, e: String) {
+		self.probe = None;
+		self.master_loudness.detach();
+		self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
+		self.audio_status = AudioStatus::Unavailable(e);
+		// The audio thread that would have answered a pending start/stop is gone:
+		// without this the record button stays lit forever.
+		self.abort_stuck_recording();
+		self.clock = None;
+	}
+
 	fn poll_audio(&mut self) {
 		let Some(audio) = &self.audio else { return };
 		let mut events = Vec::new();
@@ -4288,15 +4305,7 @@ impl AppState {
 					}
 					self.schedule_reload();
 				}
-				AudioEvent::Unavailable(e) => {
-					self.probe = None;
-					self.master_loudness.detach();
-					self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
-					self.audio_status = AudioStatus::Unavailable(e);
-					// The audio thread that would have answered a pending start/stop is
-					// gone: without this the record button stays lit forever.
-					self.abort_stuck_recording();
-				}
+				AudioEvent::Unavailable(e) => self.handle_audio_unavailable(e),
 				AudioEvent::Loaded {
 					generation,
 					warnings,

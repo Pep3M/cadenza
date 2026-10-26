@@ -4,6 +4,56 @@ All notable changes to Cadenza are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-25
+
+Melodyne-style note editing for audio, audio to MIDI (melodies, chords, drums, 808s),
+per-note expression (MPE) in MIDI clips, and genre libraries of synth presets and drum kits.
+
+### Added
+
+- **Note editor for audio clips** (audio editor "Notes", clip menu "Edit notes…"): notes
+  detected on a vocal or solo take as blobs on semitone rows; retune, move, split and merge
+  notes, flatten or deepen vibrato and drift, shift formants, change a note's level, tame
+  sibilants. Edits render in the background with a closed loop (corrected notes land within
+  a few cents), only around the notes you touch, and you hear a note while you drag it.
+- **Correct pitch / Quantize time / Leveling** macros, with the key detected from the take
+  (scale and tuning offset) or taken from a MIDI melody track.
+- **AI tuning engineer**: "Tune with AI" on an audio clip and `cadenza tune`; the producer
+  gets tools to detect, analyze, tune and edit notes (`detect_audio_notes`,
+  `tune_audio_notes`, `edit_audio_notes`, …).
+- **Pitch Correct**: a live tuner effect (retune speed, humanize, 12 scales, reference
+  pitch, presets Natural / Modern Pop / Hard Tune / Gentle) with its own editor; it can
+  follow the notes of a melody track (`set_midi_input`).
+- **Audio to MIDI** (audio clip menu "Convert to MIDI…", drag an audio clip onto an
+  instrument track, `audio_to_midi`, `cadenza notes to-midi`): melodies with optional pitch
+  bend, chords (a built-in Basic Pitch model, no download), drums (kick, snare, hats… on GM
+  notes) and pitched hits (808s, toms: a note per hit with its glide). Quantize, key snap,
+  hum mode ("Hum to MIDI when recording" on instrument tracks) and MPE export.
+- **Per-note expression in MIDI clips**: each note can carry its own pitch curve, pressure
+  and timbre (MPE-style), played by Poly Synth, Electric Piano (pitch) and Sampler and sent
+  to CLAP plugins as note expressions. Piano roll: Bend tool (G) to draw a note's pitch
+  curve, "Note pressure" / "Note timbre" event lanes, Straighten/Clear in the note popover.
+  AI tools: `bend`, `pressure`, `timbre` on notes, `set_note_bend`, `set_note_expression`.
+- **MPE files**: export a clip or track as MPE (`export_midi { mpe }`) and import MPE files
+  with every note's bend, pressure and timbre.
+- **Synth preset library**: 93 Poly Synth presets in 12 categories (bass, 808, lead, pluck,
+  keys, bell, pad, choir, strings, brass, arp, FX), level-matched, with modulation; presets
+  grouped by category with search in the browser and the editor menu.
+- **Drum kit library**: 36 genre kits for the Drum Sampler (house, techno, trap, hip-hop,
+  reggaeton, latin, afro, acoustic, funk, pop, retro…) from 256 bundled samples, credited
+  in `assets/samples/CREDITS.md`.
+- CLI: `cadenza notes analyze | segment | to-midi | tune | eval | corpus`.
+
+### Packaging
+
+- Packages ship the bundled drum samples (`samples/`) and the Basic Pitch license
+  (`LICENSE-basic-pitch`, Apache-2.0).
+
+### Compatibility
+
+- Projects from 0.2 open and sound the same: the new note, clip and device fields are
+  optional (`format_version` stays 1) and new parameters default to the old sound.
+
 ## [0.2.0] - 2026-10-21
 
 The Graphite redesign: a new look for the whole app, a dedicated editor for every built-in
@@ -91,6 +141,7 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 First release: DAW with an AI arranger and sound engineer, MCP server, CLAP/VST3 hosting,
 recording, mixing, export and the style library.
 
+[0.3.0]: https://github.com/Pep3M/cadenza/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Pep3M/cadenza/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Pep3M/cadenza/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Pep3M/cadenza/releases/tag/v0.1.0

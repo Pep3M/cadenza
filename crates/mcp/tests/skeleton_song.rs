@@ -186,6 +186,8 @@ fn builds_a_song_skeleton_and_undo_reverses_whole_steps() {
 				length: 4.0,
 				velocity: Some(0.9),
 				bend: None,
+				pressure: None,
+				timbre: None,
 			}],
 		},
 	)

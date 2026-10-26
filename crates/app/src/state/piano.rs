@@ -15,7 +15,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{ClipId, Meter, NoteId, PPQ, Tick, TimeSignature, TrackId};
 use cadenza_model::controller::splice;
-use cadenza_model::{Clip, ClipPatch, Command, Note, NotePatch, Project, TrackKind};
+use cadenza_model::{
+	Clip, ClipPatch, Command, Note, NoteExpression, NotePatch, Project, TrackKind,
+};
 use cadenza_model::{
 	Controller, ControllerPoint, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, NoteBendPoint,
 };
@@ -524,6 +526,8 @@ pub fn move_notes(
 				start: (dt.0 != 0).then_some(n.start + dt),
 				length: None,
 				bend: None,
+				pressure: None,
+				timbre: None,
 			})
 			.collect(),
 	});
@@ -559,6 +563,8 @@ pub fn resize_notes(
 						start: None,
 						length: Some(length),
 						bend: None,
+						pressure: None,
+						timbre: None,
 					},
 					n.start + length,
 				)
@@ -656,6 +662,8 @@ pub fn quantize_notes(
 				start: Some(start),
 				length: None,
 				bend: None,
+				pressure: None,
+				timbre: None,
 			})
 		})
 		.collect();
@@ -696,6 +704,8 @@ pub fn set_velocities(
 				start: None,
 				length: None,
 				bend: None,
+				pressure: None,
+				timbre: None,
 			})
 		})
 		.collect();
@@ -1028,6 +1038,8 @@ pub fn resize_start_notes(
 				start: Some(start),
 				length: Some(end - start),
 				bend: None,
+				pressure: None,
+				timbre: None,
 			})
 		})
 		.collect();
@@ -1058,6 +1070,8 @@ pub fn glue_notes(project: &Project, clip: ClipId, ids: &BTreeSet<NoteId>) -> Op
 			start: None,
 			length: Some(end - first.start),
 			bend: None,
+			pressure: None,
+			timbre: None,
 		});
 		removed.extend(notes[1..].iter().map(|n| n.id));
 	}
@@ -1097,6 +1111,8 @@ pub fn legato_notes(project: &Project, clip: ClipId, ids: &BTreeSet<NoteId>) -> 
 				start: None,
 				length: Some(length),
 				bend: None,
+				pressure: None,
+				timbre: None,
 			})
 		})
 		.collect();
@@ -1140,6 +1156,10 @@ pub fn slice_notes(project: &Project, clip: ClipId, at: Tick, lo: u8, hi: u8) ->
 						start: None,
 						length: Some(at - n.start),
 						bend: (!n.bend.is_empty()).then(|| n.split_bend(at - n.start).0),
+						pressure: (!n.pressure.is_empty())
+							.then(|| n.split_expression(NoteExpression::Pressure, at - n.start).0),
+						timbre: (!n.timbre.is_empty())
+							.then(|| n.split_expression(NoteExpression::Timbre, at - n.start).0),
 					})
 					.collect(),
 			},
@@ -1151,6 +1171,8 @@ pub fn slice_notes(project: &Project, clip: ClipId, at: Tick, lo: u8, hi: u8) ->
 						id: NoteId::new(),
 						start: at,
 						bend: n.split_bend(at - n.start).1,
+						pressure: n.split_expression(NoteExpression::Pressure, at - n.start).1,
+						timbre: n.split_expression(NoteExpression::Timbre, at - n.start).1,
 						length: n.end() - at,
 						..(*n).clone()
 					})
@@ -1252,12 +1274,16 @@ pub fn set_note(project: &Project, clip: ClipId, note: &Note) -> Option<Command>
 		start: (start != old.start).then_some(start),
 		length: (length != old.length).then_some(length),
 		bend: (note.bend != old.bend).then(|| note.bend.clone()),
+		pressure: (note.pressure != old.pressure).then(|| note.pressure.clone()),
+		timbre: (note.timbre != old.timbre).then(|| note.timbre.clone()),
 	};
 	if patch.pitch.is_none()
 		&& patch.velocity.is_none()
 		&& patch.start.is_none()
 		&& patch.length.is_none()
 		&& patch.bend.is_none()
+		&& patch.pressure.is_none()
+		&& patch.timbre.is_none()
 	{
 		return None;
 	}
@@ -1351,6 +1377,8 @@ pub fn bend_note(
 				start: None,
 				length: None,
 				bend: Some(bend),
+				pressure: None,
+				timbre: None,
 			}],
 		}],
 	)

@@ -773,7 +773,7 @@ fn effects_fed_midi_do_not_allocate() {
 #[test]
 fn note_bends_do_not_allocate() {
 	let mut p = mini_song();
-	// Every note of the first track bent up and back, chased by the loop and a seek.
+	// Every note of the first track bent up and back (with pressure and timbre curves), chased by the loop and a seek.
 	for clip in &mut p.tracks[0].clips {
 		if let cadenza_model::ClipContent::Midi { notes, .. } = &mut clip.content {
 			for n in notes.iter_mut() {
@@ -783,6 +783,16 @@ fn note_bends_do_not_allocate() {
 						semitones: if i % 2 == 0 { 0.0 } else { 1.5 },
 					})
 					.collect();
+				n.pressure = (0..8)
+					.map(|i| cadenza_model::NoteValuePoint {
+						tick: cadenza_core::Tick(n.length.0 * i / 8),
+						value: i as f32 / 8.0,
+					})
+					.collect();
+				n.timbre = vec![cadenza_model::NoteValuePoint {
+					tick: cadenza_core::Tick(n.length.0 / 3),
+					value: 0.9,
+				}];
 			}
 		}
 	}

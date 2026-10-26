@@ -1,8 +1,9 @@
 //! Channel-wide performance controls shared by the built-in instruments: pitch bend,
 //! mod wheel (vibrato), channel pressure and the sustain pedal, plus each key's own bend
-//! ([`MidiEvent::NoteBend`]: a note's pitch curve).
+//! ([`MidiEvent::NoteBend`]: a note's pitch curve), pressure and timbre
+//! ([`MidiEvent::NoteExpression`]).
 
-use crate::processor::{MidiEvent, cc};
+use crate::processor::{MidiEvent, NoteExpressionKind, cc};
 
 /// Default pitch bend range, semitones each way.
 pub const BEND_RANGE: f32 = 2.0;
@@ -35,6 +36,11 @@ pub struct Expression {
 	note_bend: [f32; 128],
 	/// A bend came for the key since its last note-off (its next note-on starts there).
 	bend_set: [bool; 128],
+	/// Each key's own pressure and timbre (0..1), with the same freshness rule.
+	note_pressure: [f32; 128],
+	note_timbre: [f32; 128],
+	pressure_set: [bool; 128],
+	timbre_set: [bool; 128],
 }
 
 impl Default for Expression {
@@ -48,6 +54,10 @@ impl Default for Expression {
 			phase: 0.0,
 			note_bend: [0.0; 128],
 			bend_set: [false; 128],
+			note_pressure: [0.0; 128],
+			note_timbre: [0.5; 128],
+			pressure_set: [false; 128],
+			timbre_set: [false; 128],
 		}
 	}
 }
@@ -65,16 +75,44 @@ impl Expression {
 				self.bend_set[k] = true;
 				ExpressionAction::None
 			}
+			MidiEvent::NoteExpression {
+				pitch, kind, value, ..
+			} => {
+				let k = usize::from(pitch.min(127));
+				let value = value.clamp(0.0, 1.0);
+				match kind {
+					NoteExpressionKind::Pressure => {
+						self.note_pressure[k] = value;
+						self.pressure_set[k] = true;
+					}
+					NoteExpressionKind::Timbre => {
+						self.note_timbre[k] = value;
+						self.timbre_set[k] = true;
+					}
+				}
+				ExpressionAction::None
+			}
 			MidiEvent::NoteOn { pitch, .. } => {
 				let k = usize::from(pitch.min(127));
 				if !self.bend_set[k] {
 					self.note_bend[k] = 0.0;
 				}
+				if !self.pressure_set[k] {
+					self.note_pressure[k] = NoteExpressionKind::Pressure.resting();
+				}
+				if !self.timbre_set[k] {
+					self.note_timbre[k] = NoteExpressionKind::Timbre.resting();
+				}
 				self.bend_set[k] = false;
+				self.pressure_set[k] = false;
+				self.timbre_set[k] = false;
 				ExpressionAction::None
 			}
 			MidiEvent::NoteOff { pitch, .. } => {
-				self.bend_set[usize::from(pitch.min(127))] = false;
+				let k = usize::from(pitch.min(127));
+				self.bend_set[k] = false;
+				self.pressure_set[k] = false;
+				self.timbre_set[k] = false;
 				ExpressionAction::None
 			}
 			MidiEvent::PitchBend { value, .. } => {
@@ -127,6 +165,10 @@ impl Expression {
 			phase: self.phase,
 			note_bend: self.note_bend,
 			bend_set: self.bend_set,
+			note_pressure: self.note_pressure,
+			note_timbre: self.note_timbre,
+			pressure_set: self.pressure_set,
+			timbre_set: self.timbre_set,
 			..Self::default()
 		};
 	}
@@ -134,6 +176,23 @@ impl Expression {
 	/// Key `pitch`'s own bend, semitones.
 	pub fn note_bend(&self, pitch: u8) -> f32 {
 		self.note_bend[usize::from(pitch.min(127))]
+	}
+
+	/// Key `pitch`'s own pressure, 0..1.
+	pub fn note_pressure(&self, pitch: u8) -> f32 {
+		self.note_pressure[usize::from(pitch.min(127))]
+	}
+
+	/// Key `pitch`'s own timbre, 0..1 (0.5 neutral).
+	pub fn note_timbre(&self, pitch: u8) -> f32 {
+		self.note_timbre[usize::from(pitch.min(127))]
+	}
+
+	/// Filter offset in semitones for key `pitch`: channel and key pressure open it up to
+	/// 24 semitones, the key's timbre moves it ±24 around neutral.
+	pub fn filter_semitones(&self, pitch: u8) -> f32 {
+		(self.pressure + self.note_pressure(pitch)).min(1.0) * 24.0
+			+ (self.note_timbre(pitch) - 0.5) * 48.0
 	}
 
 	/// Pitch offset from the bend wheel, semitones.

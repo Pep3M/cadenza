@@ -116,6 +116,33 @@ pub enum MidiEvent {
 		pitch: u8,
 		semitones: f32,
 	},
+	/// One key's own pressure or timbre (MPE-style), `value` in `0.0..=1.0`; like
+	/// [`MidiEvent::NoteBend`] it comes before its note-on and while it sounds, and a note-on
+	/// without one starts at the kind's resting value.
+	NoteExpression {
+		offset: u32,
+		pitch: u8,
+		kind: NoteExpressionKind,
+		value: f32,
+	},
+}
+
+/// Per-note expressions besides the bend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteExpressionKind {
+	/// Polyphonic pressure; rests at 0.
+	Pressure,
+	/// Brightness (MPE CC74); rests at 0.5.
+	Timbre,
+}
+
+impl NoteExpressionKind {
+	pub fn resting(self) -> f32 {
+		match self {
+			NoteExpressionKind::Pressure => 0.0,
+			NoteExpressionKind::Timbre => 0.5,
+		}
+	}
 }
 
 /// MIDI controller numbers with a meaning in the built-in instruments.
@@ -136,7 +163,8 @@ impl MidiEvent {
 			| MidiEvent::ControlChange { offset, .. }
 			| MidiEvent::PitchBend { offset, .. }
 			| MidiEvent::ChannelPressure { offset, .. }
-			| MidiEvent::NoteBend { offset, .. } => offset,
+			| MidiEvent::NoteBend { offset, .. }
+			| MidiEvent::NoteExpression { offset, .. } => offset,
 		}
 	}
 
@@ -169,6 +197,14 @@ impl MidiEvent {
 				offset,
 				pitch,
 				semitones,
+			},
+			MidiEvent::NoteExpression {
+				pitch, kind, value, ..
+			} => MidiEvent::NoteExpression {
+				offset,
+				pitch,
+				kind,
+				value,
 			},
 		}
 	}

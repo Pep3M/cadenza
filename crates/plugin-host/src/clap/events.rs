@@ -1,7 +1,7 @@
 //! Real-time event plumbing: a fixed-capacity CLAP input event list and a
 //! bounded parameter-change queue. Neither allocates after construction.
 
-use cadenza_dsp::MidiEvent;
+use cadenza_dsp::{MidiEvent, NoteExpressionKind};
 use clack_host::events::event_types::{
 	MidiEvent as ClapMidiEvent, NoteExpressionEvent, NoteExpressionType, NoteOffEvent, NoteOnEvent,
 	ParamValueEvent,
@@ -43,6 +43,12 @@ pub(crate) struct EventList {
 	/// its last note-off (else its next note starts at 0).
 	key_bend: [f64; 128],
 	bend_set: u128,
+	/// Each key's own pressure and timbre (`MidiEvent::NoteExpression`), with the same
+	/// freshness rule as the bend.
+	key_pressure: [f64; 128],
+	key_timbre: [f64; 128],
+	pressure_set: u128,
+	timbre_set: u128,
 }
 
 /// Pitch bend range used when bends become CLAP tuning expressions (semitones).
@@ -57,6 +63,10 @@ impl EventList {
 			pressure: 0.0,
 			key_bend: [0.0; 128],
 			bend_set: 0,
+			key_pressure: [0.0; 128],
+			key_timbre: [0.5; 128],
+			pressure_set: 0,
+			timbre_set: 0,
 		}
 	}
 
@@ -67,11 +77,13 @@ impl EventList {
 		while held != 0 {
 			let key = held.trailing_zeros() as u16;
 			held &= held - 1;
-			// Tuning = the channel bend plus the key's own.
-			let value = if kind == NoteExpressionType::Tuning {
-				value + self.key_bend[usize::from(key)]
-			} else {
-				value
+			// Tuning = the channel bend plus the key's own; pressure likewise.
+			let value = match kind {
+				NoteExpressionType::Tuning => value + self.key_bend[usize::from(key)],
+				NoteExpressionType::Pressure => {
+					(value + self.key_pressure[usize::from(key)]).min(1.0)
+				}
+				_ => value,
 			};
 			ok &= self.push(HostEvent::Expression(NoteExpressionEvent::new(
 				time,
@@ -190,6 +202,39 @@ impl EventList {
 				tuning,
 			)));
 		}
+		// A key's own pressure / timbre: pressure and brightness expressions on CLAP note
+		// ports; polyphonic key pressure in MIDI 1.0 bytes (timbre has none there).
+		if let MidiEvent::NoteExpression {
+			pitch, kind, value, ..
+		} = *e
+		{
+			let k = pitch.min(127);
+			let bit = 1u128 << k;
+			let value = f64::from(value.clamp(0.0, 1.0));
+			match kind {
+				NoteExpressionKind::Pressure => {
+					self.key_pressure[usize::from(k)] = value;
+					self.pressure_set |= bit;
+				}
+				NoteExpressionKind::Timbre => {
+					self.key_timbre[usize::from(k)] = value;
+					self.timbre_set |= bit;
+				}
+			}
+			let time = e.offset().min(frames.saturating_sub(1));
+			if midi_dialect {
+				return kind != NoteExpressionKind::Pressure
+					|| self.push(HostEvent::Midi(ClapMidiEvent::new(
+						time,
+						0,
+						[0xA0, k, (value * 127.0).round() as u8],
+					)));
+			}
+			if self.held & bit == 0 {
+				return true;
+			}
+			return self.push(self.key_expression(time, k, kind, controllers));
+		}
 		if !e.is_note() {
 			return self.push_controller(e, frames, controllers);
 		}
@@ -207,10 +252,19 @@ impl EventList {
 		match *e {
 			MidiEvent::NoteOn { pitch, .. } => {
 				let bit = 1u128 << pitch.min(127);
+				let k = usize::from(pitch.min(127));
 				if self.bend_set & bit == 0 {
-					self.key_bend[usize::from(pitch.min(127))] = 0.0;
+					self.key_bend[k] = 0.0;
+				}
+				if self.pressure_set & bit == 0 {
+					self.key_pressure[k] = 0.0;
+				}
+				if self.timbre_set & bit == 0 {
+					self.key_timbre[k] = 0.5;
 				}
 				self.bend_set &= !bit;
+				self.pressure_set &= !bit;
+				self.timbre_set &= !bit;
 				if !midi_dialect {
 					self.held |= bit;
 				}
@@ -218,6 +272,8 @@ impl EventList {
 			MidiEvent::NoteOff { pitch, .. } => {
 				let bit = 1u128 << pitch.min(127);
 				self.bend_set &= !bit;
+				self.pressure_set &= !bit;
+				self.timbre_set &= !bit;
 				if !midi_dialect {
 					self.held &= !bit;
 				}
@@ -275,20 +331,65 @@ impl EventList {
 				)));
 			}
 		}
-		if let (MidiEvent::NoteOn { pitch, .. }, false) = (*e, midi_dialect)
-			&& controllers == ControllerRoute::Expressions
-		{
-			let pckn = Pckn::new(0u16, 0u16, u16::from(pitch.min(127)), Match::All);
-			if self.pressure != 0.0 {
-				self.push(HostEvent::Expression(NoteExpressionEvent::new(
-					time,
-					pckn,
-					NoteExpressionType::Pressure,
-					self.pressure,
-				)));
+		if let (MidiEvent::NoteOn { pitch, .. }, false) = (*e, midi_dialect) {
+			let k = pitch.min(127);
+			let channel = if controllers == ControllerRoute::Expressions {
+				self.pressure
+			} else {
+				0.0
+			};
+			if channel + self.key_pressure[usize::from(k)] != 0.0 {
+				self.push(self.key_expression(time, k, NoteExpressionKind::Pressure, controllers));
+			}
+			if self.key_timbre[usize::from(k)] != 0.5 {
+				self.push(self.key_expression(time, k, NoteExpressionKind::Timbre, controllers));
 			}
 		}
+		if let (MidiEvent::NoteOn { pitch, .. }, true) = (*e, midi_dialect)
+			&& self.key_pressure[usize::from(pitch.min(127))] != 0.0
+		{
+			let v = (self.key_pressure[usize::from(pitch.min(127))] * 127.0).round() as u8;
+			self.push(HostEvent::Midi(ClapMidiEvent::new(
+				time,
+				0,
+				[0xA0, pitch.min(127), v],
+			)));
+		}
 		ok
+	}
+
+	/// Key `k`'s pressure (its own plus the channel's on expression-only ports) or timbre
+	/// (as brightness) as a note expression.
+	fn key_expression(
+		&self,
+		time: u32,
+		k: u8,
+		kind: NoteExpressionKind,
+		controllers: ControllerRoute,
+	) -> HostEvent {
+		let (kind, value) = match kind {
+			NoteExpressionKind::Pressure => {
+				let channel = if controllers == ControllerRoute::Expressions {
+					self.pressure
+				} else {
+					0.0
+				};
+				(
+					NoteExpressionType::Pressure,
+					(self.key_pressure[usize::from(k)] + channel).min(1.0),
+				)
+			}
+			NoteExpressionKind::Timbre => (
+				NoteExpressionType::Brightness,
+				self.key_timbre[usize::from(k)],
+			),
+		};
+		HostEvent::Expression(NoteExpressionEvent::new(
+			time,
+			Pckn::new(0u16, 0u16, u16::from(k), Match::All),
+			kind,
+			value,
+		))
 	}
 
 	#[cfg(test)]
@@ -460,6 +561,87 @@ mod tests {
 		let mut midi = EventList::with_capacity(16);
 		assert!(midi.push_event(&bend(0, 1.0), 64, true, ControllerRoute::Midi));
 		assert_eq!(midi.len(), 0);
+	}
+
+	#[test]
+	fn a_keys_pressure_and_timbre_are_its_pressure_and_brightness() {
+		let mut list = EventList::with_capacity(16);
+		let expr = |offset, kind, value| MidiEvent::NoteExpression {
+			offset,
+			pitch: 60,
+			kind,
+			value,
+		};
+		let on = MidiEvent::NoteOn {
+			offset: 0,
+			pitch: 60,
+			velocity: 0.8,
+		};
+		for e in [
+			expr(0, NoteExpressionKind::Timbre, 0.9),
+			on,
+			expr(10, NoteExpressionKind::Pressure, 0.4),
+		] {
+			assert!(list.push_event(&e, 64, false, ControllerRoute::Midi));
+		}
+		let found: Vec<(u32, NoteExpressionType, f64)> = list
+			.events
+			.iter()
+			.filter_map(|e| match e {
+				HostEvent::Expression(x) => {
+					Some((x.header().time(), x.expression_type()?, x.value()))
+				}
+				_ => None,
+			})
+			.collect();
+		assert_eq!(
+			found,
+			[
+				(0, NoteExpressionType::Brightness, 0.9_f32 as f64),
+				(10, NoteExpressionType::Pressure, 0.4_f32 as f64)
+			]
+		);
+		// MIDI 1.0 bytes: pressure is polyphonic key pressure, timbre has no place.
+		let mut midi = EventList::with_capacity(16);
+		midi.push_event(&on, 64, true, ControllerRoute::Midi);
+		assert!(midi.push_event(
+			&expr(5, NoteExpressionKind::Pressure, 1.0),
+			64,
+			true,
+			ControllerRoute::Midi
+		));
+		assert!(midi.push_event(
+			&expr(6, NoteExpressionKind::Timbre, 1.0),
+			64,
+			true,
+			ControllerRoute::Midi
+		));
+		assert_eq!(midi.len(), 2);
+		match midi.events[1] {
+			HostEvent::Midi(m) => assert_eq!(m.data(), [0xA0, 60, 127]),
+			_ => panic!("poly pressure"),
+		}
+		// The next note on the key starts neutral: no expression with it.
+		let mut list = EventList::with_capacity(16);
+		list.push_event(
+			&expr(0, NoteExpressionKind::Pressure, 0.7),
+			64,
+			false,
+			ControllerRoute::Midi,
+		);
+		list.push_event(&on, 64, false, ControllerRoute::Midi);
+		list.push_event(
+			&MidiEvent::NoteOff {
+				offset: 1,
+				pitch: 60,
+			},
+			64,
+			false,
+			ControllerRoute::Midi,
+		);
+		list.clear();
+		list.push_event(&on, 64, false, ControllerRoute::Midi);
+		assert_eq!(list.len(), 1, "a plain note-on");
 	}
 
 	#[test]

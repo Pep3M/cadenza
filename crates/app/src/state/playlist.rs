@@ -5,6 +5,7 @@
 
 use crate::i18n::mark;
 use cadenza_core::{ClipId, LinkId, NoteId, Tick, TrackId};
+use cadenza_model::NoteExpression;
 use cadenza_model::{Clip, ClipContent, ClipPatch, Command, Project};
 
 use super::edits::{self, batch};
@@ -587,6 +588,10 @@ pub fn stretch(project: &Project, clip: ClipId, length: Tick) -> Option<Command>
 				start: Some(start),
 				length: Some(Tick(scale(n.length).0.max(1))),
 				bend: (!n.bend.is_empty()).then(|| n.scaled_bend(ratio)),
+				pressure: (!n.pressure.is_empty())
+					.then(|| n.scaled_expression(NoteExpression::Pressure, ratio)),
+				timbre: (!n.timbre.is_empty())
+					.then(|| n.scaled_expression(NoteExpression::Timbre, ratio)),
 			}
 		})
 		.collect();

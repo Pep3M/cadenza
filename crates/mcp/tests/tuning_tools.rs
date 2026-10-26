@@ -328,6 +328,8 @@ fn overrides_hand_edits_splits_merges_and_a_reference_melody() {
 			length: vocal.beat(project, n.end) - vocal.beat(project, n.start),
 			velocity: None,
 			bend: None,
+			pressure: None,
+			timbre: None,
 		})
 		.collect();
 	let reference = clips::add_midi_clip(

@@ -51,7 +51,8 @@ like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_no
 `transpose_notes` to shape them. Add expression with `set_controller_events`/\
 `draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend); a \
 bend on one note only (a guitar bend in a chord, a slide, a fall) is that note's own `bend` \
-(`add_notes` or `set_note_bend`).\n\
+(`add_notes` or `set_note_bend`); a swell or brightening inside one held note is its own \
+`pressure`/`timbre` (`set_note_expression`).\n\
 Style library: for a genre request, `library_search` kind style for it and `library_get` \
 the guide before deciding the song (tempo, form, progressions, pattern ids per role and \
 section, sounds, mix, do/don't); prefer `apply_form` + `apply_pattern` from the guide over \
@@ -740,6 +741,23 @@ impl CadenzaServer {
 		Parameters(args): Parameters<clips::SetNoteBendArgs>,
 	) -> Result<Json<clips::SetNoteBendOutput>, ErrorData> {
 		Ok(Json(self.run_mut(|s| clips::set_note_bend(s, args))?))
+	}
+
+	#[tool(
+		description = "Sets one note's own pressure or timbre curve (per-note expression, \
+			MPE-style): a swell, an accent or a brightening inside one held note while the others \
+			of the chord stay. kind pressure (0..1, none = 0) or timbre (0..1, none = 0.5); points \
+			[{at_beats (from the note's start), value}] joined by straight lines; [] removes it. \
+			Notes can also carry `pressure`/`timbre` in add_notes/add_midi_clip; get_clip_notes \
+			shows them; export_midi { mpe } writes them (channel pressure and CC74). The built-in \
+			poly_synth and sampler open/move their filter with them, CLAP plugins get pressure \
+			and brightness note expressions; others ignore them. One undo step."
+	)]
+	fn set_note_expression(
+		&self,
+		Parameters(args): Parameters<clips::SetNoteExpressionArgs>,
+	) -> Result<Json<clips::SetNoteExpressionOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| clips::set_note_expression(s, args))?))
 	}
 
 	#[tool(

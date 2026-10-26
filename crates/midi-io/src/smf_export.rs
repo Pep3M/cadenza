@@ -280,6 +280,10 @@ pub struct MpeNote {
 	pub velocity: f32,
 	/// The note's pitch curve: (absolute tick, semitones from `pitch`), in time order.
 	pub curve: Vec<(Tick, f32)>,
+	/// Its pressure and timbre (absolute tick, 0..1), in time order; written as its member
+	/// channel's channel pressure and CC74.
+	pub pressure: Vec<(Tick, f32)>,
+	pub timbre: Vec<(Tick, f32)>,
 }
 
 /// Pitch-bend range of the member channels of an MPE export, semitones (the MPE default).
@@ -327,6 +331,10 @@ pub fn export_mpe(
 	for ch in 1..=MPE_MEMBERS {
 		rpn(&mut events, ch, 0, MPE_BEND_RANGE as u8);
 	}
+	// Once any note has a pressure (timbre) curve, every note starts with its value: member
+	// channels keep the last one they were sent.
+	let any_pressure = notes.iter().any(|n| !n.pressure.is_empty());
+	let any_timbre = notes.iter().any(|n| !n.timbre.is_empty());
 	let mut order: Vec<&MpeNote> = notes.iter().collect();
 	order.sort_by_key(|n| (n.start, n.pitch));
 	// Per member channel: (tick its last note ends, tick it was last given).
@@ -348,6 +356,28 @@ pub fn export_mpe(
 		let ch = c as u8 + 1;
 		let first = n.curve.first().map_or(0.0, |p| p.1);
 		events.push((start, ch, bend(first)));
+		let controls = [
+			(any_pressure, &n.pressure, Controller::ChannelPressure, 0.0),
+			(any_timbre, &n.timbre, Controller::Cc(74), 0.5),
+		];
+		for (used, curve, controller, resting) in controls {
+			if !used {
+				continue;
+			}
+			let held = curve
+				.iter()
+				.take_while(|p| p.0.0 <= start)
+				.last()
+				.map_or(resting, |p| p.1);
+			let control = |value: f32| RawEvent::Control {
+				controller,
+				value: value.clamp(0.0, 1.0),
+			};
+			events.push((start, ch, control(held)));
+			for &(tick, v) in curve.iter().filter(|p| p.0.0 > start && p.0.0 < end) {
+				events.push((tick.0, ch, control(v)));
+			}
+		}
 		let velocity = ((n.velocity * 127.0).round() as i32).clamp(1, 127) as u8;
 		events.push((
 			start,

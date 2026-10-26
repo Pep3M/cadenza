@@ -1,6 +1,6 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note bends in the project) NE-9i (drawing bends in the piano roll) and NE-9j (MPE import) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note bends in the project) NE-9i (drawing bends in the piano roll), NE-9j (MPE import) and NE-9k (per-note pressure and timbre) shipped** 2026-10-25: see the end of their sections. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -805,6 +805,28 @@ lanes (warning when the master's bend range is not the ±2 Cadenza plays). Every
 (MCP `import_midi`, the app's file drops) gets it. Tests: export_mpe -> import round trip (13
 notes, channel 10 as a member, curves back within 0.01 st, no lanes), layout of both zones +
 ranges, MCP project -> MPE file -> import_midi with the curve back.
+
+**Shipped (NE-9k, per-note pressure and timbre).** Model: `Note.pressure` / `Note.timbre:
+Vec<NoteValuePoint { tick, value 0..1 }>` (held steps like the bend, optional in JSON;
+`NoteExpression::{Pressure, Timbre}` resting at 0 / 0.5 (MPE's neutral CC74);
+`Note::{expression, expression_at, split_expression, scaled_expression}`; `NotePatch.pressure/
+timbre`; validation `InvalidNoteExpression`: 0..1, ticks increasing from 0, <= 4096). DSP:
+`MidiEvent::NoteExpression { offset, pitch, kind: NoteExpressionKind, value }` with the bend's
+freshness rule in `Expression` (`note_pressure`, `note_timbre`, `filter_semitones`: channel +
+key pressure open the filter up to 24 st, timbre moves it ±24 st around neutral) in
+`poly_synth` and `sampler` (bit-identical when unused); `electric_piano` has no filter and
+ignores them. Plugins: sandbox `EV_NOTE_PRESSURE`/`EV_NOTE_TIMBRE`; CLAP note ports get
+pressure (plus the channel's on expression-only ports) and brightness expressions, MIDI 1.0
+ports polyphonic key pressure (timbre has no MIDI 1.0 form); VST3 drops them. Engine:
+`MidiSchedule` keeps each note's bend, pressure and timbre runs (`NoteSpan.curves`), schedules
+and chases them (no-alloc covered). MPE: `export_mpe` writes them as the member channel's
+channel pressure and CC74 (every note starts with its value once any note uses them); the
+import reads them back (CC74 64 = 0.5 exactly). MCP: `pressure`/`timbre` on notes,
+`set_note_expression { kind, points }`, `get_clip_notes` shows them, the plain export warns.
+App: the note popover lists them with Clear; slicing splits them, stretching scales them.
+Tests: model, DSP (filter moves for that key only, next note neutral, fuzz), engine (darker
+alone, chased), CLAP expressions + poly pressure bytes, MPE round trips (midi-io and MCP).
+Not done: drawing pressure/timbre in the piano roll.
 - Polyphonic per-note editing after legal review / patent expiry.
 
 ## Order and dependencies

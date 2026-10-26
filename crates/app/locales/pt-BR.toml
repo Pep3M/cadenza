@@ -2330,3 +2330,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "Desenha sua curva de afinação (Shift: semitons inteiros)"
 "Double-click a note (bend tool)" = "Clique duplo em uma nota (ferramenta bend)"
 "Straighten its pitch curve" = "Endireita sua curva de afinação"
+"Timbre" = "Timbre"
+"Remove this note's own pressure curve" = "Remover a curva de pressão própria desta nota"
+"Remove this note's own timbre curve" = "Remover a curva de timbre própria desta nota"

@@ -191,7 +191,8 @@ pub enum ClipContent { Midi { notes: Vec<Note>, controllers: Vec<ControllerLane 
 	fade_in: Option<ClipFade>, fade_out: Option<ClipFade>, notes: Option<Box<NoteEdits>> /* NE-5, model::audio_notes */ } }
 pub struct ClipFade { seconds: f64, curve: FadeCurve /* linear (default) | equal_power | exponential | s_curve */ }
 pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /* relative to clip */, length: Tick,
-	bend: Vec<NoteBendPoint { tick /* from the note start */, semitones }> /* per-note bend (NE-9h), optional */ }
+	bend: Vec<NoteBendPoint { tick /* from the note start */, semitones }> /* per-note bend (NE-9h), optional */,
+	pressure, timbre: Vec<NoteValuePoint { tick, value /* 0..1 */ }> /* per-note expression (NE-9k), rest 0 / 0.5, optional */ }
 pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32,
 	shape: PointShape /* linear (default, omitted in JSON) | hold | smooth: segment to the next point */ }> }
 pub struct Marker { tick: Tick, name: String }
@@ -536,6 +537,10 @@ in JSON, `NotePatch.bend`, points past the end kept unplayed; `bend_at/split_ben
 `MidiSchedule` (chased); piano roll draws it + "Straighten", Bend tool (G) draws it freehand (NE-9i, `piano::draw_bend`); MCP `bend` on notes, `set_note_bend`, `export_midi { mpe }`.
 NE-9j MPE import: `midi_io::mpe_import` (MCM zones + RPN 0 ranges -> `ParsedMidiFile.mpe`; member-channel bends become `ParsedNote.bend`,
 notes move to the zone's master channel = one instrument, member events/config CCs leave the lanes) for every MIDI import.
+NE-9k per-note pressure/timbre: `Note.pressure/timbre` -> `MidiEvent::NoteExpression { kind: NoteExpressionKind }` (`Expression::
+filter_semitones`: poly_synth/sampler filter; sandbox EV_NOTE_PRESSURE/TIMBRE; CLAP pressure/brightness expressions, MIDI 1.0 poly
+pressure) from `MidiSchedule` (`NoteSpan.curves`, chased); MPE export/import as member channel pressure + CC74; MCP `pressure`/`timbre`
+on notes, `set_note_expression`; note popover Clear.
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

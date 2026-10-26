@@ -1587,6 +1587,8 @@ fn linked_paste_shares_note_edits_and_make_unique_splits_them() {
 					start: None,
 					length: None,
 					bend: None,
+					pressure: None,
+					timbre: None,
 				}],
 			})
 	);
@@ -1627,6 +1629,8 @@ fn linked_paste_shares_note_edits_and_make_unique_splits_them() {
 					start: None,
 					length: None,
 					bend: None,
+					pressure: None,
+					timbre: None,
 				}],
 			})
 	);

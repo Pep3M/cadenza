@@ -779,6 +779,8 @@ pub fn mpe_export(
 					.iter()
 					.map(|&(beat, v)| (Tick::from_beats(beat).max(start), v))
 					.collect(),
+				pressure: Vec::new(),
+				timbre: Vec::new(),
 			}
 		})
 		.collect();

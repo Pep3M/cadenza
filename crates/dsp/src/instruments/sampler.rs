@@ -580,7 +580,7 @@ impl Sampler {
 			let offset = v.filter_env.level() * p.get(P_FILTER_ENV_AMOUNT)
 				+ v.velocity * 48.0 * p.get(P_FILTER_VELOCITY) * 0.01
 				+ (v.pitch - 60.0) * p.get(P_FILTER_KEY_TRACK) * 0.01
-				+ self.expr.pressure * 24.0;
+				+ self.expr.filter_semitones(v.note);
 			let cutoff = p.get(P_FILTER_CUTOFF) * 2.0_f32.powf(offset / 12.0);
 			v.coeffs = SvfCoeffs::new(cutoff, p.get(P_FILTER_RESONANCE) * 0.01, self.sample_rate);
 		}

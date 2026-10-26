@@ -6,7 +6,7 @@
 //! [`ParsedMidiFile::other_events`].
 
 use cadenza_core::{Tick, TimeSignature};
-use cadenza_model::NoteBendPoint;
+use cadenza_model::{NoteBendPoint, NoteValuePoint};
 
 /// GM channel 10 (1-based), i.e. zero-based channel index 9.
 pub const GM_DRUM_CHANNEL: u8 = 9;
@@ -22,6 +22,9 @@ pub struct ParsedNote {
 	/// The note's own pitch curve (from its start), read from its MPE member channel's
 	/// pitch bend; empty outside MPE files.
 	pub bend: Vec<NoteBendPoint>,
+	/// Its own pressure and timbre (MPE: the member channel's channel pressure and CC74).
+	pub pressure: Vec<NoteValuePoint>,
+	pub timbre: Vec<NoteValuePoint>,
 }
 
 /// A non-note channel event. Controllers, pitch bend and channel pressure become clip

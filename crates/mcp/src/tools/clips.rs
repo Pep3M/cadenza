@@ -2,7 +2,10 @@
 
 use cadenza_core::Tick;
 use cadenza_core::{ClipId, NoteId, TrackId};
-use cadenza_model::{Clip, ClipPatch, Command, ModelError, Note, NoteBendPoint, NotePatch};
+use cadenza_model::{
+	Clip, ClipPatch, Command, ModelError, Note, NoteBendPoint, NoteExpression, NotePatch,
+	NoteValuePoint,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +28,24 @@ pub struct NoteInput {
 	/// built-in synths and CLAP plugins with note expressions.
 	#[serde(default)]
 	pub bend: Option<Vec<BendInput>>,
+	/// The note's own pressure, 0..1 (MPE pressure / polyphonic aftertouch: swells,
+	/// accents inside a held note), points joined by straight lines; none = 0. The
+	/// built-in synths open their filter with it.
+	#[serde(default)]
+	pub pressure: Option<Vec<ValueInput>>,
+	/// The note's own timbre, 0..1 (MPE CC74 "slide": brightness), points joined by straight
+	/// lines; none = 0.5 (neutral). The built-in synths move their filter with it.
+	#[serde(default)]
+	pub timbre: Option<Vec<ValueInput>>,
+}
+
+/// A point of a note's pressure or timbre curve.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+pub struct ValueInput {
+	/// Beats from the note's start.
+	pub at_beats: f64,
+	/// 0..1.
+	pub value: f32,
 }
 
 /// A point of a note's bend.
@@ -78,6 +99,67 @@ pub fn bend_points(points: &[BendInput]) -> Result<Vec<NoteBendPoint>, McpError>
 	Ok(out)
 }
 
+/// Pressure or timbre points joined by straight lines, as the model's held points (like
+/// [`bend_points`]); a curve that never leaves `kind`'s resting value is none.
+pub fn value_points(
+	points: &[ValueInput],
+	kind: NoteExpression,
+) -> Result<Vec<NoteValuePoint>, McpError> {
+	let mut sorted: Vec<ValueInput> = points.to_vec();
+	if sorted
+		.iter()
+		.any(|p| !(p.at_beats.is_finite() && p.at_beats >= 0.0 && (0.0..=1.0).contains(&p.value)))
+	{
+		return Err(McpError::Invalid(format!(
+			"{} points need at_beats >= 0 (from the note's start) and a value in 0..1",
+			kind.name()
+		)));
+	}
+	sorted.sort_by(|a, b| a.at_beats.total_cmp(&b.at_beats));
+	let mut out: Vec<NoteValuePoint> = Vec::new();
+	let mut push = |tick: Tick, value: f32| match out.last_mut() {
+		Some(last) if last.tick >= tick => last.value = value,
+		Some(last) if (last.value - value).abs() < 0.005 => {}
+		_ => out.push(NoteValuePoint { tick, value }),
+	};
+	for (i, p) in sorted.iter().enumerate() {
+		let tick = beats_to_tick(p.at_beats);
+		if let Some(prev) = i.checked_sub(1).map(|k| sorted[k]) {
+			let from = beats_to_tick(prev.at_beats);
+			let mut t = from.0 + BEND_STEP_TICKS;
+			while t < tick.0 {
+				let u = (t - from.0) as f32 / (tick.0 - from.0).max(1) as f32;
+				push(Tick(t), prev.value + u * (p.value - prev.value));
+				t += BEND_STEP_TICKS;
+			}
+		}
+		push(tick, p.value);
+	}
+	if out.iter().all(|p| p.value == kind.resting()) {
+		out.clear();
+	}
+	Ok(out)
+}
+
+/// A pressure or timbre curve's shape for reading: first and last points and every turn
+/// (at most 24).
+pub fn value_shape(points: &[NoteValuePoint]) -> Vec<ValueInput> {
+	let bend: Vec<NoteBendPoint> = points
+		.iter()
+		.map(|p| NoteBendPoint {
+			tick: p.tick,
+			semitones: p.value,
+		})
+		.collect();
+	bend_shape(&bend)
+		.into_iter()
+		.map(|b| ValueInput {
+			at_beats: b.at_beats,
+			value: b.semitones,
+		})
+		.collect()
+}
+
 /// A bend's shape for reading: its first and last points and every turn (at most 24).
 pub fn bend_shape(bend: &[NoteBendPoint]) -> Vec<BendInput> {
 	let mut keep: Vec<&NoteBendPoint> = Vec::new();
@@ -114,6 +196,12 @@ impl NoteInput {
 		);
 		if let Some(bend) = &self.bend {
 			note.bend = bend_points(bend)?;
+		}
+		if let Some(points) = &self.pressure {
+			note.pressure = value_points(points, NoteExpression::Pressure)?;
+		}
+		if let Some(points) = &self.timbre {
+			note.timbre = value_points(points, NoteExpression::Timbre)?;
 		}
 		Ok(note)
 	}
@@ -214,9 +302,55 @@ pub fn set_note_bend(
 			start: None,
 			length: None,
 			bend: Some(bend),
+			pressure: None,
+			timbre: None,
 		}],
 	})?;
 	Ok(SetNoteBendOutput { bend: shape })
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetNoteExpressionArgs {
+	pub clip_id: ClipId,
+	pub note_id: NoteId,
+	/// pressure (0..1, none = 0) or timbre (0..1, none = 0.5).
+	pub kind: NoteExpression,
+	/// The new curve (replaces the old one): points joined by straight lines, beats from the
+	/// note's start. Empty = none.
+	pub points: Vec<ValueInput>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SetNoteExpressionOutput {
+	/// The curve as stored, by its turns.
+	pub points: Vec<ValueInput>,
+}
+
+/// MCP `set_note_expression`: one note's own pressure or timbre curve, one undo step.
+pub fn set_note_expression(
+	session: &mut Session,
+	args: SetNoteExpressionArgs,
+) -> Result<SetNoteExpressionOutput, McpError> {
+	let points = value_points(&args.points, args.kind)?;
+	let shape = value_shape(&points);
+	let (pressure, timbre) = match args.kind {
+		NoteExpression::Pressure => (Some(points), None),
+		NoteExpression::Timbre => (None, Some(points)),
+	};
+	session.document_mut().execute(Command::UpdateNotes {
+		clip: args.clip_id,
+		notes: vec![NotePatch {
+			id: args.note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: None,
+			bend: None,
+			pressure,
+			timbre,
+		}],
+	})?;
+	Ok(SetNoteExpressionOutput { points: shape })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -308,6 +442,8 @@ pub fn transpose_notes(session: &mut Session, args: TransposeNotesArgs) -> Resul
 			start: None,
 			length: None,
 			bend: None,
+			pressure: None,
+			timbre: None,
 		});
 	}
 	session.document_mut().execute(Command::UpdateNotes {
@@ -347,6 +483,8 @@ pub fn quantize_notes(session: &mut Session, args: QuantizeNotesArgs) -> Result<
 			start: Some(beats_to_tick(new_start.max(0.0))),
 			length: None,
 			bend: None,
+			pressure: None,
+			timbre: None,
 		});
 	}
 	session.document_mut().execute(Command::UpdateNotes {
@@ -410,6 +548,8 @@ pub fn humanize_notes(session: &mut Session, args: HumanizeNotesArgs) -> Result<
 			start: Some(beats_to_tick(new_start)),
 			length: None,
 			bend: None,
+			pressure: None,
+			timbre: None,
 		});
 	}
 	session.document_mut().execute(Command::UpdateNotes {
@@ -583,6 +723,8 @@ mod tests {
 			length,
 			velocity: Some(0.8),
 			bend: None,
+			pressure: None,
+			timbre: None,
 		}
 	}
 

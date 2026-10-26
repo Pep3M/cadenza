@@ -133,6 +133,8 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 									start: Tick(start),
 									length: Tick((abs_tick - start).max(1)),
 									bend: Vec::new(),
+									pressure: Vec::new(),
+									timbre: Vec::new(),
 								}),
 								None => dropped_note_offs += 1,
 							}
@@ -215,6 +217,8 @@ pub fn parse_smf(bytes: &[u8]) -> Result<ParsedMidiFile> {
 					start: Tick(start),
 					length: Tick((abs_tick - start).max(1)),
 					bend: Vec::new(),
+					pressure: Vec::new(),
+					timbre: Vec::new(),
 				});
 				unterminated += 1;
 			}
@@ -530,6 +534,8 @@ pub fn build_import_command(
 						start: n.start,
 						length: n.length,
 						bend: n.bend.clone(),
+						pressure: n.pressure.clone(),
+						timbre: n.timbre.clone(),
 					})
 					.collect();
 				let clip = Clip {
@@ -578,6 +584,8 @@ pub fn build_import_command(
 					start: n.start,
 					length: n.length,
 					bend: n.bend.clone(),
+					pressure: n.pressure.clone(),
+					timbre: n.timbre.clone(),
 				})
 				.collect();
 			let all_events: Vec<ParsedOtherEvent> = parsed

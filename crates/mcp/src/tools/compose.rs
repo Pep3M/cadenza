@@ -412,6 +412,8 @@ pub fn snap_to_scale(session: &mut Session, args: SnapToScaleArgs) -> Result<(),
 				start: None,
 				length: None,
 				bend: None,
+				pressure: None,
+				timbre: None,
 			})
 		})
 		.collect();
@@ -591,6 +593,8 @@ mod tests {
 					length: 1.0,
 					velocity: Some(0.8),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				}],
 			},
 		)

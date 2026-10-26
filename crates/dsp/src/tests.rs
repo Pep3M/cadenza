@@ -149,6 +149,16 @@ fn survives_random_params_blocks_and_events() {
 							pitch,
 							semitones: rng.bipolar() * 60.0,
 						},
+						6 if rng.next_u32().is_multiple_of(2) => MidiEvent::NoteExpression {
+							offset,
+							pitch,
+							kind: if rng.next_u32().is_multiple_of(2) {
+								crate::NoteExpressionKind::Pressure
+							} else {
+								crate::NoteExpressionKind::Timbre
+							},
+							value: rng.bipolar() * 1.5,
+						},
 						_ => MidiEvent::AllNotesOff { offset },
 					});
 				}
@@ -515,6 +525,74 @@ fn a_note_bend_moves_only_its_own_key_and_the_next_note_starts_straight() {
 		let (again, _) = render(&mut *p, 4800, 256, &[on(57)]);
 		let straight = detect_pitch(&again[1200..], SR).unwrap();
 		assert!((straight / base - 1.0).abs() < 0.01, "{id}: {straight}");
+	}
+}
+
+#[test]
+fn a_notes_pressure_and_timbre_move_its_filter_and_the_next_note_starts_neutral() {
+	use crate::NoteExpressionKind::{Pressure, Timbre};
+	for id in ["poly_synth", "sampler"] {
+		// How much gets through a low-pass at 400 Hz (poly synth: the saw's high harmonics
+		// per unit of level) or 100 Hz (sampler: the level of its 220 Hz sine).
+		let brightness = |x: &[f32]| {
+			let level: f32 = x.iter().map(|v| v * v).sum();
+			if id == "sampler" {
+				return level;
+			}
+			let diff: f32 = x.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+			diff / level.max(1e-12)
+		};
+		let mut p = prepared(id, SR, 256);
+		let info = p.info();
+		if let Some(i) = info.param_index("filter_type") {
+			p.set_param(i, 1.0);
+		}
+		let cutoff = if id == "sampler" { 100.0 } else { 400.0 };
+		p.set_param(info.param_index("filter_cutoff").unwrap(), cutoff);
+		let on = MidiEvent::NoteOn {
+			offset: 0,
+			pitch: 57,
+			velocity: 1.0,
+		};
+		let expr = |kind, value| MidiEvent::NoteExpression {
+			offset: 0,
+			pitch: 57,
+			kind,
+			value,
+		};
+		let (plain, _) = render(&mut *p, 4800, 256, &[on]);
+		let base = brightness(&plain[2400..]);
+		p.reset();
+		let (pressed, _) = render(&mut *p, 4800, 256, &[expr(Pressure, 1.0), on]);
+		let open = brightness(&pressed[2400..]);
+		assert!(open > base * 1.5, "{id}: pressure {base} -> {open}");
+		p.reset();
+		let (dark, _) = render(&mut *p, 4800, 256, &[expr(Timbre, 0.0), on]);
+		let closed = brightness(&dark[2400..]);
+		assert!(closed < base / 1.5, "{id}: timbre {base} -> {closed}");
+		// Another key's expression leaves this one alone, and the next note on the key
+		// starts neutral.
+		let other = MidiEvent::NoteExpression {
+			offset: 0,
+			pitch: 70,
+			kind: Pressure,
+			value: 1.0,
+		};
+		render(
+			&mut *p,
+			48000,
+			256,
+			&[MidiEvent::NoteOff {
+				offset: 0,
+				pitch: 57,
+			}],
+		);
+		let (again, _) = render(&mut *p, 4800, 256, &[other, on]);
+		let neutral = brightness(&again[2400..]);
+		assert!(
+			(neutral / base - 1.0).abs() < 0.1,
+			"{id}: {base} vs {neutral}"
+		);
 	}
 }
 

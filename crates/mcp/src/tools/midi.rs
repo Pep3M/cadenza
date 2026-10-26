@@ -155,8 +155,8 @@ pub struct ExportMidiArgs {
 	/// Export only this MIDI clip (positioned at beat 0).
 	#[serde(default)]
 	pub clip_id: Option<ClipId>,
-	/// Write MPE: every note on its own channel with its own bend (notes with `bend` keep
-	/// it; for MPE synths in other programs). Needs track_id or clip_id.
+	/// Write MPE: every note on its own channel with its own bend, pressure and timbre
+	/// (channel pressure, CC74), for MPE synths in other programs. Needs track_id or clip_id.
 	#[serde(default)]
 	pub mpe: bool,
 }
@@ -190,7 +190,7 @@ pub fn export_midi(session: &Session, args: ExportMidiArgs) -> Result<ExportMidi
 	let bent = |clips: &mut dyn Iterator<Item = &cadenza_model::Clip>| -> usize {
 		clips
 			.flat_map(|c| c.notes().iter())
-			.filter(|n| !n.bend.is_empty())
+			.filter(|n| !(n.bend.is_empty() && n.pressure.is_empty() && n.timbre.is_empty()))
 			.count()
 	};
 	let bent = match (args.track_id, args.clip_id) {
@@ -201,8 +201,8 @@ pub fn export_midi(session: &Session, args: ExportMidiArgs) -> Result<ExportMidi
 	let warnings: Vec<String> = (bent > 0)
 		.then(|| {
 			format!(
-				"{bent} notes have their own bend, which plain MIDI cannot hold; export with mpe true \
-				 (and a track_id or clip_id) to keep it"
+				"{bent} notes have their own bend, pressure or timbre, which plain MIDI cannot hold; \
+				 export with mpe true (and a track_id or clip_id) to keep it"
 			)
 		})
 		.into_iter()
@@ -317,6 +317,18 @@ fn export_mpe_file(
 					.iter()
 					.filter(|p| p.tick < length)
 					.map(|p| (start + p.tick, p.semitones))
+					.collect(),
+				pressure: n
+					.pressure
+					.iter()
+					.filter(|p| p.tick < length)
+					.map(|p| (start + p.tick, p.value))
+					.collect(),
+				timbre: n
+					.timbre
+					.iter()
+					.filter(|p| p.tick < length)
+					.map(|p| (start + p.tick, p.value))
 					.collect(),
 			});
 		}

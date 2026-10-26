@@ -2329,3 +2329,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "Рисует её кривую высоты (Shift: целые полутоны)"
 "Double-click a note (bend tool)" = "Двойной щелчок по ноте (инструмент бенд)"
 "Straighten its pitch curve" = "Выпрямляет её кривую высоты"
+"Timbre" = "Тембр"
+"Remove this note's own pressure curve" = "Удалить собственную кривую давления этой ноты"
+"Remove this note's own timbre curve" = "Удалить собственную кривую тембра этой ноты"

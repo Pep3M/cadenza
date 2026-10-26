@@ -2328,3 +2328,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "ピッチカーブを描く (Shift: 半音単位)"
 "Double-click a note (bend tool)" = "ノートをダブルクリック (ベンドツール)"
 "Straighten its pitch curve" = "ピッチカーブをまっすぐに戻す"
+"Timbre" = "音色"
+"Remove this note's own pressure curve" = "このノート固有のプレッシャーカーブを削除"
+"Remove this note's own timbre curve" = "このノート固有の音色カーブを削除"

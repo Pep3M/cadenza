@@ -51,6 +51,8 @@ fn add_notes(session: &mut Session, track_id: cadenza_core::TrackId, velocity: f
 					length: 2.0,
 					velocity: Some(velocity),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 				clips::NoteInput {
 					pitch: PitchInput(64),
@@ -58,6 +60,8 @@ fn add_notes(session: &mut Session, track_id: cadenza_core::TrackId, velocity: f
 					length: 2.0,
 					velocity: Some(velocity),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 				clips::NoteInput {
 					pitch: PitchInput(67),
@@ -65,6 +69,8 @@ fn add_notes(session: &mut Session, track_id: cadenza_core::TrackId, velocity: f
 					length: 2.0,
 					velocity: Some(velocity),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 			],
 		},

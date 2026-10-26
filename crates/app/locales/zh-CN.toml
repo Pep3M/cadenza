@@ -2324,3 +2324,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "绘制其音高曲线（Shift：整半音）"
 "Double-click a note (bend tool)" = "双击音符（弯音工具）"
 "Straighten its pitch curve" = "拉直其音高曲线"
+"Timbre" = "音色"
+"Remove this note's own pressure curve" = "移除此音符自身的压力曲线"
+"Remove this note's own timbre curve" = "移除此音符自身的音色曲线"

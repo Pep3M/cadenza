@@ -241,6 +241,8 @@ fn midi_export_then_import_round_trips_and_undoes_in_one_step() {
 					length: 1.0,
 					velocity: Some(0.8),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				})
 				.collect(),
 		},

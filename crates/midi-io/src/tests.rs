@@ -294,6 +294,8 @@ fn round_trips_project_export_and_import() {
 						start: Tick::ZERO,
 						length: Tick(cadenza_core::PPQ),
 						bend: Vec::new(),
+						pressure: Vec::new(),
+						timbre: Vec::new(),
 					},
 					Note {
 						id: cadenza_core::NoteId::new(),
@@ -302,6 +304,8 @@ fn round_trips_project_export_and_import() {
 						start: Tick(cadenza_core::PPQ),
 						length: Tick(cadenza_core::PPQ),
 						bend: Vec::new(),
+						pressure: Vec::new(),
+						timbre: Vec::new(),
 					},
 				],
 				controllers: vec![
@@ -479,6 +483,8 @@ fn mpe_export_gives_each_note_its_channel_and_bend() {
 		pitch,
 		velocity: 0.8,
 		curve,
+		pressure: Vec::new(),
+		timbre: Vec::new(),
 	};
 	// A chord whose top note bends up a whole tone, then a note after it.
 	let notes = [
@@ -564,6 +570,7 @@ fn mpe_export_gives_each_note_its_channel_and_bend() {
 #[test]
 fn mpe_import_gives_notes_their_member_channel_bends() {
 	use crate::smf_export::{MpeNote, export_mpe};
+	use cadenza_model::NoteExpression;
 	// Twelve notes at once (member channel 10 is used: not a drum kit), the top one
 	// bending up a whole tone halfway, then a note that falls a semitone from its start.
 	let mut notes: Vec<MpeNote> = (0..12)
@@ -573,6 +580,8 @@ fn mpe_import_gives_notes_their_member_channel_bends() {
 			pitch: 48 + i,
 			velocity: 0.8,
 			curve: Vec::new(),
+			pressure: Vec::new(),
+			timbre: Vec::new(),
 		})
 		.collect();
 	notes[11].curve = vec![(Tick(0), 0.0), (Tick(480), 2.0)];
@@ -582,6 +591,8 @@ fn mpe_import_gives_notes_their_member_channel_bends() {
 		pitch: 62,
 		velocity: 0.8,
 		curve: vec![(Tick(960), -1.0)],
+		pressure: vec![(Tick(960), 0.25), (Tick(1440), 1.0)],
+		timbre: vec![(Tick(1200), 0.0)],
 	});
 	let out = export_mpe(
 		&notes,
@@ -640,6 +651,27 @@ fn mpe_import_gives_notes_their_member_channel_bends() {
 		clip.notes().iter().filter(|n| !n.bend.is_empty()).count() == 2,
 		"the others are straight"
 	);
+	// Its pressure and timbre came back too (7-bit values); the others have none.
+	let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+	let at = |kind, tick| later.expression_at(kind, Tick(tick));
+	assert!(
+		near(at(NoteExpression::Pressure, 0), 0.25),
+		"{:?}",
+		later.pressure
+	);
+	assert!(near(at(NoteExpression::Pressure, 480), 1.0));
+	assert!(near(at(NoteExpression::Timbre, 239), 0.5));
+	assert!(
+		near(at(NoteExpression::Timbre, 240), 0.0),
+		"{:?}",
+		later.timbre
+	);
+	let shaped = clip
+		.notes()
+		.iter()
+		.filter(|n| !n.pressure.is_empty() || !n.timbre.is_empty())
+		.count();
+	assert_eq!(shaped, 1);
 	// No configuration or member bends left as lanes.
 	let cadenza_model::ClipContent::Midi { controllers, .. } = &clip.content else {
 		panic!("midi");

@@ -304,6 +304,44 @@ pub(crate) fn note_bend(note: &Note) -> Result<(), ModelError> {
 		}
 		last = Some(p.tick);
 	}
+	for kind in crate::NoteExpression::ALL {
+		note_values(note, kind)?;
+	}
+	Ok(())
+}
+
+fn note_values(note: &Note, kind: crate::NoteExpression) -> Result<(), ModelError> {
+	let points = note.expression(kind);
+	let bad = |reason: String| ModelError::InvalidNoteExpression {
+		note: note.id,
+		kind: kind.name(),
+		reason,
+	};
+	if points.len() > crate::MAX_NOTE_BEND_POINTS {
+		return Err(bad(format!(
+			"{} points; at most {} (thin the curve)",
+			points.len(),
+			crate::MAX_NOTE_BEND_POINTS
+		)));
+	}
+	let mut last: Option<Tick> = None;
+	for p in points {
+		if p.tick < Tick::ZERO {
+			return Err(bad(format!(
+				"a point at tick {} is before the note; ticks count from its start (0)",
+				p.tick.0
+			)));
+		}
+		if last.is_some_and(|l| p.tick <= l) {
+			return Err(bad(
+				"points must be in increasing tick order, one per tick".into()
+			));
+		}
+		if !(p.value.is_finite() && (0.0..=1.0).contains(&p.value)) {
+			return Err(bad(format!("value {}; use 0..=1", p.value)));
+		}
+		last = Some(p.tick);
+	}
 	Ok(())
 }
 

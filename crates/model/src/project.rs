@@ -389,6 +389,14 @@ pub struct Note {
 	/// next, none = straight. Optional in JSON.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub bend: Vec<NoteBendPoint>,
+	/// The note's own pressure (MPE pressure / polyphonic aftertouch), 0..=1, held steps
+	/// from its start; none = 0. Optional in JSON.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub pressure: Vec<NoteValuePoint>,
+	/// The note's own timbre (MPE CC74 "slide": brightness), 0..=1, held steps from its
+	/// start; none = 0.5 (neutral). Optional in JSON.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub timbre: Vec<NoteValuePoint>,
 }
 
 /// A point of a [`Note::bend`].
@@ -400,7 +408,43 @@ pub struct NoteBendPoint {
 	pub semitones: f32,
 }
 
-/// Most points one note's bend may have.
+/// A point of a note's [`Note::pressure`] or [`Note::timbre`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteValuePoint {
+	/// From the note's start, increasing; points past the note's end are not played.
+	pub tick: Tick,
+	/// 0..=1.
+	pub value: f32,
+}
+
+/// A note's per-note expression curve besides its bend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteExpression {
+	Pressure,
+	Timbre,
+}
+
+impl NoteExpression {
+	pub const ALL: [NoteExpression; 2] = [NoteExpression::Pressure, NoteExpression::Timbre];
+
+	/// The value before the curve's first point (and of a note without one).
+	pub fn resting(self) -> f32 {
+		match self {
+			NoteExpression::Pressure => 0.0,
+			NoteExpression::Timbre => 0.5,
+		}
+	}
+
+	pub fn name(self) -> &'static str {
+		match self {
+			NoteExpression::Pressure => "pressure",
+			NoteExpression::Timbre => "timbre",
+		}
+	}
+}
+
+/// Most points one note's bend (or pressure, or timbre) curve may have.
 pub const MAX_NOTE_BEND_POINTS: usize = 4096;
 /// Largest bend either way, semitones.
 pub const MAX_NOTE_BEND: f32 = 48.0;
@@ -905,7 +949,78 @@ impl Note {
 			start,
 			length,
 			bend: Vec::new(),
+			pressure: Vec::new(),
+			timbre: Vec::new(),
 		}
+	}
+
+	/// The note's `kind` curve.
+	pub fn expression(&self, kind: NoteExpression) -> &[NoteValuePoint] {
+		match kind {
+			NoteExpression::Pressure => &self.pressure,
+			NoteExpression::Timbre => &self.timbre,
+		}
+	}
+
+	pub fn expression_mut(&mut self, kind: NoteExpression) -> &mut Vec<NoteValuePoint> {
+		match kind {
+			NoteExpression::Pressure => &mut self.pressure,
+			NoteExpression::Timbre => &mut self.timbre,
+		}
+	}
+
+	/// The `kind` value in effect `tick` after the note's start.
+	pub fn expression_at(&self, kind: NoteExpression, tick: Tick) -> f32 {
+		let points = self.expression(kind);
+		let i = points.partition_point(|p| p.tick <= tick);
+		if i == 0 {
+			kind.resting()
+		} else {
+			points[i - 1].value
+		}
+	}
+
+	/// Like [`Note::split_bend`] for the `kind` curve.
+	pub fn split_expression(
+		&self,
+		kind: NoteExpression,
+		at: Tick,
+	) -> (Vec<NoteValuePoint>, Vec<NoteValuePoint>) {
+		let points = self.expression(kind);
+		if points.is_empty() {
+			return (Vec::new(), Vec::new());
+		}
+		let left: Vec<NoteValuePoint> = points.iter().copied().filter(|p| p.tick < at).collect();
+		let mut right = vec![NoteValuePoint {
+			tick: Tick::ZERO,
+			value: self.expression_at(kind, at),
+		}];
+		right.extend(
+			points
+				.iter()
+				.filter(|p| p.tick > at)
+				.map(|p| NoteValuePoint {
+					tick: p.tick - at,
+					..*p
+				}),
+		);
+		if right.iter().all(|p| p.value == kind.resting()) {
+			right.clear();
+		}
+		(left, right)
+	}
+
+	/// Like [`Note::scaled_bend`] for the `kind` curve.
+	pub fn scaled_expression(&self, kind: NoteExpression, factor: f64) -> Vec<NoteValuePoint> {
+		let mut out: Vec<NoteValuePoint> = Vec::new();
+		for p in self.expression(kind) {
+			let tick = Tick((p.tick.0 as f64 * factor).round() as i64);
+			match out.last_mut() {
+				Some(last) if last.tick >= tick => last.value = p.value,
+				_ => out.push(NoteValuePoint { tick, ..*p }),
+			}
+		}
+		out
 	}
 
 	pub fn end(&self) -> Tick {

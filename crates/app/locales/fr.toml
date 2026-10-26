@@ -2330,3 +2330,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "Dessine sa courbe de hauteur (Maj : demi-tons entiers)"
 "Double-click a note (bend tool)" = "Double-clic sur une note (outil bend)"
 "Straighten its pitch curve" = "Redresse sa courbe de hauteur"
+"Timbre" = "Timbre"
+"Remove this note's own pressure curve" = "Retirer la courbe de pression propre à cette note"
+"Remove this note's own timbre curve" = "Retirer la courbe de timbre propre à cette note"

@@ -397,6 +397,8 @@ fn every_command_round_trips() {
 					start: Some(beats(3.5)),
 					length: None,
 					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 				NotePatch {
 					id: fx.riff_notes[1],
@@ -405,6 +407,8 @@ fn every_command_round_trips() {
 					start: None,
 					length: Some(beats(0.25)),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 			],
 		},
@@ -1114,6 +1118,8 @@ fn notes_and_clips_stay_sorted() {
 			start: Some(beats(0.5)),
 			length: None,
 			bend: None,
+			pressure: None,
+			timbre: None,
 		}],
 	})
 	.unwrap();
@@ -1312,6 +1318,8 @@ fn command_json_shape_is_stable() {
 					start: Tick(0),
 					length: Tick(PPQ),
 					bend: Vec::new(),
+					pressure: Vec::new(),
+					timbre: Vec::new(),
 				}],
 			},
 			json!({"op": "add_notes", "clip": t(3), "notes": [
@@ -2684,6 +2692,8 @@ fn linked_clips_share_note_and_controller_edits_in_one_undo_step() {
 			start: None,
 			length: None,
 			bend: None,
+			pressure: None,
+			timbre: None,
 		}],
 	})
 	.unwrap();
@@ -3212,6 +3222,8 @@ fn note_bends_validate_split_and_undo() {
 			start: None,
 			length: None,
 			bend: Some(bend),
+			pressure: None,
+			timbre: None,
 		}],
 	};
 	for bad in [
@@ -3235,6 +3247,8 @@ fn note_bends_validate_split_and_undo() {
 			start: None,
 			length: Some(beats(0.5)),
 			bend: None,
+			pressure: None,
+			timbre: None,
 		}],
 	})
 	.unwrap();
@@ -3248,4 +3262,93 @@ fn note_bends_validate_split_and_undo() {
 	assert_eq!(json["bend"][1]["semitones"], 2.0);
 	let straight = serde_json::to_value(Note::new(60, beats(0.0), beats(1.0), 0.8)).unwrap();
 	assert!(straight.get("bend").is_none());
+}
+
+#[test]
+fn note_pressure_and_timbre_validate_split_and_undo() {
+	use crate::{NoteExpression, NoteValuePoint};
+	let mut doc = Document::new(Project::new("Expression"));
+	let track = Track::new("Pad", TrackKind::Instrument);
+	let track_id = track.id;
+	doc.execute(Command::AddTrack { track, index: None })
+		.unwrap();
+	let point = |b: f64, value: f32| NoteValuePoint {
+		tick: beats(b),
+		value,
+	};
+	let mut note = Note::new(60, beats(0.0), beats(2.0), 0.8);
+	note.timbre = vec![point(1.0, 0.9)];
+	let note_id = note.id;
+	let clip = Clip::midi("Pad", beats(0.0), beats(4.0)).with_notes([note.clone()]);
+	let clip_id = clip.id;
+	doc.execute(Command::AddClip {
+		track: track_id,
+		clip,
+	})
+	.unwrap();
+	// Resting values before the first point: pressure 0, timbre 0.5.
+	assert_eq!(
+		note.expression_at(NoteExpression::Pressure, beats(1.5)),
+		0.0
+	);
+	assert_eq!(note.expression_at(NoteExpression::Timbre, beats(0.5)), 0.5);
+	assert_eq!(note.expression_at(NoteExpression::Timbre, beats(1.5)), 0.9);
+	// Split: the right part starts at the value in effect; a right part at rest is none.
+	let (left, right) = note.split_expression(NoteExpression::Timbre, beats(1.5));
+	assert_eq!(left, vec![point(1.0, 0.9)]);
+	assert_eq!(right, vec![point(0.0, 0.9)]);
+	assert_eq!(
+		note.split_expression(NoteExpression::Timbre, beats(0.5)).1,
+		vec![point(0.0, 0.5), point(0.5, 0.9)]
+	);
+	let mut early = note.clone();
+	early.timbre = vec![point(0.2, 0.5)];
+	assert!(
+		early
+			.split_expression(NoteExpression::Timbre, beats(1.0))
+			.1
+			.is_empty()
+	);
+	assert_eq!(
+		note.scaled_expression(NoteExpression::Timbre, 0.5),
+		vec![point(0.5, 0.9)]
+	);
+	let patch = |pressure: Vec<NoteValuePoint>| Command::UpdateNotes {
+		clip: clip_id,
+		notes: vec![NotePatch {
+			id: note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: None,
+			bend: None,
+			pressure: Some(pressure),
+			timbre: None,
+		}],
+	};
+	for bad in [
+		vec![point(0.0, 1.2)],
+		vec![point(1.0, 0.2), point(0.5, 0.3)],
+		vec![NoteValuePoint {
+			tick: Tick(-1),
+			value: 0.0,
+		}],
+	] {
+		let err = doc.execute(patch(bad)).unwrap_err();
+		assert!(err.to_string().contains("pressure curve"), "{err}");
+	}
+	doc.execute(patch(vec![point(0.5, 0.7)])).unwrap();
+	let stored = |doc: &Document| doc.project().find_clip(clip_id).unwrap().1.notes()[0].clone();
+	assert_eq!(stored(&doc).pressure, vec![point(0.5, 0.7)]);
+	assert_eq!(stored(&doc).timbre, vec![point(1.0, 0.9)], "untouched");
+	// JSON: present only when set.
+	let json = serde_json::to_string(&stored(&doc)).unwrap();
+	assert!(json.contains("\"pressure\"") && json.contains("\"timbre\""));
+	assert!(
+		!serde_json::to_string(&Note::new(60, beats(0.0), beats(1.0), 0.8))
+			.unwrap()
+			.contains("pressure")
+	);
+	doc.undo().unwrap();
+	assert!(stored(&doc).pressure.is_empty());
 }

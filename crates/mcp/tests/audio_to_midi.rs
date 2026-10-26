@@ -60,6 +60,8 @@ fn synth_line(session: &mut Session) -> TrackId {
 					length,
 					velocity: Some(0.8),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				})
 				.collect(),
 		},
@@ -270,6 +272,8 @@ async fn rendered_chords_come_back_as_chords() {
 						length: 1.9,
 						velocity: Some(0.8),
 						bend: None,
+						pressure: None,
+						timbre: None,
 					})
 				})
 				.collect(),
@@ -514,6 +518,8 @@ async fn a_rendered_808_line_comes_back_note_for_note() {
 					length,
 					velocity: Some(0.9),
 					bend: None,
+					pressure: None,
+					timbre: None,
 				})
 				.collect(),
 		},

@@ -884,6 +884,8 @@ impl PianoUi {
 						clip.id,
 						&Note {
 							bend: Vec::new(),
+							pressure: Vec::new(),
+							timbre: Vec::new(),
 							..n
 						},
 					) {
@@ -1501,6 +1503,30 @@ impl PianoUi {
 									.clicked()
 								{
 									n.bend.clear();
+									straighten = true;
+								}
+								ui.end_row();
+							}
+							// Its own pressure / timbre (MPE imports, the AI): shown and
+							// removable here.
+							for (curve, label, tip) in [
+								(
+									&mut n.pressure,
+									tr("Pressure"),
+									tr("Remove this note's own pressure curve"),
+								),
+								(
+									&mut n.timbre,
+									tr("Timbre"),
+									tr("Remove this note's own timbre curve"),
+								),
+							] {
+								if curve.is_empty() {
+									continue;
+								}
+								ui.label(label);
+								if ui.small_button(tr("Clear")).on_hover_text(tip).clicked() {
+									curve.clear();
 									straighten = true;
 								}
 								ui.end_row();

@@ -983,6 +983,11 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					start: patch.start.unwrap_or(old.start),
 					length: patch.length.unwrap_or(old.length),
 					bend: patch.bend.clone().unwrap_or_else(|| old.bend.clone()),
+					pressure: patch
+						.pressure
+						.clone()
+						.unwrap_or_else(|| old.pressure.clone()),
+					timbre: patch.timbre.clone().unwrap_or_else(|| old.timbre.clone()),
 				};
 				validate::note_within(c.id, span, &new)?;
 				inverse.push(NotePatch {
@@ -992,6 +997,8 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					start: patch.start.map(|_| old.start),
 					length: patch.length.map(|_| old.length),
 					bend: patch.bend.as_ref().map(|_| old.bend.clone()),
+					pressure: patch.pressure.as_ref().map(|_| old.pressure.clone()),
+					timbre: patch.timbre.as_ref().map(|_| old.timbre.clone()),
 				});
 				updated.push(new);
 			}

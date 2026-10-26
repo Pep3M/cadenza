@@ -2329,3 +2329,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "피치 곡선을 그립니다 (Shift: 반음 단위)"
 "Double-click a note (bend tool)" = "노트 더블클릭 (벤드 도구)"
 "Straighten its pitch curve" = "피치 곡선을 곧게 폅니다"
+"Timbre" = "음색"
+"Remove this note's own pressure curve" = "이 노트 고유의 프레셔 곡선을 제거합니다"
+"Remove this note's own timbre curve" = "이 노트 고유의 음색 곡선을 제거합니다"

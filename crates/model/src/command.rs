@@ -381,6 +381,12 @@ pub struct NotePatch {
 	/// Replaces the note's own bend (empty = straight).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub bend: Option<Vec<crate::NoteBendPoint>>,
+	/// Replaces the note's own pressure curve (empty = none).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pressure: Option<Vec<crate::NoteValuePoint>>,
+	/// Replaces the note's own timbre curve (empty = neutral).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub timbre: Option<Vec<crate::NoteValuePoint>>,
 }
 
 /// Distinguishes an explicit `null` (`Some(None)`) from an absent field (`None`).

@@ -27,7 +27,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use cadenza_dsp::{MidiEvent, Transport};
+use cadenza_dsp::{MidiEvent, NoteExpressionKind, Transport};
 
 pub(crate) const MAGIC: u32 = u32::from_le_bytes(*b"CDZS");
 pub(crate) const VERSION: u32 = 3;
@@ -75,6 +75,8 @@ const EV_CC: u32 = 4;
 const EV_BEND: u32 = 5;
 const EV_PRESSURE: u32 = 6;
 const EV_NOTE_BEND: u32 = 7;
+const EV_NOTE_PRESSURE: u32 = 8;
+const EV_NOTE_TIMBRE: u32 = 9;
 
 /// Upper bounds a child accepts from a header (the host never exceeds them).
 pub(crate) const MAX_CAPACITY: u32 = 1 << 16;
@@ -339,6 +341,20 @@ impl<'a> Block<'a> {
 					pitch,
 					semitones,
 				} => (EV_NOTE_BEND, offset, pitch, semitones),
+				MidiEvent::NoteExpression {
+					offset,
+					pitch,
+					kind,
+					value,
+				} => (
+					match kind {
+						NoteExpressionKind::Pressure => EV_NOTE_PRESSURE,
+						NoteExpressionKind::Timbre => EV_NOTE_TIMBRE,
+					},
+					offset,
+					pitch,
+					value,
+				),
 			};
 			self.store(w, kind);
 			self.store(w + 1, offset.saturating_sub(shift));
@@ -393,6 +409,16 @@ impl<'a> Block<'a> {
 					offset,
 					pitch,
 					semitones: finite(velocity).clamp(-48.0, 48.0),
+				},
+				kind @ (EV_NOTE_PRESSURE | EV_NOTE_TIMBRE) => MidiEvent::NoteExpression {
+					offset,
+					pitch,
+					kind: if kind == EV_NOTE_PRESSURE {
+						NoteExpressionKind::Pressure
+					} else {
+						NoteExpressionKind::Timbre
+					},
+					value: finite(velocity).clamp(0.0, 1.0),
 				},
 				_ => MidiEvent::NoteOff { offset, pitch: 0 },
 			};

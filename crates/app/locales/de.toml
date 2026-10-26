@@ -2328,3 +2328,6 @@
 "Draw its pitch curve (Shift: whole semitones)" = "Zeichnet ihre Tonhöhenkurve (Umschalt: ganze Halbtöne)"
 "Double-click a note (bend tool)" = "Doppelklick auf eine Note (Bend-Werkzeug)"
 "Straighten its pitch curve" = "Begradigt ihre Tonhöhenkurve"
+"Timbre" = "Klangfarbe"
+"Remove this note's own pressure curve" = "Die eigene Druckkurve dieser Note entfernen"
+"Remove this note's own timbre curve" = "Die eigene Klangfarbenkurve dieser Note entfernen"

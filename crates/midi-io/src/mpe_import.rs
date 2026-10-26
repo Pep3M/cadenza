@@ -1,13 +1,15 @@
 //! MPE (MIDI Polyphonic Expression) on import: a file whose MPE Configuration Message
 //! (RPN 6 on channel 1 or 16) announces a zone plays each note on a member channel of its
-//! own, bending it with that channel's pitch bend. Those bends become the notes' own curves
-//! (`Note.bend`), the notes move to the zone's master channel (one instrument, and a member
+//! own, bending it with that channel's pitch bend (and shaping it with its channel pressure
+//! and CC74 timbre). Those become the notes' own curves (`Note.bend`, `pressure`, `timbre`), the notes move to the zone's master channel (one instrument, and a member
 //! channel 10 is not a drum kit), and the member channels' events leave the lanes.
 
 use std::collections::BTreeMap;
 
 use cadenza_core::Tick;
-use cadenza_model::{MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, NoteBendPoint};
+use cadenza_model::{
+	MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, NoteBendPoint, NoteExpression, NoteValuePoint,
+};
 
 use crate::parsed::{MpeLayout, MpeZone, OtherEvent, ParsedMidiFile, ParsedOtherEvent};
 
@@ -15,6 +17,8 @@ use crate::parsed::{MpeLayout, MpeZone, OtherEvent, ParsedMidiFile, ParsedOtherE
 const MEMBER_RANGE: f32 = 48.0;
 /// Bend range of a master channel unless RPN 0 says otherwise (MPE default).
 const MASTER_RANGE: f32 = 2.0;
+/// MPE's per-note timbre ("slide") controller.
+const TIMBRE_CC: u8 = 74;
 /// The channel pitch-bend range Cadenza's instruments play.
 const PLAYED_RANGE: f32 = 2.0;
 
@@ -102,25 +106,54 @@ pub fn apply(parsed: &mut ParsedMidiFile) {
 		return;
 	};
 	let mut bent = 0usize;
+	let mut expressive = 0usize;
 	let mut notes = 0usize;
 	let mut dropped = 0usize;
 	let mut master_bends = false;
 	for track in &mut parsed.tracks {
-		// Each member channel's bends, in time order (normalized -1..1).
+		// Each member channel's bends (-1..1), pressure and timbre (0..1), in time order.
 		let mut bends: BTreeMap<u8, Vec<(Tick, f32)>> = BTreeMap::new();
+		let mut pressure: BTreeMap<u8, Vec<(Tick, f32)>> = BTreeMap::new();
+		let mut timbre: BTreeMap<u8, Vec<(Tick, f32)>> = BTreeMap::new();
 		for e in &track.other_events {
-			if let OtherEvent::PitchBend { channel, bend } = e.event
-				&& mpe.master_of(channel).is_some()
-			{
-				let v = if bend < 0 {
-					f32::from(bend) / 8192.0
-				} else {
-					f32::from(bend) / 8191.0
-				};
-				bends.entry(channel).or_default().push((e.tick, v));
+			let channel = e.event.channel();
+			if mpe.master_of(channel).is_none() {
+				continue;
+			}
+			match e.event {
+				OtherEvent::PitchBend { bend, .. } => {
+					let v = if bend < 0 {
+						f32::from(bend) / 8192.0
+					} else {
+						f32::from(bend) / 8191.0
+					};
+					bends.entry(channel).or_default().push((e.tick, v));
+				}
+				OtherEvent::ChannelPressure { value, .. } => pressure
+					.entry(channel)
+					.or_default()
+					.push((e.tick, f32::from(value.min(127)) / 127.0)),
+				OtherEvent::Controller {
+					controller: TIMBRE_CC,
+					value,
+					..
+				} => {
+					// 64 is MPE's neutral timbre: exactly the model's resting 0.5.
+					let v = if value == 64 {
+						0.5
+					} else {
+						f32::from(value.min(127)) / 127.0
+					};
+					timbre.entry(channel).or_default().push((e.tick, v))
+				}
+				_ => {}
 			}
 		}
-		for list in bends.values_mut() {
+		for list in bends
+			.values_mut()
+			.chain(pressure.values_mut())
+			.chain(timbre.values_mut())
+		{
 			list.sort_by_key(|(t, _)| *t);
 		}
 		for note in &mut track.notes {
@@ -129,10 +162,29 @@ pub fn apply(parsed: &mut ParsedMidiFile) {
 			};
 			notes += 1;
 			let range = mpe.bend_ranges[usize::from(note.channel)];
+			let (start, end) = (note.start, note.start + note.length);
 			if let Some(list) = bends.get(&note.channel) {
-				note.bend = note_curve(list, note.start, note.start + note.length, range);
+				note.bend = held_curve(list, start, end, 0.0, |v| {
+					(v * range).clamp(-MAX_NOTE_BEND, MAX_NOTE_BEND)
+				})
+				.into_iter()
+				.map(|(tick, semitones)| NoteBendPoint { tick, semitones })
+				.collect();
 				bent += usize::from(!note.bend.is_empty());
 			}
+			let values =
+				|list: Option<&Vec<(Tick, f32)>>, kind: NoteExpression| -> Vec<NoteValuePoint> {
+					list.map(|l| {
+						held_curve(l, start, end, kind.resting(), |v| v.clamp(0.0, 1.0))
+							.into_iter()
+							.map(|(tick, value)| NoteValuePoint { tick, value })
+							.collect()
+					})
+					.unwrap_or_default()
+				};
+			note.pressure = values(pressure.get(&note.channel), NoteExpression::Pressure);
+			note.timbre = values(timbre.get(&note.channel), NoteExpression::Timbre);
+			expressive += usize::from(!note.pressure.is_empty() || !note.timbre.is_empty());
 			note.channel = master;
 		}
 		track.notes.sort_by_key(|n| (n.start, n.pitch));
@@ -149,6 +201,11 @@ pub fn apply(parsed: &mut ParsedMidiFile) {
 					true
 				}
 				OtherEvent::ProgramChange { .. } => true,
+				OtherEvent::ChannelPressure { .. }
+				| OtherEvent::Controller {
+					controller: TIMBRE_CC,
+					..
+				} if member => false,
 				_ if member => {
 					dropped += 1;
 					false
@@ -164,11 +221,11 @@ pub fn apply(parsed: &mut ParsedMidiFile) {
 		}
 	}
 	parsed.warnings.push(format!(
-		"MPE file: {notes} note(s) on member channels imported on one instrument, {bent} with their own pitch curve"
+		"MPE file: {notes} note(s) on member channels imported on one instrument, {bent} with their own pitch curve, {expressive} with their own pressure or timbre"
 	));
 	if dropped > 0 {
 		parsed.warnings.push(format!(
-			"MPE: {dropped} per-note pressure/timbre/controller event(s) have no per-note lane in Cadenza and were dropped"
+			"MPE: {dropped} per-note controller event(s) (other than CC74 timbre) have no per-note lane in Cadenza and were dropped"
 		));
 	}
 	for z in &mpe.zones {
@@ -182,28 +239,32 @@ pub fn apply(parsed: &mut ParsedMidiFile) {
 	parsed.mpe = Some(mpe);
 }
 
-/// One note's curve from its member channel's bends: the value in effect at the note-on
-/// (bends sent at or before it), then every change before its end, as semitones.
-fn note_curve(bends: &[(Tick, f32)], start: Tick, end: Tick, range: f32) -> Vec<NoteBendPoint> {
-	let i = bends.partition_point(|(t, _)| *t <= start);
-	let at_start = if i == 0 { 0.0 } else { bends[i - 1].1 };
-	let mut held = 0.0f32;
-	let mut out = Vec::new();
-	let first = std::iter::once((start, at_start));
-	let inside = bends[i..].iter().copied().take_while(|(t, _)| *t < end);
-	for (t, v) in first.chain(inside) {
-		let semitones = (v * range).clamp(-MAX_NOTE_BEND, MAX_NOTE_BEND);
-		if (semitones - held).abs() <= 1e-3 {
+/// One note's curve from its member channel's events: the value in effect at the note-on
+/// (events sent at or before it), then every change before its end, as (ticks from the
+/// note's start, `map(value)`), dropping values that repeat the held one (`resting` before
+/// the first).
+fn held_curve(
+	events: &[(Tick, f32)],
+	start: Tick,
+	end: Tick,
+	resting: f32,
+	map: impl Fn(f32) -> f32,
+) -> Vec<(Tick, f32)> {
+	let i = events.partition_point(|(t, _)| *t <= start);
+	let first = (i > 0).then(|| (start, events[i - 1].1));
+	let inside = events[i..].iter().copied().take_while(|(t, _)| *t < end);
+	let mut held = resting;
+	let mut out: Vec<(Tick, f32)> = Vec::new();
+	for (t, v) in first.into_iter().chain(inside) {
+		let value = map(v);
+		if (value - held).abs() <= 1e-3 {
 			continue;
 		}
-		held = semitones;
+		held = value;
 		let tick = t - start;
 		match out.last_mut() {
-			Some(NoteBendPoint {
-				tick: last,
-				semitones: s,
-			}) if *last == tick => *s = semitones,
-			_ => out.push(NoteBendPoint { tick, semitones }),
+			Some((last, v)) if *last == tick => *v = value,
+			_ => out.push((tick, value)),
 		}
 		if out.len() == MAX_NOTE_BEND_POINTS {
 			break;

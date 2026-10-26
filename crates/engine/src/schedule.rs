@@ -7,9 +7,9 @@
 //! re-triggers them with a note-on at offset 0; their already-scheduled note-off still
 //! fires normally; so they sound for their remaining length instead of not at all.
 
-use cadenza_core::TempoMap;
-use cadenza_dsp::MidiEvent;
-use cadenza_model::{Clip, ClipContent, Controller};
+use cadenza_core::{TempoMap, Tick};
+use cadenza_dsp::{MidiEvent, NoteExpressionKind};
+use cadenza_model::{Clip, ClipContent, Controller, NoteExpression};
 
 use crate::QUANTUM;
 
@@ -26,6 +26,12 @@ pub(crate) enum EventKind {
 	NoteBend {
 		pitch: u8,
 		semitones: f32,
+	},
+	/// A note's own pressure or timbre, scheduled like its bend.
+	NoteExpression {
+		pitch: u8,
+		kind: NoteExpressionKind,
+		value: f32,
 	},
 	NoteOn {
 		pitch: u8,
@@ -73,7 +79,9 @@ impl ScheduledEvent {
 	fn sort_key(&self) -> (i64, u8, u8) {
 		match self.kind {
 			EventKind::NoteOff { pitch } => (self.sample, 0, pitch),
-			EventKind::Control { .. } | EventKind::NoteBend { .. } => (self.sample, 1, 0),
+			EventKind::Control { .. }
+			| EventKind::NoteBend { .. }
+			| EventKind::NoteExpression { .. } => (self.sample, 1, 0),
 			EventKind::NoteOn { pitch, .. } => (self.sample, 2, pitch),
 		}
 	}
@@ -87,8 +95,40 @@ struct NoteSpan {
 	end: i64,
 	pitch: u8,
 	velocity: f32,
-	/// Its bend points in [`MidiSchedule::bends`]: (first index, count).
-	bend: (u32, u32),
+	/// Its bend, pressure and timbre points in [`MidiSchedule::curves`]: (first index,
+	/// count) each.
+	curves: [(u32, u32); 3],
+}
+
+/// What each of a note's [`NoteSpan::curves`] runs is.
+const CURVE_KINDS: [Option<NoteExpressionKind>; 3] = [
+	None,
+	Some(NoteExpressionKind::Pressure),
+	Some(NoteExpressionKind::Timbre),
+];
+
+fn model_kind(kind: NoteExpressionKind) -> NoteExpression {
+	match kind {
+		NoteExpressionKind::Pressure => NoteExpression::Pressure,
+		NoteExpressionKind::Timbre => NoteExpression::Timbre,
+	}
+}
+
+/// The realtime event of a note curve's value (`kind` None = its bend).
+fn curve_event(kind: Option<NoteExpressionKind>, pitch: u8, value: f32, offset: u32) -> MidiEvent {
+	match kind {
+		None => MidiEvent::NoteBend {
+			offset,
+			pitch,
+			semitones: value,
+		},
+		Some(kind) => MidiEvent::NoteExpression {
+			offset,
+			pitch,
+			kind,
+			value,
+		},
+	}
 }
 
 #[derive(Debug, Default)]
@@ -99,8 +139,9 @@ pub(crate) struct MidiSchedule {
 	notes: Vec<NoteSpan>,
 	/// Controller values per controller, for chasing (sorted by controller).
 	controls: Vec<ControlLane>,
-	/// Every note's bend points (absolute sample, semitones), each note's run sorted.
-	bends: Vec<(i64, f32)>,
+	/// Every note's bend (semitones), pressure and timbre (0..1) points (absolute sample,
+	/// value), each note's run sorted.
+	curves: Vec<(i64, f32)>,
 }
 
 impl MidiSchedule {
@@ -108,7 +149,7 @@ impl MidiSchedule {
 		let mut events = Vec::new();
 		let mut spans = Vec::new();
 		let mut controls: Vec<ControlLane> = Vec::new();
-		let mut bends: Vec<(i64, f32)> = Vec::new();
+		let mut curves: Vec<(i64, f32)> = Vec::new();
 		for clip in clips.iter().filter(|c| c.sounds()) {
 			let ClipContent::Midi { notes, controllers } = &clip.content else {
 				continue;
@@ -175,24 +216,47 @@ impl MidiSchedule {
 				let off = (tempo.tick_to_sample(clip.start + end, sample_rate) as i64).max(on + 1);
 				let pitch = note.pitch.min(127);
 				let velocity = note.velocity.clamp(0.0, 1.0);
-				// The bend from the note-on (the value in effect there) to its end.
-				let first = bends.len() as u32;
+				// Each curve from the note-on (the value in effect there) to its end.
 				let played = end - note.start;
-				let start_bend = note.bend_at(cadenza_core::Tick::ZERO);
-				if !note.bend.is_empty() {
-					bends.push((on, start_bend));
-				}
-				for p in note.bend.iter().filter(|p| p.tick.0 > 0 && p.tick < played) {
-					let at = (tempo.tick_to_sample(clip.start + note.start + p.tick, sample_rate)
-						as i64)
-						.clamp(on, off - 1);
-					bends.push((at, p.semitones));
-				}
-				for &(sample, semitones) in &bends[first as usize..] {
-					events.push(ScheduledEvent {
-						sample,
-						kind: EventKind::NoteBend { pitch, semitones },
-					});
+				let mut runs = [(0u32, 0u32); 3];
+				for (run, kind) in runs.iter_mut().zip(CURVE_KINDS) {
+					let first = curves.len();
+					let points: Vec<(Tick, f32)> = match kind {
+						None => note.bend.iter().map(|p| (p.tick, p.semitones)).collect(),
+						Some(kind) => note
+							.expression(model_kind(kind))
+							.iter()
+							.map(|p| (p.tick, p.value))
+							.collect(),
+					};
+					if points.is_empty() {
+						*run = (first as u32, 0);
+						continue;
+					}
+					let at_start = match kind {
+						None => note.bend_at(Tick::ZERO),
+						Some(kind) => note.expression_at(model_kind(kind), Tick::ZERO),
+					};
+					curves.push((on, at_start));
+					for &(tick, value) in points.iter().filter(|p| p.0.0 > 0 && p.0 < played) {
+						let at = (tempo.tick_to_sample(clip.start + note.start + tick, sample_rate)
+							as i64)
+							.clamp(on, off - 1);
+						curves.push((at, value));
+					}
+					for &(sample, value) in &curves[first..] {
+						events.push(ScheduledEvent {
+							sample,
+							kind: match kind {
+								None => EventKind::NoteBend {
+									pitch,
+									semitones: value,
+								},
+								Some(kind) => EventKind::NoteExpression { pitch, kind, value },
+							},
+						});
+					}
+					*run = (first as u32, (curves.len() - first) as u32);
 				}
 				events.push(ScheduledEvent {
 					sample: on,
@@ -207,7 +271,7 @@ impl MidiSchedule {
 					end: off,
 					pitch,
 					velocity,
-					bend: (first, bends.len() as u32 - first),
+					curves: runs,
 				});
 			}
 		}
@@ -221,7 +285,7 @@ impl MidiSchedule {
 			cursor: 0,
 			notes: spans,
 			controls,
-			bends,
+			curves,
 		}
 	}
 
@@ -252,8 +316,13 @@ impl MidiSchedule {
 	/// Worst case of [`Self::chase`]'s output (controllers + notes sounding at once), so
 	/// its caller can size its buffer once.
 	pub fn max_chase_notes(&self) -> usize {
-		// A bent note is chased with its bend before its note-on.
-		let per_note = if self.bends.is_empty() { 1 } else { 2 };
+		// A note is chased with its curves' values before its note-on.
+		let per_note = 1 + self
+			.notes
+			.iter()
+			.map(|n| n.curves.iter().filter(|c| c.1 > 0).count())
+			.max()
+			.unwrap_or(0);
 		self.controls.len() + per_note * self.max_sounding()
 	}
 
@@ -300,18 +369,14 @@ impl MidiSchedule {
 				break;
 			}
 			if n.end > sample {
-				let (first, count) = (n.bend.0 as usize, n.bend.1 as usize);
-				if count > 0 {
-					let run = &self.bends[first..first + count];
-					let i = run.partition_point(|p| p.0 <= sample).max(1);
-					if out.len() == out.capacity() {
-						break;
+				for (&(first, count), kind) in n.curves.iter().zip(CURVE_KINDS) {
+					let (first, count) = (first as usize, count as usize);
+					if count == 0 || out.len() == out.capacity() {
+						continue;
 					}
-					out.push(MidiEvent::NoteBend {
-						offset,
-						pitch: n.pitch,
-						semitones: run[i - 1].1,
-					});
+					let run = &self.curves[first..first + count];
+					let i = run.partition_point(|p| p.0 <= sample).max(1);
+					out.push(curve_event(kind, n.pitch, run[i - 1].1, offset));
 				}
 				if out.len() == out.capacity() {
 					break;
@@ -389,6 +454,9 @@ impl MidiSchedule {
 					pitch,
 					semitones,
 				},
+				EventKind::NoteExpression { pitch, kind, value } => {
+					curve_event(Some(kind), pitch, value, offset)
+				}
 			});
 		}
 	}

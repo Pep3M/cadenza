@@ -216,11 +216,12 @@ fn piano_roll_draws_transposes_and_undoes_notes() {
 	h.run_steps(2);
 	assert_eq!(notes(&h).len(), before.len() + 1);
 
-	// F7 hides it again and gives the dock back to the mixer.
+	// F7 hides it again; the bottom dock is left empty (it never brings the mixer
+	// back on its own: the two never fight over the dock).
 	h.key_press(Key::F7);
 	h.run_steps(2);
 	assert!(!h.state().state.view.panels.visible(PanelKind::PianoRoll));
-	assert!(h.state().state.view.panels.visible(PanelKind::Mixer));
+	assert!(!h.state().state.view.panels.visible(PanelKind::Mixer));
 }
 
 /// The Keys clip of the example, emptied and refilled with C4, D4, E4 at beats 0, 1, 2

@@ -3975,9 +3975,7 @@ impl AppState {
 	/// The per-user layout/zoom preferences to persist.
 	pub fn prefs(&self) -> Prefs {
 		let v = &self.view;
-		let mut panels = v.panels.clone();
-		// The mixer only made room for the piano roll (which starts closed next time).
-		panels.mixer |= panels.mixer_yielded;
+		let panels = v.panels.clone();
 		Prefs {
 			panels,
 			px_per_beat: v.timeline.px_per_beat,
@@ -4015,10 +4013,13 @@ impl AppState {
 		v.panels = PanelLayout {
 			maximized: None,
 			focus: None,
-			mixer_yielded: false,
 			..p.panels
 		};
-		// The piano roll has nothing to show until a clip is opened.
+		// The piano roll has nothing to show until a clip is opened; the bottom dock
+		// (one of mixer / editor) falls back to the mixer when the editor held it.
+		if p.panels.piano_roll {
+			v.panels.mixer = true;
+		}
 		v.panels.piano_roll = false;
 		v.timeline.px_per_beat = p
 			.px_per_beat

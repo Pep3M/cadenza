@@ -91,9 +91,6 @@ pub struct PanelLayout {
 	/// Last panel the user interacted with: target of keyboard edits and of "maximize".
 	#[serde(skip)]
 	pub focus: Option<PanelKind>,
-	/// The piano roll took the bottom dock from the mixer: give it back on close.
-	#[serde(skip)]
-	pub mixer_yielded: bool,
 	/// The AI panel stays docked in windows narrower than `CHAT_DOCK_MIN` (the "Pin" of
 	/// its overlay drawer).
 	pub chat_pinned: bool,
@@ -116,7 +113,6 @@ impl Default for PanelLayout {
 			chat: false,
 			maximized: None,
 			focus: None,
-			mixer_yielded: false,
 			chat_pinned: false,
 			browser_overlay: false,
 		}
@@ -157,18 +153,23 @@ impl PanelLayout {
 
 	pub fn set(&mut self, panel: PanelKind, on: bool) {
 		self.maximized = None;
-		if panel == PanelKind::PianoRoll && !on && self.mixer_yielded {
-			self.mixer = true;
-			self.mixer_yielded = false;
-		}
-		if panel == PanelKind::Mixer {
-			self.mixer_yielded = false;
-		}
 		*self.flag(panel) = on;
 		if on {
 			self.focus = Some(panel);
+			self.exclude_other_bottom_dock(panel);
 		} else if self.focus == Some(panel) {
 			self.focus = None;
+		}
+	}
+
+	/// The bottom dock holds exactly one of the mixer / the editor (piano roll, audio
+	/// editor, docked device editor all share the piano roll slot): showing one closes
+	/// the other outright, it is never remembered or brought back.
+	fn exclude_other_bottom_dock(&mut self, shown: PanelKind) {
+		match shown {
+			PanelKind::Mixer => self.piano_roll = false,
+			PanelKind::PianoRoll => self.mixer = false,
+			_ => {}
 		}
 	}
 
@@ -184,16 +185,12 @@ impl PanelLayout {
 		self.set(panel, !visible);
 	}
 
-	/// Opens the piano roll in the bottom dock; a visible mixer makes room for it and
-	/// comes back when the piano roll is closed.
+	/// Opens the piano roll in the bottom dock, closing the mixer if it was shown there
+	/// (the bottom dock holds one at a time).
 	pub fn open_piano_roll(&mut self) {
 		if self.maximized == Some(PanelKind::PianoRoll) {
 			self.focus = Some(PanelKind::PianoRoll);
 			return;
-		}
-		if !self.piano_roll && self.mixer && self.maximized.is_none() {
-			self.mixer = false;
-			self.mixer_yielded = true;
 		}
 		self.set(PanelKind::PianoRoll, true);
 	}
@@ -223,6 +220,7 @@ impl PanelLayout {
 
 	fn maximize(&mut self, panel: PanelKind) {
 		*self.flag(panel) = true;
+		self.exclude_other_bottom_dock(panel);
 		self.maximized = Some(panel);
 		self.focus = Some(panel);
 	}
@@ -239,7 +237,6 @@ impl PanelLayout {
 		] {
 			*self.flag(p) = false;
 		}
-		self.mixer_yielded = false;
 		self.browser_overlay = false;
 		self.arrange = true;
 		self.focus = Some(PanelKind::Arrange);
@@ -1277,21 +1274,80 @@ mod tests {
 	}
 
 	#[test]
-	fn piano_roll_borrows_the_mixer_dock() {
+	fn bottom_dock_holds_only_the_mixer_or_the_editor() {
 		let mut l = PanelLayout::default();
+		// Default: mixer shown, editor (piano roll) closed.
+		assert!(l.visible(PanelKind::Mixer) && !l.visible(PanelKind::PianoRoll));
 		l.open_piano_roll();
 		assert!(l.visible(PanelKind::PianoRoll) && !l.visible(PanelKind::Mixer));
+		// Closing the editor leaves the dock empty: the mixer does NOT come back.
 		l.toggle(PanelKind::PianoRoll);
-		assert!(l.visible(PanelKind::Mixer), "mixer restored");
-		// Hidden mixer: stays hidden.
+		assert!(!l.visible(PanelKind::PianoRoll) && !l.visible(PanelKind::Mixer));
+		// Showing the mixer again, then opening the editor, closes the mixer outright.
 		l.toggle(PanelKind::Mixer);
+		assert!(l.visible(PanelKind::Mixer));
 		l.open_piano_roll();
-		l.set(PanelKind::PianoRoll, false);
-		assert!(!l.visible(PanelKind::Mixer));
-		// Without the arrange view the piano roll takes the center.
+		assert!(l.visible(PanelKind::PianoRoll) && !l.visible(PanelKind::Mixer));
+		// F9 while the editor is open shows the mixer and closes the editor outright.
+		l.toggle(PanelKind::Mixer);
+		assert!(l.visible(PanelKind::Mixer) && !l.visible(PanelKind::PianoRoll));
+		// Closing the mixer leaves the dock empty too (no editor reappears).
+		l.toggle(PanelKind::Mixer);
+		assert!(!l.visible(PanelKind::Mixer) && !l.visible(PanelKind::PianoRoll));
+		// Without the arrange view the editor still takes the center.
 		l.open_piano_roll();
 		l.toggle(PanelKind::Arrange);
 		assert_eq!(l.center(), Some(PanelKind::PianoRoll));
+	}
+
+	#[test]
+	fn maximizing_one_bottom_dock_panel_keeps_the_invariant_on_restore() {
+		// Maximizing the mixer while the editor was shown (a stray caller that sets the
+		// flag directly, bypassing `set`) must not leave both shown once restored.
+		let mut l = PanelLayout::default();
+		l.open_piano_roll();
+		l.toggle_maximize_panel(PanelKind::Mixer);
+		assert_eq!(l.maximized, Some(PanelKind::Mixer));
+		assert!(l.shown(PanelKind::Mixer) && !l.shown(PanelKind::PianoRoll));
+		l.toggle_maximize_panel(PanelKind::Mixer);
+		assert!(l.visible(PanelKind::Mixer) && !l.visible(PanelKind::PianoRoll));
+	}
+
+	#[test]
+	fn f11_restores_the_exact_previous_layout_regardless_of_focus() {
+		let mut l = PanelLayout::default();
+		l.toggle(PanelKind::Inspector);
+		l.toggle(PanelKind::Chat);
+		l.open_piano_roll();
+		let before = l.clone();
+		l.toggle_maximize();
+		assert_eq!(l.maximized, Some(PanelKind::PianoRoll));
+		// Whatever panel ends up focused while maximized (any stray write to `focus`,
+		// not just the one that was maximized) must not change what a second F11
+		// restores: restoring only ever clears `maximized`.
+		l.focus = Some(PanelKind::Inspector);
+		l.toggle_maximize();
+		assert_eq!(l.maximized, None);
+		assert_eq!(l.arrange, before.arrange);
+		assert_eq!(l.browser, before.browser);
+		assert_eq!(l.piano_roll, before.piano_roll);
+		assert_eq!(l.inspector, before.inspector);
+		assert_eq!(l.mixer, before.mixer);
+		assert_eq!(l.chat, before.chat);
+
+		// Maximizing a different panel than the one currently focused (the toolbar
+		// button, `toggle_maximize_panel`) restores just as completely.
+		let mut l = before.clone();
+		l.focus = Some(PanelKind::Chat);
+		l.toggle_maximize_panel(PanelKind::Inspector);
+		assert_eq!(l.maximized, Some(PanelKind::Inspector));
+		l.focus = Some(PanelKind::Browser);
+		l.toggle_maximize_panel(PanelKind::Inspector);
+		assert_eq!(l.maximized, None);
+		assert_eq!(l.arrange, before.arrange);
+		assert_eq!(l.piano_roll, before.piano_roll);
+		assert_eq!(l.mixer, before.mixer);
+		assert_eq!(l.chat, before.chat);
 	}
 
 	#[test]

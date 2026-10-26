@@ -131,10 +131,19 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   module. Panels (`state::layout::PanelLayout`, FL Studio-like keys): F5 arrange, F6 / Alt+F8
   browser, F7 piano roll, F8 inspector, F9 mixer, F11 / Ctrl+Enter maximize the focused panel
   (last one clicked), F12 close tool panels, F1 shortcut overlay (`layout::SHORTCUTS` is the
-  single shortcut table; View menu shows checkmarks + keys). The piano roll docks at the bottom
-  (borrowing the mixer's place, given back on close); with the arrange hidden it takes the
+  single shortcut table; View menu shows checkmarks + keys). F11 maximizes the focused panel
+  (any panel, by flags kept but hidden) and a second F11 restores the exact previous layout —
+  which panels were shown and which of the mixer / editor held the bottom dock — regardless of
+  what is focused by then (`PanelLayout::toggle_maximize`/`toggle_maximize_panel` just clear
+  `maximized`, they never look at `focus` to decide what to bring back). The bottom dock holds
+  exactly one of the mixer or the editor (piano roll / audio editor / a docked device editor,
+  all sharing the `PianoRoll` slot): showing one closes the other outright
+  (`PanelLayout::exclude_other_bottom_dock`, from `set`/`open_piano_roll`/`maximize`), closing
+  the one shown leaves the dock empty — it is never remembered or brought back on its own, so
+  the two never fight over the space; with the arrange hidden the editor still takes the
   center. Layout, zooms, snap, follow mode, scale, bookmarks persist per user in eframe storage
-  (`layout::Prefs`, key `cadenza-prefs`; panel sizes via egui memory).
+  (`layout::Prefs`, key `cadenza-prefs`; panel sizes via egui memory; a saved layout with the
+  editor holding the dock falls back to the mixer on load, since the piano roll starts closed).
   Responsive shell (design 12, pure `layout::Responsive::for_window(w, h, chat_pinned)` in
   `view.responsive`, set every frame): below 1600 px the browser is a 40 px icon rail (an icon /
   F6 opens it as an overlay, `PanelLayout.browser_overlay`, closed by Esc, a press on the

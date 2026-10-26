@@ -434,13 +434,17 @@ fn prefs_restore_layout_and_zoom() {
 	s.view.panels.open_piano_roll();
 	let prefs = s.prefs();
 	assert!(
-		prefs.panels.mixer,
-		"the mixer only yielded to the piano roll"
+		prefs.panels.piano_roll && !prefs.panels.mixer,
+		"the editor held the bottom dock, closing the mixer"
 	);
 	let mut t = AppState::headless();
 	t.apply_prefs(prefs);
 	assert!(t.view.panels.inspector, "shown again (hidden by default)");
 	assert!(!t.view.panels.piano_roll, "no clip to show yet");
+	assert!(
+		t.view.panels.mixer,
+		"the bottom dock falls back to the mixer once the editor is gone"
+	);
 	assert_eq!(t.view.timeline.px_per_beat, 40.0);
 	assert_eq!(t.view.follow, FollowMode::Continuous);
 	assert_eq!(t.view.piano.scale, s.view.piano.scale);

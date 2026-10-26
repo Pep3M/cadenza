@@ -1,6 +1,6 @@
 # Maintainer: Pep3 Marquez <pp.marquez16@gmail.com>
 pkgname=cadenza-bin
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="Open-source DAW and audio editor with an AI arranger and sound engineer"
 arch=('x86_64')
@@ -19,7 +19,7 @@ provides=('cadenza')
 conflicts=('cadenza')
 options=('!strip' '!debug')
 source=("$url/releases/download/v$pkgver/cadenza-$pkgver-linux-x86_64.tar.gz")
-sha256sums=('ce0600b04e6aadc8b4fccc34c448a72950b32a1ea5f800007e0769e2ab0e761e')
+sha256sums=('b23148281b6d89a8916a627c850b98f713e462f2b06e3ce35c0e569ceefaf797')
 
 package() {
 	cd "cadenza-$pkgver-linux-x86_64"
@@ -29,7 +29,7 @@ package() {
 	for bin in cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner; do
 		install -Dm755 "$bin" "$pkgdir/opt/cadenza/$bin"
 	done
-	# Factory drum kits (releases after 0.2.0).
+	# Factory drum kits.
 	if [ -d samples ]; then cp -R samples "$pkgdir/opt/cadenza/samples"; fi
 	ln -s /opt/cadenza/cadenza "$pkgdir/usr/bin/cadenza"
 	ln -s /opt/cadenza/cadenza-app "$pkgdir/usr/bin/cadenza-app"

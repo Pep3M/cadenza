@@ -1,6 +1,6 @@
 pkgbase = cadenza-bin
 	pkgdesc = Open-source DAW and audio editor with an AI arranger and sound engineer
-	pkgver = 0.1.1
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/Pep3M/cadenza
 	arch = x86_64
@@ -22,7 +22,7 @@ pkgbase = cadenza-bin
 	conflicts = cadenza
 	options = !strip
 	options = !debug
-	source = https://github.com/Pep3M/cadenza/releases/download/v0.1.1/cadenza-0.1.1-linux-x86_64.tar.gz
-	sha256sums = ab02f8d5f8f4417d6f887967338ab758e798ae7f9407af9cb70fad69ddf682ad
+	source = https://github.com/Pep3M/cadenza/releases/download/v0.3.0/cadenza-0.3.0-linux-x86_64.tar.gz
+	sha256sums = b23148281b6d89a8916a627c850b98f713e462f2b06e3ce35c0e569ceefaf797
 
 pkgname = cadenza-bin

@@ -51,6 +51,7 @@ exceptions = [
 	{ crate = "cadenza-mcp", allow = ["GPL-3.0-or-later"] },
 	{ crate = "cadenza-midi-io", allow = ["GPL-3.0-or-later"] },
 	{ crate = "cadenza-model", allow = ["GPL-3.0-or-later"] },
+	{ crate = "cadenza-notes", allow = ["GPL-3.0-or-later"] },
 	{ crate = "cadenza-plugin-host", allow = ["GPL-3.0-or-later"] },
 	{ crate = "cadenza-test-plugins", allow = ["GPL-3.0-or-later"] },
 	{ crate = "cadenza-theory", allow = ["GPL-3.0-or-later"] },

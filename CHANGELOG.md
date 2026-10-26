@@ -49,6 +49,11 @@ per-note expression (MPE) in MIDI clips, and genre libraries of synth presets an
 - Packages ship the bundled drum samples (`samples/`) and the Basic Pitch license
   (`LICENSE-basic-pitch`, Apache-2.0).
 
+### Fixed
+
+- Security: `ctutils` 0.4.6 (RUSTSEC-2026-0385), `tokio` 1.54.1 (RUSTSEC-2026-0386);
+  `clipboard-win` 5.4.3 (the previous release was yanked).
+
 ### Compatibility
 
 - Projects from 0.2 open and sound the same: the new note, clip and device fields are

@@ -633,7 +633,10 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   monitor_button`: click on/off, orange when on, Auto = dimmer outlined speaker with an "A",
   right-click Off/Auto/On), input level as a thin vertical meter on the header's left edge
   next to the color strip. Transport: red record button (Ctrl+R start/stop; R = record mode,
-  Play records the armed tracks, nothing armed = plays). Toggling record while playing never
+  Play records the armed tracks, nothing armed = plays); clicking the button (or Ctrl+R) while
+  record mode is on and nothing is recording turns the mode off instead of starting a recording
+  (`state::record::record_button_action`; the button dims to an outline while armed-but-idle,
+  filled and ringed only while actually recording). Toggling record while playing never
   stops the transport: off = stop capturing (`Player::end_recording`), on = punch in on the
   fly from the playhead (no count-in, no relocate; `Player::start_recording` while playing
   skips the count-in). The metronome toggle switches the click for playing and recording

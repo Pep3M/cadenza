@@ -358,6 +358,10 @@ Recording (phase 16; `engine::input`, `engine::metronome`, `engine::record`):
   (`RecordedPass { tag, file_start, frames, wrapped_at }`), publishes peaks per 256 frames + MIDI
   for live drawing. `request_stop_recording()` + `finish_recording(timeout)` (or `stop_recording()`)
   -> `Recording { passes, audio files, midi items, latency, midi_latency, dropouts, warnings }`.
+  If the audio thread cannot be reached (its command queue is full) or never hands the tap back
+  within `timeout`, the recording is abandoned (`self.recording` cleared, the writer's
+  `JoinHandle` detached rather than joined when its tap never came back) so the player stays
+  usable: a later `start_recording` is not refused as "already recording".
 - Latency compensation: a frame heard-tagged `t` was captured `L` frames earlier, `L` = measured
   capture -> playback delay (cpal capture/playback timestamps; without them the average ring
   backlog) + `set_latency_offset(frames)` (user, from the settings in ms). `record_commands(

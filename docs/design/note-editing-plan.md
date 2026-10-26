@@ -1,6 +1,13 @@
 # Note editing: plan (audio tuning, audio-to-MIDI)
 
-Status: plan (2026-10-24). **NE-0 to NE-8 shipped** (2026-10-24/25, branch `feat/note-editing`), **NE-9a (live pitch correction), NE-9b (local re-renders), NE-9c (poly cache), NE-9d (hear while dragging), NE-9e (MIDI-guided Pitch Correct), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note bends in the project) NE-9i (drawing bends in the piano roll), NE-9j (MPE import) and NE-9k (per-note pressure and timbre) shipped** 2026-10-25: see the end of their sections. Research and sources:
+Status: **complete** (closed 2026-10-25, branch `feat/note-editing`). NE-0 to NE-8 shipped
+2026-10-24/25; from "NE-9 — Later": the live tuner (NE-9a, + MIDI-guided NE-9e), realtime
+rendering of edits replaced by local re-renders (NE-9b), and the extensions NE-9c (poly cache),
+NE-9d (hear while dragging), NE-9f (pitched percussion), NE-9g (MPE export), NE-9h (per-note
+bends in the project), NE-9i (drawing bends), NE-9j (MPE import), NE-9k (per-note pressure and
+timbre) and NE-9l (drawing them). Not done by decision: the learned boundary model (no new ML
+models for now), polyphonic per-note audio editing (patent-gated). What is left is listed under
+"Closing" at the end. Research and sources:
 `docs/design/note-editing-research.md` (referred to as "research §n").
 
 Separate roadmap from the main phases and from SL-n: steps are **NE-0 … NE-9**.
@@ -826,7 +833,18 @@ import reads them back (CC74 64 = 0.5 exactly). MCP: `pressure`/`timbre` on note
 App: the note popover lists them with Clear; slicing splits them, stretching scales them.
 Tests: model, DSP (filter moves for that key only, next note neutral, fuzz), engine (darker
 alone, chased), CLAP expressions + poly pressure bytes, MPE round trips (midi-io and MCP).
-Not done: drawing pressure/timbre in the piano roll.
+
+**Shipped (NE-9l, drawing pressure and timbre).** Piano roll event lanes "Note pressure" and
+"Note timbre" (`EventLane::Note(NoteExpression)`; in the "+ CC" menu, tabs once the clip has
+such curves): every note's curve drawn over its own span (0..1 bottom to top), the selected
+notes and the note under the pointer in the track colour on a soft band. Dragging draws the
+curve of the note there (`piano::expression_target`: a selected note sounding there, else the
+highest — a chord's top voice), straight lines between samples on 1/64-beat cells, the old curve
+kept before the stroke and resumed after it (`piano::draw_expression`, sharing `draw_curve` with
+the bend tool); right-click clears it; one step "Note pressure" / "Note timbre"
+(`piano::set_note_expression`). The left column shows the value under the playhead. Tests:
+builders (target choice, swell, resting timbre is no curve, clamping, clear), UI (a swell drawn
+on one note of three, right-click clears), screenshot `piano_roll_note_pressure`.
 - Polyphonic per-note editing after legal review / patent expiry.
 
 ## Order and dependencies
@@ -843,3 +861,19 @@ NE-1 infra + tract). First user-visible value: NE-3 (audio/hum-to-MIDI); first t
 | Model size / CPU | SwiftF0 ~14k params, Basic Pitch ~17k: tiny; DSP fallback always works |
 | Patent exposure | polyphonic editing gated; DNA's combination not reproduced; legal review before NE-9 poly |
 | Render latency while editing | local quick render for the touched note; background full render; splice by range |
+
+## Closing (2026-10-25)
+
+Every planned step shipped or was replaced (NE-9b for the streaming engine path); the
+learned boundary model was dropped (no new models for now) and polyphonic per-note audio
+editing stays patent-gated. Open, none blocking:
+
+- Real-voice evidence: only one expert session is labeled (`tests/data/expert_take.json`);
+  the segmentation thresholds were fitted on it, and nobody has listened to the resynthesis
+  on real takes. More expert sessions + a listening pass are the most valuable next input.
+- Small "Not done" items in the sections above: all loop passes of a hum take, per-note fades
+  and attack-speed edits in the resynthesis, kick + 808 on one track, a stereo / polyphonic
+  live tuner mode, VST3 note expressions (VST3 hosts drop per-note bend/pressure/timbre).
+- Models (when allowed again): a piano-specific transcription model, a learned boundary
+  model, SwiftF0 once tract can type its graph.
+

@@ -2327,3 +2327,8 @@
 "Timbre" = "音色"
 "Remove this note's own pressure curve" = "移除此音符自身的压力曲线"
 "Remove this note's own timbre curve" = "移除此音符自身的音色曲线"
+"Note pressure" = "音符压力"
+"Note timbre" = "音符音色"
+"Each note's own curve (MPE-style), drawn over the note" = "每个音符自身的曲线（MPE 风格），绘制在音符上方"
+"Drag = draw the curve of the note there (selected first) · right-click = clear it" = "拖动 = 绘制该处音符的曲线（优先选中的音符）· 右键 = 清除"
+"No note here" = "此处没有音符"

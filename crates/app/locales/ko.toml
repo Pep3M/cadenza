@@ -2332,3 +2332,8 @@
 "Timbre" = "음색"
 "Remove this note's own pressure curve" = "이 노트 고유의 프레셔 곡선을 제거합니다"
 "Remove this note's own timbre curve" = "이 노트 고유의 음색 곡선을 제거합니다"
+"Note pressure" = "노트 프레셔"
+"Note timbre" = "노트 음색"
+"Each note's own curve (MPE-style), drawn over the note" = "각 노트 고유의 곡선 (MPE 방식), 노트 위에 그려집니다"
+"Drag = draw the curve of the note there (selected first) · right-click = clear it" = "드래그 = 그 위치 노트의 곡선을 그립니다 (선택한 노트 우선) · 우클릭 = 지우기"
+"No note here" = "여기에 노트가 없습니다"

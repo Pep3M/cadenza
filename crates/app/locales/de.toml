@@ -2331,3 +2331,8 @@
 "Timbre" = "Klangfarbe"
 "Remove this note's own pressure curve" = "Die eigene Druckkurve dieser Note entfernen"
 "Remove this note's own timbre curve" = "Die eigene Klangfarbenkurve dieser Note entfernen"
+"Note pressure" = "Notendruck"
+"Note timbre" = "Notenklangfarbe"
+"Each note's own curve (MPE-style), drawn over the note" = "Die eigene Kurve jeder Note (MPE-artig), über der Note gezeichnet"
+"Drag = draw the curve of the note there (selected first) · right-click = clear it" = "Ziehen = zeichnet die Kurve der Note dort (ausgewählte zuerst) · Rechtsklick = löscht sie"
+"No note here" = "Hier ist keine Note"

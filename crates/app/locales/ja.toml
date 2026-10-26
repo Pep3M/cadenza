@@ -2331,3 +2331,8 @@
 "Timbre" = "音色"
 "Remove this note's own pressure curve" = "このノート固有のプレッシャーカーブを削除"
 "Remove this note's own timbre curve" = "このノート固有の音色カーブを削除"
+"Note pressure" = "ノートのプレッシャー"
+"Note timbre" = "ノートの音色"
+"Each note's own curve (MPE-style), drawn over the note" = "各ノート固有のカーブ (MPE 方式)、ノートの上に描画"
+"Drag = draw the curve of the note there (selected first) · right-click = clear it" = "ドラッグ = そこにあるノートのカーブを描く (選択中のノートを優先) · 右クリック = 消去"
+"No note here" = "ここにノートはありません"

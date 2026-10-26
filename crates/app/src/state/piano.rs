@@ -19,7 +19,7 @@ use cadenza_model::{
 	Clip, ClipPatch, Command, Note, NoteExpression, NotePatch, Project, TrackKind,
 };
 use cadenza_model::{
-	Controller, ControllerPoint, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, NoteBendPoint,
+	Controller, ControllerPoint, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, NoteBendPoint, NoteValuePoint,
 };
 use cadenza_theory::{Scale, ScaleKind};
 use serde::{Deserialize, Serialize};
@@ -741,12 +741,16 @@ pub enum EventLane {
 	#[default]
 	Velocity,
 	Controller(Controller),
+	/// Each note's own pressure or timbre curve (NE-9k), drawn over its span.
+	Note(NoteExpression),
 }
 
 impl EventLane {
 	/// The lanes offered first in the selector (any CC# can be typed too).
-	pub const COMMON: [EventLane; 8] = [
+	pub const COMMON: [EventLane; 10] = [
 		EventLane::Velocity,
+		EventLane::Note(NoteExpression::Pressure),
+		EventLane::Note(NoteExpression::Timbre),
 		EventLane::Controller(Controller::Cc(1)),
 		EventLane::Controller(Controller::Cc(11)),
 		EventLane::Controller(Controller::Cc(64)),
@@ -761,6 +765,8 @@ impl EventLane {
 			EventLane::Velocity => tr("Velocity").into(),
 			EventLane::Controller(Controller::Cc(74)) => tr("Brightness (CC 74)").into(),
 			EventLane::Controller(c) => c.label(),
+			EventLane::Note(NoteExpression::Pressure) => tr("Note pressure").into(),
+			EventLane::Note(NoteExpression::Timbre) => tr("Note timbre").into(),
 		}
 	}
 }
@@ -777,6 +783,11 @@ impl EventLane {
 			EventLane::Controller(Controller::Cc(64)),
 			EventLane::Controller(Controller::Cc(11)),
 		];
+		for kind in NoteExpression::ALL {
+			if clip.notes().iter().any(|n| !n.expression(kind).is_empty()) {
+				tabs.push(EventLane::Note(kind));
+			}
+		}
 		for lane in clip.controllers() {
 			let l = EventLane::Controller(lane.controller);
 			if !tabs.contains(&l) {
@@ -799,6 +810,8 @@ impl EventLane {
 			EventLane::Controller(Controller::PitchBend) => tr("Bend").into(),
 			EventLane::Controller(Controller::ChannelPressure) => tr("Pressure").into(),
 			EventLane::Controller(Controller::Cc(n)) => format!("CC {n}"),
+			EventLane::Note(NoteExpression::Pressure) => format!("♪ {}", tr("Pressure")),
+			EventLane::Note(NoteExpression::Timbre) => format!("♪ {}", tr("Timbre")),
 		}
 	}
 }
@@ -1305,9 +1318,44 @@ pub const BEND_STEP: Tick = Tick(PPQ / 64);
 /// the stroke (straight lines between samples, held steps on [`BEND_STEP`]); before it the
 /// old curve stays, after it the old curve resumes with the value it had there.
 pub fn draw_bend(note: &Note, stroke: &[(Tick, f32)]) -> Vec<NoteBendPoint> {
-	let last = (note.length.0 - 1).max(0);
+	let old: Vec<(Tick, f32)> = note.bend.iter().map(|p| (p.tick, p.semitones)).collect();
+	let range = (-MAX_NOTE_BEND, MAX_NOTE_BEND);
+	draw_curve(&old, note.length, 0.0, range, stroke)
+		.into_iter()
+		.map(|(tick, semitones)| NoteBendPoint { tick, semitones })
+		.collect()
+}
+
+/// [`draw_bend`] for a note's pressure or timbre (values 0..1).
+pub fn draw_expression(
+	note: &Note,
+	kind: NoteExpression,
+	stroke: &[(Tick, f32)],
+) -> Vec<NoteValuePoint> {
+	let old: Vec<(Tick, f32)> = note
+		.expression(kind)
+		.iter()
+		.map(|p| (p.tick, p.value))
+		.collect();
+	draw_curve(&old, note.length, kind.resting(), (0.0, 1.0), stroke)
+		.into_iter()
+		.map(|(tick, value)| NoteValuePoint { tick, value })
+		.collect()
+}
+
+/// A held-step curve (resting at `resting` before its first point) after a stroke; see
+/// [`draw_bend`]. Values are clamped to `range`; points repeating the held value are
+/// dropped, so a curve that never leaves `resting` comes back empty.
+fn draw_curve(
+	old: &[(Tick, f32)],
+	length: Tick,
+	resting: f32,
+	range: (f32, f32),
+	stroke: &[(Tick, f32)],
+) -> Vec<(Tick, f32)> {
+	let last = (length.0 - 1).max(0);
 	let cell = |t: Tick| t.0.clamp(0, last) / BEND_STEP.0;
-	let value = |s: f32| s.clamp(-MAX_NOTE_BEND, MAX_NOTE_BEND);
+	let value = |s: f32| s.clamp(range.0, range.1);
 	let mut drawn: BTreeMap<i64, f32> = BTreeMap::new();
 	for (i, &(t, s)) in stroke.iter().enumerate() {
 		let (t0, s0) = if i == 0 { (t, s) } else { stroke[i - 1] };
@@ -1319,38 +1367,80 @@ pub fn draw_bend(note: &Note, stroke: &[(Tick, f32)]) -> Vec<NoteBendPoint> {
 		}
 	}
 	let (Some(&lo), Some(&hi)) = (drawn.keys().next(), drawn.keys().next_back()) else {
-		return note.bend.clone();
+		return old.to_vec();
+	};
+	let held_at = |tick: Tick| {
+		let i = old.partition_point(|p| p.0 <= tick);
+		if i == 0 { resting } else { old[i - 1].1 }
 	};
 	let (lo, after) = (Tick(lo * BEND_STEP.0), Tick((hi + 1) * BEND_STEP.0));
-	let mut points: Vec<NoteBendPoint> =
-		note.bend.iter().copied().filter(|p| p.tick < lo).collect();
-	points.extend(drawn.iter().map(|(&k, &semitones)| NoteBendPoint {
-		tick: Tick(k * BEND_STEP.0),
-		semitones,
-	}));
+	let mut points: Vec<(Tick, f32)> = old.iter().copied().filter(|p| p.0 < lo).collect();
+	points.extend(drawn.iter().map(|(&k, &v)| (Tick(k * BEND_STEP.0), v)));
 	if after.0 <= last {
-		points.push(NoteBendPoint {
-			tick: after,
-			semitones: note.bend_at(after),
-		});
-		points.extend(note.bend.iter().copied().filter(|p| p.tick > after));
+		points.push((after, held_at(after)));
+		points.extend(old.iter().copied().filter(|p| p.0 > after));
 	}
-	tidy_bend(points)
-}
-
-/// Drops points that repeat the value before them (the curve starts at 0), and the whole
-/// curve when it never leaves 0; keeps at most [`MAX_NOTE_BEND_POINTS`].
-fn tidy_bend(points: Vec<NoteBendPoint>) -> Vec<NoteBendPoint> {
-	let mut out: Vec<NoteBendPoint> = Vec::with_capacity(points.len());
-	let mut held = 0.0f32;
+	let mut out: Vec<(Tick, f32)> = Vec::with_capacity(points.len());
+	let mut held = resting;
 	for p in points {
-		if (p.semitones - held).abs() > 1e-3 {
-			held = p.semitones;
+		if (p.1 - held).abs() > 1e-3 {
+			held = p.1;
 			out.push(p);
 		}
 	}
 	out.truncate(MAX_NOTE_BEND_POINTS);
 	out
+}
+
+/// One stroke in a note's pressure or timbre lane = one "Note pressure" / "Note timbre"
+/// step (`points` = the new curve, e.g. from [`draw_expression`]; empty clears it).
+pub fn set_note_expression(
+	project: &Project,
+	clip: ClipId,
+	note: NoteId,
+	kind: NoteExpression,
+	points: Vec<NoteValuePoint>,
+) -> Option<Command> {
+	let c = midi_clip(project, clip)?;
+	let old = c.notes().iter().find(|n| n.id == note)?;
+	if old.expression(kind) == points.as_slice() {
+		return None;
+	}
+	let (pressure, timbre) = match kind {
+		NoteExpression::Pressure => (Some(points), None),
+		NoteExpression::Timbre => (None, Some(points)),
+	};
+	labelled(
+		match kind {
+			NoteExpression::Pressure => "Note pressure",
+			NoteExpression::Timbre => "Note timbre",
+		},
+		vec![Command::UpdateNotes {
+			clip,
+			notes: vec![NotePatch {
+				id: note,
+				pitch: None,
+				velocity: None,
+				start: None,
+				length: None,
+				bend: None,
+				pressure,
+				timbre,
+			}],
+		}],
+	)
+}
+
+/// The note a pressure/timbre lane gesture at `tick` (clip-relative) edits: of the notes
+/// sounding there, a selected one if any, the highest first (a chord's top voice).
+pub fn expression_target(clip: &Clip, selected: &BTreeSet<NoteId>, tick: Tick) -> Option<NoteId> {
+	let under = clip
+		.notes()
+		.iter()
+		.filter(|n| n.start <= tick && tick < n.end());
+	under
+		.max_by_key(|n| (selected.contains(&n.id), n.pitch))
+		.map(|n| n.id)
 }
 
 /// One stroke of the bend tool on `note` = one "Bend note" step.
@@ -1477,6 +1567,94 @@ mod tests {
 
 	fn set(ids: &[NoteId]) -> BTreeSet<NoteId> {
 		ids.iter().copied().collect()
+	}
+
+	#[test]
+	fn a_lane_stroke_draws_the_target_notes_pressure_or_timbre() {
+		let mut fx = fixture();
+		let c = clip(&fx);
+		// A chord at beat 0: C4 alone in the fixture, so add G4 over it.
+		let g4 = Note::new(67, b(0.0), b(1.0), 0.8);
+		fx.doc
+			.execute(Command::AddNotes {
+				clip: fx.clip,
+				notes: vec![g4.clone()],
+			})
+			.unwrap();
+		let none = BTreeSet::new();
+		// The top note unless another sounding one is selected; nothing outside notes.
+		assert_eq!(expression_target(&clip(&fx), &none, b(0.5)), Some(g4.id));
+		assert_eq!(
+			expression_target(&clip(&fx), &set(&[fx.ids[0]]), b(0.5)),
+			Some(fx.ids[0])
+		);
+		assert_eq!(expression_target(&c, &none, b(3.5)), None);
+		// A swell over the first half of the note.
+		let half = Tick(PPQ / 2);
+		let curve = draw_expression(
+			&g4,
+			NoteExpression::Pressure,
+			&[(Tick::ZERO, 0.0), (half, 1.0)],
+		);
+		let peak = curve.iter().map(|p| p.value).fold(0.0f32, f32::max);
+		assert!((peak - 1.0).abs() < 1e-6, "{curve:?}");
+		let cmd = set_note_expression(
+			fx.doc.project(),
+			fx.clip,
+			g4.id,
+			NoteExpression::Pressure,
+			curve.clone(),
+		)
+		.unwrap();
+		fx.doc.execute(cmd).unwrap();
+		let stored = clip(&fx)
+			.notes()
+			.iter()
+			.find(|n| n.id == g4.id)
+			.unwrap()
+			.clone();
+		assert_eq!(stored.pressure, curve);
+		assert!(stored.timbre.is_empty(), "the other curve is untouched");
+		assert_eq!(
+			stored.expression_at(NoteExpression::Pressure, half + BEND_STEP),
+			0.0,
+			"resumes at rest"
+		);
+		assert_eq!(
+			fx.doc.history_labels().last().copied(),
+			Some("Note pressure")
+		);
+		// Timbre rests at 0.5: drawing 0.5 is no curve, values are clamped to 0..1.
+		assert!(
+			draw_expression(
+				&g4,
+				NoteExpression::Timbre,
+				&[(Tick::ZERO, 0.5), (half, 0.5)]
+			)
+			.is_empty()
+		);
+		let high = draw_expression(&g4, NoteExpression::Timbre, &[(Tick::ZERO, 3.0)]);
+		assert_eq!(high[0].value, 1.0);
+		// Clearing is one step; clearing nothing is none.
+		let clear = set_note_expression(
+			fx.doc.project(),
+			fx.clip,
+			g4.id,
+			NoteExpression::Pressure,
+			Vec::new(),
+		)
+		.unwrap();
+		fx.doc.execute(clear).unwrap();
+		assert!(
+			set_note_expression(
+				fx.doc.project(),
+				fx.clip,
+				g4.id,
+				NoteExpression::Pressure,
+				Vec::new()
+			)
+			.is_none()
+		);
 	}
 
 	#[test]

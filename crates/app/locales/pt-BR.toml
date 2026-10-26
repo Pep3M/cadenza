@@ -2333,3 +2333,8 @@
 "Timbre" = "Timbre"
 "Remove this note's own pressure curve" = "Remover a curva de pressão própria desta nota"
 "Remove this note's own timbre curve" = "Remover a curva de timbre própria desta nota"
+"Note pressure" = "Pressão da nota"
+"Note timbre" = "Timbre da nota"
+"Each note's own curve (MPE-style), drawn over the note" = "A curva própria de cada nota (estilo MPE), desenhada sobre a nota"
+"Drag = draw the curve of the note there (selected first) · right-click = clear it" = "Arrastar = desenha a curva da nota ali (a selecionada primeiro) · clique direito = apaga"
+"No note here" = "Nenhuma nota aqui"

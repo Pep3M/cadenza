@@ -3372,6 +3372,15 @@ fn render_piano_roll_screens() {
 						})
 						.collect();
 				}
+				// Each chord's first top note swells (its own pressure).
+				if ri == 0 && k == 2 {
+					n.pressure = (0..12)
+						.map(|i| cadenza_model::NoteValuePoint {
+							tick: Tick::from_beats(f64::from(i) / 16.0),
+							value: (f64::from(i + 1) / 12.0) as f32,
+						})
+						.collect();
+				}
 				notes.push(n);
 			}
 		}
@@ -3417,6 +3426,9 @@ fn render_piano_roll_screens() {
 	shot(&mut h, &dir, "piano_roll_notes");
 	h.state_mut().state.view.piano.event_lane = EventLane::Controller(Controller::Cc(1));
 	shot(&mut h, &dir, "piano_roll_mod_wheel");
+	h.state_mut().state.view.piano.event_lane =
+		EventLane::Note(cadenza_model::NoteExpression::Pressure);
+	shot(&mut h, &dir, "piano_roll_note_pressure");
 	h.state_mut().state.view.piano.event_lane = EventLane::Velocity;
 	let mut app = h.into_state();
 	app.state.view.piano.framed = None;
@@ -4081,6 +4093,54 @@ fn render_phase17_screens() {
 	let folder = h.state().state.selection.track.unwrap();
 	h.state_mut().state.toggle_folder(folder);
 	shot(&mut h, &dir, "folder_folded");
+}
+
+#[test]
+fn piano_roll_note_pressure_lane_draws_one_notes_curve() {
+	use cadenza_model::NoteExpression;
+	let (mut h, clip) = fl_piano();
+	h.state_mut().state.view.piano.event_lane =
+		cadenza_app::state::piano::EventLane::Note(NoteExpression::Pressure);
+	h.run_steps(2);
+	let lane = h.state().piano_event_lane().unwrap();
+	let (bottom, top) = (lane.bottom() - 10.0, lane.top() + 10.0);
+	let x = |h: &Harness<'_, CadenzaApp>, beat: f64| note_pos(h, clip, beat, 60).x;
+	// Over D4 (beat 1..2): a swell from nothing to full.
+	h.hover_at(pos2(x(&h, 1.05), bottom));
+	h.run_steps(1);
+	h.drag_at(pos2(x(&h, 1.05), bottom));
+	h.run_steps(1);
+	for i in 1..=6 {
+		let f = i as f32 / 6.0;
+		h.hover_at(pos2(
+			x(&h, 1.05 + 0.6 * f64::from(f)),
+			bottom + (top - bottom) * f,
+		));
+		h.run_steps(1);
+	}
+	h.drop_at(pos2(x(&h, 1.65), top));
+	h.run_steps(2);
+	let note = |h: &Harness<'_, CadenzaApp>, pitch: u8| {
+		clip_notes(h, clip)
+			.into_iter()
+			.find(|n| n.pitch == pitch)
+			.unwrap()
+	};
+	let d4 = note(&h, 62);
+	let at = |beats: f64| d4.expression_at(NoteExpression::Pressure, Tick::from_beats(beats));
+	assert!(at(0.6) > 0.8, "{:?}", d4.pressure);
+	assert!(at(0.3) > 0.3 && at(0.3) < 0.7, "rising: {:?}", d4.pressure);
+	assert!(note(&h, 60).pressure.is_empty() && note(&h, 64).pressure.is_empty());
+	assert_eq!(h.state().state.undo_label(), Some("Note pressure"));
+	// The tab shows up now that the clip has data; right-click clears the curve.
+	let p = pos2(x(&h, 1.5), (top + bottom) / 2.0);
+	h.hover_at(p);
+	h.run_steps(1);
+	right_button(&h, p, true);
+	h.run_steps(1);
+	right_button(&h, p, false);
+	h.run_steps(2);
+	assert!(note(&h, 62).pressure.is_empty());
 }
 
 #[test]

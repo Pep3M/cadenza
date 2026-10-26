@@ -2332,3 +2332,8 @@
 "Timbre" = "Тембр"
 "Remove this note's own pressure curve" = "Удалить собственную кривую давления этой ноты"
 "Remove this note's own timbre curve" = "Удалить собственную кривую тембра этой ноты"
+"Note pressure" = "Давление ноты"
+"Note timbre" = "Тембр ноты"
+"Each note's own curve (MPE-style), drawn over the note" = "Собственная кривая каждой ноты (как в MPE), нарисованная над нотой"
+"Drag = draw the curve of the note there (selected first) · right-click = clear it" = "Перетаскивание = рисует кривую ноты в этом месте (сначала выделенной) · правый щелчок = удаляет её"
+"No note here" = "Здесь нет ноты"

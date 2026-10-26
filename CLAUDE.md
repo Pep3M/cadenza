@@ -412,7 +412,7 @@ refinement passes; RBJ shapes at 48 kHz (`band_response_db`). moves. Engine: `an
 master: Detail, tracks: Vec<TrackDetail> }` taps every channel like the stem export
 (cancellable).
 
-### cadenza-notes (NE-0..NE-9a; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
+### cadenza-notes (NE-0..NE-9l, plan closed; plan `docs/design/note-editing-plan.md`, research `note-editing-research.md`)
 
 Pure, offline. Times in seconds of the analyzed audio, pitches fractional MIDI. `Note { onset,
 offset, center }`; `NoteDetector { name, detect(samples, rate) }`, registry `detector(id)` /
@@ -541,6 +541,9 @@ NE-9k per-note pressure/timbre: `Note.pressure/timbre` -> `MidiEvent::NoteExpres
 filter_semitones`: poly_synth/sampler filter; sandbox EV_NOTE_PRESSURE/TIMBRE; CLAP pressure/brightness expressions, MIDI 1.0 poly
 pressure) from `MidiSchedule` (`NoteSpan.curves`, chased); MPE export/import as member channel pressure + CC74; MCP `pressure`/`timbre`
 on notes, `set_note_expression`; note popover Clear.
+NE-9l: piano roll event lanes `EventLane::Note(NoteExpression)` draw each note's pressure/timbre over its span; drag = the note there
+(`piano::expression_target`: selected, else the highest) via `draw_expression`, right-click clears, one step. The NE plan is closed
+(see "Closing" in the plan).
 NE-7a (from an expert's session, `docs/design/note-editing-expert-session.md`): `refine`
 (`SegmentOptions::refine`, default on): holds on the tracked curve (< 1000 c/s; the
 vibrato-free curve only where vibrato is, it straightens runs), never across a boundary,

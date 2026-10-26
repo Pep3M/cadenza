@@ -195,17 +195,21 @@ impl PanelLayout {
 		self.set(PanelKind::PianoRoll, true);
 	}
 
-	/// F11 / Ctrl+Enter: maximizes the focused panel (the arrange view by default), or
-	/// restores the layout.
+	/// F11 / Ctrl+Enter: maximizes the focused panel (falling back to whichever panel
+	/// is in the center, e.g. with the arrange view hidden; a no-op with nothing
+	/// shown), or restores the layout.
 	pub fn toggle_maximize(&mut self) {
 		if self.maximized.is_some() {
 			self.maximized = None;
 			return;
 		}
-		let panel = self
+		let Some(panel) = self
 			.focus
 			.filter(|p| self.shown(*p))
-			.unwrap_or(PanelKind::Arrange);
+			.or_else(|| self.center())
+		else {
+			return;
+		};
 		self.maximize(panel);
 	}
 
@@ -1311,6 +1315,39 @@ mod tests {
 		assert!(l.shown(PanelKind::Mixer) && !l.shown(PanelKind::PianoRoll));
 		l.toggle_maximize_panel(PanelKind::Mixer);
 		assert!(l.visible(PanelKind::Mixer) && !l.visible(PanelKind::PianoRoll));
+	}
+
+	#[test]
+	fn f11_with_the_arrange_hidden_maximizes_the_centered_panel_not_arrange() {
+		// With the arrange hidden, focus can land outside the shown panels (e.g.
+		// cleared by `toggle(Arrange)`); F11 must fall back to whatever is actually
+		// centered (the mixer here, since the editor is closed), not force the
+		// arrange back open.
+		let mut l = PanelLayout::default();
+		l.toggle(PanelKind::Arrange);
+		assert_eq!(l.focus, None);
+		assert_eq!(l.center(), Some(PanelKind::Mixer));
+		let before = l.clone();
+		l.toggle_maximize();
+		assert_eq!(l.maximized, Some(PanelKind::Mixer));
+		assert!(!l.visible(PanelKind::Arrange));
+		l.toggle_maximize();
+		assert_eq!(
+			l.maximized, None,
+			"two F11 presses leave the layout unchanged"
+		);
+		for p in PanelKind::ALL {
+			assert_eq!(l.shown(p), before.shown(p), "{p:?}");
+		}
+
+		// Nothing shown at all: F11 is a no-op (no panel to maximize).
+		let mut l = PanelLayout::default();
+		for p in PanelKind::ALL {
+			l.set(p, false);
+		}
+		let before = l.clone();
+		l.toggle_maximize();
+		assert_eq!(l, before);
 	}
 
 	#[test]

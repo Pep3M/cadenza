@@ -3169,10 +3169,12 @@ impl AppState {
 	}
 
 	/// Leaves the device editor of the dock (it goes back to the piano roll / audio
-	/// editor) and closes the focused device window.
+	/// editor, or closes the dock when neither has a clip open) and closes the focused
+	/// device window.
 	pub fn close_device_editor(&mut self) {
 		self.release_previews();
 		self.view.device_editor = false;
+		self.close_dock_if_its_editor_is_empty();
 		if let Some(r) = self.view.windows.focused_device() {
 			self.view.windows.close(windows::WindowItem::Device(r));
 		}
@@ -3180,14 +3182,30 @@ impl AppState {
 	}
 
 	/// Pops the dock's device out into its floating window; the dock shows the piano
-	/// roll / audio editor again.
+	/// roll / audio editor again, or closes when neither has a clip open.
 	pub fn pop_out_device_editor(&mut self) {
 		let Some(r) = self.view.instrument.device else {
 			return;
 		};
 		self.view.device_editor = false;
+		self.close_dock_if_its_editor_is_empty();
 		self.open_window(windows::WindowItem::Device(r));
 		self.sync_editor_probe();
+	}
+
+	/// After leaving the dock's device editor, closes the bottom dock outright if the
+	/// piano roll / audio editor it would fall back to has no clip open (an empty
+	/// editor is not worth showing); never reveals the mixer in its place (closing a
+	/// bottom-dock panel never shows the other one, see [`layout::PanelLayout::set`]).
+	fn close_dock_if_its_editor_is_empty(&mut self) {
+		let empty = if self.view.audio_editor {
+			self.view.audio.clip.is_none()
+		} else {
+			self.view.piano.clip.is_none()
+		};
+		if empty {
+			self.view.panels.set(PanelKind::PianoRoll, false);
+		}
 	}
 
 	/// Puts device window `r` into the bottom dock.

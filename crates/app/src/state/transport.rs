@@ -40,6 +40,9 @@ pub struct TransportView {
 	pub loop_on: bool,
 	/// The arrange loop region (kept while the loop is off).
 	pub loop_range: Option<(Tick, Tick)>,
+	/// Song mode auditions only this track (a seek from the audio / note editor ruler;
+	/// a seek from the arrange ruler plays the whole song again).
+	pub track_solo: Option<TrackId>,
 }
 
 /// What the player plays for the current mode.
@@ -76,7 +79,10 @@ pub fn config(
 ) -> (PlayConfig, bool) {
 	let song = PlayConfig {
 		loop_range: view.loop_range.filter(|_| view.loop_on),
-		audition: None,
+		audition: view
+			.track_solo
+			.filter(|t| playing && project.track(*t).is_some())
+			.map(|t| vec![t]),
 		pattern: None,
 	};
 	if view.mode == PlayMode::Song {
@@ -132,6 +138,7 @@ mod tests {
 			mode: PlayMode::Pattern,
 			loop_on: true,
 			loop_range: Some((Tick::ZERO, Tick(PPQ * 4))),
+			track_solo: None,
 		};
 		let (c, fell_back) = config(&p, &view, Some(short_id), true);
 		assert!(!fell_back);
@@ -171,6 +178,13 @@ mod tests {
 		let (c, fell_back) = config(&p, &view, Some(short_id), true);
 		assert!(!fell_back);
 		assert_eq!(c, PlayConfig::default());
+		// Listening from an editor's ruler: the song, with only that track, while playing.
+		view.track_solo = Some(track);
+		let (c, _) = config(&p, &view, None, true);
+		assert_eq!(c.audition, Some(vec![track]));
+		assert_eq!(config(&p, &view, None, false).0.audition, None);
+		view.track_solo = Some(TrackId::new());
+		assert_eq!(config(&p, &view, None, true).0.audition, None, "gone track");
 	}
 
 	#[test]

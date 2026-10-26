@@ -396,6 +396,9 @@ fn every_command_round_trips() {
 					velocity: None,
 					start: Some(beats(3.5)),
 					length: None,
+					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 				NotePatch {
 					id: fx.riff_notes[1],
@@ -403,6 +406,9 @@ fn every_command_round_trips() {
 					velocity: Some(0.1),
 					start: None,
 					length: Some(beats(0.25)),
+					bend: None,
+					pressure: None,
+					timbre: None,
 				},
 			],
 		},
@@ -1111,6 +1117,9 @@ fn notes_and_clips_stay_sorted() {
 			velocity: None,
 			start: Some(beats(0.5)),
 			length: None,
+			bend: None,
+			pressure: None,
+			timbre: None,
 		}],
 	})
 	.unwrap();
@@ -1308,6 +1317,9 @@ fn command_json_shape_is_stable() {
 					velocity: 0.5,
 					start: Tick(0),
 					length: Tick(PPQ),
+					bend: Vec::new(),
+					pressure: Vec::new(),
+					timbre: Vec::new(),
 				}],
 			},
 			json!({"op": "add_notes", "clip": t(3), "notes": [
@@ -1336,6 +1348,7 @@ fn command_json_shape_is_stable() {
 					params: [("gain".to_owned(), 1.5)].into(),
 					state: None,
 					sidechain: None,
+					midi_input: None,
 					aux_outputs: Vec::new(),
 					zones: Vec::new(),
 					modulators: Vec::new(),
@@ -2678,6 +2691,9 @@ fn linked_clips_share_note_and_controller_edits_in_one_undo_step() {
 			velocity: None,
 			start: None,
 			length: None,
+			bend: None,
+			pressure: None,
+			timbre: None,
 		}],
 	})
 	.unwrap();
@@ -2960,4 +2976,379 @@ fn midi_map_validates_round_trips_and_follows_removed_targets() {
 	assert!(doc.project().midi_map.is_empty());
 	doc.undo().unwrap();
 	assert_eq!(doc.project(), &mapped);
+}
+
+fn detected_notes() -> NoteEdits {
+	NoteEdits {
+		notes: vec![
+			AudioNote {
+				core_start: 0.15,
+				core_end: 0.45,
+				..AudioNote::new(cadenza_core::AudioNoteId::new(), 0.1, 0.5, 60.23)
+			},
+			AudioNote {
+				flags: vec![AudioNoteFlag::MaybeTwoNotes {
+					at: 0.8,
+					cents: 120.0,
+				}],
+				..AudioNote::new(cadenza_core::AudioNoteId::new(), 0.5, 1.1, 62.9)
+			},
+		],
+		sibilants: vec![NoteSpan {
+			start: 1.1,
+			end: 1.2,
+		}],
+		sibilant_gain_db: 0.0,
+		sensitivity: 1.0,
+		user_splits: Vec::new(),
+		user_merges: Vec::new(),
+	}
+}
+
+#[test]
+fn audio_notes_are_set_edited_undone_and_saved() {
+	let fx = fixture();
+	let notes = detected_notes();
+	let (a, b) = (notes.notes[0].id, notes.notes[1].id);
+	let set = Command::SetAudioNotes {
+		clip: fx.vox,
+		notes: Some(Box::new(notes.clone())),
+	};
+	assert_eq!(set.label(), "Detect notes");
+	let detected = round_trip(&fx.project, set.clone());
+	let summary = detected.summary();
+	let clip = summary
+		.tracks
+		.iter()
+		.flat_map(|t| &t.clips)
+		.find(|c| c.id == fx.vox)
+		.unwrap();
+	let s = clip.audio_notes.as_ref().unwrap();
+	assert_eq!((s.count, s.edited, s.flagged), (2, 0, 1));
+	assert!((s.avg_error_cents - 16.5).abs() < 0.1, "{s:?}");
+
+	let edit = Command::UpdateAudioNotes {
+		clip: fx.vox,
+		patches: vec![
+			AudioNotePatch {
+				id: a,
+				pitch: Some(Some(60.0)),
+				modulation: Some(0.5),
+				..Default::default()
+			},
+			AudioNotePatch {
+				id: b,
+				time: Some(Some(NoteSpan {
+					start: 0.55,
+					end: 1.1,
+				})),
+				..Default::default()
+			},
+		],
+		sibilant_gain_db: Some(-6.0),
+	};
+	assert_eq!(edit.label(), "Edit 2 audio notes");
+	let edited = round_trip(&detected, edit);
+	let (_, c) = edited.find_clip(fx.vox).unwrap();
+	let ClipContent::Audio { notes: Some(e), .. } = &c.content else {
+		panic!("notes");
+	};
+	assert!(e.is_edited());
+	assert_eq!(e.notes[0].pitch, Some(60.0));
+	assert_eq!(e.sibilant_gain_db, -6.0);
+	assert_eq!(e.summary().edited, 2);
+
+	// Saved and loaded unchanged, with only the non-default fields in the file.
+	let json = edited.to_json_string().unwrap();
+	assert!(json.contains("\"modulation\": 0.5") && !json.contains("\"drift\""));
+	assert_eq!(Project::from_json_str(&json).unwrap(), edited);
+	// And removing them is one step too.
+	round_trip(
+		&edited,
+		Command::SetAudioNotes {
+			clip: fx.vox,
+			notes: None,
+		},
+	);
+
+	// Actionable errors.
+	let err = exec_err(
+		&fx.project,
+		Command::UpdateAudioNotes {
+			clip: fx.vox,
+			patches: vec![AudioNotePatch {
+				id: a,
+				gain_db: Some(1.0),
+				..Default::default()
+			}],
+			sibilant_gain_db: None,
+		},
+	);
+	assert!(err.to_string().contains("detect them first"), "{err}");
+	let err = exec_err(
+		&detected,
+		Command::UpdateAudioNotes {
+			clip: fx.vox,
+			patches: vec![AudioNotePatch {
+				id: a,
+				pitch: Some(Some(99.0)),
+				..Default::default()
+			}],
+			sibilant_gain_db: None,
+		},
+	);
+	assert!(err.to_string().contains("semitones"), "{err}");
+	let err = exec_err(
+		&detected,
+		Command::UpdateAudioNotes {
+			clip: fx.vox,
+			patches: vec![AudioNotePatch {
+				id: a,
+				..Default::default()
+			}],
+			sibilant_gain_db: None,
+		},
+	);
+	assert!(err.to_string().contains("gain_db"), "{err}");
+	let err = exec_err(
+		&fx.project,
+		Command::SetAudioNotes {
+			clip: fx.riff,
+			notes: Some(Box::new(notes)),
+		},
+	);
+	assert!(matches!(err, ModelError::NotAnAudioClip(_)), "{err}");
+}
+
+#[test]
+fn midi_inputs_round_trip_validate_and_follow_their_track() {
+	let fx = fixture();
+	let tuner = Device::builtin("pitch_correct", "Pitch Correct");
+	let tuner_id = tuner.id;
+	let mut doc = Document::new(fx.project.clone());
+	doc.execute(Command::InsertDevice {
+		track: Some(fx.audio),
+		device: tuner,
+		index: None,
+	})
+	.unwrap();
+	let p = doc.project().clone();
+	let feed = |source| Command::SetMidiInput {
+		track: Some(fx.audio),
+		device: tuner_id,
+		source,
+	};
+	let fed = round_trip(&p, feed(Some(fx.lead)));
+	assert_eq!(
+		fed.device(Some(fx.audio), tuner_id).unwrap().midi_input,
+		Some(fx.lead)
+	);
+	assert_eq!(feed(Some(fx.lead)).label(), "Set MIDI input");
+	round_trip(&fed, feed(None));
+	// Notes come from instrument tracks, and only effects take them.
+	for bad in [fx.audio, fx.reverb] {
+		let err = exec_err(&p, feed(Some(bad)));
+		assert!(matches!(err, ModelError::InvalidMidiInput { .. }), "{err}");
+	}
+	let err = exec_err(
+		&p,
+		Command::SetMidiInput {
+			track: Some(fx.lead),
+			device: fx.synth,
+			source: Some(fx.drums),
+		},
+	);
+	assert!(err.to_string().contains("own track's notes"), "{err}");
+	// Removing the melody track disconnects it; undo connects it again.
+	let mut doc = Document::new(fed.clone());
+	doc.execute(Command::RemoveTrack { track: fx.lead })
+		.unwrap();
+	assert_eq!(
+		doc.project()
+			.device(Some(fx.audio), tuner_id)
+			.unwrap()
+			.midi_input,
+		None
+	);
+	doc.undo().unwrap();
+	assert_eq!(doc.project(), &fed);
+	// Saved and loaded with the project.
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("song.cdz");
+	fed.save_json(&path).unwrap();
+	let loaded = Project::load_json(&path).unwrap();
+	assert_eq!(
+		loaded.device(Some(fx.audio), tuner_id).unwrap().midi_input,
+		Some(fx.lead)
+	);
+}
+
+#[test]
+fn note_bends_validate_split_and_undo() {
+	let mut doc = Document::new(Project::new("Bends"));
+	let track = Track::new("Lead", TrackKind::Instrument);
+	let track_id = track.id;
+	doc.execute(Command::AddTrack { track, index: None })
+		.unwrap();
+	let mut note = Note::new(60, beats(0.0), beats(2.0), 0.8);
+	let point = |b: f64, semitones: f32| NoteBendPoint {
+		tick: beats(b),
+		semitones,
+	};
+	note.bend = vec![point(0.0, 0.0), point(1.0, 2.0), point(1.5, 1.0)];
+	let note_id = note.id;
+	let clip = Clip::midi("Lead", beats(0.0), beats(4.0)).with_notes([note.clone()]);
+	let clip_id = clip.id;
+	doc.execute(Command::AddClip {
+		track: track_id,
+		clip,
+	})
+	.unwrap();
+	// Held values; past the note's end they are kept but never played.
+	assert_eq!(note.bend_at(beats(0.5)), 0.0);
+	assert_eq!(note.bend_at(beats(1.2)), 2.0);
+	// A split carries the value in effect at the cut to the right part.
+	let (left, right) = note.split_bend(beats(1.2));
+	assert_eq!(left, vec![point(0.0, 0.0), point(1.0, 2.0)]);
+	assert_eq!(right, vec![point(0.0, 2.0), point(0.3, 1.0)]);
+	assert_eq!(note.scaled_bend(2.0)[1], point(2.0, 2.0));
+	// Out of order, too wide or before the note: rejected with a reason.
+	let patch = |bend: Vec<NoteBendPoint>| Command::UpdateNotes {
+		clip: clip_id,
+		notes: vec![NotePatch {
+			id: note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: None,
+			bend: Some(bend),
+			pressure: None,
+			timbre: None,
+		}],
+	};
+	for bad in [
+		vec![point(1.0, 0.0), point(0.5, 1.0)],
+		vec![point(0.0, 60.0)],
+		vec![NoteBendPoint {
+			tick: Tick(-1),
+			semitones: 0.0,
+		}],
+	] {
+		let err = doc.execute(patch(bad)).unwrap_err();
+		assert!(matches!(err, ModelError::InvalidNoteBend { .. }), "{err}");
+	}
+	// Shortening keeps the points; replacing the bend is undoable.
+	doc.execute(Command::UpdateNotes {
+		clip: clip_id,
+		notes: vec![NotePatch {
+			id: note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: Some(beats(0.5)),
+			bend: None,
+			pressure: None,
+			timbre: None,
+		}],
+	})
+	.unwrap();
+	doc.execute(patch(Vec::new())).unwrap();
+	let get = |doc: &Document| doc.project().find_clip(clip_id).unwrap().1.notes()[0].clone();
+	assert!(get(&doc).bend.is_empty());
+	doc.undo().unwrap();
+	assert_eq!(get(&doc).bend, note.bend);
+	// JSON: absent when straight, round trips when bent.
+	let json = serde_json::to_value(get(&doc)).unwrap();
+	assert_eq!(json["bend"][1]["semitones"], 2.0);
+	let straight = serde_json::to_value(Note::new(60, beats(0.0), beats(1.0), 0.8)).unwrap();
+	assert!(straight.get("bend").is_none());
+}
+
+#[test]
+fn note_pressure_and_timbre_validate_split_and_undo() {
+	use crate::{NoteExpression, NoteValuePoint};
+	let mut doc = Document::new(Project::new("Expression"));
+	let track = Track::new("Pad", TrackKind::Instrument);
+	let track_id = track.id;
+	doc.execute(Command::AddTrack { track, index: None })
+		.unwrap();
+	let point = |b: f64, value: f32| NoteValuePoint {
+		tick: beats(b),
+		value,
+	};
+	let mut note = Note::new(60, beats(0.0), beats(2.0), 0.8);
+	note.timbre = vec![point(1.0, 0.9)];
+	let note_id = note.id;
+	let clip = Clip::midi("Pad", beats(0.0), beats(4.0)).with_notes([note.clone()]);
+	let clip_id = clip.id;
+	doc.execute(Command::AddClip {
+		track: track_id,
+		clip,
+	})
+	.unwrap();
+	// Resting values before the first point: pressure 0, timbre 0.5.
+	assert_eq!(
+		note.expression_at(NoteExpression::Pressure, beats(1.5)),
+		0.0
+	);
+	assert_eq!(note.expression_at(NoteExpression::Timbre, beats(0.5)), 0.5);
+	assert_eq!(note.expression_at(NoteExpression::Timbre, beats(1.5)), 0.9);
+	// Split: the right part starts at the value in effect; a right part at rest is none.
+	let (left, right) = note.split_expression(NoteExpression::Timbre, beats(1.5));
+	assert_eq!(left, vec![point(1.0, 0.9)]);
+	assert_eq!(right, vec![point(0.0, 0.9)]);
+	assert_eq!(
+		note.split_expression(NoteExpression::Timbre, beats(0.5)).1,
+		vec![point(0.0, 0.5), point(0.5, 0.9)]
+	);
+	let mut early = note.clone();
+	early.timbre = vec![point(0.2, 0.5)];
+	assert!(
+		early
+			.split_expression(NoteExpression::Timbre, beats(1.0))
+			.1
+			.is_empty()
+	);
+	assert_eq!(
+		note.scaled_expression(NoteExpression::Timbre, 0.5),
+		vec![point(0.5, 0.9)]
+	);
+	let patch = |pressure: Vec<NoteValuePoint>| Command::UpdateNotes {
+		clip: clip_id,
+		notes: vec![NotePatch {
+			id: note_id,
+			pitch: None,
+			velocity: None,
+			start: None,
+			length: None,
+			bend: None,
+			pressure: Some(pressure),
+			timbre: None,
+		}],
+	};
+	for bad in [
+		vec![point(0.0, 1.2)],
+		vec![point(1.0, 0.2), point(0.5, 0.3)],
+		vec![NoteValuePoint {
+			tick: Tick(-1),
+			value: 0.0,
+		}],
+	] {
+		let err = doc.execute(patch(bad)).unwrap_err();
+		assert!(err.to_string().contains("pressure curve"), "{err}");
+	}
+	doc.execute(patch(vec![point(0.5, 0.7)])).unwrap();
+	let stored = |doc: &Document| doc.project().find_clip(clip_id).unwrap().1.notes()[0].clone();
+	assert_eq!(stored(&doc).pressure, vec![point(0.5, 0.7)]);
+	assert_eq!(stored(&doc).timbre, vec![point(1.0, 0.9)], "untouched");
+	// JSON: present only when set.
+	let json = serde_json::to_string(&stored(&doc)).unwrap();
+	assert!(json.contains("\"pressure\"") && json.contains("\"timbre\""));
+	assert!(
+		!serde_json::to_string(&Note::new(60, beats(0.0), beats(1.0), 0.8))
+			.unwrap()
+			.contains("pressure")
+	);
+	doc.undo().unwrap();
+	assert!(stored(&doc).pressure.is_empty());
 }

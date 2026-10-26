@@ -474,3 +474,52 @@ fn output_routes_and_plugin_sidechains() {
 	.unwrap_err();
 	assert!(err.to_string().contains("feedback loop"), "{err}");
 }
+
+#[test]
+fn a_melody_track_feeds_pitch_correct() {
+	let dir = tempfile::tempdir().unwrap();
+	let mut s = session(&dir, false);
+	let (melody, _) = track(&mut s, "Melody", "instrument", None);
+	let (vox, _) = track(&mut s, "Vox", "audio", None);
+	let tune = insert(&mut s, Some(vox), "pitch_correct");
+	let comp = insert(&mut s, Some(vox), "compressor");
+	tracks::set_midi_input(
+		&mut s,
+		args(json!({ "track_id": vox, "device_id": tune, "source_track_id": melody })),
+	)
+	.unwrap();
+	assert_eq!(
+		s.document()
+			.project()
+			.device(Some(vox), tune)
+			.unwrap()
+			.midi_input,
+		Some(melody)
+	);
+	let summary = serde_json::to_value(project::get_project(&s)).unwrap();
+	assert!(summary.to_string().contains("\"midi_input\""), "{summary}");
+	// A built-in that does not use notes, an audio source: actionable errors.
+	let err = tracks::set_midi_input(
+		&mut s,
+		args(json!({ "track_id": vox, "device_id": comp, "source_track_id": melody })),
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(err.contains("only pitch_correct"), "{err}");
+	let err = tracks::set_midi_input(
+		&mut s,
+		args(json!({ "track_id": vox, "device_id": tune, "source_track_id": vox })),
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(err.contains("instrument tracks"), "{err}");
+	tracks::set_midi_input(&mut s, args(json!({ "track_id": vox, "device_id": tune }))).unwrap();
+	assert_eq!(
+		s.document()
+			.project()
+			.device(Some(vox), tune)
+			.unwrap()
+			.midi_input,
+		None
+	);
+}

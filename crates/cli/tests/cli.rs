@@ -313,6 +313,94 @@ fn mix_runs_an_engineer_pass_and_prints_what_changed() {
 }
 
 #[test]
+fn tune_runs_a_tuning_pass_on_a_clip() {
+	use cadenza_model::{AudioNote, ClipContent, NoteEdits};
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("take.cdz");
+	let mut p = Project::new("Take");
+	let mut t = Track::new("Vox", TrackKind::Audio);
+	let mut clip = cadenza_model::Clip::audio(
+		"Lead vocal",
+		cadenza_core::Tick::ZERO,
+		cadenza_core::Tick::from_beats(8.0),
+		dir.path().join("vox.wav"),
+	);
+	if let ClipContent::Audio { notes, .. } = &mut clip.content {
+		*notes = Some(Box::new(NoteEdits {
+			notes: [60.3, 62.3, 64.3, 65.3, 67.3, 60.3]
+				.iter()
+				.enumerate()
+				.map(|(i, &pitch)| {
+					let at = i as f64 * 0.5;
+					AudioNote::new(cadenza_core::AudioNoteId::new(), at, at + 0.4, pitch)
+				})
+				.collect(),
+			sibilants: Vec::new(),
+			sibilant_gain_db: 0.0,
+			sensitivity: 1.0,
+			user_splits: Vec::new(),
+			user_merges: Vec::new(),
+		}));
+	}
+	let clip_id = clip.id;
+	t.clips.push(clip);
+	p.tracks.push(t);
+	p.save_json(&path).unwrap();
+	let calls = serde_json::json!([{"id": "c1", "type": "function", "function": {
+		"name": "tune_audio_notes",
+		"arguments": format!("{{\"clip_id\":\"{clip_id}\"}}")}}]);
+	let reply = |content: &str, calls: Option<serde_json::Value>| {
+		let mut message = serde_json::json!({"role": "assistant", "content": content});
+		if let Some(calls) = calls {
+			message["tool_calls"] = calls;
+		}
+		serde_json::json!({
+			"id": "x", "model": "local",
+			"choices": [{"index": 0, "finish_reason": "stop", "message": message}],
+			"usage": {"prompt_tokens": 100, "completion_tokens": 10}
+		})
+		.to_string()
+	};
+	let url = mock_completions(vec![
+		reply("Tuning.", Some(calls)),
+		reply("C major +30 c, now on target.", None),
+	]);
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"tune",
+			s(&path),
+			"--track",
+			"vox",
+			"--provider",
+			"openai-compatible",
+			"--base-url",
+			&url,
+			"--model",
+			"local",
+			"--reasoning-effort",
+			"none",
+		])
+		.env("XDG_STATE_HOME", dir.path().join("state"))
+		.env_remove("OPENAI_API_KEY")
+		.output()
+		.unwrap();
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(out.status.success(), "{stderr}");
+	for needle in ["before: 6 notes", "after: 6 notes", "6 on target", "saved:"] {
+		assert!(stderr.contains(needle), "missing {needle}: {stderr}");
+	}
+	let saved = Project::load_json(&path).unwrap();
+	let ClipContent::Audio { notes: Some(n), .. } = &saved.tracks[0].clips[0].content else {
+		panic!("notes saved");
+	};
+	assert!((n.notes[0].result_pitch() - 60.0).abs() < 1e-6);
+
+	let out = cadenza(&["tune", s(&path), "--clip", "nope", "--model", "x"]);
+	assert!(!out.status.success());
+	assert!(String::from_utf8_lossy(&out.stderr).contains("'Lead vocal'"));
+}
+
+#[test]
 fn collect_pack_and_unpack_make_a_portable_project() {
 	let dir = tempfile::tempdir().unwrap();
 	let take = dir.path().join("external").join("take.wav");
@@ -506,4 +594,235 @@ fn library_import_validate_and_list() {
 	let out = cadenza(&["library", "validate", s(&pack)]);
 	assert!(!out.status.success());
 	assert!(String::from_utf8_lossy(&out.stderr).contains("broken.json"));
+}
+
+#[test]
+fn notes_corpus_written_to_disk_scores_like_the_synthetic_one() {
+	let dir = tempfile::tempdir().unwrap();
+	let corpus = dir.path().join("corpus");
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	let out = cadenza(&["notes", "corpus", &s(&corpus)]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	assert!(corpus.join("legato_glide_long.wav").is_file());
+	assert!(corpus.join("legato_glide_long.json").is_file());
+
+	let eval = |extra: &[&str]| {
+		let mut args = vec!["notes", "eval", "--json", "--case", "legato_glide_long"];
+		args.extend_from_slice(extra);
+		let out = cadenza(&args);
+		assert!(
+			out.status.success(),
+			"{}",
+			String::from_utf8_lossy(&out.stderr)
+		);
+		serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+	};
+	let synthetic = eval(&[]);
+	let from_disk = eval(&["--no-synthetic", "--corpus", &s(&corpus)]);
+	assert_eq!(from_disk["cases"][0]["tags"][0], "real");
+	assert_eq!(
+		synthetic["total"]["detected"],
+		from_disk["total"]["detected"]
+	);
+	assert_eq!(
+		synthetic["total"]["mixed_rate"],
+		from_disk["total"]["mixed_rate"]
+	);
+
+	let out = cadenza(&["notes", "eval", "--detector", "nope"]);
+	assert!(String::from_utf8_lossy(&out.stderr).contains("baseline"));
+}
+
+#[test]
+fn notes_analyze_and_eval_pitch() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	let out = cadenza(&["notes", "corpus", &s(dir.path())]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let wav = dir.path().join("vibrato.wav");
+	let run = |extra: &[&str]| {
+		let mut args = vec!["notes", "analyze", wav.to_str().unwrap()];
+		args.extend_from_slice(extra);
+		Command::new(env!("CARGO_BIN_EXE_cadenza"))
+			.args(&args)
+			.env("XDG_CACHE_HOME", dir.path().join("cache"))
+			.output()
+			.unwrap()
+	};
+	let out = run(&["--json"]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let a: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(a["sample_rate"], 22_050);
+	assert!(a["frames"].as_array().unwrap().len() > 1_000);
+	assert!(
+		dir.path()
+			.join("cache/cadenza/analysis")
+			.read_dir()
+			.unwrap()
+			.count() == 1
+	);
+	let summary = String::from_utf8_lossy(&run(&[]).stdout).to_string();
+	assert!(
+		summary.contains("voiced:") && summary.contains("pitch:"),
+		"{summary}"
+	);
+
+	let out = cadenza(&["notes", "eval-pitch", "--json", "--case", "steady_mid"]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(r["tracker"], "pyin");
+	assert!(r["total"]["raw_pitch"].as_f64().unwrap() > 0.95);
+}
+
+#[test]
+fn notes_segment_finds_the_labeled_notes() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	let out = cadenza(&["notes", "corpus", &s(dir.path())]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let wav = s(&dir.path().join("legato_glide_long.wav"));
+	let run = |extra: &[&str]| {
+		let mut args = vec!["notes", "segment", wav.as_str()];
+		args.extend_from_slice(extra);
+		Command::new(env!("CARGO_BIN_EXE_cadenza"))
+			.args(&args)
+			.env("XDG_CACHE_HOME", dir.path().join("cache"))
+			.output()
+			.unwrap()
+	};
+	let labels: serde_json::Value = serde_json::from_str(
+		&std::fs::read_to_string(dir.path().join("legato_glide_long.json")).unwrap(),
+	)
+	.unwrap();
+	let truth = labels["notes"].as_array().unwrap();
+	let out = run(&["--json"]);
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let found: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	let notes = found["notes"].as_array().unwrap();
+	assert_eq!(notes.len(), truth.len());
+	for (n, t) in notes.iter().zip(truth) {
+		let cents = (n["center"].as_f64().unwrap() - t["pitch"].as_f64().unwrap()).abs() * 100.0;
+		assert!(cents < 5.0, "{n} vs {t}");
+	}
+
+	// A forced boundary in the middle of the first note adds one.
+	let first = &truth[0];
+	let mid = (first["onset"].as_f64().unwrap() + first["offset"].as_f64().unwrap()) / 2.0;
+	let out = run(&["--json", "--split", &format!("{mid}")]);
+	let split: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+	assert_eq!(split["notes"].as_array().unwrap().len(), truth.len() + 1);
+
+	let table = String::from_utf8_lossy(&run(&[]).stdout).to_string();
+	assert!(
+		table.contains("center") && table.lines().count() > truth.len(),
+		"{table}"
+	);
+	let bad = run(&["--sensitivity", "0"]);
+	assert!(!bad.status.success());
+	assert!(String::from_utf8_lossy(&bad.stderr).contains("--sensitivity"));
+}
+
+#[test]
+fn notes_to_midi_writes_a_midi_file() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	assert!(
+		cadenza(&["notes", "corpus", &s(dir.path())])
+			.status
+			.success()
+	);
+	let mid = dir.path().join("out.mid");
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"notes",
+			"to-midi",
+			&s(&dir.path().join("legato_glide_long.wav")),
+			"-o",
+			&s(&mid),
+			"--hum",
+			"--bends",
+		])
+		.env("XDG_CACHE_HOME", dir.path().join("cache"))
+		.output()
+		.unwrap();
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let stdout = String::from_utf8_lossy(&out.stdout);
+	assert!(stdout.starts_with("12 notes"), "{stdout}");
+	assert!(
+		stdout.contains("key:") && stdout.contains("pitch bend:"),
+		"{stdout}"
+	);
+	let bytes = std::fs::read(&mid).unwrap();
+	assert_eq!(&bytes[..4], b"MThd");
+}
+
+#[test]
+fn notes_tune_corrects_a_recording() {
+	let dir = tempfile::tempdir().unwrap();
+	let s = |p: &Path| p.to_str().unwrap().to_string();
+	assert!(
+		cadenza(&["notes", "corpus", &s(dir.path())])
+			.status
+			.success()
+	);
+	let wav = dir.path().join("tuned.wav");
+	let out = Command::new(env!("CARGO_BIN_EXE_cadenza"))
+		.args([
+			"notes",
+			"tune",
+			&s(&dir.path().join("steady_mid.wav")),
+			"-o",
+			&s(&wav),
+			"--transpose",
+			"-2",
+		])
+		.env("XDG_CACHE_HOME", dir.path().join("cache"))
+		.output()
+		.unwrap();
+	assert!(
+		out.status.success(),
+		"{}",
+		String::from_utf8_lossy(&out.stderr)
+	);
+	let stdout = String::from_utf8_lossy(&out.stdout);
+	assert!(stdout.contains("10 notes, 10 moved"), "{stdout}");
+	let worst: f64 = stdout
+		.split("worst after: ")
+		.nth(1)
+		.and_then(|t| t.split(' ').next())
+		.and_then(|t| t.parse().ok())
+		.unwrap();
+	assert!(worst <= 5.0, "{stdout}");
+	assert!(std::fs::metadata(&wav).unwrap().len() > 1000);
+	let bad = cadenza(&["notes", "tune", &s(&wav), "--key", "H major"]);
+	assert!(!bad.status.success());
+	assert!(String::from_utf8_lossy(&bad.stderr).contains("A minor"));
 }

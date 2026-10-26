@@ -457,6 +457,74 @@ fn piano_roll_double_click_opens_note_properties() {
 }
 
 #[test]
+fn piano_roll_bend_tool_draws_a_notes_curve_and_double_click_straightens_it() {
+	let (mut h, clip) = fl_piano();
+	h.key_press(Key::G);
+	h.run_steps(1);
+	assert_eq!(
+		h.state().state.view.piano.tool,
+		cadenza_app::state::piano::Tool::Bend
+	);
+	// Drag over C4 from its row up to D4's row: a rise of two semitones.
+	let a = note_pos(&h, clip, 0.1, 60);
+	let b = note_pos(&h, clip, 0.8, 62);
+	h.hover_at(a);
+	h.run_steps(1);
+	h.drag_at(a);
+	h.run_steps(1);
+	for i in 1..=6 {
+		h.hover_at(a + (b - a) * (i as f32 / 6.0));
+		h.run_steps(1);
+	}
+	h.drop_at(b);
+	h.run_steps(2);
+	let c4 = |h: &Harness<'_, CadenzaApp>| {
+		clip_notes(h, clip)
+			.into_iter()
+			.find(|n| n.pitch == 60)
+			.unwrap()
+	};
+	let n = c4(&h);
+	assert!(
+		(n.bend_at(Tick::from_beats(0.8)) - 2.0).abs() < 0.1,
+		"{:?}",
+		n.bend
+	);
+	assert!(
+		n.bend_at(Tick::from_beats(0.05)).abs() < 1e-6,
+		"before the stroke"
+	);
+	assert!(n.bend_at(Tick::from_beats(0.45)) > 0.5, "rising in between");
+	assert!(
+		clip_notes(&h, clip)
+			.iter()
+			.all(|m| m.pitch == 60 || m.bend.is_empty()),
+		"only that note bends"
+	);
+	assert_eq!(clip_notes(&h, clip).len(), 3);
+	assert_eq!(h.state().state.undo_label(), Some("Bend note"));
+
+	// Double-click it: straight again, and no properties popover.
+	let mid = note_pos(&h, clip, 0.5, 60);
+	h.hover_at(mid);
+	h.run_steps(1);
+	for _ in 0..2 {
+		for pressed in [true, false] {
+			h.event(egui::Event::PointerButton {
+				pos: mid,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: Modifiers::NONE,
+			});
+		}
+		h.run_steps(1);
+	}
+	h.run_steps(2);
+	assert!(c4(&h).bend.is_empty());
+	assert!(h.query_by_label("Pitch").is_none());
+}
+
+#[test]
 fn piano_roll_keys_clone_transpose_and_nudge_like_fl() {
 	let (mut h, clip) = fl_piano();
 	// Ctrl+A, Ctrl+B: the 3-beat phrase is cloned right after itself, selected; again
@@ -1518,6 +1586,9 @@ fn linked_paste_shares_note_edits_and_make_unique_splits_them() {
 					velocity: None,
 					start: None,
 					length: None,
+					bend: None,
+					pressure: None,
+					timbre: None,
 				}],
 			})
 	);
@@ -1557,6 +1628,9 @@ fn linked_paste_shares_note_edits_and_make_unique_splits_them() {
 					velocity: None,
 					start: None,
 					length: None,
+					bend: None,
+					pressure: None,
+					timbre: None,
 				}],
 			})
 	);
@@ -3280,6 +3354,33 @@ fn render_piano_roll_screens() {
 				if bar == 1 && ri == 0 {
 					selected.push(n.id);
 				}
+				let mut n = n;
+				// A bend up a whole tone on one chord's top note, vibrato on the last one's.
+				if ri == 2 && k == 2 && bar >= 2 {
+					n.bend = (0..32)
+						.map(|i| {
+							let at = i as f64 / 16.0;
+							let semitones = if bar == 2 {
+								(at.min(1.0) * 2.0) as f32
+							} else {
+								(0.35 * (at * std::f64::consts::TAU * 3.0).sin()) as f32
+							};
+							cadenza_model::NoteBendPoint {
+								tick: Tick::from_beats(at),
+								semitones,
+							}
+						})
+						.collect();
+				}
+				// Each chord's first top note swells (its own pressure).
+				if ri == 0 && k == 2 {
+					n.pressure = (0..12)
+						.map(|i| cadenza_model::NoteValuePoint {
+							tick: Tick::from_beats(f64::from(i) / 16.0),
+							value: (f64::from(i + 1) / 12.0) as f32,
+						})
+						.collect();
+				}
 				notes.push(n);
 			}
 		}
@@ -3325,6 +3426,9 @@ fn render_piano_roll_screens() {
 	shot(&mut h, &dir, "piano_roll_notes");
 	h.state_mut().state.view.piano.event_lane = EventLane::Controller(Controller::Cc(1));
 	shot(&mut h, &dir, "piano_roll_mod_wheel");
+	h.state_mut().state.view.piano.event_lane =
+		EventLane::Note(cadenza_model::NoteExpression::Pressure);
+	shot(&mut h, &dir, "piano_roll_note_pressure");
 	h.state_mut().state.view.piano.event_lane = EventLane::Velocity;
 	let mut app = h.into_state();
 	app.state.view.piano.framed = None;
@@ -3989,6 +4093,54 @@ fn render_phase17_screens() {
 	let folder = h.state().state.selection.track.unwrap();
 	h.state_mut().state.toggle_folder(folder);
 	shot(&mut h, &dir, "folder_folded");
+}
+
+#[test]
+fn piano_roll_note_pressure_lane_draws_one_notes_curve() {
+	use cadenza_model::NoteExpression;
+	let (mut h, clip) = fl_piano();
+	h.state_mut().state.view.piano.event_lane =
+		cadenza_app::state::piano::EventLane::Note(NoteExpression::Pressure);
+	h.run_steps(2);
+	let lane = h.state().piano_event_lane().unwrap();
+	let (bottom, top) = (lane.bottom() - 10.0, lane.top() + 10.0);
+	let x = |h: &Harness<'_, CadenzaApp>, beat: f64| note_pos(h, clip, beat, 60).x;
+	// Over D4 (beat 1..2): a swell from nothing to full.
+	h.hover_at(pos2(x(&h, 1.05), bottom));
+	h.run_steps(1);
+	h.drag_at(pos2(x(&h, 1.05), bottom));
+	h.run_steps(1);
+	for i in 1..=6 {
+		let f = i as f32 / 6.0;
+		h.hover_at(pos2(
+			x(&h, 1.05 + 0.6 * f64::from(f)),
+			bottom + (top - bottom) * f,
+		));
+		h.run_steps(1);
+	}
+	h.drop_at(pos2(x(&h, 1.65), top));
+	h.run_steps(2);
+	let note = |h: &Harness<'_, CadenzaApp>, pitch: u8| {
+		clip_notes(h, clip)
+			.into_iter()
+			.find(|n| n.pitch == pitch)
+			.unwrap()
+	};
+	let d4 = note(&h, 62);
+	let at = |beats: f64| d4.expression_at(NoteExpression::Pressure, Tick::from_beats(beats));
+	assert!(at(0.6) > 0.8, "{:?}", d4.pressure);
+	assert!(at(0.3) > 0.3 && at(0.3) < 0.7, "rising: {:?}", d4.pressure);
+	assert!(note(&h, 60).pressure.is_empty() && note(&h, 64).pressure.is_empty());
+	assert_eq!(h.state().state.undo_label(), Some("Note pressure"));
+	// The tab shows up now that the clip has data; right-click clears the curve.
+	let p = pos2(x(&h, 1.5), (top + bottom) / 2.0);
+	h.hover_at(p);
+	h.run_steps(1);
+	right_button(&h, p, true);
+	h.run_steps(1);
+	right_button(&h, p, false);
+	h.run_steps(2);
+	assert!(note(&h, 62).pressure.is_empty());
 }
 
 #[test]
@@ -6798,6 +6950,123 @@ fn render_mod_effects_screens() {
 	}
 }
 
+/// A sung phrase a little sharp with vibrato (`detected`) and its correction to E
+/// phrygian, for the Pitch Correct display.
+fn pitch_trace() -> Vec<cadenza_app::state::pitch_correct_editor::PitchPoint> {
+	use cadenza_app::state::pitch_correct_editor::PitchPoint;
+	let notes = [64.0, 65.0, 67.0, 69.0, 67.0, 64.0];
+	(0..400)
+		.map(|i| {
+			let t = i as f32 * 0.01;
+			let n = (t / 0.62) as usize;
+			let in_note = t - n as f32 * 0.62;
+			if n >= notes.len() || in_note > 0.55 {
+				return PitchPoint::from_readings(t as f64, -1.0, -1.0, -1.0);
+			}
+			let target = notes[n];
+			let scoop = (-in_note / 0.05).exp() * -0.6;
+			let sung = target + 0.3 + scoop + 0.25 * (std::f32::consts::TAU * 5.5 * t).sin();
+			let out = target + 0.25 * (std::f32::consts::TAU * 5.5 * t).sin() * 0.2 + scoop * 0.2;
+			PitchPoint::from_readings(t as f64, sung, out, target)
+		})
+		.collect()
+}
+
+#[test]
+fn the_pitch_correct_scale_and_key_are_one_click_each() {
+	let (mut a, r) = effect_dock_app("Lead", "pitch_correct", "Pitch Correct");
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	let mut h = app_harness(a, vec2(1920.0, 1000.0), false);
+	h.run_steps(3);
+	let before = h.state().state.document().history_labels().len();
+	h.get_by_label("Phrygian").click();
+	h.run_steps(2);
+	h.get_by_label("Key E").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	assert_eq!(builtin_param(s, r, "pitch_correct", "scale"), 6.0);
+	assert_eq!(builtin_param(s, r, "pitch_correct", "key"), 4.0);
+	assert_eq!(s.document().history_labels().len(), before + 2);
+	// The melody: the MIDI menu lists the instrument tracks.
+	h.get_by_label("MIDI: none").click();
+	h.run_steps(2);
+	h.get_by_label("Bass").click();
+	h.run_steps(2);
+	let s = &h.state().state;
+	let bass = s
+		.project()
+		.tracks
+		.iter()
+		.find(|t| t.name == "Bass")
+		.unwrap()
+		.id;
+	let device = s.project().device(r.track, r.device).unwrap();
+	assert_eq!(device.midi_input, Some(bass));
+	assert_eq!(s.undo_label(), Some("Set MIDI input"));
+	h.get_by_label("MIDI: Bass").click();
+	h.run_steps(2);
+	h.get_by_label("Only while a note is held").click();
+	h.run_steps(2);
+	assert_eq!(
+		builtin_param(&h.state().state, r, "pitch_correct", "midi"),
+		2.0
+	);
+}
+
+#[test]
+fn render_pitch_correct_screens() {
+	use cadenza_app::ui::devices::pitch_correct;
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let params = [
+		("key", 4.0),
+		("scale", 6.0),
+		("retune", 20.0),
+		("humanize", 30.0),
+		("reference", 448.0),
+	];
+	let trace = pitch_trace();
+	for (width, name) in [
+		(1920.0, "pitch_correct_dock"),
+		(1100.0, "pitch_correct_dock_narrow"),
+	] {
+		let (mut a, r) = effect_dock_app("Lead", "pitch_correct", "Pitch Correct");
+		a.state.commit_params(r.track, r.device, &params, "Tune");
+		let mut h = app_harness(a, vec2(width, 1000.0), true);
+		h.run_steps(2);
+		pitch_correct::set_display(&h.ctx, "dock", r, &trace);
+		h.run_steps(4);
+		h.render()
+			.unwrap()
+			.save(dir.join(format!("{name}.png")))
+			.unwrap();
+	}
+	let (mut a, _) = effect_dock_app("Lead", "pitch_correct", "Pitch Correct");
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	let mut h = app_harness(a, vec2(1920.0, 1000.0), true);
+	h.run_steps(4);
+	h.render()
+		.unwrap()
+		.save(dir.join("pitch_correct_dock_idle.png"))
+		.unwrap();
+	let mut a = app();
+	let r = insert_builtin(&mut a.state, "Lead", "pitch_correct", "Pitch Correct");
+	a.state.commit_params(r.track, r.device, &params, "Tune");
+	a.state.selection.select_device(r);
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	a.state.view.panels.set(PanelKind::Inspector, true);
+	let mut h = app_harness(a, vec2(1920.0, 1100.0), true);
+	h.run_steps(2);
+	pitch_correct::set_display(&h.ctx, "inspector", r, &trace);
+	h.run_steps(4);
+	h.render()
+		.unwrap()
+		.save(dir.join("pitch_correct_inspector_compact.png"))
+		.unwrap();
+}
+
 /// The app with the Lead track's Poly Synth open in the dock (inspector and browser
 /// hidden).
 fn synth_dock_app() -> (CadenzaApp, DeviceRef) {
@@ -9177,4 +9446,309 @@ fn render_midi_learn_screens() {
 	h.run_steps(5);
 	shot(&mut h, &dir, "explain_device_chat");
 	assert!(h.state().state.project().midi_map.len() == 3);
+}
+
+/// The "Convert to MIDI" dialog on a sung phrase (NE-3):
+/// `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored render_to_midi_screens`.
+#[test]
+#[ignore]
+fn render_to_midi_screens() {
+	use cadenza_mcp::tools::notes::ConvertMode;
+	use cadenza_notes::eval::synth::{Phrase, SynthNote, Vibrato, Vowel, render};
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	let wav = tmp.path().join("Lead vocal.wav");
+	let mut notes: Vec<SynthNote> = [
+		(57.0, 0.5),
+		(60.0, 0.25),
+		(62.0, 0.25),
+		(64.0, 1.0),
+		(62.0, 0.5),
+		(60.0, 0.5),
+		(59.0, 0.25),
+		(57.0, 1.5),
+	]
+	.into_iter()
+	.map(|(p, d)| SynthNote::new(p, d).legato(0.06))
+	.collect();
+	notes[0].rest_before = 0.2;
+	notes[3].detune_cents = 25.0;
+	notes[7].vibrato = Some(Vibrato {
+		rate_hz: 5.5,
+		depth_cents: 40.0,
+		delay: 0.3,
+	});
+	let r = render(&Phrase {
+		notes,
+		vowel: Vowel::A,
+		sample_rate: 44_100,
+		snr_db: None,
+		reverb: None,
+		seed: 4,
+	});
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(44_100, vec![r.samples]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	let mut state = AppState::headless();
+	state.analysis_cache = Some(tmp.path().join("cache"));
+	state.import_audio(&wav);
+	let clip = state.project().tracks.last().unwrap().clips[0].id;
+	state.start_convert_to_midi(clip);
+	let start = std::time::Instant::now();
+	while state.convert_preview().is_none() {
+		assert!(start.elapsed().as_secs() < 30);
+		std::thread::sleep(std::time::Duration::from_millis(5));
+		state.tick(std::time::Instant::now());
+	}
+	let mut h = screenshot_harness(CadenzaApp::with_state(state));
+	shot(&mut h, &dir, "to_midi_recording");
+	{
+		let c = h.state_mut().state.convert_to_midi_mut().unwrap();
+		c.set_mode(ConvertMode::Hum);
+		c.args.bends = Some(true);
+	}
+	shot(&mut h, &dir, "to_midi_humming");
+	h.get_by_label("Convert").click();
+	shot(&mut h, &dir, "to_midi_result");
+}
+
+/// Note renders of this test binary go to a temp folder (set once, before any render).
+fn note_renders_dir() -> PathBuf {
+	static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+	DIR.get_or_init(|| {
+		let dir =
+			std::env::temp_dir().join(format!("cadenza-ui-note-renders-{}", std::process::id()));
+		// SAFETY: set once (OnceLock) before any render is looked up.
+		unsafe { std::env::set_var(cadenza_engine::note_render::NOTE_RENDERS_ENV, &dir) };
+		dir
+	})
+	.clone()
+}
+
+/// A short sung line with detuned notes and a vibrato ending, as a WAV in `dir`.
+fn synthetic_vocal(dir: &std::path::Path) -> PathBuf {
+	use cadenza_notes::eval::synth::{Phrase, SynthNote, Vibrato, Vowel, render};
+	let wav = dir.join("Lead vocal.wav");
+	let mut notes: Vec<SynthNote> = [
+		(57.0, 0.5, 18.0),
+		(60.0, 0.3, -22.0),
+		(62.0, 0.3, 12.0),
+		(64.0, 0.9, 35.0),
+		(62.0, 0.45, -15.0),
+		(60.0, 0.45, 28.0),
+		(59.0, 0.3, -30.0),
+		(57.0, 1.4, 8.0),
+	]
+	.into_iter()
+	.map(|(p, d, c)| {
+		let mut n = SynthNote::new(p, d).legato(0.06);
+		n.detune_cents = c;
+		n
+	})
+	.collect();
+	notes[0].rest_before = 0.25;
+	notes[4] = notes[4].clone().rest(0.2);
+	notes[7].vibrato = Some(Vibrato {
+		rate_hz: 5.5,
+		depth_cents: 45.0,
+		delay: 0.3,
+	});
+	let r = render(&Phrase {
+		notes,
+		vowel: Vowel::A,
+		sample_rate: 44_100,
+		snr_db: None,
+		reverb: None,
+		seed: 7,
+	});
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(44_100, vec![r.samples]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	wav
+}
+
+#[test]
+fn note_editor_detects_and_corrects_through_the_ui() {
+	note_renders_dir();
+	let tmp = tempfile::tempdir().unwrap();
+	let wav = synthetic_vocal(tmp.path());
+	let mut state = AppState::headless();
+	state.analysis_cache = Some(tmp.path().join("cache"));
+	state.import_audio(&wav);
+	let clip = state.project().tracks.last().unwrap().clips[0].id;
+	assert!(state.open_note_editor(clip));
+	let start = std::time::Instant::now();
+	while cadenza_app::state::note_editor::clip_notes(state.project(), clip).is_none() {
+		assert!(start.elapsed().as_secs() < 30);
+		std::thread::sleep(std::time::Duration::from_millis(5));
+		state.tick(std::time::Instant::now());
+	}
+	assert_eq!(
+		state.document().history_labels().last().copied(),
+		Some("Detect notes")
+	);
+	let mut h = harness(CadenzaApp::with_state(state));
+	h.run_steps(4);
+	h.get_by_label("Notes");
+	h.get_by_role_and_label(egui::accesskit::Role::Button, "Correct pitch")
+		.click();
+	h.run_steps(4);
+	let s = &h.state().state;
+	assert_eq!(
+		s.document().history_labels().last().copied(),
+		Some("Correct pitch")
+	);
+	let (edits, _) = cadenza_app::state::note_editor::clip_notes(s.project(), clip).unwrap();
+	assert_eq!(edits.notes.len(), 8);
+	assert!(
+		edits
+			.notes
+			.iter()
+			.all(|n| n.pitch.is_some_and(|p| p == p.round()))
+	);
+	// Back to the waveform and into the notes again keeps them.
+	h.get_by_label("Waveform").click();
+	h.run_steps(4);
+	assert_eq!(
+		h.state().state.view.audio.mode,
+		cadenza_app::state::note_editor::EditorMode::Waveform
+	);
+}
+
+#[test]
+#[ignore = "writes PNGs; run with CADENZA_SCREENSHOT_DIR"]
+fn render_note_editor_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	note_renders_dir();
+	let wav = synthetic_vocal(tmp.path());
+	let mut state = AppState::headless();
+	state.analysis_cache = Some(tmp.path().join("cache"));
+	state.import_audio(&wav);
+	let clip = state.project().tracks.last().unwrap().clips[0].id;
+	assert!(state.open_note_editor(clip));
+	let start = std::time::Instant::now();
+	while cadenza_app::state::note_editor::clip_notes(state.project(), clip).is_none() {
+		assert!(start.elapsed().as_secs() < 30);
+		std::thread::sleep(std::time::Duration::from_millis(5));
+		state.tick(std::time::Instant::now());
+	}
+	let mut h = screenshot_harness(CadenzaApp::with_state(state));
+	shot(&mut h, &dir, "notes_detected");
+	{
+		let s = &mut h.state_mut().state;
+		let (edits, _) = cadenza_app::state::note_editor::clip_notes(s.project(), clip).unwrap();
+		let view = s.view.audio.notes.clone();
+		let cmd = cadenza_app::state::note_editor::correct_pitch(
+			clip,
+			&edits,
+			&Default::default(),
+			&view,
+		);
+		assert!(s.note_edit(Ok(cmd)));
+		let (edits, _) = cadenza_app::state::note_editor::clip_notes(s.project(), clip).unwrap();
+		let last = edits.notes.last().unwrap().id;
+		s.view.audio.notes.selection = [last].into();
+		let flat = cadenza_app::state::note_editor::tool_edit(
+			clip,
+			&edits,
+			&s.view.audio.notes.selection.clone(),
+			cadenza_app::state::note_editor::NoteTool::Modulation,
+			Some(-4.0),
+		);
+		assert!(s.note_edit(Ok(flat)));
+		s.view.audio.notes.key = cadenza_app::state::note_editor::KeyChoice::Detected;
+	}
+	shot(&mut h, &dir, "notes_corrected");
+	h.state_mut().state.view.audio.notes.tool = cadenza_app::state::note_editor::NoteTool::Formant;
+	h.state_mut().state.view.audio.notes.macros = false;
+	shot(&mut h, &dir, "notes_no_macros");
+}
+
+/// A few seconds of block chords over a bass with harmonics (a stand-in for a piano), or
+/// the file in `CADENZA_POLY_SCREEN_AUDIO`.
+fn chord_recording(dir: &std::path::Path) -> PathBuf {
+	if let Some(path) = std::env::var_os("CADENZA_POLY_SCREEN_AUDIO") {
+		return PathBuf::from(path);
+	}
+	let rate = 44_100u32;
+	let chords: [(&[u8], f64); 4] = [
+		(&[43, 62, 67, 71], 0.0),
+		(&[40, 59, 64, 67], 1.0),
+		(&[36, 60, 64, 67], 2.0),
+		(&[38, 57, 62, 66], 3.0),
+	];
+	let n = (4.5 * f64::from(rate)) as usize;
+	let mut x = vec![0.0f32; n];
+	for (pitches, start) in chords {
+		for &p in pitches {
+			let f = 440.0 * 2f64.powf((f64::from(p) - 69.0) / 12.0);
+			for (i, v) in x.iter_mut().enumerate() {
+				let t = i as f64 / f64::from(rate) - start;
+				if !(0.0..0.95).contains(&t) {
+					continue;
+				}
+				let env = (-t * 2.0).exp() * (t / 0.005).min(1.0);
+				for h in 1..5 {
+					*v += (env * (2.0 * std::f64::consts::PI * f * h as f64 * t).sin() * 0.12
+						/ (h * h) as f64) as f32;
+				}
+			}
+		}
+	}
+	let wav = dir.join("Piano chords.wav");
+	let buf = cadenza_audio_io::AudioBuffer::from_planar(rate, vec![x]).unwrap();
+	cadenza_audio_io::export(
+		&buf,
+		&wav,
+		&cadenza_audio_io::ExportOptions::wav(cadenza_audio_io::WavSampleFormat::Float32),
+	)
+	.unwrap();
+	wav
+}
+
+#[test]
+#[ignore = "writes PNGs; run with CADENZA_SCREENSHOT_DIR"]
+fn render_polyphonic_note_editor_screens() {
+	let Some(dir) = std::env::var_os("CADENZA_SCREENSHOT_DIR").map(PathBuf::from) else {
+		return;
+	};
+	std::fs::create_dir_all(&dir).unwrap();
+	let tmp = tempfile::tempdir().unwrap();
+	note_renders_dir();
+	let wav = chord_recording(tmp.path());
+	let mut state = AppState::headless();
+	state.analysis_cache = Some(tmp.path().join("cache"));
+	state.import_audio(&wav);
+	let clip = state.project().tracks.last().unwrap().clips[0].id;
+	assert!(state.open_note_editor(clip));
+	let file = cadenza_app::state::audio_edit::region(state.project(), clip)
+		.unwrap()
+		.file;
+	let start = std::time::Instant::now();
+	while cadenza_app::state::note_editor::clip_notes(state.project(), clip).is_none()
+		|| state.poly_layers.get(&file).is_none()
+	{
+		assert!(start.elapsed().as_secs() < 60);
+		std::thread::sleep(std::time::Duration::from_millis(5));
+		state.tick(std::time::Instant::now());
+	}
+	assert_eq!(state.poly_layers.polyphonic(&file), Some(true));
+	let mut h = screenshot_harness(CadenzaApp::with_state(state));
+	shot(&mut h, &dir, "notes_polyphonic");
+	h.get_by_label("Polyphonic recording");
 }

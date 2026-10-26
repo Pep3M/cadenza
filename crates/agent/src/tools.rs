@@ -30,6 +30,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
 	"analyze_track",
 	"compare_to_reference",
 	"mix_targets",
+	"analyze_vocal",
+	"get_audio_notes",
 	"render",
 	"save_project",
 	"get_audio_info",
@@ -446,6 +448,12 @@ impl ToolBridge {
 					None => return Err("missing 'path'".into()),
 				}
 			}
+			"audio_to_midi" => {
+				if let Some(raw) = obj.get("mpe_path").and_then(Value::as_str) {
+					let path = self.policy.resolve_any(raw, MIDI_EXTENSIONS)?;
+					obj.insert("mpe_path".into(), path_value(&path));
+				}
+			}
 			"compare_to_reference" => {
 				let raw = obj
 					.get("file")
@@ -524,7 +532,8 @@ fn offered(name: &str, allow_plugins: bool) -> bool {
 fn describe(name: &str, description: String) -> String {
 	match name {
 		"save_project" | "open_project" | "render" | "import_audio" | "import_midi"
-		| "export_midi" | "get_audio_info" | "relink_files" | "pack_project" | "export_stems" => format!(
+		| "export_midi" | "get_audio_info" | "relink_files" | "pack_project" | "export_stems"
+		| "audio_to_midi" => format!(
 			"{description} Paths are file names relative to the session folder; locations \
 			 outside it are rejected."
 		),
@@ -800,6 +809,14 @@ mod tests {
 		);
 		assert!(ok("export_midi", "../out.mid").is_err());
 		assert!(ok("export_midi", "out.wav").unwrap_err().contains(".mid"));
+		let mpe = |path: &str| bridge.apply_policy("audio_to_midi", json!({ "mpe_path": path }));
+		assert_eq!(
+			mpe("chords.mid").unwrap()["mpe_path"],
+			json!(root.join("chords.mid").display().to_string())
+		);
+		assert!(mpe("/tmp/chords.mid").is_err());
+		assert!(mpe("chords.wav").is_err());
+		assert!(bridge.apply_policy("audio_to_midi", json!({})).is_ok());
 		assert!(ok("get_audio_info", "/tmp/x.wav").is_err());
 		assert!(bridge.apply_policy("get_audio_info", json!({})).is_ok());
 		assert!(bridge.apply_policy("import_midi", json!({})).is_err());

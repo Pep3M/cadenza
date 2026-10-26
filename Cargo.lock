@@ -770,6 +770,7 @@ dependencies = [
  "cadenza-mcp",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
  "eframe",
@@ -822,6 +823,7 @@ dependencies = [
  "cadenza-mcp",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
  "clap",
@@ -858,6 +860,7 @@ dependencies = [
  "cadenza-dsp",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cpal",
  "hound",
@@ -865,6 +868,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -893,6 +897,7 @@ dependencies = [
  "cadenza-library",
  "cadenza-midi-io",
  "cadenza-model",
+ "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
  "hound",
@@ -934,6 +939,21 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "cadenza-notes"
+version = "0.2.0"
+dependencies = [
+ "cadenza-audio-io",
+ "cadenza-core",
+ "cadenza-model",
+ "cadenza-theory",
+ "realfft",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

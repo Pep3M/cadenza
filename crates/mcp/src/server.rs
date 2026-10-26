@@ -27,8 +27,8 @@ use crate::error::ServeError;
 use crate::player::PlayerHandle;
 use crate::session::{Session, SharedSession};
 use crate::tools::{
-	arrange, audio, clips, compose, controllers, devices, library, midi, mix, modulation, playback,
-	portable, presets, project, render, samples, tracks,
+	arrange, audio, clips, compose, controllers, devices, library, midi, mix, modulation, notes,
+	playback, portable, presets, project, render, samples, tracks, tuning,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -49,7 +49,10 @@ with voicing and comping pattern) and `write_drum_pattern` (ASCII step grids on 
 like kick/snare/closed_hat); or build clips by hand with `add_midi_clip`/`add_notes`. Use \
 `scale_info`/`snap_to_scale` to keep melodies in key, `quantize_notes`/`humanize_notes`/\
 `transpose_notes` to shape them. Add expression with `set_controller_events`/\
-`draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend).\n\
+`draw_controller_curve` (sustain pedal, mod wheel, expression, filter CCs, pitch bend); a \
+bend on one note only (a guitar bend in a chord, a slide, a fall) is that note's own `bend` \
+(`add_notes` or `set_note_bend`); a swell or brightening inside one held note is its own \
+`pressure`/`timbre` (`set_note_expression`).\n\
 Style library: for a genre request, `library_search` kind style for it and `library_get` \
 the guide before deciding the song (tempo, form, progressions, pattern ids per role and \
 section, sounds, mix, do/don't); prefer `apply_form` + `apply_pattern` from the guide over \
@@ -79,7 +82,11 @@ hangs is bypassed and the work continues. `render`/`analyze_mix` then name it in
 `warnings` (re-render to retry); during playback `transport_status` lists it under \
 `plugin_crashes` and `restart_plugins` reloads it. Replace a plugin that keeps crashing.\n\n\
 Audio and MIDI files: `import_audio` puts a recording on an Audio track (then \
-`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files. \
+`set_clip_fades`, `get_audio_info`); `import_midi`/`export_midi` read and write .mid files; \
+`audio_to_midi` turns a sung, hummed or played (monophonic) audio clip into a MIDI clip. \
+Tuning a vocal: `detect_audio_notes`, `analyze_vocal` (scale, the singer's offset, the \
+doubtful notes), `tune_audio_notes` (toward the targets, overrides for your decisions), \
+`edit_audio_notes`, `split_audio_note`/`merge_audio_notes`, `get_audio_notes`. \
 `export_stems` writes per-track/bus stems (and the mixdown) with range, format, \
 normalization and metadata. Project files: `list_missing_files`/`relink_files` fix moved \
 audio, `collect_files` copies outside files into the project folder, `pack_project` zips it.\n\n\
@@ -545,6 +552,22 @@ impl CadenzaServer {
 	}
 
 	#[tool(
+		description = "Feeds an effect the MIDI notes of an instrument track: a pitch_correct \
+			on a vocal then tunes each sung note to the note the melody track holds (in the \
+			singer's octave; its `midi` param: 1 = held note else the scale, 2 = only while a \
+			note is held). track_id + device_id select the effect (omit track_id for a master \
+			insert); source_track_id is the melody's instrument track (omit/null to \
+			disconnect). The melody can be a silent guide (no instrument, or muted). Removing \
+			that track disconnects it."
+	)]
+	fn set_midi_input(
+		&self,
+		Parameters(args): Parameters<tracks::SetMidiInputArgs>,
+	) -> Result<(), ErrorData> {
+		self.run_mut(|s| tracks::set_midi_input(s, args))
+	}
+
+	#[tool(
 		description = "Adds movement to a built-in device: LFOs and envelope followers that \
 			move parameters around their set (or automated) value, e.g. a slow sine on a pad's \
 			filter_cutoff, a 1/8 tremolo (sync_beats 0.5) on gain, a kick-keyed envelope \
@@ -702,6 +725,39 @@ impl CadenzaServer {
 		Parameters(args): Parameters<clips::AddNotesArgs>,
 	) -> Result<Json<clips::AddNotesOutput>, ErrorData> {
 		Ok(Json(self.run_mut(|s| clips::add_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "Sets one note's own pitch curve (per-note bend, MPE-style): guitar bends, \
+			slides into or out of a note, vibrato or a fall on one note of a chord while the others \
+			stay. points [{at_beats (from the note's start), semitones (-48..48)}] are joined by \
+			straight lines; [] makes the note straight again. Notes can also carry `bend` in \
+			add_notes/add_midi_clip; get_clip_notes shows it. Played by the built-in poly_synth, \
+			electric_piano and sampler and by CLAP plugins with note expressions (other plugins \
+			ignore it). One undo step."
+	)]
+	fn set_note_bend(
+		&self,
+		Parameters(args): Parameters<clips::SetNoteBendArgs>,
+	) -> Result<Json<clips::SetNoteBendOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| clips::set_note_bend(s, args))?))
+	}
+
+	#[tool(
+		description = "Sets one note's own pressure or timbre curve (per-note expression, \
+			MPE-style): a swell, an accent or a brightening inside one held note while the others \
+			of the chord stay. kind pressure (0..1, none = 0) or timbre (0..1, none = 0.5); points \
+			[{at_beats (from the note's start), value}] joined by straight lines; [] removes it. \
+			Notes can also carry `pressure`/`timbre` in add_notes/add_midi_clip; get_clip_notes \
+			shows them; export_midi { mpe } writes them (channel pressure and CC74). The built-in \
+			poly_synth and sampler open/move their filter with them, CLAP plugins get pressure \
+			and brightness note expressions; others ignore them. One undo step."
+	)]
+	fn set_note_expression(
+		&self,
+		Parameters(args): Parameters<clips::SetNoteExpressionArgs>,
+	) -> Result<Json<clips::SetNoteExpressionOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| clips::set_note_expression(s, args))?))
 	}
 
 	#[tool(
@@ -889,11 +945,135 @@ impl CadenzaServer {
 	}
 
 	#[tool(
+		description = "Captures the notes of an audio clip as a MIDI clip, in one undo step: \
+			on track_id (an instrument track) or on a new instrument track below the audio \
+			track (bass, keys or lead sound by register; keys for chords), aligned with the \
+			audio. algorithm: auto (default: poly when chords sound a good part of the time), \
+			mono (one line: voice, hum, bass, lead; exact timing, intonation, bends), poly \
+			(chords: piano, guitar, keys, ensembles; no bends), percussive (drum loops -> \
+			drum_machine notes; drum_note writes every hit as one note) or pitched_percussive \
+			(808s, toms, plucked bass: a note per hit at its pitch down to B0, slides as bends \
+			with bends true; an 808 gets the 808 Clean synth). mode audio (default) keeps the sung timing and nearest \
+			semitone; mode hum quantizes to sixteenths, infers and snaps to the key and merges \
+			repeats. Override with quantize_beats, key (\"auto\", \"off\", \"A minor\"), \
+			bends (pitch-bend lane replaying slides/vibrato; with poly each note gets its own bend), octave_shift, lowest/highest \
+			(fold into a range), velocity, sensitivity. mpe_path also writes an MPE .mid (each \
+			note its own channel and pitch curve: chord notes bend independently) for other \
+			programs. Returns the clip, key, range and the first notes with their sung \
+			intonation in cents."
+	)]
+	fn audio_to_midi(
+		&self,
+		Parameters(args): Parameters<notes::AudioToMidiArgs>,
+	) -> Result<Json<notes::AudioToMidiOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| notes::audio_to_midi(s, args))?))
+	}
+
+	#[tool(
+		description = "Detects the notes of a sung or played monophonic audio clip (voice, \
+			lead, bass) for tuning, in one undo step. Again on a clip that has notes, it keeps \
+			the edits, splits and merges of the notes it finds again. sensitivity above 1 \
+			finds more notes, below 1 fewer. Then analyze_vocal."
+	)]
+	fn detect_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::DetectAudioNotesArgs>,
+	) -> Result<Json<tuning::DetectAudioNotesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::detect_audio_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "The tuning engineer's read of an audio clip's detected notes (read \
+			only): the scale and the singer's overall offset fitted to the notes (every mode; \
+			alternatives that fit nearly as well), range, mean error of the sung and the \
+			current pitches against their targets, and the decisions left to you: notes \
+			between two tones, chromatic notes kept, notes that may hold two notes (split \
+			them), unsure notes. key (\"auto\", \"nearest\", \"E phrygian\"), \
+			offset_cents and reference_clip_id (a MIDI melody) change where targets come from. \
+			Notes are numbered in time order."
+	)]
+	fn analyze_vocal(
+		&self,
+		Parameters(args): Parameters<tuning::AnalyzeVocalArgs>,
+	) -> Result<Json<tuning::VocalReport>, ErrorData> {
+		Ok(Json(tuning::analyze_vocal(&self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Lists the detected notes of an audio clip (read only), optionally in \
+			start_beat..end_beat: number, beat, length, sung pitch with cents, target tone \
+			with its reason (in_scale, chromatic, joins_next, scoop_landing, reference) and the \
+			other tone it could be, the pitch now when retuned, other edits, confidence and \
+			flags. Same key/offset_cents/reference_clip_id as analyze_vocal; limit (40, max \
+			200)."
+	)]
+	fn get_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::GetAudioNotesArgs>,
+	) -> Result<Json<tuning::GetAudioNotesOutput>, ErrorData> {
+		Ok(Json(tuning::get_audio_notes(&self.session(), args)?))
+	}
+
+	#[tool(
+		description = "Retunes the notes of an audio clip toward their targets (the same as \
+			analyze_vocal's), in one undo step: center_pct of the way (100 default), drift_pct \
+			of the slow drift straightened (0 default), vibrato_pct of the vibrato kept (default \
+			untouched), notes within threshold_cents left alone. notes picks note numbers \
+			(default all); overrides gives your tone for doubtful notes ([{note, pitch}]). \
+			Returns the mean error before -> after and the changes. The sound updates after a \
+			short background render."
+	)]
+	fn tune_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::TuneAudioNotesArgs>,
+	) -> Result<Json<tuning::TuneAudioNotesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::tune_audio_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "Edits single notes of an audio clip by number, in one undo step: pitch \
+			(tone name or MIDI number) and/or cents, drift_pct and vibrato_pct kept (100 = as \
+			sung, 0 = straight/flat), formant_cents, gain_db, as_sung (reset first)."
+	)]
+	fn edit_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::EditAudioNotesArgs>,
+	) -> Result<Json<tuning::EditAudioNotesOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::edit_audio_notes(s, args))?))
+	}
+
+	#[tool(
+		description = "Splits a detected note of an audio clip at a song beat (two notes that \
+			can be tuned apart; kept by later detections), one undo step. Notes are renumbered: \
+			the result lists the notes around the cut."
+	)]
+	fn split_audio_note(
+		&self,
+		Parameters(args): Parameters<tuning::SplitAudioNoteArgs>,
+	) -> Result<Json<tuning::ReshapeOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::split_audio_note(s, args))?))
+	}
+
+	#[tool(
+		description = "Joins a detected note of an audio clip with the next one (a note the \
+			detection cut in two; kept by later detections), one undo step. Notes are \
+			renumbered: the result lists the notes around the join."
+	)]
+	fn merge_audio_notes(
+		&self,
+		Parameters(args): Parameters<tuning::MergeAudioNotesArgs>,
+	) -> Result<Json<tuning::ReshapeOutput>, ErrorData> {
+		Ok(Json(self.run_mut(|s| tuning::merge_audio_notes(s, args))?))
+	}
+
+	#[tool(
 		description = "Imports a standard MIDI file (.mid) in one undo step: new instrument \
 			tracks per source track (or per channel with split_by_channel; drums get \
 			drum_machine, the rest poly_synth), or one clip on an existing instrument track \
 			(track_id, at_beats). Also applies the file's tempo map, time signature and \
-			markers. Returns the created tracks/clip and warnings about data that was dropped."
+			markers. MPE files (an MPE configuration message) become one instrument per \
+			zone whose notes keep their own pitch bends (see get_clip_notes). Returns the \
+			created tracks/clip and warnings about data that was dropped."
 	)]
 	fn import_midi(
 		&self,
@@ -905,7 +1085,9 @@ impl CadenzaServer {
 	#[tool(
 		description = "Writes the project's MIDI to a standard MIDI file (.mid): every \
 			instrument track with notes, or only track_id, or only one clip (clip_id). \
-			Includes the tempo map, time signature and markers."
+			Includes the tempo map, time signature and markers. mpe true (with track_id or \
+			clip_id) writes MPE instead: each note on its own channel, keeping the notes' own \
+			bends."
 	)]
 	fn export_midi(
 		&self,

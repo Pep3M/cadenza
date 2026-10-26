@@ -524,6 +524,9 @@ impl PolySynth {
 
 	fn handle(&mut self, ev: &MidiEvent) {
 		self.held.apply(ev);
+		if matches!(ev, MidiEvent::NoteOn { .. } | MidiEvent::NoteOff { .. }) {
+			self.expr.apply(ev);
+		}
 		match *ev {
 			MidiEvent::NoteOn {
 				pitch, velocity, ..
@@ -589,14 +592,15 @@ impl PolySynth {
 		let key_track = p.get(P_KEY_TRACK) * 0.01;
 		let vel_sens = p.get(P_VEL_SENS) * 0.01;
 		let glide_coeff = one_pole_coeff(p.get(P_GLIDE) * 0.4, sr);
-		// Bend + mod wheel vibrato for this chunk; pressure opens the filter.
+		// Bend + mod wheel vibrato for this chunk; pressure and timbre move the filter.
 		let pitch_offset = self.expr.pitch_offset(n, sr);
-		let pressure_semis = self.expr.pressure * 24.0;
 
 		for v in self.voices.iter_mut().filter(|v| v.slot.active) {
 			let vel_scale = 1.0 - vel_sens * (1.0 - v.velocity);
 			let amp_scale = vel_scale * vel_scale * VOICE_GAIN;
-			let mut inc = midi_to_hz(v.pitch + pitch_offset) / sr;
+			let key_bend = self.expr.note_bend(v.slot.note);
+			let pressure_semis = self.expr.filter_semitones(v.slot.note);
+			let mut inc = midi_to_hz(v.pitch + pitch_offset + key_bend) / sr;
 			for i in 0..n {
 				if v.pitch != v.target_pitch {
 					v.pitch += (v.target_pitch - v.pitch) * glide_coeff;
@@ -607,7 +611,7 @@ impl PolySynth {
 				let fenv = v.filter_env.tick();
 				let aenv = v.amp_env.tick();
 				if v.control_counter == 0 {
-					inc = midi_to_hz(v.pitch + pitch_offset) / sr;
+					inc = midi_to_hz(v.pitch + pitch_offset + key_bend) / sr;
 					let lanes = v.lvl1.iter_mut().zip(&mut v.lvl2).zip(&detune);
 					for ((l1, l2), d) in lanes.take(unison) {
 						if table1.is_some() {

@@ -281,6 +281,10 @@ impl DeviceEditorUi {
 				self.instrument.clear();
 				crate::ui::devices::gain::gain_body(ui, state, cx);
 			}
+			"pitch_correct" => {
+				self.instrument.clear();
+				crate::ui::devices::pitch_correct::pitch_correct_body(ui, state, cx);
+			}
 			"poly_synth" => {
 				self.instrument.clear();
 				crate::ui::devices::poly_synth::poly_synth_body(

@@ -4,6 +4,7 @@
 //! Only this crate mutates [`Project`]; every other crate goes through [`Document::execute`].
 
 mod apply;
+pub mod audio_notes;
 pub mod command;
 pub mod controller;
 pub mod document;
@@ -20,6 +21,9 @@ pub mod summary;
 pub mod takes;
 pub mod validate;
 
+pub use audio_notes::{
+	AudioNote, AudioNoteFlag, AudioNotePatch, AudioNotesSummary, NoteEdits, NoteSpan,
+};
 pub use command::{
 	AudioClipPatch, ChannelPatch, ClipPatch, Command, NotePatch, SendPatch, TrackPatch,
 };
@@ -32,9 +36,9 @@ pub use modulation::{EnvelopeSource, LfoShape, ModTarget, Modulator, ModulatorKi
 pub use persist::{backup_path, write_atomic};
 pub use project::{
 	AutomationLane, AutomationPoint, Channel, Clip, ClipContent, ClipFade, Device, DeviceKind,
-	FORMAT_VERSION, FadeCurve, Freeze, Marker, MonitorMode, Note, Output, OutputRoute, PointShape,
-	Project, ProjectMeta, Send, SidechainSource, Take, Track, TrackInput, TrackKind,
-	automation_value,
+	FORMAT_VERSION, FadeCurve, Freeze, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, Marker, MonitorMode,
+	Note, NoteBendPoint, NoteExpression, NoteValuePoint, Output, OutputRoute, PointShape, Project,
+	ProjectMeta, Send, SidechainSource, Take, Track, TrackInput, TrackKind, automation_value,
 };
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{

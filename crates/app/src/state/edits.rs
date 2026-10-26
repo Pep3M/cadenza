@@ -332,6 +332,9 @@ pub fn trim_start(project: &Project, clip: ClipId, start: Tick) -> Option<Comman
 						velocity: None,
 						start: Some(s),
 						length: (len != n.length).then_some(len),
+						bend: None,
+						pressure: None,
+						timbre: None,
 					}
 				})
 				.collect();

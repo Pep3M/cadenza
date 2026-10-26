@@ -54,6 +54,11 @@ pub fn paint_hint(ctx: &Context) {
 			)
 		}
 	};
+	draw_hint(ctx, pos, &text, accepted);
+}
+
+/// The hint box at `pos` (pointer), for gestures that are not drag-and-drop payloads.
+pub fn draw_hint(ctx: &Context, pos: egui::Pos2, text: &str, accepted: bool) {
 	let (icon, color) = if accepted {
 		("⤵", theme::ACCENT)
 	} else {

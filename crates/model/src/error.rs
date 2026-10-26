@@ -40,6 +40,14 @@ pub enum ModelError {
 	InvalidPitch(u8),
 	#[error("velocity {0} is out of range; velocity must be 0.0..=1.0")]
 	InvalidVelocity(f32),
+	#[error("note {note} has an invalid bend: {reason}")]
+	InvalidNoteBend { note: NoteId, reason: String },
+	#[error("note {note} has an invalid {kind} curve: {reason}")]
+	InvalidNoteExpression {
+		note: NoteId,
+		kind: &'static str,
+		reason: String,
+	},
 	#[error("volume {0} dB is out of range; volume must be -144.0..=12.0 dB")]
 	InvalidVolume(f32),
 	#[error("pan {0} is out of range; pan must be -1.0 (left)..=1.0 (right)")]
@@ -95,6 +103,8 @@ pub enum ModelError {
 	RoutingCycle { from: TrackId, to: TrackId },
 	#[error("cannot key device {device} from that sidechain source: {reason}")]
 	InvalidSidechain { device: DeviceId, reason: String },
+	#[error("cannot feed device {device} that MIDI input: {reason}")]
+	InvalidMidiInput { device: DeviceId, reason: String },
 	#[error("invalid instrument output route on track {track}: {reason}")]
 	InvalidOutputRoute { track: TrackId, reason: String },
 	#[error(

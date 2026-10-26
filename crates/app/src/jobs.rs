@@ -188,6 +188,8 @@ pub enum FileAction {
 	PadLayer,
 	/// A folder of drum samples mapped onto the pads by name.
 	KitFolder,
+	/// The MPE file of a Convert to MIDI preview.
+	ExportMpe,
 }
 
 impl FileAction {
@@ -206,6 +208,7 @@ impl FileAction {
 			Self::PadSample => tr("Load a sample into the pad"),
 			Self::PadLayer => tr("Add a layer to the pad"),
 			Self::KitFolder => tr("Map a folder of drum samples onto the pads"),
+			Self::ExportMpe => tr("Export MPE MIDI file"),
 		}
 	}
 }
@@ -247,6 +250,10 @@ pub fn file_dialog(
 			| FileAction::KitFolder => dialog.pick_folder(),
 			FileAction::PackArchive => dialog
 				.add_filter("Cadenza project archive", &["cdzpack"])
+				.set_file_name(suggested_name)
+				.save_file(),
+			FileAction::ExportMpe => dialog
+				.add_filter("MIDI", &["mid"])
 				.set_file_name(suggested_name)
 				.save_file(),
 		}

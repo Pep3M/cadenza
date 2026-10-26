@@ -152,6 +152,9 @@ pub fn split_clip(
 					velocity: None,
 					start: None,
 					length: Some(left_len - n.start),
+					bend: None,
+					pressure: None,
+					timbre: None,
 				})
 				.collect();
 			if !shortened.is_empty() {

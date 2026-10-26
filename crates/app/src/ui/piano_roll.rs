@@ -15,7 +15,7 @@ use crate::i18n::{tr, trf};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadenza_core::{NoteId, PPQ, Tick, TrackId};
-use cadenza_model::{Clip, Controller, ControllerPoint, Note};
+use cadenza_model::{Clip, Controller, ControllerPoint, Note, NoteExpression, NoteValuePoint};
 use cadenza_theory::{PitchClass, Scale, ScaleKind};
 use egui::{
 	Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Key, KeyboardShortcut, Modifiers,
@@ -95,6 +95,18 @@ enum Gesture {
 	},
 	/// Slice tool: a vertical cut at `at` (absolute) from the press row to the pointer.
 	Slice { at: Tick, from_y: f32, to: Pos2 },
+	/// Bend tool: the pointer's path over `note` as (ticks from its start, semitones from
+	/// its row); committed only when the pointer moved (a click or double-click is not a
+	/// stroke).
+	Bend {
+		note: NoteId,
+		/// Absolute start and row of the note.
+		start: Tick,
+		pitch: u8,
+		stroke: Vec<(Tick, f32)>,
+		press: Pos2,
+		moved: bool,
+	},
 }
 
 /// Right button held on the grid: every note the pointer passes over is deleted on
@@ -180,6 +192,9 @@ pub struct PianoUi {
 	erase: Option<Erase>,
 	velocity: Option<VelocityDrag>,
 	control: Option<ControlDrag>,
+	/// A stroke in a note pressure / timbre lane: the note and the pointer's path as
+	/// (ticks from the note's start, value).
+	note_stroke: Option<(NoteId, Vec<(Tick, f32)>)>,
 	props: Option<Props>,
 	/// Key held on the keyboard (auditioning).
 	key: Option<u8>,
@@ -350,6 +365,7 @@ impl PianoUi {
 			match state.view.piano.event_lane {
 				EventLane::Velocity => self.velocity_lane(ui, state, r, &t),
 				EventLane::Controller(c) => self.controller_lane(ui, state, c, r, &t),
+				EventLane::Note(kind) => self.note_expression_lane(ui, state, kind, r, &t),
 			}
 		}
 		ruler(ui, state, &g, &t);
@@ -848,9 +864,9 @@ impl PianoUi {
 		{
 			let icon = match (hit(pos), v.tool) {
 				_ if mods.command => CursorIcon::Default,
-				(Some(_), Tool::Slice) | (None, Tool::Draw | Tool::Paint | Tool::Slice) => {
-					CursorIcon::Crosshair
-				}
+				(Some(_), Tool::Slice | Tool::Bend)
+				| (None, Tool::Draw | Tool::Paint | Tool::Slice) => CursorIcon::Crosshair,
+				(None, Tool::Bend) => CursorIcon::Default,
 				(Some((_, Edge::Start | Edge::End)), _) => CursorIcon::ResizeHorizontal,
 				(Some(_), _) if mods.shift => CursorIcon::Copy,
 				(Some(_), _) => CursorIcon::Move,
@@ -859,16 +875,32 @@ impl PianoUi {
 			ui.ctx().set_cursor_icon(icon);
 		}
 
-		// Double-click a note: its properties.
+		// Double-click a note: its properties (bend tool: straighten its curve).
 		if response.double_clicked()
 			&& let Some(pos) = response.interact_pointer_pos()
 			&& let Some((n, _)) = hit(pos)
 		{
 			self.gesture = None;
-			self.props = Some(Props {
-				note: n,
-				pos: pos + vec2(12.0, 12.0),
-			});
+			if v.tool == Tool::Bend {
+				if !n.bend.is_empty()
+					&& let Some(cmd) = piano::set_note(
+						state.project(),
+						clip.id,
+						&Note {
+							bend: Vec::new(),
+							pressure: Vec::new(),
+							timbre: Vec::new(),
+							..n
+						},
+					) {
+					state.apply(cmd);
+				}
+			} else {
+				self.props = Some(Props {
+					note: n,
+					pos: pos + vec2(12.0, 12.0),
+				});
+			}
 		}
 
 		// Press: start a gesture.
@@ -895,6 +927,18 @@ impl PianoUi {
 					from_y: pos.y - area.top() + v.scroll_y,
 					to: pos,
 				});
+			} else if v.tool == Tool::Bend {
+				if let Some((n, _)) = under {
+					self.gesture = Some(Gesture::Bend {
+						note: n.id,
+						start: clip.start + n.start,
+						pitch: n.pitch,
+						stroke: Vec::new(),
+						press: pos,
+						moved: false,
+					});
+					self.sound(state, t.track, n.pitch, n.velocity);
+				}
 			} else if let Some((n, edge)) = under {
 				let in_sel = v.selected.contains(&n.id);
 				if !in_sel {
@@ -954,7 +998,7 @@ impl PianoUi {
 						});
 						self.sound(state, t.track, pitch, v.last_velocity);
 					}
-					Tool::Select | Tool::Slice => {
+					Tool::Select | Tool::Slice | Tool::Bend => {
 						self.gesture = Some(Gesture::Rubber {
 							from: (abs, pos.y - area.top() + v.scroll_y),
 							to: pos,
@@ -1026,6 +1070,28 @@ impl PianoUi {
 					*delta = at - *anchor;
 				}
 				Gesture::Rubber { to, .. } | Gesture::Slice { to, .. } => *to = pos,
+				Gesture::Bend {
+					start,
+					pitch,
+					stroke,
+					press,
+					moved,
+					..
+				} => {
+					*moved |= pos.distance(*press) > 3.0;
+					if *moved {
+						let row = area.top() + v.pitch_to_y(*pitch) + v.row_height * 0.5;
+						let mut semitones = (row - pos.y) / v.row_height;
+						if mods.shift {
+							semitones = semitones.round();
+						}
+						if stroke.is_empty() {
+							let first = tl.x_to_tick(press.x - area.left()) - *start;
+							stroke.push((first, semitones));
+						}
+						stroke.push((abs - *start, semitones));
+					}
+				}
 				Gesture::Paint {
 					first,
 					spacing,
@@ -1103,6 +1169,17 @@ impl PianoUi {
 						state.apply(cmd);
 					}
 				}
+				Gesture::Bend {
+					note,
+					stroke,
+					moved: true,
+					..
+				} => {
+					if let Some(cmd) = piano::bend_note(state.project(), clip.id, note, &stroke) {
+						state.apply(cmd);
+					}
+				}
+				Gesture::Bend { .. } => {}
 				gesture => commit(state, clip, gesture, &v),
 			}
 		}
@@ -1158,6 +1235,14 @@ impl PianoUi {
 			_ => (None, None),
 		};
 		let erased = self.erase.as_ref().map(|e| &e.hits);
+		let drawing = match &self.gesture {
+			Some(Gesture::Bend { note, stroke, .. }) if !stroke.is_empty() => clip
+				.notes()
+				.iter()
+				.find(|n| n.id == *note)
+				.map(|n| (n.id, piano::draw_bend(n, stroke))),
+			_ => None,
+		};
 		let rubber = match &self.gesture {
 			Some(Gesture::Rubber { from, to, .. }) => {
 				let a = pos2(
@@ -1253,6 +1338,13 @@ impl PianoUi {
 				pitch,
 				(v.row_height, flats),
 			);
+			let bend = match &drawing {
+				Some((id, bend)) if *id == n.id => bend,
+				_ => &n.bend,
+			};
+			if !bend.is_empty() {
+				paint_bend(&pr, v, area, clip.start + start, length, r, bend);
+			}
 		}
 		match &self.gesture {
 			// The note being placed.
@@ -1354,6 +1446,7 @@ impl PianoUi {
 						});
 					});
 					let n = &mut props.note;
+					let mut straighten = false;
 					let mut done = |r: egui::Response| {
 						commit |= (r.changed() && !r.dragged()) || r.drag_stopped();
 					};
@@ -1406,7 +1499,44 @@ impl PianoUi {
 							n.length = Tick::from_beats(length);
 							done(r);
 							ui.end_row();
+							if !n.bend.is_empty() {
+								ui.label(tr("Bend"));
+								if ui
+									.small_button(tr("Straighten"))
+									.on_hover_text(tr("Remove this note's own pitch curve"))
+									.clicked()
+								{
+									n.bend.clear();
+									straighten = true;
+								}
+								ui.end_row();
+							}
+							// Its own pressure / timbre (MPE imports, the AI): shown and
+							// removable here.
+							for (curve, label, tip) in [
+								(
+									&mut n.pressure,
+									tr("Pressure"),
+									tr("Remove this note's own pressure curve"),
+								),
+								(
+									&mut n.timbre,
+									tr("Timbre"),
+									tr("Remove this note's own timbre curve"),
+								),
+							] {
+								if curve.is_empty() {
+									continue;
+								}
+								ui.label(label);
+								if ui.small_button(tr("Clear")).on_hover_text(tip).clicked() {
+									curve.clear();
+									straighten = true;
+								}
+								ui.end_row();
+							}
 						});
+					commit |= straighten;
 				});
 			});
 		let outside = ui.input(|i| i.pointer.any_pressed())
@@ -1664,6 +1794,157 @@ impl PianoUi {
 
 	/// A controller lane (FL Studio event editor): the value as a step graph, pencil
 	/// drawing per grid cell, Alt/right-drag ramps, right-click deletes an event.
+	/// A note pressure / timbre lane (NE-9k curves): every note's curve over its own span,
+	/// value 0..1 bottom to top; the selected notes (else the note that would be edited) in
+	/// the track colour. Dragging draws the curve of the note under the pointer
+	/// ([`piano::expression_target`]), right-click clears it; one step each.
+	fn note_expression_lane(
+		&mut self,
+		ui: &mut Ui,
+		state: &mut AppState,
+		kind: NoteExpression,
+		lane: Rect,
+		t: &Target,
+	) {
+		let p = ui.painter_at(lane);
+		p.rect_filled(lane, 0.0, theme::CANVAS);
+		lane_bar_lines(&p, state, lane);
+		let inner = lane.shrink2(vec2(0.0, 8.0));
+		let y_of = |v: f32| inner.bottom() - v.clamp(0.0, 1.0) * inner.height();
+		let value_at = |y: f32| ((inner.bottom() - y) / inner.height()).clamp(0.0, 1.0);
+		for frac in [0.25, 0.5, 0.75] {
+			let stroke = if frac == kind.resting() && frac > 0.0 {
+				theme::BORDER
+			} else {
+				theme::BORDER_SUBTLE
+			};
+			p.hline(lane.x_range(), y_of(frac), Stroke::new(1.0, stroke));
+		}
+		let tl = state.view.piano.timeline;
+		let clip = &t.clip;
+		let x_of = |tick: Tick| lane.left() + tl.tick_to_x(clip.start + tick);
+		let tick_at = |x: f32| tl.x_to_tick(x - lane.left()) - clip.start;
+		let selected = state.view.piano.selected.clone();
+
+		let response = ui.interact(
+			lane,
+			Id::new("piano-note-expression"),
+			Sense::click_and_drag(),
+		);
+		let hover = response.hover_pos();
+		let (pressed, r_clicked, down) = ui.input(|i| {
+			(
+				i.pointer.primary_pressed(),
+				i.pointer.button_clicked(PointerButton::Secondary),
+				i.pointer.primary_down(),
+			)
+		});
+		let target_at = |x: f32| piano::expression_target(clip, &selected, tick_at(x));
+		let note_of = |id: NoteId| clip.notes().iter().find(|n| n.id == id);
+		if pressed
+			&& let Some(pos) = hover
+			&& let Some(id) = target_at(pos.x)
+		{
+			self.note_stroke = Some((id, Vec::new()));
+		}
+		if let Some((id, stroke)) = self.note_stroke.as_mut()
+			&& let (Some(pos), Some(n)) = (ui.ctx().pointer_latest_pos(), note_of(*id))
+		{
+			let point = (tick_at(pos.x) - n.start, value_at(pos.y));
+			if stroke.last() != Some(&point) {
+				stroke.push(point);
+			}
+		}
+		if !down
+			&& let Some((id, stroke)) = self.note_stroke.take()
+			&& let Some(n) = note_of(id)
+		{
+			let points = piano::draw_expression(n, kind, &stroke);
+			if let Some(cmd) =
+				piano::set_note_expression(state.project(), clip.id, id, kind, points)
+			{
+				state.apply(cmd);
+			}
+		}
+		if r_clicked
+			&& let Some(pos) = hover
+			&& let Some(id) = target_at(pos.x)
+			&& let Some(cmd) =
+				piano::set_note_expression(state.project(), clip.id, id, kind, Vec::new())
+		{
+			state.apply(cmd);
+		}
+
+		// Each note's curve (with the stroke being drawn applied).
+		let drawing = self.note_stroke.as_ref().and_then(|(id, stroke)| {
+			note_of(*id).map(|n| (*id, piano::draw_expression(n, kind, stroke)))
+		});
+		let hovered = self
+			.note_stroke
+			.as_ref()
+			.map(|(id, _)| *id)
+			.or_else(|| hover.and_then(|pos| target_at(pos.x)));
+		let (t_lo, t_hi) = (tick_at(lane.left()), tick_at(lane.right()));
+		let mut notes: Vec<&Note> = clip
+			.notes()
+			.iter()
+			.filter(|n| n.start < clip.length && n.end() > t_lo && n.start < t_hi)
+			.collect();
+		// Highlighted curves last, on top.
+		let lit = |n: &Note| selected.contains(&n.id) || hovered == Some(n.id);
+		notes.sort_by_key(|n| lit(n));
+		for n in notes {
+			let curve: &[NoteValuePoint] = match &drawing {
+				Some((id, c)) if *id == n.id => c,
+				_ => n.expression(kind),
+			};
+			let end = n.length.min(clip.length - n.start);
+			let (x0, x1) = (x_of(n.start), x_of(n.start + end));
+			let mut line = vec![pos2(x0, y_of(kind.resting()))];
+			let mut value = kind.resting();
+			for pt in curve.iter().filter(|p| p.tick < end) {
+				let x = x_of(n.start + pt.tick);
+				line.push(pos2(x, y_of(value)));
+				line.push(pos2(x, y_of(pt.value)));
+				value = pt.value;
+			}
+			line.push(pos2(x1, y_of(value)));
+			let on = lit(n);
+			let color = if on {
+				t.color
+			} else if curve.is_empty() {
+				theme::BORDER
+			} else {
+				t.color.gamma_multiply(0.45)
+			};
+			if on {
+				// The note's span as a soft band behind its curve.
+				p.rect_filled(
+					Rect::from_x_y_ranges(x0..=x1, inner.y_range()),
+					0.0,
+					t.color.gamma_multiply(0.08),
+				);
+			}
+			p.add(egui::Shape::line(
+				line,
+				Stroke::new(if on { 2.0 } else { 1.0 }, color),
+			));
+		}
+		if let Some(pos) = hover
+			&& self.note_stroke.is_none()
+		{
+			let text = match target_at(pos.x).and_then(note_of) {
+				Some(n) => format!(
+					"{} · {:.0}%",
+					cadenza_model::note_name(n.pitch),
+					value_at(pos.y) * 100.0
+				),
+				None => tr("No note here").to_string(),
+			};
+			response.on_hover_text_at_pointer(text);
+		}
+	}
+
 	fn controller_lane(
 		&mut self,
 		ui: &mut Ui,
@@ -1964,6 +2245,7 @@ impl PianoUi {
 				Tool::Paint => Key::B,
 				Tool::Select => Key::E,
 				Tool::Slice => Key::C,
+				Tool::Bend => Key::G,
 			};
 			if pressed(Modifiers::NONE, key) {
 				state.view.piano.tool = tool;
@@ -2174,7 +2456,7 @@ fn commit(state: &mut AppState, clip: &Clip, gesture: Gesture, v: &PianoView) {
 				state.view.piano.last_length = n.length;
 			}
 		}
-		Gesture::Rubber { .. } | Gesture::Slice { .. } => {}
+		Gesture::Rubber { .. } | Gesture::Slice { .. } | Gesture::Bend { .. } => {}
 	}
 }
 
@@ -2274,6 +2556,36 @@ fn paint_note(
 			theme::text_on(fill),
 		);
 	}
+}
+
+/// A note's own bend (NE-9h) drawn over it: the held values as steps from the note's
+/// middle, a semitone per row, cut at the note's end.
+fn paint_bend(
+	p: &Painter,
+	v: &PianoView,
+	area: Rect,
+	start: Tick,
+	length: Tick,
+	r: Rect,
+	bend: &[cadenza_model::NoteBendPoint],
+) {
+	let x = |tick: Tick| area.left() + v.timeline.tick_to_x(start + tick);
+	let y = |semitones: f32| r.center().y - semitones * v.row_height;
+	let end = x(length);
+	let mut points = vec![pos2(r.left(), y(0.0))];
+	for b in bend.iter().take_while(|b| b.tick < length) {
+		let at = x(b.tick).max(r.left());
+		let last = points.last().map_or(y(0.0), |q| q.y);
+		points.push(pos2(at, last));
+		points.push(pos2(at, y(b.semitones)));
+	}
+	let last = points.last().map_or(y(0.0), |q| q.y);
+	points.push(pos2(end, last));
+	p.add(egui::Shape::line(
+		points.clone(),
+		Stroke::new(3.0, Color32::from_black_alpha(110)),
+	));
+	p.add(egui::Shape::line(points, Stroke::new(1.5, theme::TEXT)));
 }
 
 /// Row fill (design 04): with scale rows, in-scale rows one step lighter than the
@@ -2427,7 +2739,7 @@ fn piano_fold(ui: &Ui, width: f32) -> PianoFold {
 	let reserve = if compact { 260.0 } else { 520.0 };
 	let available = (width - reserve).max(0.0);
 	let spacing = ui.spacing().item_spacing.x.max(2.0);
-	let tools: [(&str, &str, &str); 4] = Tool::ALL.map(|t| (t.glyph(), t.name(), t.key()));
+	let tools: [(&str, &str, &str); 5] = Tool::ALL.map(|t| (t.glyph(), t.name(), t.key()));
 	for tools_fold in [arrange::ToolFold::Full, arrange::ToolFold::NoKey] {
 		let w: f32 = tools
 			.iter()
@@ -2908,12 +3220,20 @@ fn lane_tabs(ui: &mut Ui, state: &mut AppState, rect: Rect, t: &Target) {
 		let data = match lane {
 			EventLane::Velocity => false,
 			EventLane::Controller(c) => t.clip.controller(c).is_some(),
+			EventLane::Note(kind) => t
+				.clip
+				.notes()
+				.iter()
+				.any(|n| !n.expression(kind).is_empty()),
 		};
 		if lane_tab(ui, &lane.label(), lane == current, data)
 			.on_hover_text(match lane {
 				EventLane::Velocity => tr("Note velocities").to_string(),
 				EventLane::Controller(c) => {
 					trf("{label} events of this clip", &[("label", &c.label())])
+				}
+				EventLane::Note(_) => {
+					tr("Each note's own curve (MPE-style), drawn over the note").to_string()
 				}
 			})
 			.clicked()
@@ -2930,7 +3250,15 @@ fn lane_tabs(ui: &mut Ui, state: &mut AppState, rect: Rect, t: &Target) {
 		.show(|ui| {
 			ui.set_min_width(170.0);
 			for l in EventLane::COMMON {
-				let has = matches!(l, EventLane::Controller(c) if t.clip.controller(c).is_some());
+				let has = match l {
+					EventLane::Controller(c) => t.clip.controller(c).is_some(),
+					EventLane::Note(kind) => t
+						.clip
+						.notes()
+						.iter()
+						.any(|n| !n.expression(kind).is_empty()),
+					EventLane::Velocity => false,
+				};
 				let text = if has {
 					format!("● {}", l.label())
 				} else {
@@ -2959,6 +3287,9 @@ fn lane_tabs(ui: &mut Ui, state: &mut AppState, rect: Rect, t: &Target) {
 		EventLane::Velocity => tr("Drag = set · Alt or right drag = line · Alt+wheel on notes"),
 		EventLane::Controller(_) => {
 			tr("Drag = draw · Alt or right drag = ramp · right-click = delete")
+		}
+		EventLane::Note(_) => {
+			tr("Drag = draw the curve of the note there (selected first) · right-click = clear it")
 		}
 	};
 	let font = theme::small();
@@ -3077,6 +3408,22 @@ fn lane_label(ui: &mut Ui, state: &AppState, lane: Rect, g: &Geometry, t: &Targe
 				theme::mono(10.5),
 				theme::AUTOMATION,
 			);
+		}
+		EventLane::Note(kind) => {
+			// The value of the selected note (else the top one) under the playhead.
+			let at = state.position() - t.clip.start;
+			let sel = &state.view.piano.selected;
+			if let Some(n) = piano::expression_target(&t.clip, sel, at)
+				.and_then(|id| t.clip.notes().iter().find(|n| n.id == id))
+			{
+				p.text(
+					bottom,
+					Align2::LEFT_BOTTOM,
+					format!("{:.0}%", n.expression_at(kind, at - n.start) * 100.0),
+					theme::mono(10.5),
+					t.color,
+				);
+			}
 		}
 	}
 }

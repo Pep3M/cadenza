@@ -114,6 +114,9 @@ pub struct DeviceSummary {
 	/// Track keying this device's sidechain input.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub sidechain: Option<SidechainSource>,
+	/// Instrument track whose MIDI notes this effect receives.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub midi_input: Option<TrackId>,
 	/// Extra instrument outputs in use (main output only when empty).
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<OutputRoute>,
@@ -182,6 +185,10 @@ pub struct ClipSummary {
 	/// -1.00..0.50)".
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub controllers: Vec<String>,
+	/// Notes detected in an audio clip: how many, how many edited, the mean distance of
+	/// the resulting pitches from the nearest semitone, and how many the detection doubts.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio_notes: Option<crate::audio_notes::AudioNotesSummary>,
 }
 
 impl Project {
@@ -305,6 +312,7 @@ fn device_summary(device: &Device) -> DeviceSummary {
 		params: device.params.clone(),
 		has_state: device.state.is_some(),
 		sidechain: device.sidechain,
+		midi_input: device.midi_input,
 		aux_outputs: device.aux_outputs.clone(),
 		zones: zone_summaries(&device.zones),
 		modulators: device.modulators.iter().map(|m| m.describe()).collect(),
@@ -400,7 +408,12 @@ fn clip_summary(project: &crate::Project, clip: &Clip) -> ClipSummary {
 			Some(parts.join(", "))
 		}
 	};
+	let audio_notes = match &clip.content {
+		ClipContent::Audio { notes: Some(n), .. } => Some(n.summary()),
+		_ => None,
+	};
 	ClipSummary {
+		audio_notes,
 		id: clip.id,
 		name: clip.name.clone(),
 		kind,

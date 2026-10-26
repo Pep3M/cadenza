@@ -41,6 +41,9 @@ pub struct AudioEditorView {
 	pub pitch_semitones: f32,
 	/// Clip the view was last fitted to.
 	pub framed: Option<ClipId>,
+	/// Waveform or Notes (NE-6).
+	pub mode: super::note_editor::EditorMode,
+	pub notes: super::note_editor::NoteEditorView,
 }
 
 impl Default for AudioEditorView {
@@ -54,6 +57,8 @@ impl Default for AudioEditorView {
 			stretch_ratio: 1.25,
 			pitch_semitones: 2.0,
 			framed: None,
+			mode: Default::default(),
+			notes: Default::default(),
 		}
 	}
 }
@@ -92,6 +97,10 @@ impl AudioEditorView {
 			self.clip = None;
 			self.selection = None;
 		}
+		let notes = self
+			.clip
+			.and_then(|c| super::note_editor::clip_notes(project, c));
+		self.notes.prune(notes.as_ref().map(|(n, _)| n));
 	}
 }
 
@@ -148,6 +157,7 @@ pub fn region(project: &Project, clip: ClipId) -> Option<Region> {
 		gain_db,
 		fade_in,
 		fade_out,
+		..
 	} = &c.content
 	else {
 		return None;
@@ -576,6 +586,18 @@ pub fn swap_in(project: &Project, done: &Rendered) -> Option<Command> {
 			..Default::default()
 		},
 	}];
+	// Detected notes are times and pitches of the old file: after a reverse, stretch or
+	// transpose they no longer describe it (normalize and gain keep them).
+	let reshaped = matches!(
+		done.op,
+		Process::Reverse | Process::Stretch(_) | Process::Pitch(_)
+	);
+	if reshaped && let ClipContent::Audio { notes: Some(_), .. } = &r.clip.content {
+		commands.push(Command::SetAudioNotes {
+			clip: done.clip,
+			notes: None,
+		});
+	}
 	if done.extra_seconds.abs() > 1e-6 {
 		let end = project
 			.tempo

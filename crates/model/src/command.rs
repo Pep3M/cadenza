@@ -117,6 +117,15 @@ pub enum Command {
 		#[serde(default)]
 		source: Option<SidechainSource>,
 	},
+	/// Feeds an effect the MIDI notes of an instrument track (`source: null` disconnects
+	/// it).
+	SetMidiInput {
+		#[serde(default)]
+		track: Option<TrackId>,
+		device: DeviceId,
+		#[serde(default)]
+		source: Option<TrackId>,
+	},
 	/// Replaces which extra outputs of a track's (multi-output) instrument are used and
 	/// where they go; an empty list means main output only.
 	SetOutputRoutes {
@@ -176,6 +185,21 @@ pub enum Command {
 		clip: ClipId,
 		#[serde(flatten)]
 		patch: AudioClipPatch,
+	},
+	/// Replaces the detected notes of an audio clip and their edits (`None` removes
+	/// them: the clip plays its file as recorded).
+	SetAudioNotes {
+		clip: ClipId,
+		notes: Option<Box<crate::audio_notes::NoteEdits>>,
+	},
+	/// Edits notes of an audio clip (pitch, drift, vibrato, formant, gain, time) and/or
+	/// the gain of its sibilants.
+	UpdateAudioNotes {
+		clip: ClipId,
+		#[serde(default)]
+		patches: Vec<crate::audio_notes::AudioNotePatch>,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		sibilant_gain_db: Option<f32>,
 	},
 	AddNotes {
 		clip: ClipId,
@@ -354,10 +378,19 @@ pub struct NotePatch {
 	pub start: Option<Tick>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub length: Option<Tick>,
+	/// Replaces the note's own bend (empty = straight).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub bend: Option<Vec<crate::NoteBendPoint>>,
+	/// Replaces the note's own pressure curve (empty = none).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pressure: Option<Vec<crate::NoteValuePoint>>,
+	/// Replaces the note's own timbre curve (empty = neutral).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub timbre: Option<Vec<crate::NoteValuePoint>>,
 }
 
 /// Distinguishes an explicit `null` (`Some(None)`) from an absent field (`None`).
-fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
 	T: Deserialize<'de>,
 	D: Deserializer<'de>,
@@ -383,6 +416,7 @@ impl Command {
 			Self::SetSampleZones { .. } => "set_sample_zones",
 			Self::SetModulators { .. } => "set_modulators",
 			Self::SetSidechain { .. } => "set_sidechain",
+			Self::SetMidiInput { .. } => "set_midi_input",
 			Self::SetOutputRoutes { .. } => "set_output_routes",
 			Self::SetParam { .. } => "set_param",
 			Self::ResetParam { .. } => "reset_param",
@@ -394,6 +428,8 @@ impl Command {
 			Self::UpdateClip { .. } => "update_clip",
 			Self::SetClipFades { .. } => "set_clip_fades",
 			Self::UpdateAudioClip { .. } => "update_audio_clip",
+			Self::SetAudioNotes { .. } => "set_audio_notes",
+			Self::UpdateAudioNotes { .. } => "update_audio_notes",
 			Self::AddNotes { .. } => "add_notes",
 			Self::RemoveNotes { .. } => "remove_notes",
 			Self::UpdateNotes { .. } => "update_notes",
@@ -472,6 +508,10 @@ impl Command {
 				source: Some(_), ..
 			} => "Set sidechain".into(),
 			Self::SetSidechain { source: None, .. } => "Remove sidechain".into(),
+			Self::SetMidiInput {
+				source: Some(_), ..
+			} => "Set MIDI input".into(),
+			Self::SetMidiInput { source: None, .. } => "Remove MIDI input".into(),
 			Self::SetOutputRoutes { routes, .. } if routes.is_empty() => {
 				"Use main instrument output only".into()
 			}
@@ -534,6 +574,12 @@ impl Command {
 					_ => "Edit audio clip".into(),
 				}
 			}
+			Self::SetAudioNotes { notes: None, .. } => "Remove note edits".into(),
+			Self::SetAudioNotes { .. } => "Detect notes".into(),
+			Self::UpdateAudioNotes { patches, .. } if patches.is_empty() => {
+				"Set sibilant level".into()
+			}
+			Self::UpdateAudioNotes { patches, .. } => plural("Edit", patches.len(), "audio note"),
 			Self::AddNotes { notes, .. } => plural("Add", notes.len(), "note"),
 			Self::RemoveNotes { notes, .. } => plural("Remove", notes.len(), "note"),
 			Self::UpdateNotes { notes, .. } => plural("Edit", notes.len(), "note"),

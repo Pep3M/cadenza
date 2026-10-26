@@ -221,15 +221,28 @@ impl ElectricPiano {
 		// Bend and mod wheel vibrato for this span.
 		let ratio = 2.0_f32.powf(self.expr.pitch_offset(left.len(), self.sample_rate) / 12.0);
 		let lfo_inc = self.params.get(P_TREM_RATE) * inv_sr;
+		// Each key's own bend, per span.
+		let mut key = [1.0f32; VOICES];
+		for (k, v) in key.iter_mut().zip(&self.voices) {
+			let bend = self.expr.note_bend(v.slot.note);
+			if v.slot.active && bend != 0.0 {
+				*k = 2.0_f32.powf(bend / 12.0);
+			}
+		}
 		for (l, r) in left.iter_mut().zip(right.iter_mut()) {
 			let mut mono = 0.0;
-			for v in self.voices.iter_mut().filter(|v| v.slot.active) {
+			for (v, key) in self
+				.voices
+				.iter_mut()
+				.zip(&key)
+				.filter(|(v, _)| v.slot.active)
+			{
 				let a = v.amp.tick();
 				let m = (TAU * v.phase_m).sin() * v.index * v.mod_env.tick();
 				let body = (TAU * v.phase_c + m).sin();
 				let bell = (TAU * v.phase_b + 0.5 * m).sin() * v.bell * v.bell_env.tick();
 				mono += (body + bell) * a * v.gain;
-				let inc = v.freq * ratio * inv_sr;
+				let inc = v.freq * ratio * key * inv_sr;
 				v.phase_c = (v.phase_c + inc).fract();
 				// Slight modulator detune gives the tine its slow beating.
 				v.phase_m = (v.phase_m + inc * 1.0007).fract();
@@ -286,6 +299,9 @@ impl Processor for ElectricPiano {
 			self.render(&mut left[start..end], &mut right[start..end]);
 			if let Some(ev) = ev {
 				self.held.apply(ev);
+				if matches!(ev, MidiEvent::NoteOn { .. } | MidiEvent::NoteOff { .. }) {
+					self.expr.apply(ev);
+				}
 			}
 			match ev {
 				Some(&MidiEvent::NoteOn {

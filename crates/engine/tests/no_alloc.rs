@@ -704,3 +704,111 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 	assert_eq!(rec.audio[0].channels, 2);
 	let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn note_audition_snippets_do_not_allocate() {
+	let (mut player, mut dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	player.load(&mini_song()).unwrap();
+	let tone = |hz: f32| -> Vec<f32> {
+		(0..22_050)
+			.map(|n| (n as f32 * hz * std::f32::consts::TAU / 44_100.0).sin() * 0.5)
+			.collect()
+	};
+	let mut out = vec![0.0f32; 2 * 256];
+	let mut loudest = 0.0f32;
+	let mut run = |dev: &mut cadenza_engine::VirtualDevice, blocks: usize| {
+		TRACKING.with(|t| t.set(true));
+		for _ in 0..blocks {
+			dev.process(&mut out, &[]);
+			loudest = loudest.max(out.iter().fold(0.0f32, |m, x| m.max(x.abs())));
+		}
+		TRACKING.with(|t| t.set(false));
+	};
+	// Stopped: the snippet plays over silence, a newer one replaces it (the old fades),
+	// one is stopped, and finished ones are handed back.
+	player.play_snippet(vec![tone(220.0)], 44_100, 0.0).unwrap();
+	run(&mut dev, 20);
+	player
+		.play_snippet(vec![tone(330.0), tone(330.0)], 44_100, -6.0)
+		.unwrap();
+	run(&mut dev, 20);
+	player.stop_snippet().unwrap();
+	run(&mut dev, 20);
+	player.play_snippet(vec![tone(440.0)], 44_100, 0.0).unwrap();
+	run(&mut dev, 200);
+	assert_no_allocations();
+	assert!(loudest > 0.3, "the snippets sounded: {loudest}");
+	// After it ended: silence again.
+	dev.process(&mut out, &[]);
+	assert!(out.iter().all(|x| *x == 0.0));
+}
+
+#[test]
+fn effects_fed_midi_do_not_allocate() {
+	let mut p = mini_song();
+	let melody = p.tracks[0].id;
+	let mut tune = cadenza_model::Device::builtin("pitch_correct", "Tune");
+	tune.midi_input = Some(melody);
+	p.tracks[1].channel.inserts.push(tune.clone());
+	let mut master_tune = tune;
+	master_tune.id = cadenza_core::DeviceId::new();
+	p.master.inserts.push(master_tune);
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	graph.set_loop(Some((beats(1.0), beats(3.0))));
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	graph.play();
+	TRACKING.with(|t| t.set(true));
+	for block in [1usize, 37, 512, 1024].into_iter().cycle().take(400) {
+		graph.process(&mut left[..block], &mut right[..block]);
+	}
+	graph.seek(beats(2.5));
+	graph.process(&mut left, &mut right);
+	graph.stop();
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+	assert_no_allocations();
+}
+
+#[test]
+fn note_bends_do_not_allocate() {
+	let mut p = mini_song();
+	// Every note of the first track bent up and back (with pressure and timbre curves), chased by the loop and a seek.
+	for clip in &mut p.tracks[0].clips {
+		if let cadenza_model::ClipContent::Midi { notes, .. } = &mut clip.content {
+			for n in notes.iter_mut() {
+				n.bend = (0..8)
+					.map(|i| cadenza_model::NoteBendPoint {
+						tick: cadenza_core::Tick(n.length.0 * i / 8),
+						semitones: if i % 2 == 0 { 0.0 } else { 1.5 },
+					})
+					.collect();
+				n.pressure = (0..8)
+					.map(|i| cadenza_model::NoteValuePoint {
+						tick: cadenza_core::Tick(n.length.0 * i / 8),
+						value: i as f32 / 8.0,
+					})
+					.collect();
+				n.timbre = vec![cadenza_model::NoteValuePoint {
+					tick: cadenza_core::Tick(n.length.0 / 3),
+					value: 0.9,
+				}];
+			}
+		}
+	}
+	let mut graph = compile(&p, 48_000, 1024).unwrap();
+	graph.set_loop(Some((beats(1.0), beats(3.0))));
+	let mut left = vec![0.0f32; 1024];
+	let mut right = vec![0.0f32; 1024];
+	graph.play();
+	TRACKING.with(|t| t.set(true));
+	for block in [1usize, 37, 512, 1024].into_iter().cycle().take(400) {
+		graph.process(&mut left[..block], &mut right[..block]);
+	}
+	graph.seek(beats(2.5));
+	graph.process(&mut left, &mut right);
+	graph.stop();
+	graph.process(&mut left, &mut right);
+	TRACKING.with(|t| t.set(false));
+	assert_no_allocations();
+}

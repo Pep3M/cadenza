@@ -377,6 +377,51 @@ pub(crate) struct Device {
 	pub processor: Box<dyn Processor>,
 	pub sidechain: Option<Box<Sidechain>>,
 	pub modulation: Option<Box<Modulation>>,
+	/// Effects with a MIDI input: the notes of that track, scheduled like an instrument's.
+	pub midi: Option<Box<DeviceMidi>>,
+}
+
+/// The MIDI an effect receives from another track (`Device.midi_input` in the model).
+pub(crate) struct DeviceMidi {
+	pub schedule: MidiSchedule,
+	pub events: Vec<MidiEvent>,
+}
+
+/// Where the quantum being rendered sits, for collecting scheduled MIDI.
+#[derive(Clone, Copy)]
+struct QuantumMidi {
+	pos: i64,
+	wrap: Option<Wrap>,
+	all_notes_off: bool,
+	preview: bool,
+}
+
+impl QuantumMidi {
+	/// The quantum's events of `schedule` into `events` (cleared): notes off and chased
+	/// after a reset, then the notes, across a loop wrap. Nothing while previewing.
+	fn fill(self, schedule: &mut MidiSchedule, events: &mut Vec<MidiEvent>) {
+		events.clear();
+		if self.all_notes_off {
+			events.push(MidiEvent::AllNotesOff { offset: 0 });
+		}
+		if self.preview {
+			return;
+		}
+		if self.all_notes_off {
+			schedule.chase(self.pos, 0, events);
+		}
+		match self.wrap {
+			None => schedule.collect(self.pos, QUANTUM, 0, events),
+			Some(w) => {
+				let at = w.at as u32;
+				schedule.collect(self.pos, w.at, 0, events);
+				schedule.release(w.from, at, events);
+				schedule.seek(w.to);
+				schedule.chase(w.to, at, events);
+				schedule.collect(w.to, QUANTUM - w.at, at, events);
+			}
+		}
+	}
 }
 
 /// The audio side of the device probe (see [`crate::probe`]): the shared ring the player
@@ -481,6 +526,33 @@ impl Device {
 			return;
 		}
 		self.processor.set_param(index, value);
+	}
+
+	/// Runs one quantum of an effect, with the MIDI it receives if any.
+	fn run_effect(
+		&mut self,
+		buf: &mut StereoBuf,
+		t: &Transport,
+		done: &[Node],
+		probe: &mut ProbeTap,
+		q: QuantumMidi,
+	) {
+		match self.midi.take() {
+			Some(mut m) => {
+				let DeviceMidi { schedule, events } = &mut *m;
+				q.fill(schedule, events);
+				self.run(buf, &m.events, t, done, probe);
+				self.midi = Some(m);
+			}
+			None => self.run(buf, &[], t, done, probe),
+		}
+	}
+
+	/// Moves the MIDI it receives to timeline sample `pos`.
+	fn seek_midi(&mut self, pos: i64) {
+		if let Some(m) = &mut self.midi {
+			m.schedule.seek(pos);
+		}
 	}
 
 	fn reset(&mut self) {
@@ -1469,6 +1541,7 @@ impl Graph {
 			}
 			for d in &mut node.inserts {
 				d.reset();
+				d.seek_midi(pos);
 			}
 			for e in &mut node.edges {
 				e.delay.clear();
@@ -1482,6 +1555,7 @@ impl Graph {
 		}
 		for d in &mut self.master.inserts {
 			d.reset();
+			d.seek_midi(pos);
 		}
 		self.master.fader.snap();
 	}
@@ -1602,6 +1676,12 @@ impl Graph {
 			acc.clear();
 		}
 		let auditioning = self.audition.active();
+		let quantum_midi = QuantumMidi {
+			pos,
+			wrap,
+			all_notes_off,
+			preview,
+		};
 		let Self {
 			nodes,
 			accumulators,
@@ -1737,7 +1817,7 @@ impl Graph {
 				}
 			}
 			for d in &mut node.inserts {
-				d.run(buf, &[], &transport, done, probe);
+				d.run_effect(buf, &transport, done, probe, quantum_midi);
 			}
 			if node.tap_pre {
 				node.pre.l.copy_from_slice(&buf.l);
@@ -1776,7 +1856,7 @@ impl Graph {
 		master.buf.l.copy_from_slice(&master_in.l);
 		master.buf.r.copy_from_slice(&master_in.r);
 		for d in &mut master.inserts {
-			d.run(&mut master.buf, &[], &transport, nodes, probe);
+			d.run_effect(&mut master.buf, &transport, nodes, probe, quantum_midi);
 		}
 		if let Some(p) = &probe.probe {
 			p.set_active(probe.hit);

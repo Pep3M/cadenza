@@ -18,6 +18,7 @@
 pub mod error;
 pub mod ids;
 pub mod input;
+pub mod mpe_import;
 pub mod parsed;
 pub mod raw;
 pub mod record;
@@ -31,12 +32,14 @@ pub use input::{
 	new_queue, open_input_port,
 };
 pub use parsed::{
-	GM_DRUM_CHANNEL, OtherEvent, ParsedMarker, ParsedMidiFile, ParsedNote, ParsedOtherEvent,
-	ParsedTempoPoint, ParsedTrack,
+	GM_DRUM_CHANNEL, MpeLayout, MpeZone, OtherEvent, ParsedMarker, ParsedMidiFile, ParsedNote,
+	ParsedOtherEvent, ParsedTempoPoint, ParsedTrack,
 };
 pub use raw::{RawMessage, RunningStatusDecoder};
 pub use record::{RecordedControl, RecordedNote, Recorder, control_lanes};
-pub use smf_export::{export_clip, export_project};
+pub use smf_export::{
+	MPE_BEND_RANGE, MPE_MEMBERS, MpeExport, MpeNote, export_clip, export_mpe, export_project,
+};
 pub use smf_import::{
 	ImportOptions, ImportResult, ImportTarget, build_import_command, controller_lanes, import_smf,
 	import_smf_with_ids, meter_changes, parse_smf,

@@ -12,6 +12,7 @@ pub mod gain;
 pub mod keyboard;
 pub mod limiter;
 pub mod modulation;
+pub mod pitch_correct;
 pub mod poly_synth;
 pub mod reverb;
 pub mod sampler;

@@ -155,6 +155,13 @@ pub const PARAM_NAMES: &[&str] = &[
 	mark("Tap 3 Pan"),
 	mark("Tap 4 Pan"),
 	mark("Oversampling"),
+	mark("Key"),
+	mark("Scale"),
+	mark("Retune"),
+	mark("Humanize"),
+	mark("Amount"),
+	mark("Reference"),
+	mark("MIDI"),
 ];
 
 /// `cadenza_dsp::PRESET_CATEGORIES`.

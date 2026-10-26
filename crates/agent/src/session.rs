@@ -38,6 +38,8 @@ use crate::types::{AssistantTurn, Message, ToolResult, ToolSpec};
 pub const DEFAULT_SESSION_MAX_COST_USD: f64 = 0.25;
 /// Undo step of a [`SessionAgent::run_engineer_pass`].
 pub const ENGINEER_UNDO_LABEL: &str = "AI mix pass";
+/// Undo step of a [`SessionAgent::run_tuning_pass`].
+pub const TUNING_UNDO_LABEL: &str = "AI tuning pass";
 /// The only tools a read-only request ([`SessionAgent::run_explain`]) may call.
 pub const EXPLAIN_TOOLS: &[&str] = &[
 	"get_project",
@@ -52,6 +54,8 @@ pub const EXPLAIN_TOOLS: &[&str] = &[
 	"analyze_track",
 	"mix_targets",
 	"get_audio_info",
+	"analyze_vocal",
+	"get_audio_notes",
 	"library_search",
 	"library_get",
 ];
@@ -352,6 +356,28 @@ impl SessionAgent {
 		self.run_labeled(
 			&request,
 			ENGINEER_UNDO_LABEL.to_owned(),
+			false,
+			context,
+			observer,
+			cancel,
+		)
+		.await
+	}
+
+	/// A tuning pass by the tuning engineer on one audio clip (the app's "Tune with AI",
+	/// `cadenza tune`): the request is [`prompt::tuning_request`] and the whole pass is ONE
+	/// undo step [`TUNING_UNDO_LABEL`].
+	pub async fn run_tuning_pass(
+		&mut self,
+		brief: &prompt::TuningBrief,
+		context: &AppContext,
+		observer: &dyn AgentObserver,
+		cancel: &CancelToken,
+	) -> Result<RequestOutcome, AgentError> {
+		let request = prompt::tuning_request(brief);
+		self.run_labeled(
+			&request,
+			TUNING_UNDO_LABEL.to_owned(),
 			false,
 			context,
 			observer,

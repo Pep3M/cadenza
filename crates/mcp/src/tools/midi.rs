@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use cadenza_core::{ClipId, TrackId};
+use cadenza_core::{ClipId, Tick, TrackId};
 use cadenza_midi_io::{ImportOptions, ImportTarget};
 use cadenza_model::{Command, ModelError, TrackKind};
 use schemars::JsonSchema;
@@ -155,6 +155,10 @@ pub struct ExportMidiArgs {
 	/// Export only this MIDI clip (positioned at beat 0).
 	#[serde(default)]
 	pub clip_id: Option<ClipId>,
+	/// Write MPE: every note on its own channel with its own bend, pressure and timbre
+	/// (channel pressure, CC74), for MPE synths in other programs. Needs track_id or clip_id.
+	#[serde(default)]
+	pub mpe: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -163,6 +167,8 @@ pub struct ExportMidiOutput {
 	/// Note tracks written (plus one tempo/meta track).
 	pub tracks: usize,
 	pub notes: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub warnings: Vec<String>,
 }
 
 pub fn export_midi(session: &Session, args: ExportMidiArgs) -> Result<ExportMidiOutput, McpError> {
@@ -178,6 +184,29 @@ pub fn export_midi(session: &Session, args: ExportMidiArgs) -> Result<ExportMidi
 		)));
 	}
 	let project = session.document().project();
+	if args.mpe {
+		return export_mpe_file(project, &args, &path);
+	}
+	let bent = |clips: &mut dyn Iterator<Item = &cadenza_model::Clip>| -> usize {
+		clips
+			.flat_map(|c| c.notes().iter())
+			.filter(|n| !(n.bend.is_empty() && n.pressure.is_empty() && n.timbre.is_empty()))
+			.count()
+	};
+	let bent = match (args.track_id, args.clip_id) {
+		(_, Some(id)) => bent(&mut project.find_clip(id).map(|(_, c)| c).into_iter()),
+		(Some(id), None) => bent(&mut project.track(id).into_iter().flat_map(|t| t.clips.iter())),
+		(None, None) => bent(&mut project.tracks.iter().flat_map(|t| t.clips.iter())),
+	};
+	let warnings: Vec<String> = (bent > 0)
+		.then(|| {
+			format!(
+				"{bent} notes have their own bend, pressure or timbre, which plain MIDI cannot hold; \
+				 export with mpe true (and a track_id or clip_id) to keep it"
+			)
+		})
+		.into_iter()
+		.collect();
 	let (bytes, tracks, notes) = match (args.track_id, args.clip_id) {
 		(Some(_), Some(_)) => {
 			return Err(McpError::Invalid(
@@ -231,5 +260,108 @@ pub fn export_midi(session: &Session, args: ExportMidiArgs) -> Result<ExportMidi
 		path: path.display().to_string(),
 		tracks,
 		notes,
+		warnings,
+	})
+}
+
+/// `export_midi { mpe: true }`: the clip's notes (from beat 0) or the track's sounding clips
+/// as one MPE file ([`cadenza_midi_io::export_mpe`]).
+fn export_mpe_file(
+	project: &cadenza_model::Project,
+	args: &ExportMidiArgs,
+	path: &std::path::Path,
+) -> Result<ExportMidiOutput, McpError> {
+	let (clips, origin, name): (Vec<&cadenza_model::Clip>, Tick, String) =
+		match (args.track_id, args.clip_id) {
+			(_, Some(id)) => {
+				let (_, clip) = project.find_clip(id).ok_or(ModelError::ClipNotFound(id))?;
+				if !clip.is_midi() {
+					return Err(ModelError::NotAMidiClip(id).into());
+				}
+				(vec![clip], clip.start, clip.name.clone())
+			}
+			(Some(id), None) => {
+				let t = project.track(id).ok_or(ModelError::TrackNotFound(id))?;
+				if t.kind != TrackKind::Instrument {
+					return Err(McpError::Invalid(format!(
+						"track {id} is a {:?} track; only Instrument tracks hold MIDI",
+						t.kind
+					)));
+				}
+				let clips = t
+					.clips
+					.iter()
+					.filter(|c| c.is_midi() && c.sounds())
+					.collect();
+				(clips, Tick::ZERO, t.name.clone())
+			}
+			(None, None) => {
+				return Err(McpError::Invalid(
+					"mpe needs track_id or clip_id: an MPE file holds one instrument's notes"
+						.into(),
+				));
+			}
+		};
+	let mut notes = Vec::new();
+	for c in &clips {
+		for n in c.notes().iter().filter(|n| n.start < c.length) {
+			let start = c.start + n.start - origin;
+			let length = n.length.min(c.length - n.start);
+			notes.push(cadenza_midi_io::MpeNote {
+				start,
+				length,
+				pitch: n.pitch,
+				velocity: n.velocity,
+				curve: n
+					.bend
+					.iter()
+					.filter(|p| p.tick < length)
+					.map(|p| (start + p.tick, p.semitones))
+					.collect(),
+				pressure: n
+					.pressure
+					.iter()
+					.filter(|p| p.tick < length)
+					.map(|p| (start + p.tick, p.value))
+					.collect(),
+				timbre: n
+					.timbre
+					.iter()
+					.filter(|p| p.tick < length)
+					.map(|p| (start + p.tick, p.value))
+					.collect(),
+			});
+		}
+	}
+	if notes.is_empty() {
+		return Err(McpError::Invalid(
+			"nothing to export: no MIDI notes there; add notes first".into(),
+		));
+	}
+	let first = clips.first().map_or(Tick::ZERO, |c| c.start);
+	let out = cadenza_midi_io::export_mpe(
+		&notes,
+		&project.tempo,
+		&project.meter().signature_at(first),
+		&name,
+	)
+	.map_err(|e| McpError::Invalid(e.to_string()))?;
+	std::fs::write(path, &out.bytes).map_err(|e| McpError::Io {
+		path: path.display().to_string(),
+		message: e.to_string(),
+	})?;
+	Ok(ExportMidiOutput {
+		path: path.display().to_string(),
+		tracks: 1,
+		notes: notes.len(),
+		warnings: (out.shared > 0)
+			.then(|| {
+				format!(
+					"{} notes sounded with 15 others and share an MPE channel: their bends move each other",
+					out.shared
+				)
+			})
+			.into_iter()
+			.collect(),
 	})
 }

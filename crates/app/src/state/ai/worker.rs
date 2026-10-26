@@ -12,7 +12,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use cadenza_agent::observer::{AgentEvent, AgentObserver};
 use cadenza_agent::provider::ProviderError;
 use cadenza_agent::session::{RequestStatus, actionable_error};
-use cadenza_agent::{AppContext, CancelToken, EngineerBrief, LlmProvider, SessionAgent};
+use cadenza_agent::{
+	AppContext, CancelToken, EngineerBrief, LlmProvider, SessionAgent, TuningBrief,
+};
 use cadenza_mcp::SharedSession;
 
 use super::secrets::{KeySource, SecretStore, resolve_key};
@@ -34,13 +36,23 @@ pub fn default_factory() -> ProviderFactory {
 	})
 }
 
+/// What kind of request a run is.
+pub enum Pass {
+	/// The chat request itself.
+	Chat,
+	/// A mix pass by the sound engineer.
+	Engineer(EngineerBrief),
+	/// A read-only explain request (the text sent; the run's `request` is what the chat
+	/// shows).
+	Explain(String),
+	/// A tuning pass by the tuning engineer on one audio clip.
+	Tuning(TuningBrief),
+}
+
 pub enum Command {
 	Run {
 		request: String,
-		/// A mix pass by the sound engineer instead of a chat request.
-		engineer: Option<EngineerBrief>,
-		/// A read-only explain request (the text sent; `request` is what the chat shows).
-		explain: Option<String>,
+		pass: Pass,
 		context: Box<AppContext>,
 		settings: AiSettings,
 	},
@@ -206,8 +218,7 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 		match command {
 			Command::Run {
 				request,
-				engineer,
-				explain,
+				pass,
 				context,
 				settings,
 			} => {
@@ -248,15 +259,19 @@ fn run(setup: WorkerSetup, commands: Receiver<Command>, events: Sender<Event>) {
 				}
 				let a = agent.as_mut().expect("set above");
 				let result = runtime.block_on(async {
-					match (&engineer, &explain) {
-						(Some(brief), _) => {
+					match &pass {
+						Pass::Engineer(brief) => {
 							a.run_engineer_pass(brief, &context, &forward, &setup.cancel)
 								.await
 						}
-						(None, Some(text)) => {
+						Pass::Tuning(brief) => {
+							a.run_tuning_pass(brief, &context, &forward, &setup.cancel)
+								.await
+						}
+						Pass::Explain(text) => {
 							a.run_explain(text, &context, &forward, &setup.cancel).await
 						}
-						(None, None) => {
+						Pass::Chat => {
 							a.run_request(&request, &context, &forward, &setup.cancel)
 								.await
 						}

@@ -275,6 +275,7 @@ fn round_trips_project_export_and_import() {
 			params: Default::default(),
 			state: None,
 			sidechain: None,
+			midi_input: None,
 			aux_outputs: Vec::new(),
 			zones: Vec::new(),
 			modulators: Vec::new(),
@@ -292,6 +293,9 @@ fn round_trips_project_export_and_import() {
 						velocity: 0.8,
 						start: Tick::ZERO,
 						length: Tick(cadenza_core::PPQ),
+						bend: Vec::new(),
+						pressure: Vec::new(),
+						timbre: Vec::new(),
 					},
 					Note {
 						id: cadenza_core::NoteId::new(),
@@ -299,6 +303,9 @@ fn round_trips_project_export_and_import() {
 						velocity: 0.6,
 						start: Tick(cadenza_core::PPQ),
 						length: Tick(cadenza_core::PPQ),
+						bend: Vec::new(),
+						pressure: Vec::new(),
+						timbre: Vec::new(),
 					},
 				],
 				controllers: vec![
@@ -465,4 +472,254 @@ fn meter_changes_snap_to_bar_lines() {
 	let (first, changes) = crate::meter_changes(&[(Tick(4 * PPQ), ts(3, 4))], &mut warnings);
 	assert_eq!(first, Some(ts(4, 4)));
 	assert_eq!(changes, vec![MeterChange::new(1, ts(3, 4))]);
+}
+
+#[test]
+fn mpe_export_gives_each_note_its_channel_and_bend() {
+	use crate::smf_export::{MPE_BEND_RANGE, MpeNote, export_mpe};
+	let note = |pitch, start: i64, len: i64, curve: Vec<(Tick, f32)>| MpeNote {
+		start: Tick(start),
+		length: Tick(len),
+		pitch,
+		velocity: 0.8,
+		curve,
+		pressure: Vec::new(),
+		timbre: Vec::new(),
+	};
+	// A chord whose top note bends up a whole tone, then a note after it.
+	let notes = [
+		note(60, 0, 960, vec![(Tick(0), 0.0)]),
+		note(64, 0, 960, vec![(Tick(0), 0.0)]),
+		note(67, 0, 960, vec![(Tick(0), 0.0), (Tick(480), 2.0)]),
+		note(62, 960, 960, vec![(Tick(960), -0.25)]),
+	];
+	let out = export_mpe(
+		&notes,
+		&TempoMap::constant(120.0),
+		&TimeSignature::default(),
+		"Chords",
+	)
+	.unwrap();
+	assert_eq!(out.shared, 0);
+	let smf = Smf::parse(&out.bytes).unwrap();
+	let mut tick = 0u32;
+	let mut on: Vec<(u32, u8, u8)> = Vec::new();
+	let mut bends: Vec<(u32, u8, f32)> = Vec::new();
+	let mut rpn6 = None;
+	let mut last_cc = [[0u8; 128]; 16];
+	for e in &smf.tracks[1] {
+		tick += e.delta.as_int();
+		if let TrackEventKind::Midi { channel, message } = e.kind {
+			let ch = channel.as_int();
+			match message {
+				MidiMessage::NoteOn { key, vel } if vel.as_int() > 0 => {
+					on.push((tick, ch, key.as_int()))
+				}
+				MidiMessage::PitchBend { bend } => {
+					bends.push((tick, ch, bend.as_f32() * MPE_BEND_RANGE))
+				}
+				MidiMessage::Controller { controller, value } => {
+					let (c, v) = (controller.as_int(), value.as_int());
+					if c == 6 && last_cc[ch as usize][100] == 6 && ch == 0 {
+						rpn6 = Some(v);
+					}
+					last_cc[ch as usize][c as usize] = v;
+				}
+				_ => {}
+			}
+		}
+	}
+	assert_eq!(rpn6, Some(15), "MPE configuration: 15 member channels");
+	let channels: Vec<u8> = on.iter().map(|o| o.1).collect();
+	assert!(channels.iter().all(|c| (1..=15).contains(c)), "{on:?}");
+	assert_eq!(
+		channels[..3]
+			.iter()
+			.collect::<std::collections::BTreeSet<_>>()
+			.len(),
+		3,
+		"one channel per chord note: {on:?}"
+	);
+	let top = on.iter().find(|o| o.2 == 67).unwrap().1;
+	assert!(
+		bends
+			.iter()
+			.any(|b| b.0 == 480 && b.1 == top && (b.2 - 2.0).abs() < 0.01),
+		"{bends:?}"
+	);
+	// The later note takes a channel the chord did not use last, starting at its bend.
+	let later = on.iter().find(|o| o.2 == 62).unwrap();
+	assert!(!channels[..3].contains(&later.1), "{on:?}");
+	assert!(
+		bends
+			.iter()
+			.any(|b| b.0 == 960 && b.1 == later.1 && (b.2 + 0.25).abs() < 0.01)
+	);
+	// 16 notes at once: one shares a channel.
+	let crowd: Vec<MpeNote> = (0..16).map(|i| note(40 + i, 0, 960, Vec::new())).collect();
+	let out = export_mpe(
+		&crowd,
+		&TempoMap::constant(120.0),
+		&TimeSignature::default(),
+		"Crowd",
+	)
+	.unwrap();
+	assert_eq!(out.shared, 1);
+}
+
+#[test]
+fn mpe_import_gives_notes_their_member_channel_bends() {
+	use crate::smf_export::{MpeNote, export_mpe};
+	use cadenza_model::NoteExpression;
+	// Twelve notes at once (member channel 10 is used: not a drum kit), the top one
+	// bending up a whole tone halfway, then a note that falls a semitone from its start.
+	let mut notes: Vec<MpeNote> = (0..12)
+		.map(|i| MpeNote {
+			start: Tick(0),
+			length: Tick(960),
+			pitch: 48 + i,
+			velocity: 0.8,
+			curve: Vec::new(),
+			pressure: Vec::new(),
+			timbre: Vec::new(),
+		})
+		.collect();
+	notes[11].curve = vec![(Tick(0), 0.0), (Tick(480), 2.0)];
+	notes.push(MpeNote {
+		start: Tick(960),
+		length: Tick(960),
+		pitch: 62,
+		velocity: 0.8,
+		curve: vec![(Tick(960), -1.0)],
+		pressure: vec![(Tick(960), 0.25), (Tick(1440), 1.0)],
+		timbre: vec![(Tick(1200), 0.0)],
+	});
+	let out = export_mpe(
+		&notes,
+		&TempoMap::constant(120.0),
+		&TimeSignature::default(),
+		"Expressive",
+	)
+	.unwrap();
+	let options = ImportOptions {
+		split_by_channel: true,
+		..Default::default()
+	};
+	let result = crate::import_smf(&out.bytes, &options).unwrap();
+	let mpe = result.parsed.mpe.as_ref().expect("an MPE file");
+	assert_eq!(mpe.zones.len(), 1);
+	assert_eq!(mpe.zones[0].members.len(), 15);
+	assert!(
+		result
+			.warnings
+			.iter()
+			.any(|w| w.starts_with("MPE file: 13 note(s)")),
+		"{:?}",
+		result.warnings
+	);
+	let Command::Batch { commands, .. } = result.command else {
+		panic!("a batch");
+	};
+	let tracks: Vec<&cadenza_model::Track> = commands
+		.iter()
+		.filter_map(|c| match c {
+			Command::AddTrack { track, .. } => Some(track),
+			_ => None,
+		})
+		.collect();
+	assert_eq!(tracks.len(), 1, "one instrument for the zone");
+	let track = tracks[0];
+	assert!(
+		matches!(&track.instrument.as_ref().unwrap().kind, cadenza_model::DeviceKind::Builtin { id } if id == "poly_synth")
+	);
+	let clip = &track.clips[0];
+	assert_eq!(clip.notes().len(), 13);
+	let top = clip.notes().iter().find(|n| n.pitch == 59).unwrap();
+	assert!(top.bend_at(Tick(479)).abs() < 1e-3);
+	assert!(
+		(top.bend_at(Tick(480)) - 2.0).abs() < 0.01,
+		"{:?}",
+		top.bend
+	);
+	let later = clip.notes().iter().find(|n| n.pitch == 62).unwrap();
+	assert!(
+		(later.bend_at(Tick(0)) + 1.0).abs() < 0.01,
+		"{:?}",
+		later.bend
+	);
+	assert!(
+		clip.notes().iter().filter(|n| !n.bend.is_empty()).count() == 2,
+		"the others are straight"
+	);
+	// Its pressure and timbre came back too (7-bit values); the others have none.
+	let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+	let at = |kind, tick| later.expression_at(kind, Tick(tick));
+	assert!(
+		near(at(NoteExpression::Pressure, 0), 0.25),
+		"{:?}",
+		later.pressure
+	);
+	assert!(near(at(NoteExpression::Pressure, 480), 1.0));
+	assert!(near(at(NoteExpression::Timbre, 239), 0.5));
+	assert!(
+		near(at(NoteExpression::Timbre, 240), 0.0),
+		"{:?}",
+		later.timbre
+	);
+	let shaped = clip
+		.notes()
+		.iter()
+		.filter(|n| !n.pressure.is_empty() || !n.timbre.is_empty())
+		.count();
+	assert_eq!(shaped, 1);
+	// No configuration or member bends left as lanes.
+	let cadenza_model::ClipContent::Midi { controllers, .. } = &clip.content else {
+		panic!("midi");
+	};
+	assert!(controllers.is_empty(), "{controllers:?}");
+}
+
+#[test]
+fn mpe_layout_reads_both_zones_and_bend_ranges() {
+	use crate::parsed::{OtherEvent, ParsedMidiFile, ParsedOtherEvent, ParsedTrack};
+	let cc = |tick: i64, channel: u8, controller: u8, value: u8| ParsedOtherEvent {
+		tick: Tick(tick),
+		event: OtherEvent::Controller {
+			channel,
+			controller,
+			value,
+		},
+	};
+	let rpn = |channel: u8, number: u8, value: u8| {
+		vec![
+			cc(0, channel, 101, 0),
+			cc(0, channel, 100, number),
+			cc(0, channel, 6, value),
+		]
+	};
+	let mut events = Vec::new();
+	events.extend(rpn(0, 6, 7)); // lower zone: channels 2..8
+	events.extend(rpn(15, 6, 5)); // upper zone: channels 15..11
+	events.extend(rpn(3, 0, 24)); // member channel 4: ±24
+	events.push(cc(0, 3, 38, 50)); // + 50 cents
+	let parsed = ParsedMidiFile {
+		tracks: vec![ParsedTrack {
+			name: None,
+			notes: Vec::new(),
+			is_drum: false,
+			other_events: events,
+		}],
+		..Default::default()
+	};
+	let layout = crate::mpe_import::layout(&parsed).unwrap();
+	assert_eq!(layout.zones[0].members, (1..=7).collect::<Vec<u8>>());
+	assert_eq!(layout.zones[1].master, 15);
+	assert_eq!(layout.zones[1].members, vec![14, 13, 12, 11, 10]);
+	assert_eq!(layout.bend_ranges[0], 2.0);
+	assert_eq!(layout.bend_ranges[1], 48.0);
+	assert_eq!(layout.bend_ranges[3], 24.5);
+	assert_eq!(layout.master_of(12), Some(15));
+	assert_eq!(layout.master_of(8), None, "between the zones");
+	// A plain file has no layout.
+	assert!(crate::mpe_import::layout(&ParsedMidiFile::default()).is_none());
 }

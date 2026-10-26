@@ -9,7 +9,7 @@
 use crate::i18n::{tr, trf, trn};
 use std::path::{Path, PathBuf};
 
-use cadenza_dsp::instruments::drum_sampler::PADS;
+use cadenza_dsp::instruments::drum_sampler::{PADS, pad_layout};
 use cadenza_dsp::readings;
 use cadenza_model::{Command, Device, LoopMode, Project, SampleRef, SampleZone};
 
@@ -40,6 +40,7 @@ pub fn pad_color(note: u8) -> usize {
 		42 | 44 | 46 => 3,
 		41 | 43 | 45 | 47 | 48 | 50 => 4,
 		49 | 51..=53 | 55 | 57 | 59 => 6,
+		60..=66 => 5,
 		_ => 7,
 	}
 }
@@ -75,8 +76,37 @@ pub fn pad_short(note: u8) -> &'static str {
 		51 => tr("Ride"),
 		54 => tr("Tamb"),
 		56 => tr("Cowb"),
+		60 => tr("Hi Bgo"),
+		61 => tr("Lo Bgo"),
+		62 => tr("Mt Cga"),
+		63 => tr("Op Cga"),
+		64 => tr("Lo Cga"),
+		65 => tr("Hi Tim"),
+		66 => tr("Lo Tim"),
+		67 => tr("Hi Ago"),
+		68 => tr("Lo Ago"),
+		69 => tr("Cabasa"),
+		70 => tr("Shaker"),
+		73 | 74 => tr("Guiro"),
+		75 => tr("Claves"),
+		76 => tr("Hi Blk"),
+		77 => tr("Lo Blk"),
+		78 | 79 => tr("Cuica"),
+		80 | 81 => tr("Tri"),
 		_ => tr("Pad"),
 	}
+}
+
+/// The kit's 16 pads (note, GM name): the GM pads, with spare ones given to the other
+/// drum notes its zones use (`drum_sampler::pad_layout`, the processor's own layout).
+pub fn kit_pads(device: &Device) -> [(u8, &'static str); 16] {
+	pad_layout(
+		device
+			.zones
+			.iter()
+			.filter(|z| z.is_single_key())
+			.map(|z| z.key_low),
+	)
 }
 
 /// Pad `i` (0..16, pad 1 bottom-left) of the 4x4 grid: its (row from the top, column).
@@ -768,7 +798,7 @@ impl WaveWindow {
 
 // --- Flashes -------------------------------------------------------------------------
 
-/// The pads' flashes from the processor's trigger counters (one per pad of [`PADS`]):
+/// The pads' flashes from the processor's trigger counters (one per pad of [`kit_pads`]):
 /// a counter that grew since the last frame flashes its pad; one that went down (a
 /// fresh instance after a reload) rebases without flashing.
 #[derive(Debug, Clone, Default)]
@@ -795,7 +825,7 @@ impl PadFlashes {
 		self.last = Some(current);
 	}
 
-	/// How lit pad `i` (index into [`PADS`]) is at `now`.
+	/// How lit pad `i` (index into [`kit_pads`]) is at `now`.
 	pub fn level(&self, i: usize, now: f64) -> f32 {
 		self.at
 			.get(i)
@@ -809,7 +839,7 @@ impl PadFlashes {
 	}
 }
 
-/// The pad (index into [`PADS`]) a computer key auditions: 1-8 the lower two rows, Shift
+/// The pad (index into [`kit_pads`]) a computer key auditions: 1-8 the lower two rows, Shift
 /// + 1-8 the upper two.
 pub fn key_pad(digit: u8, shift: bool) -> Option<usize> {
 	(1..=8)

@@ -164,4 +164,6 @@ Cadenza is free software: you can redistribute it and/or modify it under the ter
 [LICENSE](LICENSE).
 
 Third-party crates keep their own licenses (permissive or MPL-2.0, checked in CI with
-`cargo deny`). Builds with the optional `mp3` feature link LAME (LGPL).
+`cargo deny`). Builds with the optional `mp3` feature link LAME (LGPL). The polyphonic note
+detector embeds the Basic Pitch weights (© 2022 Spotify AB, Apache-2.0; see
+[crates/notes/models](crates/notes/models/README.md)).

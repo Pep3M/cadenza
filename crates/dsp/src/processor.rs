@@ -109,6 +109,40 @@ pub enum MidiEvent {
 		offset: u32,
 		value: f32,
 	},
+	/// One key's own pitch offset (a note's curve, MPE-style), semitones; sent before its
+	/// note-on for the starting value and while it sounds. A note-on without one starts at 0.
+	NoteBend {
+		offset: u32,
+		pitch: u8,
+		semitones: f32,
+	},
+	/// One key's own pressure or timbre (MPE-style), `value` in `0.0..=1.0`; like
+	/// [`MidiEvent::NoteBend`] it comes before its note-on and while it sounds, and a note-on
+	/// without one starts at the kind's resting value.
+	NoteExpression {
+		offset: u32,
+		pitch: u8,
+		kind: NoteExpressionKind,
+		value: f32,
+	},
+}
+
+/// Per-note expressions besides the bend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteExpressionKind {
+	/// Polyphonic pressure; rests at 0.
+	Pressure,
+	/// Brightness (MPE CC74); rests at 0.5.
+	Timbre,
+}
+
+impl NoteExpressionKind {
+	pub fn resting(self) -> f32 {
+		match self {
+			NoteExpressionKind::Pressure => 0.0,
+			NoteExpressionKind::Timbre => 0.5,
+		}
+	}
 }
 
 /// MIDI controller numbers with a meaning in the built-in instruments.
@@ -128,7 +162,9 @@ impl MidiEvent {
 			| MidiEvent::AllNotesOff { offset }
 			| MidiEvent::ControlChange { offset, .. }
 			| MidiEvent::PitchBend { offset, .. }
-			| MidiEvent::ChannelPressure { offset, .. } => offset,
+			| MidiEvent::ChannelPressure { offset, .. }
+			| MidiEvent::NoteBend { offset, .. }
+			| MidiEvent::NoteExpression { offset, .. } => offset,
 		}
 	}
 
@@ -155,6 +191,21 @@ impl MidiEvent {
 			MidiEvent::ChannelPressure { value, .. } => {
 				MidiEvent::ChannelPressure { offset, value }
 			}
+			MidiEvent::NoteBend {
+				pitch, semitones, ..
+			} => MidiEvent::NoteBend {
+				offset,
+				pitch,
+				semitones,
+			},
+			MidiEvent::NoteExpression {
+				pitch, kind, value, ..
+			} => MidiEvent::NoteExpression {
+				offset,
+				pitch,
+				kind,
+				value,
+			},
 		}
 	}
 
@@ -354,6 +405,14 @@ pub mod readings {
 	pub const DRUM_PAD_TRIGGERS_START: usize = 0;
 	/// Number of `drum_sampler` pad trigger counters.
 	pub const DRUM_PADS: usize = 16;
+	/// `pitch_correct`: the detected pitch (fractional MIDI against the reference tuning),
+	/// -1 while unpitched.
+	pub const PITCH_DETECTED: usize = 0;
+	/// `pitch_correct`: the pitch played now (detected + shift), -1 while unpitched.
+	pub const PITCH_OUTPUT: usize = 1;
+	/// `pitch_correct`: the note it is pulling to (scale note + transpose), -1 while
+	/// unpitched.
+	pub const PITCH_TARGET: usize = 2;
 
 	// Live voice state of the built-in instruments (`poly_synth`, `electric_piano`,
 	// `sampler`, `drum_sampler`); encoded and decoded by `instruments::voice_readings`.

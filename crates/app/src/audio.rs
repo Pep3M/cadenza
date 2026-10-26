@@ -106,6 +106,9 @@ enum Request {
 	/// Recording latency offset, frames.
 	LatencyOffset(i64),
 	TestTone(bool),
+	/// Play a snippet once over the output (note audition): channels, rate, gain dB.
+	Snippet(Vec<Vec<f32>>, u32, f32),
+	StopSnippet,
 	/// The device the probe follows (`None`: off).
 	Probe(Option<DeviceId>),
 	/// Monitoring switches on the output (mono, dim).
@@ -249,6 +252,16 @@ impl AudioEngine {
 
 	pub fn test_tone(&self, on: bool) {
 		self.send(Request::TestTone(on));
+	}
+
+	/// Plays `channels` (at `rate`) once over the output, replacing the snippet playing:
+	/// the note editor's audition of a dragged note.
+	pub fn play_snippet(&self, channels: Vec<Vec<f32>>, rate: u32, gain_db: f32) {
+		self.send(Request::Snippet(channels, rate, gain_db));
+	}
+
+	pub fn stop_snippet(&self) {
+		self.send(Request::StopSnippet);
 	}
 
 	/// Follows `device` with the probe (answered by [`AudioEvent::Probe`]).
@@ -806,6 +819,10 @@ fn run(
 					Ok(())
 				}
 				Request::TestTone(on) => player.set_test_tone(on),
+				Request::Snippet(channels, rate, gain_db) => {
+					player.play_snippet(channels, rate, gain_db)
+				}
+				Request::StopSnippet => player.stop_snippet(),
 				Request::MonitorFx(fx) => {
 					kept.monitor_fx = fx;
 					player.set_monitor(fx)

@@ -135,14 +135,6 @@ fn detect_role(notes: &[ImportNote], opts: &ImportOptions) -> Role {
 	}
 }
 
-/// Krumhansl-Kessler key profiles.
-const MAJOR_PROFILE: [f64; 12] = [
-	6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
-];
-const MINOR_PROFILE: [f64; 12] = [
-	6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
-];
-
 /// The major or natural minor key whose profile best matches the notes' pitch classes
 /// (weighted by duration).
 pub fn infer_key(notes: &[ImportNote]) -> Option<Scale> {
@@ -150,32 +142,7 @@ pub fn infer_key(notes: &[ImportNote]) -> Option<Scale> {
 	for n in notes {
 		hist[n.pitch as usize % 12] += n.length_beats.max(0.1);
 	}
-	if hist.iter().all(|&h| h == 0.0) {
-		return None;
-	}
-	let mean_h = hist.iter().sum::<f64>() / 12.0;
-	let mut best: Option<(f64, Scale)> = None;
-	for (profile, kind) in [
-		(MAJOR_PROFILE, ScaleKind::Major),
-		(MINOR_PROFILE, ScaleKind::NaturalMinor),
-	] {
-		let mean_p = profile.iter().sum::<f64>() / 12.0;
-		for root in 0..12u8 {
-			let (mut num, mut dh, mut dp) = (0.0, 0.0, 0.0);
-			for (i, h) in hist.iter().enumerate() {
-				let p = profile[(i + 12 - root as usize) % 12] - mean_p;
-				let h = h - mean_h;
-				num += h * p;
-				dh += h * h;
-				dp += p * p;
-			}
-			let r = num / (dh * dp).sqrt().max(1e-9);
-			if best.as_ref().is_none_or(|(b, _)| r > *b) {
-				best = Some((r, Scale::new(cadenza_theory::PitchClass(root), kind)));
-			}
-		}
-	}
-	best.map(|(_, s)| s)
+	Scale::infer(&hist)
 }
 
 fn octave_suffix(octave: i32) -> String {

@@ -325,8 +325,9 @@ pub struct DeviceInfoOutput {
 	/// Extra outputs of a multi-output instrument, numbered from 1 for set_output_routes.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<String>,
-	/// Factory presets of a built-in device (apply with load_preset once it is on a
-	/// track); plugin presets are listed by list_presets.
+	/// Factory presets of a built-in device: "name: description", or one "Category: names"
+	/// line per category for large libraries (descriptions via list_presets). Start a
+	/// device from one with `preset` in create_track / insert_device, or load_preset.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub presets: Vec<String>,
 	/// Built-in wavetables of the poly_synth (`oscN_table` index: name, what
@@ -428,10 +429,7 @@ pub fn get_device_info(
 			next_offset,
 			sidechain_input: cadenza_dsp::create(info.id).is_some_and(|p| p.has_sidechain()),
 			aux_outputs: Vec::new(),
-			presets: cadenza_dsp::factory_presets(info.id)
-				.iter()
-				.map(|p| format!("{}: {}", p.name, p.description))
-				.collect(),
+			presets: preset_lines(info.id),
 			wavetables: wavetable_lines(info.id),
 		},
 		DeviceRef::Plugin(desc) => DeviceInfoOutput {
@@ -582,6 +580,28 @@ fn lock(session: &std::sync::Mutex<Session>) -> std::sync::MutexGuard<'_, Sessio
 	session.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// `get_device_info` preset lines: described one by one, or grouped by category.
+fn preset_lines(id: &str) -> Vec<String> {
+	let presets = cadenza_dsp::factory_presets(id);
+	if presets.iter().all(|p| p.category.is_empty()) {
+		return presets
+			.iter()
+			.map(|p| format!("{}: {}", p.name, p.description))
+			.collect();
+	}
+	cadenza_dsp::PRESET_CATEGORIES
+		.iter()
+		.filter_map(|c| {
+			let names: Vec<&str> = presets
+				.iter()
+				.filter(|p| p.category == *c)
+				.map(|p| p.name)
+				.collect();
+			(!names.is_empty()).then(|| format!("{c}: {}", names.join(", ")))
+		})
+		.collect()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -677,7 +697,13 @@ mod tests {
 		assert!(info.wavetables[2].starts_with("2 Formant"));
 		let ids: Vec<&str> = info.params.iter().map(|p| p.id.as_str()).collect();
 		assert_eq!(ids, ["osc1_position", "osc2_position"]);
-		assert!(info.presets.iter().any(|p| p.starts_with("Vowel Pad")));
+		assert!(
+			info.presets
+				.iter()
+				.any(|p| p.starts_with("Pad: ") && p.contains("Vowel Pad")),
+			"{:?}",
+			info.presets
+		);
 		assert!(info.description.contains("wavetable"));
 	}
 }

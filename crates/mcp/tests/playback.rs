@@ -32,6 +32,7 @@ fn play_stop_round_trip_succeeds_or_fails_cleanly_without_a_device() {
 			instrument: Some(DeviceSpec {
 				device: "poly_synth".into(),
 				params: BTreeMap::new(),
+				preset: None,
 			}),
 			color: None,
 			output: None,

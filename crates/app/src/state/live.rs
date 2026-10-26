@@ -61,6 +61,10 @@ pub fn diff(old: &Project, new: &Project, live_state: LiveState) -> Option<LiveC
 			device(od, nd, &mut changes, live_state)?;
 		}
 		if o.clips != n.clips && o.kind == TrackKind::Instrument && n.kind == o.kind {
+			// Effects fed this track's MIDI hold their own schedule: recompile for them.
+			if feeds_midi(new, n.id) {
+				return None;
+			}
 			o.clips = n.clips.clone();
 			changes.clips.push(n.id);
 		}
@@ -84,6 +88,16 @@ pub fn diff(old: &Project, new: &Project, live_state: LiveState) -> Option<LiveC
 		normalized.midi_map = new.midi_map.clone();
 	}
 	(normalized == *new).then_some(changes)
+}
+
+/// Whether a device of `project` takes the MIDI of `track`.
+fn feeds_midi(project: &Project, track: TrackId) -> bool {
+	project
+		.tracks
+		.iter()
+		.flat_map(|t| t.devices())
+		.chain(&project.master.inserts)
+		.any(|d| d.midi_input == Some(track))
 }
 
 fn channel(
@@ -257,6 +271,17 @@ mod tests {
 			},
 		);
 		assert!(diff(&p, &added).is_none());
+		// Once an effect takes this track's MIDI, its edits recompile.
+		let mut vox = Track::new("Vox", TrackKind::Audio);
+		vox.channel
+			.inserts
+			.push(Device::builtin("pitch_correct", "Tune"));
+		vox.channel.inserts[0].midi_input = Some(track);
+		let mut fed = n.clone();
+		fed.tracks.push(vox.clone());
+		let mut edited = moved.clone();
+		edited.tracks.push(vox);
+		assert!(diff(&fed, &edited).is_none());
 	}
 
 	#[test]

@@ -78,7 +78,8 @@ jobs:
         run: |
           mkdir -p "dist/$NAME"
           cp target/release/{cadenza,cadenza-app,cadenza-plugin-sandbox,cadenza-plugin-scanner} "dist/$NAME/"
-          cp LICENSE README.md packaging/linux/cadenza.desktop packaging/linux/cadenza.svg "dist/$NAME/"
+          cp LICENSE README.md crates/notes/models/LICENSE-basic-pitch packaging/linux/cadenza.desktop packaging/linux/cadenza.svg "dist/$NAME/"
+          cp -R assets/samples "dist/$NAME/samples"
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
       - name: AppImage
         run: |
@@ -87,7 +88,9 @@ jobs:
           cp target/release/{cadenza,cadenza-app,cadenza-plugin-sandbox,cadenza-plugin-scanner} "$app/usr/bin/"
           cp packaging/linux/cadenza.desktop packaging/linux/cadenza.svg "$app/"
           mkdir -p "$app/usr/share/doc/cadenza"
-          cp LICENSE README.md "$app/usr/share/doc/cadenza/"
+          cp LICENSE README.md crates/notes/models/LICENSE-basic-pitch "$app/usr/share/doc/cadenza/"
+          mkdir -p "$app/usr/share/cadenza"
+          cp -R assets/samples "$app/usr/share/cadenza/samples"
           printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/cadenza-app" "$@"\n' > "$app/AppRun"
           chmod +x "$app/AppRun"
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
@@ -127,7 +130,8 @@ jobs:
           foreach ($b in "cadenza", "cadenza-app", "cadenza-plugin-scanner") {
             Copy-Item "target/release/$b.exe" "dist/$env:NAME/"
           }
-          Copy-Item LICENSE, README.md "dist/$env:NAME/"
+          Copy-Item LICENSE, README.md, crates/notes/models/LICENSE-basic-pitch "dist/$env:NAME/"
+          Copy-Item assets/samples "dist/$env:NAME/samples" -Recurse
           Compress-Archive -Path "dist/$env:NAME" -DestinationPath "dist/$env:NAME.zip"
       - name: installer
         shell: pwsh
@@ -192,8 +196,9 @@ jobs:
           sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
           plutil -lint "$app/Contents/Info.plist"
           mkdir -p "$app/Contents/Resources"
-          cp LICENSE README.md "$app/Contents/Resources/"
+          cp LICENSE README.md crates/notes/models/LICENSE-basic-pitch "$app/Contents/Resources/"
           cp packaging/icons/cadenza.icns "$app/Contents/Resources/"
+          cp -R assets/samples "$app/Contents/Resources/samples"
           cp LICENSE "dist/$NAME/"
           codesign --force --deep --sign - "$app"
           ln -s /Applications "dist/$NAME/Applications"

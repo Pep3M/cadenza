@@ -550,6 +550,111 @@ async fn an_engineer_pass_mixes_as_one_undo_step() {
 }
 
 #[tokio::test]
+async fn a_tuning_pass_retunes_the_clip_as_one_undo_step() {
+	use cadenza_core::{AudioNoteId, Tick};
+	use cadenza_model::{AudioNote, Clip, ClipContent, NoteEdits};
+
+	// Six notes of C major sung 30 c sharp (the file is never read: notes are stored).
+	let mut clip = Clip::audio("Vox", Tick::ZERO, Tick::from_beats(8.0), "/takes/vox.wav");
+	let edits = NoteEdits {
+		notes: [60.3, 62.3, 64.3, 65.3, 67.3, 60.3]
+			.iter()
+			.enumerate()
+			.map(|(i, &p)| {
+				let t = i as f64 * 0.5;
+				AudioNote::new(AudioNoteId::new(), t, t + 0.4, p)
+			})
+			.collect(),
+		sibilants: Vec::new(),
+		sibilant_gain_db: 0.0,
+		sensitivity: 1.0,
+		user_splits: Vec::new(),
+		user_merges: Vec::new(),
+	};
+	if let ClipContent::Audio { notes, .. } = &mut clip.content {
+		*notes = Some(Box::new(edits));
+	}
+	let clip_id = clip.id.to_string();
+	let analyze = format!(r#"{{"clip_id":"{clip_id}"}}"#);
+	let tune = format!(r#"{{"clip_id":"{clip_id}","center_pct":90}}"#);
+	let server = MockServer::start(move |_, index| match index {
+		0 => streamed(
+			None,
+			Some("Reading the take."),
+			&[("c1", "analyze_vocal", analyze.as_str())],
+			"tool_calls",
+			usage(3000, 40, 0, 0.002),
+		),
+		1 => streamed(
+			None,
+			None,
+			&[("c2", "tune_audio_notes", tune.as_str())],
+			"tool_calls",
+			usage(3300, 40, 2900, 0.001),
+		),
+		_ => streamed(
+			None,
+			Some("C major, sung +30 c: 30 -> 3 c."),
+			&[],
+			"stop",
+			usage(3500, 20, 3200, 0.001),
+		),
+	})
+	.await;
+	let mut f = fixture(&server, |_| {});
+	{
+		let mut project = Project::new("Demo");
+		let mut track = Track::new("Vox", TrackKind::Audio);
+		track.clips.push(clip);
+		project.tracks.push(track);
+		f.session
+			.lock()
+			.unwrap()
+			.reset(cadenza_model::Document::new(project), None);
+	}
+	let brief = cadenza_agent::TuningBrief {
+		clip: format!("Vox (clip {clip_id}, track Vox)"),
+		..Default::default()
+	};
+	let outcome = f
+		.agent
+		.run_tuning_pass(
+			&brief,
+			&context(&f),
+			&Recorder::default(),
+			&CancelToken::new(),
+		)
+		.await
+		.unwrap();
+	assert_eq!(outcome.status, RequestStatus::Completed);
+	assert_eq!(outcome.undo_label, cadenza_agent::TUNING_UNDO_LABEL);
+	{
+		let session = f.session.lock().unwrap();
+		let doc = session.document();
+		assert_eq!(doc.history_labels(), vec!["AI tuning pass"]);
+		let clip = &doc.project().tracks[0].clips[0];
+		let ClipContent::Audio { notes: Some(n), .. } = &clip.content else {
+			panic!("notes kept");
+		};
+		// 90 % of the way from +30 c: +3 c.
+		assert!(
+			(n.notes[0].result_pitch() - 60.03).abs() < 1e-6,
+			"{:?}",
+			n.notes[0]
+		);
+	}
+	let requests = server.requests();
+	let message = first_user_text(&requests[0]);
+	assert!(message.starts_with("Request: Tuning pass:"), "{message}");
+	assert!(message.contains(&clip_id), "{message}");
+	let report = requests[1].body.to_string();
+	assert!(
+		report.contains("c major") || report.contains("C major"),
+		"{report}"
+	);
+}
+
+#[tokio::test]
 async fn an_explain_request_is_read_only_and_leaves_no_undo_step() {
 	let server = MockServer::start(|_, index| match index {
 		0 => streamed(

@@ -149,6 +149,9 @@ impl Recorder {
 				velocity: n.velocity,
 				start: n.start,
 				length: n.length,
+				bend: Vec::new(),
+				pressure: Vec::new(),
+				timbre: Vec::new(),
 			})
 			.collect()
 	}

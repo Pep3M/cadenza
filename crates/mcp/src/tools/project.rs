@@ -132,6 +132,15 @@ pub struct NoteOut {
 	/// Relative to the clip start.
 	pub start_beats: f64,
 	pub length_beats: f64,
+	/// The note's own pitch curve by its turns (beats from the note's start), when bent.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub bend: Vec<crate::tools::clips::BendInput>,
+	/// The note's own pressure curve by its turns, when it has one.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub pressure: Vec<crate::tools::clips::ValueInput>,
+	/// The note's own timbre curve by its turns, when it has one.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub timbre: Vec<crate::tools::clips::ValueInput>,
 }
 
 pub fn get_clip_notes(session: &Session, args: GetClipNotesArgs) -> Result<Vec<NoteOut>, McpError> {
@@ -150,6 +159,9 @@ pub fn get_clip_notes(session: &Session, args: GetClipNotesArgs) -> Result<Vec<N
 			velocity: n.velocity,
 			start_beats: tick_to_beats(n.start),
 			length_beats: tick_to_beats(n.length),
+			bend: crate::tools::clips::bend_shape(&n.bend),
+			pressure: crate::tools::clips::value_shape(&n.pressure),
+			timbre: crate::tools::clips::value_shape(&n.timbre),
 		})
 		.collect())
 }

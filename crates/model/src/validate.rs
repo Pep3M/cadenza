@@ -255,6 +255,7 @@ pub(crate) fn note_within(clip: ClipId, span: Tick, note: &Note) -> Result<(), M
 	velocity(note.velocity)?;
 	length("note", note.length)?;
 	start("note", note.start)?;
+	note_bend(note)?;
 	if note.start >= span {
 		return Err(ModelError::NoteOutsideClip {
 			clip,
@@ -262,6 +263,84 @@ pub(crate) fn note_within(clip: ClipId, span: Tick, note: &Note) -> Result<(), M
 			start: note.start.0,
 			clip_length: span.0,
 		});
+	}
+	Ok(())
+}
+
+/// A note's bend: at most [`crate::MAX_NOTE_BEND_POINTS`] points, ticks from 0 increasing,
+/// values within ±[`crate::MAX_NOTE_BEND`] semitones. Points past the note's end are kept
+/// (a shortened note keeps its curve for when it grows back) and never played.
+pub(crate) fn note_bend(note: &Note) -> Result<(), ModelError> {
+	let bad = |reason: String| ModelError::InvalidNoteBend {
+		note: note.id,
+		reason,
+	};
+	if note.bend.len() > crate::MAX_NOTE_BEND_POINTS {
+		return Err(bad(format!(
+			"{} points; at most {} (thin the curve)",
+			note.bend.len(),
+			crate::MAX_NOTE_BEND_POINTS
+		)));
+	}
+	let mut last: Option<Tick> = None;
+	for p in &note.bend {
+		if p.tick < Tick::ZERO {
+			return Err(bad(format!(
+				"a point at tick {} is before the note; ticks count from its start (0)",
+				p.tick.0
+			)));
+		}
+		if last.is_some_and(|l| p.tick <= l) {
+			return Err(bad(
+				"points must be in increasing tick order, one per tick".into()
+			));
+		}
+		if !(p.semitones.is_finite() && p.semitones.abs() <= crate::MAX_NOTE_BEND) {
+			return Err(bad(format!(
+				"{} semitones; use -{max}..={max}",
+				p.semitones,
+				max = crate::MAX_NOTE_BEND
+			)));
+		}
+		last = Some(p.tick);
+	}
+	for kind in crate::NoteExpression::ALL {
+		note_values(note, kind)?;
+	}
+	Ok(())
+}
+
+fn note_values(note: &Note, kind: crate::NoteExpression) -> Result<(), ModelError> {
+	let points = note.expression(kind);
+	let bad = |reason: String| ModelError::InvalidNoteExpression {
+		note: note.id,
+		kind: kind.name(),
+		reason,
+	};
+	if points.len() > crate::MAX_NOTE_BEND_POINTS {
+		return Err(bad(format!(
+			"{} points; at most {} (thin the curve)",
+			points.len(),
+			crate::MAX_NOTE_BEND_POINTS
+		)));
+	}
+	let mut last: Option<Tick> = None;
+	for p in points {
+		if p.tick < Tick::ZERO {
+			return Err(bad(format!(
+				"a point at tick {} is before the note; ticks count from its start (0)",
+				p.tick.0
+			)));
+		}
+		if last.is_some_and(|l| p.tick <= l) {
+			return Err(bad(
+				"points must be in increasing tick order, one per tick".into()
+			));
+		}
+		if !(p.value.is_finite() && (0.0..=1.0).contains(&p.value)) {
+			return Err(bad(format!("value {}; use 0..=1", p.value)));
+		}
+		last = Some(p.tick);
 	}
 	Ok(())
 }
@@ -395,7 +474,11 @@ pub(crate) fn clip_within(clip: &Clip, span: Tick) -> Result<(), ModelError> {
 			gain_db,
 			fade_in,
 			fade_out,
+			notes,
 		} => {
+			if let Some(n) = notes {
+				crate::audio_notes::validate(n)?;
+			}
 			for (what, fade) in [("fade_in", fade_in), ("fade_out", fade_out)] {
 				if let Some(f) = fade
 					&& !(f.seconds.is_finite() && f.seconds > 0.0)
@@ -588,6 +671,31 @@ pub(crate) fn sidechain(
 	Ok(())
 }
 
+/// A MIDI input on `device` (an instrument when `instrument`) from track `source`.
+pub(crate) fn midi_input(
+	project: &Project,
+	device: DeviceId,
+	source: TrackId,
+	instrument: bool,
+) -> Result<(), ModelError> {
+	let fail = |reason: String| ModelError::InvalidMidiInput { device, reason };
+	if instrument {
+		return Err(fail(
+			"an instrument already plays its own track's notes; MIDI inputs feed effects".into(),
+		));
+	}
+	let Some(t) = project.track(source) else {
+		return Err(ModelError::TrackNotFound(source));
+	};
+	if t.kind != TrackKind::Instrument {
+		return Err(fail(format!(
+			"track '{}' is a {:?} track; MIDI notes come from instrument tracks (the one holding the melody's MIDI clips)",
+			t.name, t.kind
+		)));
+	}
+	Ok(())
+}
+
 /// Structural checks of instrument output routes (ports, duplicates, own track).
 fn output_route_shape(track: TrackId, routes: &[OutputRoute]) -> Result<(), ModelError> {
 	let fail = |reason: String| ModelError::InvalidOutputRoute { track, reason };
@@ -660,6 +768,9 @@ pub(crate) fn device_links(
 ) -> Result<(), ModelError> {
 	if let Some(source) = device.sidechain {
 		sidechain(project, owner, device.id, source)?;
+	}
+	if let Some(source) = device.midi_input {
+		midi_input(project, device.id, source, instrument)?;
 	}
 	if device.aux_outputs.is_empty() {
 		return Ok(());
@@ -1075,6 +1186,13 @@ pub(crate) fn project(project: &Project) -> Result<(), ModelError> {
 	crate::midi_map::validate_loaded(project)?;
 	for d in &project.master.inserts {
 		device_links(project, None, d, false)?;
+	}
+	for t in &project.tracks {
+		for (i, d) in t.devices().enumerate() {
+			if let Some(source) = d.midi_input {
+				midi_input(project, d.id, source, i == 0 && t.instrument.is_some())?;
+			}
+		}
 	}
 	for t in &project.tracks {
 		for target in consumers(project, t) {

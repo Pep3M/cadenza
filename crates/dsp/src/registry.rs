@@ -1,10 +1,12 @@
 //! Catalogue of built-in devices and their factory.
 
-use crate::effects::{chorus, compressor, delay, eq, gain, limiter, reverb, saturator};
+use crate::effects::{
+	chorus, compressor, delay, eq, gain, limiter, pitch_correct, reverb, saturator,
+};
 use crate::instruments::{drum_machine, drum_sampler, electric_piano, poly_synth, sampler};
 use crate::processor::{DeviceInfo, Processor};
 
-static REGISTRY: [&DeviceInfo; 13] = [
+static REGISTRY: [&DeviceInfo; 14] = [
 	&poly_synth::INFO,
 	&drum_machine::INFO,
 	&electric_piano::INFO,
@@ -18,6 +20,7 @@ static REGISTRY: [&DeviceInfo; 13] = [
 	&chorus::INFO,
 	&saturator::INFO,
 	&gain::INFO,
+	&pitch_correct::INFO,
 ];
 
 /// Every built-in device, instruments first.
@@ -36,6 +39,12 @@ pub fn param_changes_latency(device: &str, param: &str) -> bool {
 	matches!((device, param), ("limiter", "oversample"))
 }
 
+/// Whether the built-in effect `device` uses MIDI notes fed to it (a MIDI input from
+/// another track): `pitch_correct` takes its target notes from them.
+pub fn effect_takes_midi(device: &str) -> bool {
+	device == "pitch_correct"
+}
+
 /// Instantiates a built-in device by id. Call `prepare` before `process`.
 pub fn create(id: &str) -> Option<Box<dyn Processor>> {
 	Some(match id {
@@ -52,6 +61,7 @@ pub fn create(id: &str) -> Option<Box<dyn Processor>> {
 		"chorus" => Box::new(chorus::Chorus::new()),
 		"saturator" => Box::new(saturator::Saturator::new()),
 		"gain" => Box::new(gain::Gain::new()),
+		"pitch_correct" => Box::new(pitch_correct::PitchCorrect::new()),
 		_ => return None,
 	})
 }

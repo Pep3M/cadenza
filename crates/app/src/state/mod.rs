@@ -50,8 +50,12 @@ pub mod midi_learn;
 pub mod mix;
 pub mod mixer;
 pub mod modulation;
+pub mod note_audition;
+pub mod note_editor;
+pub mod note_renders;
 pub mod notices;
 pub mod piano;
+pub mod pitch_correct_editor;
 pub mod playlist;
 pub mod poly_synth_editor;
 pub mod project_io;
@@ -65,6 +69,7 @@ pub mod saturator_editor;
 pub mod selection;
 pub mod start;
 pub mod timeline;
+pub mod to_midi;
 pub mod transport;
 pub mod windows;
 pub mod xruns;
@@ -416,6 +421,18 @@ pub struct AppState {
 	pub mix: mix::MixAssistant,
 	/// Match EQ of the EQ editors.
 	match_eq: match_eq::MatchEqState,
+	/// The "Convert to MIDI" dialog of an audio clip (NE-3).
+	to_midi: Option<to_midi::ConvertToMidi>,
+	/// Note-analysis cache folder; `None` = the user cache folder (tests use a temp dir).
+	pub analysis_cache: Option<std::path::PathBuf>,
+	/// Background renders of clips with note edits.
+	pub note_renders: note_renders::NoteRenders,
+	/// Pitch analyses of audio files for the note editor.
+	pub note_analyses: note_editor::NoteAnalyses,
+	/// The note editor's read-only polyphonic layer, per file.
+	pub poly_layers: note_editor::PolyLayers,
+	/// Hearing notes while they are dragged in the note editor.
+	pub note_audition: note_audition::NoteAudition,
 	collisions: collisions::CollisionState,
 	/// MIDI learn and the mapped controllers' values (T36).
 	pub midi: midi_learn::MidiLearnState,
@@ -562,6 +579,12 @@ impl AppState {
 			),
 			mix: mix::MixAssistant::default(),
 			match_eq: match_eq::MatchEqState::default(),
+			to_midi: None,
+			analysis_cache: None,
+			note_renders: note_renders::NoteRenders::new(),
+			note_analyses: note_editor::NoteAnalyses::default(),
+			poly_layers: note_editor::PolyLayers::default(),
+			note_audition: note_audition::NoteAudition::default(),
 			collisions: collisions::CollisionState::default(),
 			midi: midi_learn::MidiLearnState::default(),
 			start: start::StartScreen::default(),
@@ -1072,6 +1095,7 @@ impl AppState {
 	/// reload (which cuts sounding notes).
 	fn after_edit(&mut self, before: Option<&Project>) {
 		self.dirty = true;
+		self.note_renders.invalidate();
 		self.selection.prune(&self.doc.project);
 		self.view.piano.prune(&self.doc.project);
 		self.view.automation.prune(&self.doc.project);
@@ -1877,6 +1901,16 @@ impl AppState {
 		self.set_param(address, value);
 	}
 
+	/// Feeds effect `r` the MIDI notes of instrument track `source` (`None` disconnects):
+	/// one undo step.
+	pub fn set_midi_input(&mut self, r: DeviceRef, source: Option<TrackId>) -> bool {
+		self.apply(Command::SetMidiInput {
+			track: r.track,
+			device: r.device,
+			source,
+		})
+	}
+
 	/// Forgets a parameter preview without committing it (a gesture that ended where it
 	/// started).
 	pub fn drop_param_preview(&mut self, device: DeviceId, param: &str) {
@@ -2016,42 +2050,16 @@ impl AppState {
 		));
 	}
 
-	/// Loads a built-in factory preset into a device (one undo step); sampler presets
-	/// bring their (factory) samples.
+	/// Loads a built-in factory preset into a device (one undo step): params, modulators
+	/// and, for sampler presets, their (factory) samples.
 	pub fn load_factory_preset(&mut self, device: DeviceRef, preset: &cadenza_dsp::FactoryPreset) {
-		let params = preset
-			.params
-			.iter()
-			.map(|(k, v)| ((*k).to_owned(), *v))
-			.collect();
-		let set = Command::SetDeviceState {
-			track: device.track,
-			device: device.device,
-			state: None,
-			params: Some(params),
+		let entry = device::PresetEntry {
+			name: preset.name.to_owned(),
+			user: false,
+			category: preset.category.to_owned(),
+			description: preset.description.to_owned(),
 		};
-		let cmd = if preset.zones.is_empty() {
-			set
-		} else {
-			match cadenza_engine::factory::preset_zones(preset) {
-				Ok(zones) => Command::Batch {
-					label: format!("Load preset '{}'", preset.name),
-					commands: vec![
-						set,
-						Command::SetSampleZones {
-							track: device.track,
-							device: device.device,
-							zones,
-						},
-					],
-				},
-				Err(e) => {
-					self.notices.error(e.to_string());
-					return;
-				}
-			}
-		};
-		self.apply(cmd);
+		self.load_device_preset(device, &entry);
 	}
 
 	/// The device at `r`, if it still exists (instrument or insert).
@@ -2308,9 +2316,17 @@ impl AppState {
 	/// What the player plays for the current mode (second value: pattern mode fell back
 	/// to the song because no clip is open in the piano roll).
 	pub fn transport_config(&self) -> (transport::PlayConfig, bool) {
+		let view = transport::TransportView {
+			track_solo: self
+				.view
+				.transport
+				.track_solo
+				.filter(|_| self.view.audio_editor),
+			..self.view.transport
+		};
 		transport::config(
 			self.project(),
-			&self.view.transport,
+			&view,
 			self.view.piano.clip.filter(|_| !self.view.audio_editor),
 			self.play_intent,
 		)
@@ -2422,6 +2438,37 @@ impl AppState {
 	pub fn seek(&mut self, tick: Tick) {
 		self.cued = true;
 		self.locate(tick);
+	}
+
+	/// A seek from the arrange: the whole song plays again.
+	pub fn seek_song(&mut self, tick: Tick) {
+		self.view.transport.track_solo = None;
+		self.seek(tick);
+		self.sync_transport();
+	}
+
+	/// A seek from the audio / note editor ruler: plays on from there with only `track`
+	/// heard (the song's timeline, its loop) until the arrange is clicked or the editor
+	/// closes.
+	pub fn seek_track(&mut self, tick: Tick, track: TrackId) {
+		self.view.transport.track_solo = Some(track);
+		self.seek(tick);
+		self.sync_transport();
+	}
+
+	/// Song mode with only the open editor's track heard (see [`Self::seek_track`]).
+	pub fn track_solo(&self) -> Option<TrackId> {
+		self.view.transport.track_solo.filter(|t| {
+			self.view.audio_editor
+				&& self.view.transport.mode == transport::PlayMode::Song
+				&& self.project().track(*t).is_some()
+		})
+	}
+
+	/// Back to the whole song (the editor's "Track only" chip).
+	pub fn set_track_solo(&mut self, track: Option<TrackId>) {
+		self.view.transport.track_solo = track;
+		self.sync_transport();
 	}
 
 	/// Moves the playhead without cueing (transport bookkeeping).
@@ -2753,6 +2800,7 @@ impl AppState {
 		let spec = cadenza_mcp::convert::DeviceSpec {
 			device: item.id.clone(),
 			params: Default::default(),
+			preset: None,
 		};
 		match cadenza_mcp::convert::build_device(&spec, item.role, catalog.as_deref()) {
 			Ok(d) => Some(d),
@@ -2841,14 +2889,8 @@ impl AppState {
 			return false;
 		};
 		let mut d = cadenza_model::Device::builtin(info.id, info.name);
-		d.params = preset
-			.params
-			.iter()
-			.map(|(k, v)| ((*k).to_owned(), *v))
-			.collect();
-		match cadenza_engine::factory::preset_zones(preset) {
-			Ok(zones) => d.zones = zones,
-			Err(e) => self.notices.error(e.to_string()),
+		if let Err(e) = cadenza_engine::factory::apply_preset(&mut d, preset) {
+			self.notices.error(e.to_string());
 		}
 		let r = DeviceRef {
 			track: Some(track),
@@ -3435,6 +3477,8 @@ impl AppState {
 		let args = cadenza_mcp::tools::presets::ListPresetsArgs {
 			track_id: r.track,
 			device_id: r.device,
+			category: None,
+			query: None,
 		};
 		let listed = cadenza_mcp::tools::presets::list_presets(&mut self.session(), args);
 		match listed {
@@ -3444,6 +3488,7 @@ impl AppState {
 				.map(|p| device::PresetEntry {
 					name: p.name,
 					user: p.source == cadenza_mcp::tools::presets::PresetSource::User,
+					category: p.category,
 					description: p.description,
 				})
 				.collect(),
@@ -4056,6 +4101,12 @@ impl AppState {
 			.unwrap_or_else(|| self.project().name.clone());
 		let name = match action {
 			FileAction::PackArchive => format!("{stem}.cdzpack"),
+			FileAction::ExportMpe => format!(
+				"{} MPE.mid",
+				self.to_midi
+					.as_ref()
+					.map_or(stem.as_str(), |c| &c.clip_name)
+			),
 			_ => format!("{stem}.cdz"),
 		};
 		let dir = match action {
@@ -4088,6 +4139,7 @@ impl AppState {
 			FileAction::MixReference => self.mix.reference = Some(path),
 			FileAction::MatchReference => self.finish_match_file(path),
 			FileAction::ImportMidi => self.import_midi(&path),
+			FileAction::ExportMpe => self.finish_export_mpe(&path),
 			FileAction::PadSample | FileAction::PadLayer | FileAction::KitFolder => {
 				self.finish_sample_dialog(action, &path);
 			}
@@ -4158,6 +4210,10 @@ impl AppState {
 		self.poll_jobs();
 		self.poll_mix();
 		self.poll_match_eq();
+		self.poll_convert_to_midi();
+		self.poll_note_renders();
+		self.poll_note_analyses();
+		self.poll_note_audition();
 		self.poll_collisions();
 		self.poll_file_jobs();
 		self.tick_autosave(now);
@@ -4182,6 +4238,10 @@ impl AppState {
 			|| self.files_jobs.busy()
 			|| self.jobs.process.is_some()
 			|| self.jobs.bounce.is_some()
+			|| self.note_renders.busy()
+			|| self.note_analyses.busy()
+			|| self.poly_layers.busy()
+			|| self.note_audition.busy()
 			|| self.ai.busy()
 			|| self.mix.busy()
 			|| self.record_animating()
@@ -4237,6 +4297,11 @@ impl AppState {
 							}
 						}
 					}
+					// Missing note renders are being made in the background.
+					let warnings: Vec<String> = warnings
+						.into_iter()
+						.filter(|w| !w.contains(cadenza_engine::note_render::PENDING_WARNING))
+						.collect();
 					if warnings != self.load_warnings {
 						for w in &warnings {
 							self.notices.warn(w.clone());
@@ -4280,6 +4345,17 @@ impl AppState {
 				AudioEvent::RecordFailed(e) => self.record_event(record::RecordEvent::Failed(e)),
 				AudioEvent::Error(e) => self.notices.error(trf("Audio: {e}", &[("e", &e)])),
 			}
+		}
+	}
+
+	fn poll_note_renders(&mut self) {
+		let waker = self.waker.clone();
+		match self.note_renders.tick(&self.doc.project, waker) {
+			Some(note_renders::Finished::Rendered) => self.schedule_reload(),
+			Some(note_renders::Finished::Failed(e)) => self
+				.notices
+				.error(trf("Rendering the note edits failed: {e}", &[("e", &e)])),
+			None => {}
 		}
 	}
 

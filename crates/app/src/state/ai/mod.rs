@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use cadenza_agent::{AppContext, CancelToken, EngineerBrief, RequestStatus};
+use cadenza_agent::{AppContext, CancelToken, EngineerBrief, RequestStatus, TuningBrief};
 use cadenza_mcp::SharedSession;
 
 use crate::audio::Waker;
@@ -182,7 +182,7 @@ impl AiChat {
 
 	/// Sends a request (ignored while one runs or when empty). Returns whether it was sent.
 	pub fn send(&mut self, request: &str, context: AppContext, session: &SharedSession) -> bool {
-		self.send_with(request, None, None, context, session)
+		self.send_with(request, worker::Pass::Chat, context, session)
 	}
 
 	/// Sends a read-only explain request (`text`, see `prompt::explain_request`), shown
@@ -194,7 +194,7 @@ impl AiChat {
 		context: AppContext,
 		session: &SharedSession,
 	) -> bool {
-		self.send_with(label, None, Some(text), context, session)
+		self.send_with(label, worker::Pass::Explain(text), context, session)
 	}
 
 	/// Runs a sound-engineer mix pass (one undo step "AI mix pass"); shown in the chat as
@@ -206,14 +206,25 @@ impl AiChat {
 		context: AppContext,
 		session: &SharedSession,
 	) -> bool {
-		self.send_with(label, Some(brief), None, context, session)
+		self.send_with(label, worker::Pass::Engineer(brief), context, session)
+	}
+
+	/// Runs a tuning pass on one audio clip (one undo step "AI tuning pass"); shown in the
+	/// chat as `label`. Returns whether it was sent.
+	pub fn send_tuning_pass(
+		&mut self,
+		label: &str,
+		brief: TuningBrief,
+		context: AppContext,
+		session: &SharedSession,
+	) -> bool {
+		self.send_with(label, worker::Pass::Tuning(brief), context, session)
 	}
 
 	fn send_with(
 		&mut self,
 		request: &str,
-		engineer: Option<EngineerBrief>,
-		explain: Option<String>,
+		pass: worker::Pass,
 		context: AppContext,
 		session: &SharedSession,
 	) -> bool {
@@ -233,8 +244,7 @@ impl AiChat {
 		let settings = self.settings.clone();
 		let sent = self.worker(session).send(worker::Command::Run {
 			request,
-			engineer,
-			explain,
+			pass,
 			context: Box::new(context),
 			settings,
 		});

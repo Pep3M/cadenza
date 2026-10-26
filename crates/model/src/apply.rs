@@ -461,6 +461,28 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetMidiInput {
+			track,
+			device,
+			source,
+		} => {
+			existing_device_mut(project, *track, *device)?;
+			if let Some(source) = source {
+				let instrument = track
+					.and_then(|t| project.track(t))
+					.and_then(|t| t.instrument.as_ref())
+					.is_some_and(|d| d.id == *device);
+				validate::midi_input(project, *device, *source, instrument)?;
+			}
+			let d = existing_device_mut(project, *track, *device)?;
+			let old = std::mem::replace(&mut d.midi_input, *source);
+			Ok(vec![Command::SetMidiInput {
+				track: *track,
+				device: *device,
+				source: old,
+			}])
+		}
+
 		Command::SetOutputRoutes { track, routes } => {
 			let t = project
 				.track(*track)
@@ -758,6 +780,92 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			}])
 		}
 
+		Command::SetAudioNotes { clip, notes } => {
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			if c.is_midi() {
+				return Err(ModelError::NotAnAudioClip(*clip));
+			}
+			if let Some(n) = notes {
+				crate::audio_notes::validate(n)?;
+			}
+			let target = project
+				.find_clip_mut(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			let ClipContent::Audio { notes: slot, .. } = &mut target.content else {
+				return Err(ModelError::NotAnAudioClip(*clip));
+			};
+			let old = std::mem::replace(slot, notes.clone());
+			Ok(vec![Command::SetAudioNotes {
+				clip: *clip,
+				notes: old,
+			}])
+		}
+
+		Command::UpdateAudioNotes {
+			clip,
+			patches,
+			sibilant_gain_db,
+		} => {
+			if patches.is_empty() && sibilant_gain_db.is_none()
+				|| patches.iter().any(|p| p.is_empty())
+			{
+				return Err(empty_patch(
+					"update_audio_notes",
+					"pitch, drift, modulation, formant_cents, gain_db and/or time per note, or sibilant_gain_db",
+				));
+			}
+			let (_, c) = project
+				.find_clip(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			let ClipContent::Audio {
+				notes: Some(edits), ..
+			} = &c.content
+			else {
+				return Err(if c.is_midi() {
+					ModelError::NotAnAudioClip(*clip)
+				} else {
+					ModelError::invalid(
+						"update_audio_notes clip",
+						clip,
+						"the clip has no detected notes; detect them first",
+					)
+				});
+			};
+			let mut edits = edits.clone();
+			let mut undo = Vec::with_capacity(patches.len());
+			for p in patches {
+				let n = edits
+					.notes
+					.iter_mut()
+					.find(|n| n.id == p.id)
+					.ok_or_else(|| {
+						ModelError::invalid(
+							"update_audio_notes note",
+							p.id,
+							"no such note in the clip; use an id from its notes",
+						)
+					})?;
+				undo.push(p.apply(n));
+			}
+			undo.reverse();
+			let old_sibilants =
+				sibilant_gain_db.map(|g| std::mem::replace(&mut edits.sibilant_gain_db, g));
+			crate::audio_notes::validate(&edits)?;
+			let target = project
+				.find_clip_mut(*clip)
+				.ok_or(ModelError::ClipNotFound(*clip))?;
+			if let ClipContent::Audio { notes, .. } = &mut target.content {
+				*notes = Some(edits);
+			}
+			Ok(vec![Command::UpdateAudioNotes {
+				clip: *clip,
+				patches: undo,
+				sibilant_gain_db: old_sibilants,
+			}])
+		}
+
 		Command::AddNotes { clip, notes } => {
 			if notes.is_empty() {
 				return Err(ModelError::invalid(
@@ -874,6 +982,12 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					velocity: patch.velocity.unwrap_or(old.velocity),
 					start: patch.start.unwrap_or(old.start),
 					length: patch.length.unwrap_or(old.length),
+					bend: patch.bend.clone().unwrap_or_else(|| old.bend.clone()),
+					pressure: patch
+						.pressure
+						.clone()
+						.unwrap_or_else(|| old.pressure.clone()),
+					timbre: patch.timbre.clone().unwrap_or_else(|| old.timbre.clone()),
 				};
 				validate::note_within(c.id, span, &new)?;
 				inverse.push(NotePatch {
@@ -882,6 +996,9 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 					velocity: patch.velocity.map(|_| old.velocity),
 					start: patch.start.map(|_| old.start),
 					length: patch.length.map(|_| old.length),
+					bend: patch.bend.as_ref().map(|_| old.bend.clone()),
+					pressure: patch.pressure.as_ref().map(|_| old.pressure.clone()),
+					timbre: patch.timbre.as_ref().map(|_| old.timbre.clone()),
 				});
 				updated.push(new);
 			}
@@ -1330,7 +1447,8 @@ fn take_lanes(project: &mut Project, pred: impl Fn(&ParamAddress) -> bool) -> Ve
 	restore
 }
 
-/// Disconnects `device`'s sidechain if it is keyed by `source`, recording the undo.
+/// Disconnects `device`'s sidechain and MIDI input when they come from `source`, recording
+/// the undo.
 fn unkey(
 	device: &mut crate::Device,
 	source: TrackId,
@@ -1342,6 +1460,13 @@ fn unkey(
 			track: owner,
 			device: device.id,
 			source: device.sidechain.take(),
+		});
+	}
+	if device.midi_input == Some(source) {
+		inverse.push(Command::SetMidiInput {
+			track: owner,
+			device: device.id,
+			source: device.midi_input.take(),
 		});
 	}
 }

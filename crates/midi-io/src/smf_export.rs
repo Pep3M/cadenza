@@ -269,3 +269,156 @@ pub fn export_clip(
 	];
 	write_smf(tracks)
 }
+
+/// One note of an MPE export ([`export_mpe`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MpeNote {
+	pub start: Tick,
+	pub length: Tick,
+	pub pitch: u8,
+	/// 0..1.
+	pub velocity: f32,
+	/// The note's pitch curve: (absolute tick, semitones from `pitch`), in time order.
+	pub curve: Vec<(Tick, f32)>,
+	/// Its pressure and timbre (absolute tick, 0..1), in time order; written as its member
+	/// channel's channel pressure and CC74.
+	pub pressure: Vec<(Tick, f32)>,
+	pub timbre: Vec<(Tick, f32)>,
+}
+
+/// Pitch-bend range of the member channels of an MPE export, semitones (the MPE default).
+pub const MPE_BEND_RANGE: f32 = 48.0;
+/// Member channels of the lower zone (MIDI channels 2..16).
+pub const MPE_MEMBERS: u8 = 15;
+
+/// An MPE file: the bytes, and how many notes had to share a channel with one still
+/// sounding (more than [`MPE_MEMBERS`] at once: their bends move each other).
+#[derive(Debug, Clone)]
+pub struct MpeExport {
+	pub bytes: Vec<u8>,
+	pub shared: usize,
+}
+
+/// Writes `notes` as an MPE (MIDI Polyphonic Expression) file: a lower zone whose master
+/// channel 1 announces 15 member channels (MCM: RPN 6), each member channel set to a
+/// [`MPE_BEND_RANGE`] bend range (RPN 0), and every note on a member channel of its own
+/// (least recently used free one) carrying its curve as that channel's pitch bend, so
+/// the notes of a chord bend independently. Ticks are absolute song ticks.
+pub fn export_mpe(
+	notes: &[MpeNote],
+	tempo: &TempoMap,
+	time_signature: &TimeSignature,
+	name: &str,
+) -> Result<MpeExport> {
+	let cc = |n: u8, v: u8| RawEvent::Control {
+		controller: Controller::Cc(n),
+		value: f32::from(v) / 127.0,
+	};
+	let bend = |semitones: f32| RawEvent::Control {
+		controller: Controller::PitchBend,
+		value: semitones / MPE_BEND_RANGE,
+	};
+	let mut events: Vec<(i64, u8, RawEvent)> = Vec::new();
+	let rpn = |events: &mut Vec<(i64, u8, RawEvent)>, ch: u8, number: u8, value: u8| {
+		for e in [cc(101, 0), cc(100, number), cc(6, value), cc(38, 0)] {
+			events.push((0, ch, e));
+		}
+		// RPN null: later data entries change nothing.
+		events.push((0, ch, cc(101, 127)));
+		events.push((0, ch, cc(100, 127)));
+	};
+	rpn(&mut events, 0, 6, MPE_MEMBERS);
+	for ch in 1..=MPE_MEMBERS {
+		rpn(&mut events, ch, 0, MPE_BEND_RANGE as u8);
+	}
+	// Once any note has a pressure (timbre) curve, every note starts with its value: member
+	// channels keep the last one they were sent.
+	let any_pressure = notes.iter().any(|n| !n.pressure.is_empty());
+	let any_timbre = notes.iter().any(|n| !n.timbre.is_empty());
+	let mut order: Vec<&MpeNote> = notes.iter().collect();
+	order.sort_by_key(|n| (n.start, n.pitch));
+	// Per member channel: (tick its last note ends, tick it was last given).
+	let mut channels = [(i64::MIN, i64::MIN); MPE_MEMBERS as usize];
+	let mut shared = 0;
+	for n in order {
+		let start = n.start.0;
+		let end = start + n.length.0.max(1);
+		let free = (0..channels.len())
+			.filter(|&c| channels[c].0 <= start)
+			.min_by_key(|&c| channels[c].1);
+		let c = free.unwrap_or_else(|| {
+			shared += 1;
+			(0..channels.len())
+				.min_by_key(|&c| channels[c].0)
+				.unwrap_or(0)
+		});
+		channels[c] = (channels[c].0.max(end), start);
+		let ch = c as u8 + 1;
+		let first = n.curve.first().map_or(0.0, |p| p.1);
+		events.push((start, ch, bend(first)));
+		let controls = [
+			(any_pressure, &n.pressure, Controller::ChannelPressure, 0.0),
+			(any_timbre, &n.timbre, Controller::Cc(74), 0.5),
+		];
+		for (used, curve, controller, resting) in controls {
+			if !used {
+				continue;
+			}
+			let held = curve
+				.iter()
+				.take_while(|p| p.0.0 <= start)
+				.last()
+				.map_or(resting, |p| p.1);
+			let control = |value: f32| RawEvent::Control {
+				controller,
+				value: value.clamp(0.0, 1.0),
+			};
+			events.push((start, ch, control(held)));
+			for &(tick, v) in curve.iter().filter(|p| p.0.0 > start && p.0.0 < end) {
+				events.push((tick.0, ch, control(v)));
+			}
+		}
+		let velocity = ((n.velocity * 127.0).round() as i32).clamp(1, 127) as u8;
+		events.push((
+			start,
+			ch,
+			RawEvent::NoteOn {
+				pitch: n.pitch,
+				velocity,
+			},
+		));
+		for &(tick, v) in n.curve.iter().skip(1) {
+			if tick.0 > start && tick.0 < end {
+				events.push((tick.0, ch, bend(v)));
+			}
+		}
+		events.push((end, ch, RawEvent::NoteOff { pitch: n.pitch }));
+	}
+	events.sort_by_key(|(tick, _, e)| (*tick, e.order()));
+	let name = name.as_bytes().to_vec();
+	let mut track: Track<'_> = Vec::with_capacity(events.len() + 2);
+	track.push(TrackEvent {
+		delta: u28::new(0),
+		kind: TrackEventKind::Meta(MetaMessage::TrackName(&name)),
+	});
+	let mut last = 0i64;
+	for (tick, ch, e) in &events {
+		track.push(TrackEvent {
+			delta: u28::new((tick - last).max(0) as u32),
+			kind: TrackEventKind::Midi {
+				channel: u4::new(*ch),
+				message: e.message(),
+			},
+		});
+		last = *tick;
+	}
+	track.push(TrackEvent {
+		delta: u28::new(0),
+		kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+	});
+	let bytes = write_smf(vec![
+		meta_track(tempo, Meter::new(*time_signature, &[]), &[], &[]),
+		track,
+	])?;
+	Ok(MpeExport { bytes, shared })
+}

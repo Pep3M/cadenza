@@ -1,5 +1,5 @@
 //! UI names of strings that come from other crates (drawn with [`super::tr_str`]): the
-//! built-in device parameter names (`cadenza-dsp`), mix roles and tone profiles
+//! built-in device parameter names and preset categories (`cadenza-dsp`), mix roles and tone profiles
 //! (`cadenza-analysis`) and the mix pass review rows (`cadenza-mcp`). Listing them here
 //! with [`mark`] lets the key checker require their translations; a test keeps the
 //! parameter list in sync with the registry.
@@ -155,6 +155,41 @@ pub const PARAM_NAMES: &[&str] = &[
 	mark("Tap 3 Pan"),
 	mark("Tap 4 Pan"),
 	mark("Oversampling"),
+	mark("Key"),
+	mark("Scale"),
+	mark("Retune"),
+	mark("Humanize"),
+	mark("Amount"),
+	mark("Reference"),
+	mark("MIDI"),
+];
+
+/// `cadenza_dsp::PRESET_CATEGORIES`.
+pub const PRESET_CATEGORIES: &[&str] = &[
+	mark("Bass"),
+	mark("808"),
+	mark("Lead"),
+	mark("Pluck"),
+	mark("Keys"),
+	mark("Bell"),
+	mark("Pad"),
+	mark("Choir"),
+	mark("Strings"),
+	mark("Brass"),
+	mark("Arp"),
+	mark("FX"),
+	mark("House"),
+	mark("Techno"),
+	mark("Dance"),
+	mark("Trap"),
+	mark("Hip-Hop"),
+	mark("Reggaeton"),
+	mark("Latin"),
+	mark("Afro"),
+	mark("Pop"),
+	mark("Funk"),
+	mark("Acoustic"),
+	mark("Retro"),
 ];
 
 /// `cadenza_analysis::roles::Role::name`.
@@ -207,6 +242,7 @@ mod tests {
 			.filter(|n| !PARAM_NAMES.contains(n))
 			.collect();
 		assert!(missing.is_empty(), "add to PARAM_NAMES: {missing:?}");
+		assert_eq!(PRESET_CATEGORIES, cadenza_dsp::PRESET_CATEGORIES);
 		for role in cadenza_analysis::roles::Role::ALL {
 			assert!(ROLES.contains(&role.name()), "{}", role.name());
 		}

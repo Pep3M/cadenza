@@ -234,6 +234,10 @@ pub struct Device {
 	/// compressor. Missing = no sidechain.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sidechain: Option<SidechainSource>,
+	/// Effects only: the instrument track whose MIDI notes this device receives (e.g. a
+	/// melody guiding `pitch_correct`'s target notes). Missing = none.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub midi_input: Option<TrackId>,
 	/// Instruments only: extra output ports to mix in (default: only the main output).
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub aux_outputs: Vec<OutputRoute>,
@@ -333,6 +337,9 @@ pub enum ClipContent {
 		/// Fade at the clip end (missing = none).
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		fade_out: Option<ClipFade>,
+		/// Notes detected in the recording and their edits (missing = none).
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		notes: Option<Box<crate::audio_notes::NoteEdits>>,
 	},
 }
 
@@ -378,7 +385,69 @@ pub struct Note {
 	/// Relative to the clip start.
 	pub start: Tick,
 	pub length: Tick,
+	/// The note's own pitch curve (per-note bend, MPE-style): each point holds until the
+	/// next, none = straight. Optional in JSON.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub bend: Vec<NoteBendPoint>,
+	/// The note's own pressure (MPE pressure / polyphonic aftertouch), 0..=1, held steps
+	/// from its start; none = 0. Optional in JSON.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub pressure: Vec<NoteValuePoint>,
+	/// The note's own timbre (MPE CC74 "slide": brightness), 0..=1, held steps from its
+	/// start; none = 0.5 (neutral). Optional in JSON.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub timbre: Vec<NoteValuePoint>,
 }
+
+/// A point of a [`Note::bend`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteBendPoint {
+	/// From the note's start, increasing; points past the note's end are not played.
+	pub tick: Tick,
+	/// Pitch offset, -48..=48 semitones.
+	pub semitones: f32,
+}
+
+/// A point of a note's [`Note::pressure`] or [`Note::timbre`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteValuePoint {
+	/// From the note's start, increasing; points past the note's end are not played.
+	pub tick: Tick,
+	/// 0..=1.
+	pub value: f32,
+}
+
+/// A note's per-note expression curve besides its bend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteExpression {
+	Pressure,
+	Timbre,
+}
+
+impl NoteExpression {
+	pub const ALL: [NoteExpression; 2] = [NoteExpression::Pressure, NoteExpression::Timbre];
+
+	/// The value before the curve's first point (and of a note without one).
+	pub fn resting(self) -> f32 {
+		match self {
+			NoteExpression::Pressure => 0.0,
+			NoteExpression::Timbre => 0.5,
+		}
+	}
+
+	pub fn name(self) -> &'static str {
+		match self {
+			NoteExpression::Pressure => "pressure",
+			NoteExpression::Timbre => "timbre",
+		}
+	}
+}
+
+/// Most points one note's bend (or pressure, or timbre) curve may have.
+pub const MAX_NOTE_BEND_POINTS: usize = 4096;
+/// Largest bend either way, semitones.
+pub const MAX_NOTE_BEND: f32 = 48.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AutomationLane {
@@ -691,6 +760,7 @@ impl Device {
 			params: BTreeMap::new(),
 			state: None,
 			sidechain: None,
+			midi_input: None,
 			aux_outputs: Vec::new(),
 			zones: Vec::new(),
 			modulators: Vec::new(),
@@ -762,6 +832,7 @@ impl Clip {
 				gain_db: 0.0,
 				fade_in: None,
 				fade_out: None,
+				notes: None,
 			},
 			take: None,
 			muted: false,
@@ -877,11 +948,132 @@ impl Note {
 			velocity,
 			start,
 			length,
+			bend: Vec::new(),
+			pressure: Vec::new(),
+			timbre: Vec::new(),
 		}
+	}
+
+	/// The note's `kind` curve.
+	pub fn expression(&self, kind: NoteExpression) -> &[NoteValuePoint] {
+		match kind {
+			NoteExpression::Pressure => &self.pressure,
+			NoteExpression::Timbre => &self.timbre,
+		}
+	}
+
+	pub fn expression_mut(&mut self, kind: NoteExpression) -> &mut Vec<NoteValuePoint> {
+		match kind {
+			NoteExpression::Pressure => &mut self.pressure,
+			NoteExpression::Timbre => &mut self.timbre,
+		}
+	}
+
+	/// The `kind` value in effect `tick` after the note's start.
+	pub fn expression_at(&self, kind: NoteExpression, tick: Tick) -> f32 {
+		let points = self.expression(kind);
+		let i = points.partition_point(|p| p.tick <= tick);
+		if i == 0 {
+			kind.resting()
+		} else {
+			points[i - 1].value
+		}
+	}
+
+	/// Like [`Note::split_bend`] for the `kind` curve.
+	pub fn split_expression(
+		&self,
+		kind: NoteExpression,
+		at: Tick,
+	) -> (Vec<NoteValuePoint>, Vec<NoteValuePoint>) {
+		let points = self.expression(kind);
+		if points.is_empty() {
+			return (Vec::new(), Vec::new());
+		}
+		let left: Vec<NoteValuePoint> = points.iter().copied().filter(|p| p.tick < at).collect();
+		let mut right = vec![NoteValuePoint {
+			tick: Tick::ZERO,
+			value: self.expression_at(kind, at),
+		}];
+		right.extend(
+			points
+				.iter()
+				.filter(|p| p.tick > at)
+				.map(|p| NoteValuePoint {
+					tick: p.tick - at,
+					..*p
+				}),
+		);
+		if right.iter().all(|p| p.value == kind.resting()) {
+			right.clear();
+		}
+		(left, right)
+	}
+
+	/// Like [`Note::scaled_bend`] for the `kind` curve.
+	pub fn scaled_expression(&self, kind: NoteExpression, factor: f64) -> Vec<NoteValuePoint> {
+		let mut out: Vec<NoteValuePoint> = Vec::new();
+		for p in self.expression(kind) {
+			let tick = Tick((p.tick.0 as f64 * factor).round() as i64);
+			match out.last_mut() {
+				Some(last) if last.tick >= tick => last.value = p.value,
+				_ => out.push(NoteValuePoint { tick, ..*p }),
+			}
+		}
+		out
 	}
 
 	pub fn end(&self) -> Tick {
 		self.start + self.length
+	}
+
+	/// The bend in effect `tick` after the note's start, semitones (0 before the first point).
+	pub fn bend_at(&self, tick: Tick) -> f32 {
+		let i = self.bend.partition_point(|p| p.tick <= tick);
+		if i == 0 {
+			0.0
+		} else {
+			self.bend[i - 1].semitones
+		}
+	}
+
+	/// The note cut at `at` ticks after its start: the left part's bend up to there, the
+	/// right part's from there (the value in effect at the cut becomes its first point).
+	pub fn split_bend(&self, at: Tick) -> (Vec<NoteBendPoint>, Vec<NoteBendPoint>) {
+		if self.bend.is_empty() {
+			return (Vec::new(), Vec::new());
+		}
+		let left: Vec<NoteBendPoint> = self.bend.iter().copied().filter(|p| p.tick < at).collect();
+		let mut right = vec![NoteBendPoint {
+			tick: Tick::ZERO,
+			semitones: self.bend_at(at),
+		}];
+		right.extend(
+			self.bend
+				.iter()
+				.filter(|p| p.tick > at)
+				.map(|p| NoteBendPoint {
+					tick: p.tick - at,
+					..*p
+				}),
+		);
+		if right.iter().all(|p| p.semitones == 0.0) {
+			right.clear();
+		}
+		(left, right)
+	}
+
+	/// The bend with its ticks scaled by `factor` (a stretched note).
+	pub fn scaled_bend(&self, factor: f64) -> Vec<NoteBendPoint> {
+		let mut out: Vec<NoteBendPoint> = Vec::with_capacity(self.bend.len());
+		for p in &self.bend {
+			let tick = Tick((p.tick.0 as f64 * factor).round() as i64);
+			match out.last_mut() {
+				Some(last) if last.tick >= tick => last.semitones = p.semitones,
+				_ => out.push(NoteBendPoint { tick, ..*p }),
+			}
+		}
+		out
 	}
 }
 

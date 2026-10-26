@@ -16,7 +16,10 @@ pub mod util;
 
 pub use effects::compressor::Compressor;
 pub use effects::limiter::Limiter;
-pub use presets::{FactoryPreset, FactoryZone, factory_presets};
+pub use presets::{
+	FactoryPreset, FactoryZone, KIT_CATEGORIES, KIT_SAMPLES, PRESET_CATEGORIES, PresetLfoShape,
+	PresetModSource, PresetModulator, PresetRetrigger, SYNTH_CATEGORIES, factory_presets,
+};
 /// File names of the factory samples the built-in presets use.
 pub mod factory_samples {
 	pub use crate::presets::{
@@ -25,10 +28,10 @@ pub mod factory_samples {
 	};
 }
 pub use processor::{
-	DeviceInfo, DeviceRole, Listen, MidiEvent, ParamInfo, PresetInfo, Processor, Transport, cc,
-	readings,
+	DeviceInfo, DeviceRole, Listen, MidiEvent, NoteExpressionKind, ParamInfo, PresetInfo,
+	Processor, Transport, cc, readings,
 };
-pub use registry::{create, device_info, param_changes_latency, registry};
+pub use registry::{create, device_info, effect_takes_midi, param_changes_latency, registry};
 pub use sample::{LoopMode, SampleBuffer, SampleData, Zone, uses_samples};
 
 #[cfg(test)]

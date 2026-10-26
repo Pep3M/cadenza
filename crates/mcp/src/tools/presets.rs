@@ -1,10 +1,10 @@
 //! Device presets and plugin state.
 //!
-//! - Factory presets: built-in devices ship named parameter maps
-//!   ([`cadenza_dsp::factory_presets`]); plugins expose theirs (CLAP preset discovery),
+//! - Factory presets: built-in devices ship named parameter maps with their modulators,
+//!   grouped in categories ([`cadenza_dsp::factory_presets`]); plugins expose theirs (CLAP preset discovery),
 //!   loaded into a fresh instance whose resulting state is stored in the project.
 //! - User presets: JSON files `<preset dir>/<device id>/<name>.json` holding the device's
-//!   explicit params and (plugins) its captured state; the preset dir is
+//!   explicit params, modulators (built-ins) and (plugins) its captured state; the preset dir is
 //!   `$CADENZA_PRESET_DIR`, else `$XDG_DATA_HOME/cadenza/presets` (see [`default_preset_dir`]).
 //! - State capture: a plugin's opaque state is captured from a freshly loaded instance
 //!   configured exactly like the project's device (stored state + explicit params) and
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use cadenza_core::{DeviceId, TrackId};
-use cadenza_model::{Command, Device, DeviceKind};
+use cadenza_model::{Command, Device, DeviceKind, EnvelopeSource, Modulator, ModulatorKind};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +56,9 @@ pub struct UserPreset {
 	/// Sample zones (sampler / drum_sampler), with absolute sample paths.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub zones: Vec<cadenza_model::SampleZone>,
+	/// Modulators (built-in devices).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub modulators: Vec<Modulator>,
 }
 
 /// `list_devices`-style id of a project device.
@@ -156,13 +159,27 @@ pub struct ListPresetsArgs {
 	pub track_id: Option<TrackId>,
 	/// Instrument or insert id from get_project.
 	pub device_id: DeviceId,
+	/// Only this category (built-ins: Bass, 808, Lead, Pluck, Keys, Bell, Pad, Choir,
+	/// Strings, Brass, Arp, FX; plugins: their bank), case-insensitive.
+	#[serde(default)]
+	pub category: Option<String>,
+	/// Only presets whose name, category or description mention every word (genre,
+	/// character: "trap", "warm", "supersaw").
+	#[serde(default)]
+	pub query: Option<String>,
 }
+
+/// Above this many matches without a filter, descriptions are left out.
+const DESCRIBED_PRESETS: usize = 30;
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PresetOut {
 	pub name: String,
 	pub source: PresetSource,
-	/// Bank/folder (plugin factory presets) or what it sounds like (built-ins).
+	/// Built-in category or plugin bank/folder.
+	#[serde(skip_serializing_if = "String::is_empty")]
+	pub category: String,
+	/// What it sounds like and what it suits (built-ins).
 	#[serde(skip_serializing_if = "String::is_empty")]
 	pub description: String,
 }
@@ -184,6 +201,7 @@ fn factory_presets(session: &mut Session, device: &Device) -> Result<Vec<PresetO
 			.map(|p| PresetOut {
 				name: p.name.to_owned(),
 				source: PresetSource::Factory,
+				category: p.category.to_owned(),
 				description: p.description.to_owned(),
 			})
 			.collect(),
@@ -195,7 +213,8 @@ fn factory_presets(session: &mut Session, device: &Device) -> Result<Vec<PresetO
 				.map(|p| PresetOut {
 					name: p.name,
 					source: PresetSource::Factory,
-					description: p.category,
+					category: p.category,
+					description: String::new(),
 				})
 				.collect()
 		}
@@ -214,19 +233,59 @@ pub fn list_presets(
 			.map(|(p, _)| PresetOut {
 				name: p.name,
 				source: PresetSource::User,
+				category: String::new(),
 				description: String::new(),
 			}),
 	);
-	let note = presets.is_empty().then(|| {
-		"this device has no presets yet; dial it in with set_device_params and keep the \
-		 result with save_preset"
-			.to_string()
-	});
+	let any = !presets.is_empty();
+	if let Some(category) = &args.category {
+		let category = category.trim();
+		presets.retain(|p| p.category.eq_ignore_ascii_case(category));
+	}
+	if let Some(query) = &args.query {
+		let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+		presets.retain(|p| {
+			let text = format!("{} {} {}", p.name, p.category, p.description).to_lowercase();
+			words.iter().all(|w| text.contains(w.as_str()))
+		});
+	}
+	let note = if !any {
+		Some(
+			"this device has no presets yet; dial it in with set_device_params and keep the \
+			 result with save_preset"
+				.to_string(),
+		)
+	} else if presets.is_empty() {
+		Some("no preset matches; try another category or query, or list them all".to_string())
+	} else {
+		None
+	};
+
 	Ok(ListPresetsOutput {
 		device: device_key(&device),
 		presets,
 		note,
 	})
+}
+
+/// The `list_presets` tool: like [`list_presets`], but a long unfiltered list goes out
+/// without descriptions (the model narrows it down with `category` / `query`).
+pub fn list_presets_tool(
+	session: &mut Session,
+	args: ListPresetsArgs,
+) -> Result<ListPresetsOutput, McpError> {
+	let filtered = args.category.is_some() || args.query.is_some();
+	let mut out = list_presets(session, args)?;
+	if !filtered && out.presets.len() > DESCRIBED_PRESETS {
+		for p in &mut out.presets {
+			p.description.clear();
+		}
+		out.note = Some(format!(
+			"{} presets; pass category or query to get their descriptions",
+			out.presets.len()
+		));
+	}
+	Ok(out)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -253,6 +312,9 @@ pub struct LoadPresetOutput {
 	/// Sample zones now loaded (sampler / drum_sampler presets).
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub zones: Option<usize>,
+	/// Modulators the preset installed (they replace the device's own).
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub modulators: Vec<String>,
 }
 
 pub fn load_preset(
@@ -294,7 +356,8 @@ pub fn load_preset(
 			device.name
 		))
 	};
-	let (name, state, params, zones) = match source {
+	let builtin = device.builtin_id().is_some();
+	let (name, state, params, zones, modulators) = match source {
 		PresetSource::Factory => {
 			let preset = factory.ok_or_else(not_found)?;
 			match &device.kind {
@@ -311,7 +374,8 @@ pub fn load_preset(
 					let zones = cadenza_dsp::uses_samples(id)
 						.then(|| cadenza_engine::factory::preset_zones(p))
 						.transpose()?;
-					(preset.name, None, params, zones)
+					let modulators = cadenza_engine::factory::preset_modulators(p);
+					(preset.name, None, params, zones, modulators)
 				}
 				_ => {
 					let catalog = session.plugins();
@@ -323,7 +387,7 @@ pub fn load_preset(
 						.key;
 					let state =
 						cadenza_engine::preset_state(&device, &key, Some(&catalog), &hosting)?;
-					(preset.name, Some(state), BTreeMap::new(), None)
+					(preset.name, Some(state), BTreeMap::new(), None, Vec::new())
 				}
 			}
 		}
@@ -348,7 +412,26 @@ pub fn load_preset(
 				.builtin_id()
 				.is_some_and(cadenza_dsp::uses_samples)
 				.then_some(preset.zones);
-			(preset.name, preset.state, preset.params, zones)
+			// A follower keyed by a sidechain needs one on this device.
+			let modulators = preset
+				.modulators
+				.into_iter()
+				.filter(|m| {
+					device.sidechain.is_some()
+						|| !matches!(
+							m.kind,
+							ModulatorKind::Envelope {
+								source: EnvelopeSource::Sidechain,
+								..
+							}
+						)
+				})
+				.map(|m| Modulator {
+					id: cadenza_core::ModulatorId::new(),
+					..m
+				})
+				.collect();
+			(preset.name, preset.state, preset.params, zones, modulators)
 		}
 	};
 	let has_state = state.is_some();
@@ -359,19 +442,30 @@ pub fn load_preset(
 		params: Some(params.clone()),
 	};
 	let zone_count = zones.as_ref().map(Vec::len);
-	let command = match zones {
-		Some(zones) => Command::Batch {
+	let modulator_lines: Vec<String> = modulators.iter().map(Modulator::describe).collect();
+	let mut commands = vec![set_state];
+	if let Some(zones) = zones {
+		commands.push(Command::SetSampleZones {
+			track: args.track_id,
+			device: args.device_id,
+			zones,
+		});
+	}
+	// A built-in preset is the whole patch: its modulators replace the device's.
+	if builtin && !(modulators.is_empty() && device.modulators.is_empty()) {
+		commands.push(Command::SetModulators {
+			track: args.track_id,
+			device: args.device_id,
+			modulators,
+		});
+	}
+	let command = if commands.len() == 1 {
+		commands.remove(0)
+	} else {
+		Command::Batch {
 			label: format!("Load preset '{name}'"),
-			commands: vec![
-				set_state,
-				Command::SetSampleZones {
-					track: args.track_id,
-					device: args.device_id,
-					zones,
-				},
-			],
-		},
-		None => set_state,
+			commands,
+		}
 	};
 	session.document_mut().execute(command)?;
 	Ok(LoadPresetOutput {
@@ -380,6 +474,7 @@ pub fn load_preset(
 		params,
 		has_state,
 		zones: zone_count,
+		modulators: modulator_lines,
 	})
 }
 
@@ -427,6 +522,7 @@ pub fn save_preset(
 		params: device.params.clone(),
 		state,
 		zones: device.zones.clone(),
+		modulators: device.modulators.clone(),
 	};
 	let folder = session.preset_dir().join(device_folder(&device));
 	let path = folder.join(format!("{file_name}.json"));

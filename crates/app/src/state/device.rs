@@ -452,7 +452,33 @@ pub struct PresetEntry {
 	pub name: String,
 	/// Saved by the user (else shipped with the device).
 	pub user: bool,
+	/// Factory category or plugin bank (empty: ungrouped).
+	pub category: String,
 	pub description: String,
+}
+
+/// `entries` grouped by category: built-in categories in their browsing order, then plugin
+/// banks as they come, with the uncategorized ones first under an empty name.
+pub fn preset_groups<'a>(entries: &[&'a PresetEntry]) -> Vec<(&'a str, Vec<&'a PresetEntry>)> {
+	let mut groups: Vec<(&'a str, Vec<&'a PresetEntry>)> = Vec::new();
+	for e in entries {
+		match groups.iter_mut().find(|(c, _)| *c == e.category) {
+			Some((_, g)) => g.push(e),
+			None => groups.push((e.category.as_str(), vec![e])),
+		}
+	}
+	let rank = |c: &str| {
+		if c.is_empty() {
+			0
+		} else {
+			cadenza_dsp::PRESET_CATEGORIES
+				.iter()
+				.position(|k| *k == c)
+				.map_or(usize::MAX, |i| i + 1)
+		}
+	};
+	groups.sort_by_key(|(c, _)| rank(c));
+	groups
 }
 
 /// The preset last loaded into or saved from a device, with the params it set.
@@ -559,6 +585,9 @@ pub fn param_choices(device: &str, param: &str) -> Option<&'static [&'static str
 		("poly_synth", "filter_slope") => &["12 dB", "24 dB"],
 		("sampler", "mode") => &const { [mark("Gate"), mark("One-shot")] },
 		("sampler", "filter_type") => &const { [mark("Off"), "LP", "HP", "BP"] },
+		("pitch_correct", "key") => &crate::state::pitch_correct_editor::KEY_NAMES,
+		("pitch_correct", "scale") => &crate::state::pitch_correct_editor::SCALE_LABELS,
+		("pitch_correct", "midi") => &crate::state::pitch_correct_editor::MIDI_MODES,
 		_ => return None,
 	})
 }
@@ -1071,12 +1100,44 @@ mod tests {
 	}
 
 	#[test]
+	fn preset_groups_follow_the_category_order_with_banks_after() {
+		let entry = |name: &str, category: &str| PresetEntry {
+			name: name.into(),
+			user: false,
+			category: category.into(),
+			description: String::new(),
+		};
+		let list = [
+			entry("Pad 1", "Pad"),
+			entry("Bank A 1", "Bank A"),
+			entry("Bass 1", "Bass"),
+			entry("Loose", ""),
+			entry("Pad 2", "Pad"),
+		];
+		let refs: Vec<&PresetEntry> = list.iter().collect();
+		let groups: Vec<(&str, Vec<&str>)> = preset_groups(&refs)
+			.into_iter()
+			.map(|(c, g)| (c, g.iter().map(|e| e.name.as_str()).collect()))
+			.collect();
+		assert_eq!(
+			groups,
+			[
+				("", vec!["Loose"]),
+				("Bass", vec!["Bass 1"]),
+				("Pad", vec!["Pad 1", "Pad 2"]),
+				("Bank A", vec!["Bank A 1"]),
+			]
+		);
+	}
+
+	#[test]
 	fn presets_step_and_wrap() {
 		let list: Vec<PresetEntry> = ["A", "B", "C"]
 			.iter()
 			.map(|n| PresetEntry {
 				name: (*n).into(),
 				user: false,
+				category: String::new(),
 				description: String::new(),
 			})
 			.collect();

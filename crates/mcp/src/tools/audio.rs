@@ -225,6 +225,7 @@ pub fn get_audio_info(
 				gain_db,
 				fade_in,
 				fade_out,
+				..
 			} = &clip.content
 			else {
 				return Err(ModelError::NotAnAudioClip(id).into());

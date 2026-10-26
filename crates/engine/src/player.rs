@@ -55,6 +55,7 @@ use std::collections::HashSet;
 use std::collections::HashMap;
 
 use crate::midi_map::{MapTarget, MidiMapMonitor, MidiMapTable};
+use crate::snippet::Snippet;
 use cadenza_core::{DeviceId, TempoMap, Tick, TrackId};
 use cadenza_dsp::{Listen, MidiEvent};
 use cadenza_midi_io::{MappedEvent, MidiInputConnection, PortInfo, TimedMessage};
@@ -156,6 +157,10 @@ enum Cmd {
 	MonitorFx(MonitorFx),
 	/// Device playing a listen mode (kept across loads).
 	Listen(Option<(DeviceId, Listen)>),
+	/// Take the snippet waiting in its ring (the playing one fades out).
+	Snippet,
+	/// Fade the playing snippet out.
+	StopSnippet,
 }
 
 /// Monitoring-only switches applied to what the output device plays, after the master
@@ -290,6 +295,11 @@ struct AudioCore {
 	tap_garbage: Producer<Box<RecordTap>>,
 	/// Test tone phase (radians) while it plays.
 	test_tone: Option<f32>,
+	/// The note editor's audition and the one it replaced, fading out.
+	snippet: Option<Box<Snippet>>,
+	snippet_out: Option<Box<Snippet>>,
+	snippets: Consumer<Box<Snippet>>,
+	snippet_garbage: Producer<Box<Snippet>>,
 	monitor_fx: MonitorFx,
 	/// When the first frame of the current block will be heard (backend clock).
 	playback_ns: Option<u64>,
@@ -314,6 +324,8 @@ struct Control {
 	input_garbage: Consumer<Box<InputReader>>,
 	taps: Producer<Box<RecordTap>>,
 	tap_garbage: Consumer<Box<RecordTap>>,
+	snippets: Producer<Box<Snippet>>,
+	snippet_garbage: Consumer<Box<Snippet>>,
 }
 
 fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
@@ -333,6 +345,9 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 	let (input_garbage_tx, input_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 1);
 	let (tap_tx, tap_rx) = RingBuffer::new(HANDOVER_SLOTS);
 	let (tap_garbage_tx, tap_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 1);
+	let (snippet_tx, snippet_rx) = RingBuffer::new(HANDOVER_SLOTS);
+	// The playing snippet, the one fading out and one more in flight.
+	let (snippet_garbage_tx, snippet_garbage_rx) = RingBuffer::new(HANDOVER_SLOTS + 3);
 	let shared = Arc::new(Shared::default());
 	(
 		Control {
@@ -353,6 +368,8 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			input_garbage: input_garbage_rx,
 			taps: tap_tx,
 			tap_garbage: tap_garbage_rx,
+			snippets: snippet_tx,
+			snippet_garbage: snippet_garbage_rx,
 		},
 		AudioCore {
 			graph: None,
@@ -399,6 +416,10 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			taps: tap_rx,
 			tap_garbage: tap_garbage_tx,
 			test_tone: None,
+			snippet: None,
+			snippet_out: None,
+			snippets: snippet_rx,
+			snippet_garbage: snippet_garbage_tx,
 			monitor_fx: MonitorFx::default(),
 			playback_ns: None,
 		},
@@ -587,6 +608,21 @@ impl AudioCore {
 						g.set_listen(target);
 					}
 				}
+				Cmd::Snippet => {
+					if let Ok(next) = self.snippets.pop() {
+						self.retire_snippet_out();
+						self.snippet_out = self.snippet.take();
+						if let Some(s) = &mut self.snippet_out {
+							s.fade_out();
+						}
+						self.snippet = Some(next);
+					}
+				}
+				Cmd::StopSnippet => {
+					if let Some(s) = &mut self.snippet {
+						s.fade_out();
+					}
+				}
 				Cmd::TestTone(on) => {
 					self.test_tone = match (on, self.test_tone) {
 						(true, Some(p)) => Some(p),
@@ -709,6 +745,33 @@ impl AudioCore {
 			&& let Err(rtrb::PushError::Full(old)) = self.input_garbage.push(old)
 		{
 			self.input = Some(old);
+		}
+	}
+
+	/// Hands the snippet fading out back to the control thread (never dropped here).
+	fn retire_snippet_out(&mut self) {
+		if let Some(old) = self.snippet_out.take()
+			&& let Err(rtrb::PushError::Full(old)) = self.snippet_garbage.push(old)
+		{
+			self.snippet_out = Some(old);
+		}
+	}
+
+	/// Plays the snippets into the scratch buffers and retires finished ones.
+	fn add_snippets(&mut self, frames: usize) {
+		let (l, r) = (&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
+		for s in [&mut self.snippet_out, &mut self.snippet]
+			.into_iter()
+			.flatten()
+		{
+			s.add(l, r);
+		}
+		if self.snippet_out.as_ref().is_some_and(|s| s.done()) {
+			self.retire_snippet_out();
+		}
+		if self.snippet.as_ref().is_some_and(|s| s.done()) && self.snippet_out.is_none() {
+			self.snippet_out = self.snippet.take();
+			self.retire_snippet_out();
 		}
 	}
 
@@ -848,6 +911,7 @@ impl AudioCore {
 			self.read_input(frames, at);
 			self.render(frames);
 			self.record(at == 0);
+			self.add_snippets(frames);
 			self.monitor_fx
 				.apply(&mut self.scratch_l[..frames], &mut self.scratch_r[..frames]);
 			self.add_test_tone(frames);
@@ -879,6 +943,7 @@ impl Control {
 		while self.midi_garbage.pop().is_ok() {}
 		while self.midi_map_garbage.pop().is_ok() {}
 		while self.input_garbage.pop().is_ok() {}
+		while self.snippet_garbage.pop().is_ok() {}
 	}
 
 	/// Hands an audio input reader to the audio thread (replacing the current one).
@@ -1390,6 +1455,30 @@ impl Player {
 	pub fn recording_latency(&self) -> i64 {
 		(self.input_stats.delay_frames(self.sample_rate).round() as i64 + self.latency_offset)
 			.max(0)
+	}
+
+	/// Plays `channels` (one or two, at `rate`) once over the output, `gain_db` louder,
+	/// replacing (with a short fade) the snippet playing: the note editor's audition of a
+	/// dragged note. Monitoring only, like the test tone.
+	pub fn play_snippet(
+		&mut self,
+		channels: Vec<Vec<f32>>,
+		rate: u32,
+		gain_db: f32,
+	) -> Result<(), EngineError> {
+		let rate_out = f64::from(self.sample_rate);
+		let snippet = Box::new(Snippet::new(channels, rate, rate_out, gain_db));
+		self.control.collect_garbage();
+		self.control
+			.snippets
+			.push(snippet)
+			.map_err(|_| EngineError::Busy)?;
+		self.control.send(Cmd::Snippet)
+	}
+
+	/// Fades the playing snippet out.
+	pub fn stop_snippet(&mut self) -> Result<(), EngineError> {
+		self.control.send(Cmd::StopSnippet)
 	}
 
 	/// Plays a 440 Hz test tone (-20 dBFS) over everything else.

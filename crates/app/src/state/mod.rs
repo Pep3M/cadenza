@@ -2293,8 +2293,11 @@ impl AppState {
 		}
 	}
 
-	/// Stops; pattern mode goes back to the pattern start (FL Studio).
+	/// Stops; pattern mode goes back to the pattern start (FL Studio). Stop on an already
+	/// stopped transport rewinds to the start (song tick 0, pattern mode its pattern
+	/// start), like most DAWs: a second press of Stop is "go to the top".
 	pub fn stop(&mut self) {
+		let already_stopped = !self.play_intent;
 		self.end_recording(false);
 		self.play_intent = false;
 		self.cued = false;
@@ -2302,7 +2305,14 @@ impl AppState {
 			a.stop();
 		}
 		let (config, _) = self.transport_config();
-		if let (Some(_), Some((start, _))) = (config.pattern, config.loop_range) {
+		if already_stopped {
+			self.locate(
+				config
+					.pattern
+					.and(config.loop_range)
+					.map_or(Tick::ZERO, |(start, _)| start),
+			);
+		} else if let (Some(_), Some((start, _))) = (config.pattern, config.loop_range) {
 			self.locate(start);
 		}
 		self.send_config(config);
@@ -4282,6 +4292,9 @@ impl AppState {
 					self.master_loudness.detach();
 					self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
 					self.audio_status = AudioStatus::Unavailable(e);
+					// The audio thread that would have answered a pending start/stop is
+					// gone: without this the record button stays lit forever.
+					self.abort_stuck_recording();
 				}
 				AudioEvent::Loaded {
 					generation,

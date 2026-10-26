@@ -1277,6 +1277,7 @@
 "Recorded — one undo step (Ctrl+Z)" = "已录制——一个撤销步骤（Ctrl+Z）"
 "Recording" = "录音"
 "Recording: {e}" = "录音：{e}"
+"Recording stopped: the audio device is gone" = "录音已停止：音频设备已消失"
 "Recover" = "恢复"
 "Recover autosave" = "恢复自动保存"
 "Recover unsaved work?" = "是否恢复未保存的工作？"

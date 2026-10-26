@@ -1283,6 +1283,7 @@
 "Recorded — one undo step (Ctrl+Z)" = "Записано — один шаг отмены (Ctrl+Z)"
 "Recording" = "Запись"
 "Recording: {e}" = "Запись: {e}"
+"Recording stopped: the audio device is gone" = "Запись остановлена: аудиоустройство недоступно"
 "Recover" = "Восстановить"
 "Recover autosave" = "Восстановить автосохранение"
 "Recover unsaved work?" = "Восстановить несохранённую работу?"

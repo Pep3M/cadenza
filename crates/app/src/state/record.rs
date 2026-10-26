@@ -521,10 +521,26 @@ impl AppState {
 		if !matches!(self.record.phase, Phase::Starting | Phase::Recording(_)) {
 			return;
 		}
-		if let Some(a) = &self.audio {
-			a.stop_recording(keep_playing);
-		}
+		let Some(a) = &self.audio else {
+			// No audio thread to ever answer: `Phase::Stopping` would be stuck forever
+			// (the button lit with nothing recording). There is nothing to keep.
+			self.record.phase = Phase::Idle;
+			return;
+		};
+		a.stop_recording(keep_playing);
 		self.record.phase = Phase::Stopping;
+	}
+
+	/// The audio device is gone (its thread exited): any pending start/stop will never
+	/// get an answer, so a recording in progress or being stopped must not leave the
+	/// record button lit forever.
+	pub(crate) fn abort_stuck_recording(&mut self) {
+		if self.is_recording() {
+			self.record.phase = Phase::Idle;
+			self.play_intent = false;
+			self.notices
+				.warn(tr("Recording stopped: the audio device is gone"));
+		}
 	}
 
 	/// Adds what was recorded to the project as ONE undo step ("Record").
@@ -951,6 +967,34 @@ mod tests {
 		p.tracks.push(vox);
 		s.load_document(Document::new(p), None);
 		(s, id)
+	}
+
+	/// Root cause of the record button staying lit forever: `end_recording` used to set
+	/// `Phase::Stopping` even when there was no audio thread left to ever answer (the
+	/// device gone, e.g. disconnected mid-recording) — nothing would ever move the phase
+	/// back to `Idle`, so `is_recording()` (and the button) stayed true forever. Losing
+	/// the device while a recording is starting/running must also clear it right away.
+	#[test]
+	fn a_lost_audio_device_does_not_leave_the_record_button_stuck() {
+		let (mut s, vox) = state_with_vox();
+		s.toggle_arm(vox);
+
+		// Pressing Stop with no audio thread (`self.audio` is `None` in headless tests,
+		// like a device that just disappeared) must resolve to Idle, not get stuck
+		// waiting in `Stopping`.
+		s.record.phase = Phase::Starting;
+		assert!(s.is_recording());
+		s.stop_recording();
+		assert!(!s.is_recording(), "no thread will ever answer this stop");
+
+		// The audio thread reporting its own disappearance while a recording is in
+		// progress must also unstick the button.
+		s.record.phase = Phase::Starting;
+		s.play_intent = true;
+		assert!(s.is_recording());
+		s.abort_stuck_recording();
+		assert!(!s.is_recording());
+		assert!(!s.play_intent());
 	}
 
 	#[test]

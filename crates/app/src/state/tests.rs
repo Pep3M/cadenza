@@ -281,6 +281,54 @@ fn transport_without_audio_keeps_a_position() {
 	assert_eq!(s.notices.count(notices::Level::Warning), 1);
 }
 
+/// Stop while already stopped rewinds to the start (song tick 0, pattern mode its
+/// pattern start), like most DAWs; Stop while playing just stops where it was.
+#[test]
+fn stop_on_an_already_stopped_transport_rewinds_to_the_start() {
+	let (mut s, _) = state_with_song();
+	s.seek(Tick(PPQ * 3));
+	assert_eq!(s.position(), Tick(PPQ * 3));
+	// Already stopped (no Play since load): Stop goes back to the start.
+	s.stop();
+	assert_eq!(s.position(), Tick::ZERO);
+
+	// Playing then stopping: the position stays where Stop was pressed.
+	s.seek(Tick(PPQ * 3));
+	s.play();
+	assert!(s.play_intent());
+	s.stop();
+	assert!(!s.play_intent());
+	assert_eq!(
+		s.position(),
+		Tick(PPQ * 3),
+		"stops in place while it was playing"
+	);
+
+	// Pressed again on the now-stopped transport: back to the start.
+	s.stop();
+	assert_eq!(s.position(), Tick::ZERO);
+}
+
+/// Pattern mode: Stop while already stopped goes back to the pattern's own start, not
+/// tick 0 (the FL Studio rule already used while playing).
+#[test]
+fn stop_on_a_stopped_pattern_rewinds_to_the_pattern_start() {
+	let (mut s, keys) = state_with_song();
+	let clip = s.project().track(keys).unwrap().clips[0].id;
+	s.view.piano.clip = Some(clip);
+	s.view.transport.mode = crate::state::transport::PlayMode::Pattern;
+	s.seek(Tick(PPQ * 8));
+	assert_eq!(s.position(), Tick(PPQ * 8));
+	s.stop();
+	assert_eq!(s.position(), Tick::ZERO, "the clip starts at tick 0");
+
+	// Playing then stopping stays at the pattern start too (existing FL behavior).
+	s.seek(Tick(PPQ * 2));
+	s.play();
+	s.stop();
+	assert_eq!(s.position(), Tick::ZERO);
+}
+
 #[test]
 fn drops_create_tracks_and_import_midi_at_the_drop_beat() {
 	let (mut s, keys) = state_with_song();

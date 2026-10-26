@@ -1282,6 +1282,7 @@
 "Recorded — one undo step (Ctrl+Z)" = "録音しました — 元に戻す操作は1ステップです(Ctrl+Z)"
 "Recording" = "録音"
 "Recording: {e}" = "録音: {e}"
+"Recording stopped: the audio device is gone" = "録音を停止しました: オーディオデバイスが失われました"
 "Recover" = "復元"
 "Recover autosave" = "自動保存から復元する"
 "Recover unsaved work?" = "未保存の作業を復元しますか?"

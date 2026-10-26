@@ -1034,6 +1034,7 @@
 "Recorded — one undo step (Ctrl+Z)" = "녹음됨 — 실행 취소 1단계 (Ctrl+Z)"
 "Recording" = "녹음"
 "Recording: {e}" = "녹음: {e}"
+"Recording stopped: the audio device is gone" = "녹음이 중지되었습니다: 오디오 장치가 사라졌습니다"
 "Recover" = "복구"
 "Recover autosave" = "자동 저장 복구"
 "Recover unsaved work?" = "저장하지 않은 작업을 복구할까요?"

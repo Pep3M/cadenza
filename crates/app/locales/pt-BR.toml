@@ -1282,6 +1282,7 @@
 "Recorded — one undo step (Ctrl+Z)" = "Gravado — uma etapa de desfazer (Ctrl+Z)"
 "Recording" = "Gravação"
 "Recording: {e}" = "Gravação: {e}"
+"Recording stopped: the audio device is gone" = "Gravação interrompida: o dispositivo de áudio desapareceu"
 "Recover" = "Recuperar"
 "Recover autosave" = "Recuperar o salvamento automático"
 "Recover unsaved work?" = "Recuperar o trabalho não salvo?"

@@ -278,7 +278,7 @@
 "Click or drag to play · drop an audio file to map it across the keyboard" = "クリックまたはドラッグで再生 · オーディオファイルをドロップすると鍵盤全体にマッピング"
 "Click or drag vertically across notes to split them" = "クリックまたは縦方向にドラッグしてノートを分割"
 "Click or sweep over clips to mute / unmute them" = "クリックまたはクリップ上をなぞってミュート / ミュート解除"
-"Click selects, drag a rubber band (Shift/Ctrl adds)" = "クリックで選択、ドラッグでラバーバンド選択(Shift/Ctrlで追加)"
+"Click selects, drag a rubber band (Shift adds)" = "クリックで選択、ドラッグでラバーバンド選択(Shiftで追加)"
 "Click to hear this key at this velocity · double-click: a new zone of the last loaded file · wheel zooms the keys, Shift+wheel the velocities" = "クリックでこの鍵盤をこのベロシティで試聴 · ダブルクリック: 最後に読み込んだファイルの新しいゾーン · ホイールで鍵盤をズーム、Shift+ホイールでベロシティをズーム"
 "Click to load (undoable), or drag onto another track or device." = "クリックで読み込み(取り消し可能)、または別のトラックやデバイスへドラッグ。"
 "Click to open" = "クリックで開く"

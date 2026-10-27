@@ -196,7 +196,9 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   everything: click on empty grid adds a note with the last length/velocity and keeps
   dragging it (pitch + snapped time, auditioned on press and pitch change); drag a note =
   move it (or the selection), its right/left edge = resize end/start; Shift+drag duplicates;
-  Ctrl+drag rubber band, Ctrl+click toggles; Alt = no snap; right-click deletes the note,
+  Ctrl+drag rubber band (replaces the selection, Shift adds, Ctrl+click toggles the note
+  under the pointer — a rubber band always picks a fresh area unless Shift is also held,
+  `piano::rubber_rect_adds`/`rubber_click_keeps`); Alt = no snap; right-click deletes the note,
   holding the right button deletes every note swept over (`sweep_hits`, one `RemoveNotes`);
   double-click = properties popover (pitch, velocity, start, length; `set_note`). Paint drags
   notes at every `paint_cell` (spacing = last length rounded to the snap); Slice splits

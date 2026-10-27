@@ -278,7 +278,7 @@
 "Click or drag to play · drop an audio file to map it across the keyboard" = "Haz clic o arrastra para tocar · suelta un archivo de audio para mapearlo en todo el teclado"
 "Click or drag vertically across notes to split them" = "Haz clic o arrastra en vertical sobre las notas para cortarlas"
 "Click or sweep over clips to mute / unmute them" = "Haz clic o barre sobre los clips para silenciarlos / activarlos"
-"Click selects, drag a rubber band (Shift/Ctrl adds)" = "Clic selecciona, arrastrar dibuja un recuadro (Shift/Ctrl añade)"
+"Click selects, drag a rubber band (Shift adds)" = "Clic selecciona, arrastrar dibuja un recuadro (Shift añade)"
 "Click to hear this key at this velocity · double-click: a new zone of the last loaded file · wheel zooms the keys, Shift+wheel the velocities" = "Clic para oír esta tecla a esta velocidad · doble clic: una zona nueva con el último archivo cargado · la rueda hace zoom en las teclas, Shift+rueda en las velocidades"
 "Click to load (undoable), or drag onto another track or device." = "Clic para cargarlo (se puede deshacer), o arrástralo a otra pista o dispositivo."
 "Click to open" = "Clic para abrir"

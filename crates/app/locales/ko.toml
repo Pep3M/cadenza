@@ -1307,7 +1307,7 @@
 "Click or drag to play · drop an audio file to map it across the keyboard" = "클릭하거나 드래그해서 재생 · 오디오 파일을 놓으면 건반 전체에 매핑돼요"
 "Click or drag vertically across notes to split them" = "노트 위를 클릭하거나 세로로 드래그하면 분할돼요"
 "Click or sweep over clips to mute / unmute them" = "클립을 클릭하거나 훑으면 음소거 / 해제돼요"
-"Click selects, drag a rubber band (Shift/Ctrl adds)" = "클릭하면 선택, 드래그하면 고무줄 선택 (Shift/Ctrl은 추가)"
+"Click selects, drag a rubber band (Shift adds)" = "클릭하면 선택, 드래그하면 고무줄 선택 (Shift는 추가)"
 "Click to hear this key at this velocity · double-click: a new zone of the last loaded file · wheel zooms the keys, Shift+wheel the velocities" = "클릭하면 이 벨로시티로 이 음을 들어요 · 더블클릭: 마지막으로 불러온 파일로 새 존 생성 · 휠은 건반 확대, Shift+휠은 벨로시티 확대"
 "Click to load (undoable), or drag onto another track or device." = "클릭해서 불러오세요 (실행 취소 가능), 또는 다른 트랙이나 장치로 드래그하세요."
 "Click to open" = "클릭하면 열려요"

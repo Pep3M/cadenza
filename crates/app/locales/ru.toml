@@ -279,7 +279,7 @@
 "Click or drag to play · drop an audio file to map it across the keyboard" = "Клик или перетаскивание для воспроизведения · перетащите аудиофайл, чтобы распределить его по клавиатуре"
 "Click or drag vertically across notes to split them" = "Клик или перетаскивание по вертикали через ноты разрезает их"
 "Click or sweep over clips to mute / unmute them" = "Клик или протаскивание по клипам отключает / включает их звук"
-"Click selects, drag a rubber band (Shift/Ctrl adds)" = "Клик выделяет, перетаскивание растягивает рамку выделения (Shift/Ctrl добавляет)"
+"Click selects, drag a rubber band (Shift adds)" = "Клик выделяет, перетаскивание растягивает рамку выделения (Shift добавляет)"
 "Click to hear this key at this velocity · double-click: a new zone of the last loaded file · wheel zooms the keys, Shift+wheel the velocities" = "Клик проигрывает эту клавишу с этой velocity · двойной клик: новая зона из последнего загруженного файла · колесо масштабирует клавиши, Shift+колесо — velocity"
 "Click to load (undoable), or drag onto another track or device." = "Клик загружает (можно отменить), или перетащите на другую дорожку или устройство."
 "Click to open" = "Клик открывает"

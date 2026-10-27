@@ -274,7 +274,7 @@
 "Click or drag to play · drop an audio file to map it across the keyboard" = "点击或拖动以播放 · 拖放音频文件可将其映射到整个键盘"
 "Click or drag vertically across notes to split them" = "在音符上点击或纵向拖动以分割它们"
 "Click or sweep over clips to mute / unmute them" = "点击或划过片段以静音 / 取消静音"
-"Click selects, drag a rubber band (Shift/Ctrl adds)" = "点击选中，拖动框选（Shift/Ctrl 追加选择）"
+"Click selects, drag a rubber band (Shift adds)" = "点击选中，拖动框选（Shift 追加选择）"
 "Click to hear this key at this velocity · double-click: a new zone of the last loaded file · wheel zooms the keys, Shift+wheel the velocities" = "点击以该力度试听此琴键 · 双击：用上次加载的文件新建一个音区 · 滚轮缩放琴键范围，Shift+滚轮缩放力度范围"
 "Click to load (undoable), or drag onto another track or device." = "点击加载（可撤销），或拖到另一条音轨或设备上。"
 "Click to open" = "点击打开"

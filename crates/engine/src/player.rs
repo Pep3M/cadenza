@@ -1580,6 +1580,13 @@ impl Player {
 		// immutable borrow held past this point would conflict with this `&mut self`
 		// call).
 		self.drain_tap_garbage(id);
+		// The tap must never sit in `taps` without the `StartRecord` that consumes it:
+		// a later start would pop it instead of its own and every take after that
+		// would be off by one.
+		self.control.collect_garbage();
+		if self.control.commands.slots() < 2 || self.control.taps.slots() == 0 {
+			return Err(EngineError::Busy);
+		}
 		let resolver = self.resolver.as_ref().expect("checked above");
 		let (tap, mut session) = crate::record::start(
 			setup,

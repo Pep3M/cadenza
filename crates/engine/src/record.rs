@@ -147,6 +147,9 @@ pub(crate) struct RecordTap {
 	/// Timeline sample the next segment continues at (wrap detection).
 	pub(crate) next_tag: Option<i64>,
 	stats: Arc<RecordStats>,
+	/// Matches the owning [`RecordSession`]'s `id`, so the control side can tell a
+	/// retired tap from an earlier, abandoned recording apart from the current one's.
+	pub(crate) id: u64,
 }
 
 impl RecordTap {
@@ -335,6 +338,8 @@ pub(crate) struct RecordSession {
 	pub punch_out: Option<i64>,
 	pub midi_tracks: Vec<TrackId>,
 	pub input_dropouts_at_start: u64,
+	/// Matches the [`RecordTap`] handed to the audio thread for this recording.
+	pub id: u64,
 }
 
 /// What the writer thread returns.
@@ -396,12 +401,16 @@ fn timestamp() -> String {
 }
 
 /// Creates the rings, the files and the writer thread of a recording. Returns the
-/// tap for the audio thread and the control-side session.
+/// tap for the audio thread and the control-side session. `id` (a `Player`-owned
+/// counter, unique per `start_recording` call) tags both sides, so a tap retired from
+/// an earlier, abandoned recording can be told apart from the current one's and never
+/// mistaken for it in `tap_garbage`.
 pub(crate) fn start(
 	setup: &RecordSetup,
 	tempo: &TempoMap,
 	sample_rate: u32,
 	input_channels: usize,
+	id: u64,
 ) -> Result<(Box<RecordTap>, RecordSession), EngineError> {
 	let sr = f64::from(sample_rate);
 	let mut channels = [0usize; MAX_INPUT_CHANNELS];
@@ -485,6 +494,7 @@ pub(crate) fn start(
 		midi: setup.tracks.iter().any(|t| t.input.is_none()),
 		next_tag: None,
 		stats: stats.clone(),
+		id,
 	});
 	let monitor = Arc::new(RecordingMonitor {
 		live: Mutex::new(LiveRecording {
@@ -531,6 +541,7 @@ pub(crate) fn start(
 				.map(|t| t.track)
 				.collect(),
 			input_dropouts_at_start: 0,
+			id,
 		},
 	))
 }

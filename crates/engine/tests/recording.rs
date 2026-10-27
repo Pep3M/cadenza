@@ -149,12 +149,33 @@ fn latency_compensation_moves_the_recording_back_exactly() {
 	loopback(137);
 }
 
+/// Calls `f()` on its own thread and panics with a clear message instead of hanging
+/// the whole suite if it does not return within `timeout`: a correctness bug in the
+/// recording-abandon path (wrong tap matched, a join on a writer whose producer is
+/// never dropped) must fail loudly, not wedge CI.
+fn with_timeout<T: Send + 'static>(
+	timeout: std::time::Duration,
+	f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+	let (tx, rx) = std::sync::mpsc::channel();
+	std::thread::spawn(move || {
+		let _ = tx.send(f());
+	});
+	rx.recv_timeout(timeout)
+		.expect("hung: did not finish within the timeout")
+}
+
 /// Reviewer-reported cause B: if the audio side never hands the tap back (a stuck
 /// output device, or one that died without unwinding), `finish_recording`'s timeout
 /// used to return `Err` while leaving `self.recording` set — `start_recording` would
 /// then refuse every later attempt as "already recording" and `Configure` would be
 /// refused too. The timeout path must abandon the recording instead, so the player is
-/// usable again right after.
+/// usable again right after — including a full round trip with a second recording,
+/// which used to deadlock: the first (abandoned) tap, retired late by the virtual
+/// device, used to be popped by the second recording's `finish_recording` as if it
+/// were its own (wrong `stop` tag), leaving the second recording's real tap — and its
+/// writer thread's still-live producer — stuck in `tap_garbage` forever, so joining
+/// its writer blocked forever. A generation id on the tap now tells them apart.
 #[test]
 fn a_finish_recording_timeout_unsticks_the_player() {
 	let dir = folder("timeout-wedge");
@@ -168,8 +189,8 @@ fn a_finish_recording_timeout_unsticks_the_player() {
 	let mut stream = 0;
 	run(&mut dev, &mut stream, 20, &|_| 0.0);
 	player.request_stop_recording().unwrap();
-	// No further `process()` call: unlike every other test here, the (virtual) audio
-	// side never answers, standing in for a stuck output device.
+	// No further `process()` call yet: unlike every other test here, the (virtual)
+	// audio side never answers in time, standing in for a stuck output device.
 	assert!(
 		player
 			.finish_recording(std::time::Duration::from_millis(20))
@@ -182,16 +203,76 @@ fn a_finish_recording_timeout_unsticks_the_player() {
 	);
 
 	// The player is usable again: a new recording is accepted, not refused as
-	// "already recording". (The abandoned recording's own tap is still unconsumed on
-	// the virtual device's side, standing in for the stuck audio thread — the test
-	// does not drive it any further, which would entangle a second recording's
-	// finish with the first abandoned one's leftover tap.)
+	// "already recording". Punch in right where the stream already is, so the 20
+	// blocks below actually reach the capture window (the abandoned first recording's
+	// own punch-in, at BEAT, is still well ahead of it and so never captures anything,
+	// which is fine: the point is proving the SECOND one's audio comes back, not the
+	// first's).
+	player
+		.start_recording(&audio_setup(&dir, track, stream))
+		.unwrap();
+	// This also drives the audio side through the FIRST recording's deferred
+	// EndRecord/Stop (still queued from the abandoned attempt above), retiring its
+	// stale tap into `tap_garbage` interleaved with the second recording's own —
+	// exactly the scenario that used to deadlock.
+	run(&mut dev, &mut stream, 20, &|_| 0.0);
+	player.request_stop_recording().unwrap();
+	run(&mut dev, &mut stream, 1, &|_| 0.0);
+	let rec = with_timeout(std::time::Duration::from_secs(5), move || {
+		player.finish_recording(std::time::Duration::from_secs(5))
+	})
+	.expect("the second recording's own tap, not the first's stale one");
+	assert_eq!(rec.audio[0].track, track);
 	assert!(
-		player
-			.start_recording(&audio_setup(&dir, track, BEAT * 2))
-			.is_ok(),
-		"must accept a new recording instead of refusing it as already in progress"
+		rec.audio[0].frames > 0,
+		"its own captured audio, not the first (abandoned, never-reached) recording's"
 	);
+	let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Several abandons in a row must not fill `tap_garbage` (capacity `HANDOVER_SLOTS +
+/// 1`) with stale taps nobody ever drains: once full, the audio thread's
+/// `Cmd::StartRecord` silently does nothing (it only retires the current tap when
+/// there is room for the next one), so recording would stop working at all.
+#[test]
+fn repeated_abandons_do_not_fill_tap_garbage() {
+	let dir = folder("repeated-abandons");
+	let (p, track) = vox_project(MonitorMode::Off);
+	let (mut player, mut dev) = Player::virtual_device(SR, 2);
+	player.load(&p).unwrap();
+	player.set_armed(track, true).unwrap();
+	let mut stream = 0;
+	// More than `HANDOVER_SLOTS + 1` (tap_garbage's capacity) abandoned attempts in a
+	// row, each never driven further on the audio side.
+	for n in 0..6 {
+		player
+			.start_recording(&audio_setup(&dir, track, BEAT * n))
+			.unwrap();
+		run(&mut dev, &mut stream, 2, &|_| 0.0);
+		player.request_stop_recording().unwrap();
+		assert!(
+			player
+				.finish_recording(std::time::Duration::from_millis(10))
+				.is_err(),
+			"attempt {n} left unanswered on purpose"
+		);
+	}
+	// Still usable: StartRecord must not have become a silent no-op, and a recording
+	// driven to completion normally must still produce real audio. Punch in right
+	// where the stream already is so the run below actually reaches the capture
+	// window (every abandoned attempt's own punch-in point, further ahead, is never
+	// reached on purpose).
+	player
+		.start_recording(&audio_setup(&dir, track, stream))
+		.unwrap();
+	run(&mut dev, &mut stream, 20, &|_| 0.0);
+	player.request_stop_recording().unwrap();
+	run(&mut dev, &mut stream, 1, &|_| 0.0);
+	let rec = with_timeout(std::time::Duration::from_secs(5), move || {
+		player.finish_recording(std::time::Duration::from_secs(5))
+	})
+	.expect("recording still works after several abandons");
+	assert!(!rec.audio.is_empty());
 	let _ = std::fs::remove_dir_all(&dir);
 }
 

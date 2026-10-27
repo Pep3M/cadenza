@@ -41,6 +41,14 @@ pub fn add_track(project: &Project, track: Track, after: Option<TrackId>) -> Com
 	Command::AddTrack { track, index }
 }
 
+/// Appends `track` at the very end of the track list (top level, after every other track
+/// including a folder's contents), ignoring any current selection. The generic "add a track"
+/// affordances (below the tracks, the Track menu, the mixer's "+ Bus") always want this, not
+/// "insert after the selected track" — see `add_track` for that explicit, different behavior.
+pub fn add_track_at_end(project: &Project, track: Track) -> Command {
+	add_track(project, track, project.tracks.last().map(|t| t.id))
+}
+
 /// Moves a track by `delta` positions (clamped); `None` when it would not move.
 pub fn move_track(project: &Project, track: TrackId, delta: i64) -> Option<Command> {
 	let from = project.track_index(track)? as i64;
@@ -638,6 +646,64 @@ mod tests {
 			Command::AddTrack { index, .. } => assert_eq!(index, Some(1)),
 			other => panic!("{other:?}"),
 		}
+	}
+
+	/// The "+ Instrument/Audio/Bus/Folder" affordances below the tracks (and the Track menu,
+	/// and the mixer's "+ Bus") always append at the end, regardless of a mid-list selection:
+	/// regression test for the bug where it inserted after the *selected* track instead.
+	#[test]
+	fn add_track_at_end_ignores_selection_and_appends_last() {
+		let fx = fixture();
+		let p = fx.doc.project();
+		assert_eq!(p.tracks.len(), 3);
+		// fx.keys is the first track, not the last: a naive "after the selection" builder
+		// would insert right after it (index 1), in the middle of the list.
+		let new = new_track(p, TrackKind::Instrument);
+		match add_track_at_end(p, new) {
+			Command::AddTrack { index, .. } => assert_eq!(index, Some(p.tracks.len())),
+			other => panic!("{other:?}"),
+		}
+	}
+
+	#[test]
+	fn add_track_at_end_goes_after_a_trailing_folders_contents() {
+		let mut fx = fixture();
+		let project_tracks_len = {
+			let p = fx.doc.project();
+			p.tracks.len()
+		};
+		// Move the audio track inside a new folder at the end, so the last entries in the
+		// flat track list are a folder and its child: the new track must land after both,
+		// at the top level, not between the folder and its content or inside it.
+		let mut folder = new_track(fx.doc.project(), TrackKind::Folder);
+		let folder_id = folder.id;
+		folder.folder = None;
+		fx.doc
+			.execute(add_track(fx.doc.project(), folder, None))
+			.unwrap();
+		fx.doc
+			.execute(cadenza_model::Command::SetTrackFolder {
+				track: fx.audio,
+				folder: Some(folder_id),
+			})
+			.unwrap();
+		fx.doc
+			.execute(cadenza_model::Command::MoveTrack {
+				track: fx.audio,
+				index: project_tracks_len,
+			})
+			.unwrap();
+		let p = fx.doc.project();
+		assert_eq!(p.tracks.last().unwrap().id, fx.audio);
+		assert_eq!(p.track(fx.audio).unwrap().folder, Some(folder_id));
+
+		let new = new_track(p, TrackKind::Instrument);
+		let new_id = new.id;
+		let cmd = add_track_at_end(p, new);
+		fx.doc.execute(cmd).unwrap();
+		let p = fx.doc.project();
+		assert_eq!(p.tracks.last().unwrap().id, new_id);
+		assert_eq!(p.track(new_id).unwrap().folder, None);
 	}
 
 	#[test]

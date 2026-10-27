@@ -4,6 +4,27 @@ All notable changes to Cadenza are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-10-27
+
+Workflow fixes from day-to-day use: transport, recording, layout and piano roll selection.
+
+### Fixed
+
+- **Stop** on a stopped transport goes back to the start of the song (the pattern start in
+  pattern mode).
+- **Record button stuck lit**: clicking it while record mode is on and nothing is recording
+  turns record mode off; the button now looks different when only the mode is on (outline)
+  and while recording (filled), and its tooltip says what a click does. Recording no longer
+  gets stuck after the audio device disappears or a take fails to finish in time: the next
+  recording starts normally.
+- **"+ Instrument / Audio / Bus / Folder"** below the tracks always adds the track at the end
+  of the list, not after the selected track.
+- **F11 / Ctrl+Enter** restores exactly the layout from before maximizing; View > "Maximize
+  focused panel" maximizes the panel you were working in, not the one under the menu.
+- **Bottom dock**: the mixer and the editors (piano roll, audio editor, docked device editor)
+  never share it. Opening one closes the other and closing it leaves the dock empty.
+- **Piano roll rubber band** replaces the selection; hold Shift to add to it.
+
 ## [0.3.0] - 2026-10-25
 
 Melodyne-style note editing for audio, audio to MIDI (melodies, chords, drums, 808s),
@@ -146,6 +167,7 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 First release: DAW with an AI arranger and sound engineer, MCP server, CLAP/VST3 hosting,
 recording, mixing, export and the style library.
 
+[0.3.1]: https://github.com/Pep3M/cadenza/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Pep3M/cadenza/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Pep3M/cadenza/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Pep3M/cadenza/compare/v0.1.0...v0.1.1

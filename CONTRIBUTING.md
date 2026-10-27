@@ -24,7 +24,8 @@ On Linux you need `pkg-config` and `libasound2-dev`. CI runs the same checks (pl
 `cargo deny check`) on Linux, and on Windows and macOS for pull requests to `main`.
 
 [`CLAUDE.md`](CLAUDE.md) is the project contract: crate layout and the rules every change
-follows. The most important ones:
+follows; each crate's detailed contract is in [`docs/contracts/`](docs/contracts). The most
+important rules:
 
 - **The audio thread is sacred:** no allocation, locks, I/O or panics inside
   `Processor::process` or the engine's realtime callback.

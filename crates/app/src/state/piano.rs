@@ -95,7 +95,7 @@ impl Tool {
 				 right-drag deletes, Ctrl+drag selects, Shift+drag duplicates",
 			),
 			Tool::Paint => tr("Drag to paint notes at every snap step"),
-			Tool::Select => tr("Click selects, drag a rubber band (Shift/Ctrl adds)"),
+			Tool::Select => tr("Click selects, drag a rubber band (Shift adds)"),
 			Tool::Slice => tr("Click or drag vertically across notes to split them"),
 			Tool::Bend => tr(
 				"Drag over a note to draw its pitch curve (Shift: whole semitones), \
@@ -323,6 +323,9 @@ impl PianoView {
 	}
 
 	/// Selects `ids` (replacing the selection, or adding with `add`).
+	///
+	/// A fresh rubber-band drag should feel like picking something else, not extending
+	/// the old pick (FL Studio): [`rubber_rect_adds`] / [`rubber_click_keeps`] decide `add`.
 	pub fn select(&mut self, ids: impl IntoIterator<Item = NoteId>, add: bool) {
 		if !add {
 			self.selected.clear();
@@ -349,6 +352,23 @@ impl PianoView {
 				.is_some_and(|(track, _)| track.id == *t)
 		});
 	}
+}
+
+/// Whether a finished rubber-band drag should add its notes to the current selection
+/// instead of replacing it. Only Shift adds (FL Studio); Ctrl merely engages rubber-band
+/// selection in tools where a plain drag would otherwise draw or move notes (the Draw
+/// tool), so a Ctrl-drag with no Shift still picks a fresh area, letting the user select
+/// something else without the old selection staying highlighted outside it.
+pub fn rubber_rect_adds(shift: bool) -> bool {
+	shift
+}
+
+/// Whether a click with nothing under the pointer (no drag) should keep the current
+/// selection instead of clearing it. Either modifier keeps it: Shift because it is the
+/// "add" modifier, Ctrl because that click is the no-op side of Ctrl+click's per-note
+/// toggle (the toggle itself is handled separately, by id, regardless of this).
+pub fn rubber_click_keeps(shift: bool, ctrl: bool) -> bool {
+	shift || ctrl
 }
 
 /// The MIDI clip of instrument track `track` the piano roll opens for it: a selected clip
@@ -1919,6 +1939,33 @@ mod tests {
 		want.sort();
 		assert_eq!(hits, want);
 		assert!(is_black(61) && !is_black(60));
+	}
+
+	#[test]
+	fn rubber_band_replaces_unless_shift() {
+		assert!(!rubber_rect_adds(false), "plain drag replaces");
+		assert!(rubber_rect_adds(true), "shift adds");
+
+		assert!(!rubber_click_keeps(false, false), "plain click clears");
+		assert!(rubber_click_keeps(true, false), "shift click keeps");
+		assert!(
+			rubber_click_keeps(false, true),
+			"ctrl click on empty space is a no-op, not a clear"
+		);
+		assert!(rubber_click_keeps(true, true));
+	}
+
+	#[test]
+	fn select_replaces_or_adds() {
+		let mut v = PianoView::default();
+		let a = NoteId::new();
+		let b_id = NoteId::new();
+		v.select([a], false);
+		assert_eq!(v.selected, [a].into());
+		v.select([b_id], false);
+		assert_eq!(v.selected, [b_id].into(), "a new pick replaces the old one");
+		v.select([a], true);
+		assert_eq!(v.selected, [a, b_id].into(), "add unions instead");
 	}
 
 	#[test]

@@ -426,13 +426,16 @@ fn loop_button(ui: &mut Ui, state: &mut AppState, label: bool) {
 	}
 }
 
-/// The red record button: filled while recording, outlined in record mode (R).
+/// The red record button: filled solid while actually recording; mode (R) on its own,
+/// with nothing recording, only dims the dot and outlines the button — distinct from an
+/// active recording, so "lit" never means "stuck".
 fn record_button(ui: &mut Ui, state: &mut AppState) {
 	let (rect, resp) = ui.allocate_exact_size(BUTTON, Sense::click());
 	resp.widget_info(|| {
 		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tr("Record (Ctrl+R)"))
 	});
 	let recording = state.is_recording();
+	let mode_only = state.record.mode && !recording;
 	let p = ui.painter();
 	let r = CornerRadius::same(theme::RADIUS_MD);
 	let bg = if recording {
@@ -443,17 +446,28 @@ fn record_button(ui: &mut Ui, state: &mut AppState) {
 		theme::BG_WIDGET
 	};
 	p.rect_filled(rect, r, bg);
-	if state.record.mode || recording {
+	if mode_only || recording {
 		p.rect_stroke(rect, r, Stroke::new(1.0, theme::RECORD), StrokeKind::Inside);
 	}
 	let c = rect.center();
-	p.circle_filled(c, 5.5, theme::RECORD);
+	// Mode-only is a dimmer dot (armed, not firing); an active recording is full red
+	// with a ring around it.
+	let dot = if mode_only {
+		theme::RECORD.gamma_multiply(0.55)
+	} else {
+		theme::RECORD
+	};
+	p.circle_filled(c, 5.5, dot);
 	if recording {
 		p.circle_stroke(c, 8.0, Stroke::new(1.0, theme::RECORD));
 	}
-	let resp = resp.on_hover_text(tr(
-		"Record the armed tracks (Ctrl+R; again to stop). R: record mode, so Play records",
-	));
+	let resp = resp.on_hover_text(if recording {
+		tr("Stop recording (Ctrl+R)")
+	} else if mode_only {
+		tr("Record mode is on; click to turn it off (R). Play would start recording")
+	} else {
+		tr("Record the armed tracks (Ctrl+R; again to stop). R: record mode, so Play records")
+	});
 	if resp.clicked() {
 		state.toggle_record();
 	}

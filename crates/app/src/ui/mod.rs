@@ -921,6 +921,14 @@ fn track_focus(ctx: &egui::Context, state: &mut AppState, rects: &[(PanelKind, R
 	let Some(pos) = ctx.pointer_interact_pos() else {
 		return;
 	};
+	// A press on a menu, popup or floating window (any non-background layer) is not a
+	// panel click: it must not steal "maximize"'s target from under it.
+	if !ctx
+		.layer_id_at(pos)
+		.is_none_or(|l| l.order == egui::Order::Background)
+	{
+		return;
+	}
 	if let Some((panel, _)) = rects.iter().find(|(_, r)| r.contains(pos)) {
 		state.view.panels.focus = Some(*panel);
 	}

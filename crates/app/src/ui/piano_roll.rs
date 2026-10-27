@@ -82,7 +82,11 @@ enum Gesture {
 	Rubber {
 		from: (Tick, f32),
 		to: Pos2,
-		add: bool,
+		shift: bool,
+		/// Whether Ctrl triggered this gesture (Draw tool, or a Ctrl+drag in any tool):
+		/// it only keeps the selection on an empty click, never on a real rect-select
+		/// (see `piano::rubber_rect_adds`).
+		ctrl: bool,
 		/// Note under a Ctrl+press: a click without a drag toggles it.
 		note: Option<NoteId>,
 	},
@@ -918,7 +922,8 @@ impl PianoUi {
 				self.gesture = Some(Gesture::Rubber {
 					from: (abs, pos.y - area.top() + v.scroll_y),
 					to: pos,
-					add: true,
+					shift: mods.shift,
+					ctrl: true,
 					note: under.map(|(n, _)| n.id),
 				});
 			} else if v.tool == Tool::Slice {
@@ -1002,7 +1007,8 @@ impl PianoUi {
 						self.gesture = Some(Gesture::Rubber {
 							from: (abs, pos.y - area.top() + v.scroll_y),
 							to: pos,
-							add: mods.shift,
+							shift: mods.shift,
+							ctrl: false,
 							note: None,
 						});
 					}
@@ -1123,7 +1129,8 @@ impl PianoUi {
 				Gesture::Rubber {
 					from,
 					to,
-					add,
+					shift,
+					ctrl,
 					note,
 				} => {
 					let a = pos2(
@@ -1137,7 +1144,9 @@ impl PianoUi {
 								state.view.piano.selected.remove(&id);
 							}
 							Some(id) => state.view.piano.select([id], true),
-							None if !add => state.view.piano.selected.clear(),
+							None if !piano::rubber_click_keeps(shift, ctrl) => {
+								state.view.piano.selected.clear();
+							}
 							None => {}
 						}
 					} else {
@@ -1152,7 +1161,7 @@ impl PianoUi {
 							pitch(from.1),
 							pitch(y1),
 						);
-						state.view.piano.select(ids, add);
+						state.view.piano.select(ids, piano::rubber_rect_adds(shift));
 					}
 				}
 				Gesture::Slice { at, from_y, to } => {

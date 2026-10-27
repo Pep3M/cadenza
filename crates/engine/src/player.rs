@@ -74,7 +74,9 @@ use crate::input::{InputFifo, InputInfo, InputMode, InputReader, InputStats, MAX
 use crate::meter::MeterBank;
 use crate::metronome::MetronomeSettings;
 use crate::probe::DeviceProbe;
-use crate::record::{RecordSession, RecordSetup, RecordTap, Recording, RecordingMonitor};
+use crate::record::{
+	RecordSession, RecordSetup, RecordTap, Recording, RecordingMonitor, WriterOutput,
+};
 use crate::schedule::MidiSchedule;
 
 const GRAPH_SLOTS: usize = 4;
@@ -1102,6 +1104,9 @@ pub struct Player {
 	metronome: MetronomeSettings,
 	armed: Vec<TrackId>,
 	recording: Option<RecordSession>,
+	/// Tags each `start_recording` call so a tap retired from an earlier, abandoned
+	/// recording can never be mistaken for the current one's in `tap_garbage`.
+	next_recording_id: u64,
 	/// How the output callback thread is scheduled, once the helper thread raised it.
 	audio_scheduling: Arc<Mutex<Option<String>>>,
 	_stream: Option<cpal::Stream>,
@@ -1197,6 +1202,23 @@ pub fn find_midi_input(query: &str) -> Result<PortInfo, EngineError> {
 const PLAYBACK_CRASH_HINT: &str = "Playback continues without it. Reload the project into \
 	the player (e.g. play again) to restart it from the project's saved state; if it keeps \
 	failing, replace this device with another plugin or a built-in device, or bypass it.";
+
+/// `request_stop_recording`/`request_end_recording` only report whether the stop
+/// reached the audio thread (callers follow up with `finish_recording` for the real
+/// `Recording`); but on their failure paths `abandon_recording` can still recover one
+/// (the tap had in fact already come back by the time the command send failed) and
+/// that result then has nowhere to go through their `Result<(), _>` signature. Warn
+/// rather than silently losing already-captured audio/MIDI.
+fn warn_discarded_recording(rec: Option<Recording>) {
+	if let Some(rec) = rec {
+		eprintln!(
+			"cadenza: a recording that could not be stopped cleanly was abandoned with \
+			 {} audio file(s) and {} MIDI item(s) already captured; it was discarded",
+			rec.audio.len(),
+			rec.midi.len()
+		);
+	}
+}
 
 impl Player {
 	/// Opens the default output device and starts a (silent) output stream.
@@ -1355,6 +1377,7 @@ impl Player {
 			metronome: MetronomeSettings::default(),
 			armed: Vec::new(),
 			recording: None,
+			next_recording_id: 0,
 			audio_scheduling: Arc::new(Mutex::new(None)),
 			_stream: stream,
 		}
@@ -1536,21 +1559,41 @@ impl Player {
 				"no track is armed; arm an audio or instrument track first".into(),
 			));
 		}
-		let Some(resolver) = &self.resolver else {
+		if self.resolver.is_none() {
 			return Err(EngineError::Record(
 				"no project is loaded into the player yet".into(),
 			));
-		};
+		}
 		if setup.tracks.iter().any(|t| t.input.is_some()) && self.input_channels == 0 {
 			return Err(EngineError::Record(
 				"no audio input is open; choose an input device in the audio settings".into(),
 			));
 		}
+		let id = self.next_recording_id;
+		self.next_recording_id = self.next_recording_id.wrapping_add(1);
+		// Drop any tap(s) left over from an earlier abandoned recording before
+		// accepting a new one: besides freeing `tap_garbage` slots (a full ring makes
+		// `Cmd::StartRecord` a silent no-op, since the audio thread only retires the
+		// current tap when there is room for it), this stops a stale tap from later
+		// being mistaken for this recording's own in `finish_recording`/
+		// `abandon_recording`. Done before borrowing `self.resolver` below (an
+		// immutable borrow held past this point would conflict with this `&mut self`
+		// call).
+		self.drain_tap_garbage(id);
+		// The tap must never sit in `taps` without the `StartRecord` that consumes it:
+		// a later start would pop it instead of its own and every take after that
+		// would be off by one.
+		self.control.collect_garbage();
+		if self.control.commands.slots() < 2 || self.control.taps.slots() == 0 {
+			return Err(EngineError::Busy);
+		}
+		let resolver = self.resolver.as_ref().expect("checked above");
 		let (tap, mut session) = crate::record::start(
 			setup,
 			&resolver.tempo,
 			self.sample_rate,
 			self.input_channels,
+			id,
 		)?;
 		self.control.collect_garbage();
 		self.control.taps.push(tap).map_err(|_| EngineError::Busy)?;
@@ -1576,26 +1619,43 @@ impl Player {
 		self.recording.is_some()
 	}
 
-	/// Stops capturing and the transport; finish with [`Player::finish_recording`].
+	/// Stops capturing and the transport; finish with [`Player::finish_recording`]. If
+	/// the audio thread cannot be reached (command queue full: it stopped consuming,
+	/// e.g. the output device died), the recording is abandoned right away instead of
+	/// leaving `self.recording` set forever, which would refuse any later
+	/// `StartRecording` ("already recording") and `Configure`.
 	pub fn request_stop_recording(&mut self) -> Result<(), EngineError> {
 		self.control.shared.playing.store(false, Ordering::Relaxed);
-		self.control.send(Cmd::EndRecord)?;
-		self.control.send(Cmd::Stop)
+		if let Err(e) = self.control.send(Cmd::EndRecord) {
+			warn_discarded_recording(self.abandon_recording());
+			return Err(e);
+		}
+		if let Err(e) = self.control.send(Cmd::Stop) {
+			warn_discarded_recording(self.abandon_recording());
+			return Err(e);
+		}
+		Ok(())
 	}
 
 	/// Waits (at most `timeout`) for the audio thread to hand the recording back, lets
 	/// the writer finish the files and returns what was recorded (build the project
-	/// edit with [`crate::record_commands`]).
+	/// edit with [`crate::record_commands`]). On timeout the recording is abandoned
+	/// (see [`Player::abandon_recording`]) so the player is usable again afterwards;
+	/// if the tap had in fact already come back (it arrived just before the deadline),
+	/// that still-good `Recording` is returned rather than discarded.
 	pub fn finish_recording(&mut self, timeout: Duration) -> Result<Recording, EngineError> {
-		if self.recording.is_none() {
+		let Some(id) = self.recording.as_ref().map(|s| s.id) else {
 			return Err(EngineError::Record("not recording".into()));
-		}
+		};
 		let deadline = Instant::now() + timeout;
 		let tap = loop {
-			if let Ok(tap) = self.control.tap_garbage.pop() {
+			if let Some(tap) = self.drain_tap_garbage(id) {
 				break tap;
 			}
 			if Instant::now() > deadline {
+				if let Some(rec) = self.abandon_recording() {
+					return Ok(rec);
+				}
 				return Err(EngineError::Record(
 					"the audio thread did not hand the recording back; is the output device \
 					 still running?"
@@ -1612,9 +1672,39 @@ impl Player {
 			.take()
 			.and_then(|w| w.join().ok())
 			.unwrap_or_default();
+		Ok(self.recording_from(&session, stop, output))
+	}
+
+	/// Drains every tap currently retired in `tap_garbage` (one non-blocking pass),
+	/// dropping any that does not belong to recording `id` — left over from an
+	/// earlier, abandoned recording. Dropping it here, never on the audio thread, lets
+	/// that recording's own writer thread finally see its events producer gone and
+	/// exit; it also frees the `tap_garbage` slot a stale tap would otherwise occupy
+	/// forever, which would make every later `Cmd::StartRecord` a silent no-op (the
+	/// audio thread only retires its current tap when there is room for it, see
+	/// `Control::process`'s `StartRecord` arm).
+	fn drain_tap_garbage(&mut self, id: u64) -> Option<Box<RecordTap>> {
+		let mut found = None;
+		while let Ok(tap) = self.control.tap_garbage.pop() {
+			if tap.id == id {
+				found = Some(tap);
+			}
+		}
+		found
+	}
+
+	/// Builds the [`Recording`] result from a finished session (dropouts/warnings
+	/// included), shared by [`Player::finish_recording`] and
+	/// [`Player::abandon_recording`].
+	fn recording_from(
+		&self,
+		session: &RecordSession,
+		stop: i64,
+		output: WriterOutput,
+	) -> Recording {
 		let mut warnings = Vec::new();
-		if let Some(e) = output.error {
-			warnings.push(e);
+		if let Some(e) = &output.error {
+			warnings.push(e.clone());
 		}
 		let dropouts = self
 			.input_stats
@@ -1627,7 +1717,7 @@ impl Player {
 				 size in the audio settings"
 			));
 		}
-		Ok(Recording {
+		Recording {
 			sample_rate: self.sample_rate,
 			start: session.monitor.start,
 			punch_out: session.punch_out,
@@ -1636,17 +1726,43 @@ impl Player {
 			midi_latency: self.output_latency() as i64,
 			passes: output.passes,
 			audio: output.audio,
-			midi_tracks: session.midi_tracks,
+			midi_tracks: session.midi_tracks.clone(),
 			midi: output.midi,
 			dropouts,
 			warnings,
-		})
+		}
+	}
+
+	/// Drops a recording the audio thread cannot be reached for, so the player is
+	/// usable again: a later `StartRecording` is not refused as "already recording"
+	/// and `Configure` is not refused either. Returns what was recorded if the tap had
+	/// already been handed back (the writer then finishes almost immediately);
+	/// otherwise the writer's `JoinHandle` is dropped without joining — it may be
+	/// waiting on a producer a merely stuck (not dead) audio thread never drops, so
+	/// joining here could block forever — and nothing is recovered.
+	fn abandon_recording(&mut self) -> Option<Recording> {
+		let mut session = self.recording.take()?;
+		if let Some(tap) = self.drain_tap_garbage(session.id) {
+			let stop = tap.next_tag.unwrap_or(session.monitor.start);
+			drop(tap);
+			let output = session
+				.writer
+				.take()
+				.and_then(|w| w.join().ok())
+				.unwrap_or_default();
+			return Some(self.recording_from(&session, stop, output));
+		}
+		drop(session.writer.take());
+		None
 	}
 
 	/// Stops capturing but keeps the transport playing (punch out on the fly); finish
-	/// with [`Player::finish_recording`].
+	/// with [`Player::finish_recording`]. See [`Player::request_stop_recording`] about
+	/// the failure path.
 	pub fn request_end_recording(&mut self) -> Result<(), EngineError> {
-		self.control.send(Cmd::EndRecord)
+		self.control.send(Cmd::EndRecord).inspect_err(|_| {
+			warn_discarded_recording(self.abandon_recording());
+		})
 	}
 
 	/// [`Player::request_end_recording`] + [`Player::finish_recording`].

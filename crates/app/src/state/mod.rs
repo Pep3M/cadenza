@@ -2293,8 +2293,11 @@ impl AppState {
 		}
 	}
 
-	/// Stops; pattern mode goes back to the pattern start (FL Studio).
+	/// Stops; pattern mode goes back to the pattern start (FL Studio). Stop on an already
+	/// stopped transport rewinds to the start (song tick 0, pattern mode its pattern
+	/// start), like most DAWs: a second press of Stop is "go to the top".
 	pub fn stop(&mut self) {
+		let already_stopped = !self.play_intent;
 		self.end_recording(false);
 		self.play_intent = false;
 		self.cued = false;
@@ -2302,7 +2305,14 @@ impl AppState {
 			a.stop();
 		}
 		let (config, _) = self.transport_config();
-		if let (Some(_), Some((start, _))) = (config.pattern, config.loop_range) {
+		if already_stopped {
+			self.locate(
+				config
+					.pattern
+					.and(config.loop_range)
+					.map_or(Tick::ZERO, |(start, _)| start),
+			);
+		} else if let (Some(_), Some((start, _))) = (config.pattern, config.loop_range) {
 			self.locate(start);
 		}
 		self.send_config(config);
@@ -3159,10 +3169,12 @@ impl AppState {
 	}
 
 	/// Leaves the device editor of the dock (it goes back to the piano roll / audio
-	/// editor) and closes the focused device window.
+	/// editor, or closes the dock when neither has a clip open) and closes the focused
+	/// device window.
 	pub fn close_device_editor(&mut self) {
 		self.release_previews();
 		self.view.device_editor = false;
+		self.close_dock_if_its_editor_is_empty();
 		if let Some(r) = self.view.windows.focused_device() {
 			self.view.windows.close(windows::WindowItem::Device(r));
 		}
@@ -3170,14 +3182,30 @@ impl AppState {
 	}
 
 	/// Pops the dock's device out into its floating window; the dock shows the piano
-	/// roll / audio editor again.
+	/// roll / audio editor again, or closes when neither has a clip open.
 	pub fn pop_out_device_editor(&mut self) {
 		let Some(r) = self.view.instrument.device else {
 			return;
 		};
 		self.view.device_editor = false;
+		self.close_dock_if_its_editor_is_empty();
 		self.open_window(windows::WindowItem::Device(r));
 		self.sync_editor_probe();
+	}
+
+	/// After leaving the dock's device editor, closes the bottom dock outright if the
+	/// piano roll / audio editor it would fall back to has no clip open (an empty
+	/// editor is not worth showing); never reveals the mixer in its place (closing a
+	/// bottom-dock panel never shows the other one, see [`layout::PanelLayout::set`]).
+	fn close_dock_if_its_editor_is_empty(&mut self) {
+		let empty = if self.view.audio_editor {
+			self.view.audio.clip.is_none()
+		} else {
+			self.view.piano.clip.is_none()
+		};
+		if empty {
+			self.view.panels.set(PanelKind::PianoRoll, false);
+		}
 	}
 
 	/// Puts device window `r` into the bottom dock.
@@ -3965,9 +3993,7 @@ impl AppState {
 	/// The per-user layout/zoom preferences to persist.
 	pub fn prefs(&self) -> Prefs {
 		let v = &self.view;
-		let mut panels = v.panels.clone();
-		// The mixer only made room for the piano roll (which starts closed next time).
-		panels.mixer |= panels.mixer_yielded;
+		let panels = v.panels.clone();
 		Prefs {
 			panels,
 			px_per_beat: v.timeline.px_per_beat,
@@ -4005,10 +4031,13 @@ impl AppState {
 		v.panels = PanelLayout {
 			maximized: None,
 			focus: None,
-			mixer_yielded: false,
 			..p.panels
 		};
-		// The piano roll has nothing to show until a clip is opened.
+		// The piano roll has nothing to show until a clip is opened; the bottom dock
+		// (one of mixer / editor) falls back to the mixer when the editor held it.
+		if p.panels.piano_roll {
+			v.panels.mixer = true;
+		}
 		v.panels.piano_roll = false;
 		v.timeline.px_per_beat = p
 			.px_per_beat
@@ -4248,6 +4277,23 @@ impl AppState {
 			|| self.midi.learning.is_some()
 	}
 
+	/// The player thread behind `self.audio` has exited (its command receiver is
+	/// dropped), so every later send to it is silently lost. Clears the recording
+	/// phase and the clock so `record()`'s "no audio device" guard fires instead of
+	/// starting a recording that would sit in `Phase::Starting` forever with no
+	/// `Ready`/`Unavailable` ever following it; the app otherwise stays usable
+	/// without sound. Pure state change, unit-tested directly.
+	pub(crate) fn handle_audio_unavailable(&mut self, e: String) {
+		self.probe = None;
+		self.master_loudness.detach();
+		self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
+		self.audio_status = AudioStatus::Unavailable(e);
+		// The audio thread that would have answered a pending start/stop is gone:
+		// without this the record button stays lit forever.
+		self.abort_stuck_recording();
+		self.clock = None;
+	}
+
 	fn poll_audio(&mut self) {
 		let Some(audio) = &self.audio else { return };
 		let mut events = Vec::new();
@@ -4277,12 +4323,7 @@ impl AppState {
 					}
 					self.schedule_reload();
 				}
-				AudioEvent::Unavailable(e) => {
-					self.probe = None;
-					self.master_loudness.detach();
-					self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
-					self.audio_status = AudioStatus::Unavailable(e);
-				}
+				AudioEvent::Unavailable(e) => self.handle_audio_unavailable(e),
 				AudioEvent::Loaded {
 					generation,
 					warnings,

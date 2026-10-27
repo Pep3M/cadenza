@@ -93,7 +93,7 @@ DESKTOP_FILE="$DATA_HOME/applications/cadenza.desktop"
 ICON_FILE="$DATA_HOME/icons/hicolor/scalable/apps/cadenza.svg"
 
 # What the Linux archive ships; nothing else may live in an install folder.
-SHIPPED="cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner LICENSE README.md cadenza.desktop cadenza.svg"
+SHIPPED="cadenza cadenza-app cadenza-plugin-sandbox cadenza-plugin-scanner LICENSE LICENSE-basic-pitch README.md cadenza.desktop cadenza.svg samples"
 # Installer 0.1.0/0.1.1 used the app's data folder as the install folder.
 LEGACY_DIR="$DATA_HOME/cadenza"
 

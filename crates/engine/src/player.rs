@@ -125,6 +125,8 @@ pub struct AudioConfig {
 enum Cmd {
 	Play,
 	Stop,
+	/// Silence the tails a stop left ringing.
+	CutTails,
 	Seek(Tick),
 	Monitor(Option<TrackId>),
 	DetachMidi,
@@ -484,6 +486,11 @@ impl AudioCore {
 					self.playing = false;
 					if let Some(g) = &mut self.graph {
 						g.stop();
+					}
+				}
+				Cmd::CutTails => {
+					if let Some(g) = &mut self.graph {
+						g.cut_tails();
 					}
 				}
 				Cmd::Seek(tick) => {
@@ -2378,10 +2385,18 @@ impl Player {
 		self.control.send(Cmd::Play)
 	}
 
-	/// Stops playback; sounding notes receive AllNotesOff.
+	/// Stops playback: sounding notes are released and effect tails ring out (see
+	/// [`Graph::stop`]); [`Player::cut_tails`] silences them. The next
+	/// [`Player::play`] starts clean.
 	pub fn stop(&mut self) -> Result<(), EngineError> {
 		self.control.shared.playing.store(false, Ordering::Relaxed);
 		self.control.send(Cmd::Stop)
+	}
+
+	/// Silences the tails a stop left ringing (and previewed notes) at once, resetting
+	/// every device. No effect while playing.
+	pub fn cut_tails(&mut self) -> Result<(), EngineError> {
+		self.control.send(Cmd::CutTails)
 	}
 
 	/// Moves the playhead; sounding notes receive AllNotesOff and effect tails are cleared.
@@ -2636,8 +2651,103 @@ mod tests {
 		assert_eq!(pos, PPQ * 2 + PPQ / 5);
 		control.send(Cmd::Stop).unwrap();
 		core.fill_interleaved(&mut out, 2);
+		assert!(out.iter().any(|&x| x != 0.0), "the release rings on");
+		assert_eq!(control.shared.position.load(Ordering::Relaxed), pos);
+		control.send(Cmd::CutTails).unwrap();
+		core.fill_interleaved(&mut out, 2);
 		assert!(out.iter().all(|&x| x == 0.0));
 		assert_eq!(control.shared.position.load(Ordering::Relaxed), pos);
+	}
+
+	/// A synth note through a reverb and a delay, 1 beat long at the song start.
+	fn tail_project() -> Project {
+		let mut p = Project::new("t");
+		let mut t = Track::new("synth", TrackKind::Instrument)
+			.with_instrument(Device::builtin("poly_synth", "Synth"));
+		t.channel.inserts.push(Device::builtin("delay", "Delay"));
+		t.channel.inserts.push(Device::builtin("reverb", "Reverb"));
+		t.clips.push(
+			Clip::midi("c", Tick::ZERO, Tick(PPQ * 8)).with_notes([Note::new(
+				60,
+				Tick::ZERO,
+				Tick(PPQ),
+				0.9,
+			)]),
+		);
+		p.tracks.push(t);
+		p
+	}
+
+	fn peak(out: &[f32]) -> f32 {
+		out.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+	}
+
+	#[test]
+	fn stop_lets_tails_ring_a_second_stop_cuts_them_and_play_starts_clean() {
+		let (mut player, mut dev) = Player::virtual_device(48_000, 0);
+		player.load(&tail_project()).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		player.play().unwrap();
+		for _ in 0..3 {
+			dev.process(&mut out, &[]);
+		}
+		assert!(peak(&out) > 0.01, "the note plays");
+		let pos = player.position();
+
+		// First stop: the transport stops, the delay and reverb keep ringing.
+		player.stop().unwrap();
+		dev.process(&mut out, &[]);
+		let first = peak(&out);
+		assert!(first > 1e-3, "the tail rings after stop ({first})");
+		assert_eq!(player.position(), pos, "the playhead stays");
+		assert!(!player.is_playing());
+		for _ in 0..5 {
+			dev.process(&mut out, &[]);
+		}
+		assert!(peak(&out) > 0.0, "still ringing 0.6 s later");
+
+		// Second stop: silent at once.
+		player.cut_tails().unwrap();
+		dev.process(&mut out, &[]);
+		assert!(out.iter().all(|&x| x == 0.0), "cut: {}", peak(&out));
+
+		// Playing again past the note: nothing of the old tail comes back.
+		player.play().unwrap();
+		for _ in 0..3 {
+			dev.process(&mut out, &[]);
+		}
+		player.stop().unwrap();
+		player.seek(Tick(PPQ * 4)).unwrap();
+		dev.process(&mut out, &[]);
+		assert!(
+			peak(&out) > 0.0,
+			"a seek while stopped keeps the tail ringing"
+		);
+		player.play().unwrap();
+		dev.process(&mut out, &[]);
+		assert!(
+			out.iter().all(|&x| x == 0.0),
+			"play resets the devices first: {}",
+			peak(&out)
+		);
+	}
+
+	#[test]
+	fn a_ringing_tail_ends_by_itself() {
+		let (mut player, mut dev) = Player::virtual_device(48_000, 0);
+		player.load(&tail_project()).unwrap();
+		let mut out = vec![0.0f32; 2 * 4800];
+		player.play().unwrap();
+		for _ in 0..3 {
+			dev.process(&mut out, &[]);
+		}
+		player.stop().unwrap();
+		// 0.1 s blocks: at most MAX_TAIL_SECONDS of tail.
+		let blocks = (crate::MAX_TAIL_SECONDS * 10.0) as usize + 2;
+		for _ in 0..blocks {
+			dev.process(&mut out, &[]);
+		}
+		assert!(out.iter().all(|&x| x == 0.0), "the tail ended");
 	}
 
 	#[test]
@@ -2664,9 +2774,10 @@ mod tests {
 		assert!(meters.track(track).unwrap().max_peak() > 0.0);
 
 		control.send(Cmd::Stop).unwrap();
+		control.send(Cmd::CutTails).unwrap();
 		core.fill_interleaved(&mut out, 2);
 		let after = meters.master();
-		assert_eq!(after.rms, [0.0, 0.0], "stopping clears the levels");
+		assert_eq!(after.rms, [0.0, 0.0], "cutting the tails clears the levels");
 	}
 
 	#[test]

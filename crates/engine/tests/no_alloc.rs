@@ -358,10 +358,18 @@ fn metering_does_not_allocate() {
 		}
 	}
 	graph.stop();
+	// The tails ring (a stopped graph still renders), then are cut.
+	for block in [1usize, 64, 333, 1024].into_iter().cycle().take(40) {
+		graph.process(&mut left[..block], &mut right[..block]);
+	}
+	graph.seek(beats(1.0));
+	graph.process(&mut left, &mut right);
+	graph.cut_tails();
 	graph.process(&mut left, &mut right);
 	TRACKING.with(|t| t.set(false));
 
 	assert_no_allocations();
+	assert!(!graph.is_ringing());
 	assert!(loudest > 0.0, "meters saw the song");
 	assert_eq!(meters.master().rms, [0.0, 0.0]);
 }

@@ -2360,9 +2360,10 @@ impl AppState {
 		}
 	}
 
-	/// Stops; pattern mode goes back to the pattern start (FL Studio). Stop on an already
-	/// stopped transport rewinds to the start (song tick 0, pattern mode its pattern
-	/// start), like most DAWs: a second press of Stop is "go to the top".
+	/// Stops; pattern mode goes back to the pattern start (FL Studio). Effect tails
+	/// (reverb, delay, releases) ring out after it. Stop on an already stopped transport
+	/// cuts those tails and rewinds to the start (song tick 0, pattern mode its pattern
+	/// start), like most DAWs: a second press of Stop is "silence, go to the top".
 	pub fn stop(&mut self) {
 		let already_stopped = !self.play_intent;
 		self.end_recording(false);
@@ -2370,6 +2371,9 @@ impl AppState {
 		self.cued = false;
 		if let Some(a) = &self.audio {
 			a.stop();
+			if already_stopped {
+				a.cut_tails();
+			}
 		}
 		let (config, _) = self.transport_config();
 		if already_stopped {

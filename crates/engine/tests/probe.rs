@@ -154,8 +154,9 @@ fn probe_carries_held_keys_and_voices_from_playback_and_previews() {
 	assert_eq!(voices.len(), 2, "{voices:?}");
 	assert!(voices.iter().all(|v| !v.released && v.elapsed_ms > 50.0));
 
-	// Stopped: a preview note is what the instrument holds.
+	// Stopped with the tails cut: a preview note is what the instrument holds.
 	player.stop().unwrap();
+	player.cut_tails().unwrap();
 	run(&mut dev, 20);
 	assert!(
 		!probe.is_active(),

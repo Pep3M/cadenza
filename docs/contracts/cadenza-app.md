@@ -282,7 +282,8 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   (`transport::pattern_range`), so notes drawn past the end grow the loop live (no
   restart). Play starts at the pattern start unless the playhead was placed inside it since
   the last stop (`AppState::seek` cues, internal `locate` does not); Stop rewinds to the
-  pattern start. No clip open = song with a toast. `AppState::sync_transport` (every tick) sends loop/audition only
+  pattern start. Stop while playing lets effect tails ring (`AudioEngine::stop`); Stop on
+  a stopped transport also cuts them (`AudioEngine::cut_tails`) and rewinds. No clip open = song with a toast. `AppState::sync_transport` (every tick) sends loop/audition only
   when they change; switching modes while playing restarts; audition only while playing.
 - Piano roll access: F7 / double-click an instrument track header / track menu open the
   selected instrument track's clip (`piano::clip_for_track`: selected, under the playhead,

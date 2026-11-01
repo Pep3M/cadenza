@@ -58,6 +58,8 @@ enum Request {
 	},
 	Play,
 	Stop,
+	/// Silence the tails the last stop left ringing.
+	CutTails,
 	Seek(Tick),
 	Volume(Option<TrackId>, f32),
 	Pan(Option<TrackId>, f32),
@@ -225,6 +227,32 @@ impl AudioEngine {
 		Self { tx, events, thread }
 	}
 
+	/// A handle with no player thread: the requests sent through it, as names (tests).
+	#[cfg(test)]
+	pub(crate) fn detached() -> (Self, impl Fn() -> Vec<&'static str>) {
+		let (tx, rx) = mpsc::channel::<Request>();
+		let (_, events) = mpsc::channel::<AudioEvent>();
+		let names = move || {
+			rx.try_iter()
+				.map(|r| match r {
+					Request::Play => "play",
+					Request::Stop => "stop",
+					Request::CutTails => "cut_tails",
+					Request::Seek(_) => "seek",
+					_ => "other",
+				})
+				.collect()
+		};
+		(
+			Self {
+				tx,
+				events,
+				thread: None,
+			},
+			names,
+		)
+	}
+
 	/// Reopens the devices (the project is reloaded once the player is ready again).
 	pub fn configure(&self, config: AudioConfig) {
 		self.send(Request::Configure(config));
@@ -310,8 +338,14 @@ impl AudioEngine {
 		self.send(Request::Play);
 	}
 
+	/// Stops the transport; effect tails ring out (see [`Player::stop`]).
 	pub fn stop(&self) {
 		self.send(Request::Stop);
+	}
+
+	/// Silences the ringing tails at once (Stop on a stopped transport).
+	pub fn cut_tails(&self) {
+		self.send(Request::CutTails);
 	}
 
 	pub fn seek(&self, tick: Tick) {
@@ -681,6 +715,7 @@ fn run(
 				}
 				Request::Play => player.play(),
 				Request::Stop => player.stop(),
+				Request::CutTails => player.cut_tails(),
 				Request::Seek(tick) => player.seek(tick),
 				Request::Volume(track, db) => player.set_live_volume(track, db),
 				Request::Pan(track, pan) => player.set_live_pan(track, pan),

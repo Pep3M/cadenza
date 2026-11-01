@@ -292,6 +292,16 @@ chase at the start, collect the rest; audio clips split the quantum; a quantum e
 on the end wraps at the next one; the output position wraps once the latency has passed;
 tails ring on; automation is evaluated per quantum on the timeline position). The loop is a
 `Cmd::Loop` kept by the callback across graph swaps; offline renders never loop.
+Stop tails: `Graph::stop` (`Player::stop`, also the recording stop) stops the song (no notes,
+clips, clicks; the playhead stays) and releases what sounds (builtins `AllNotesOff`, plugins
+note-offs of the scheduled/held pitches + CC64 off; no reset), but the stopped graph keeps
+rendering like a note preview so reverb/delay/releases ring out, until the output stays below
+`TAIL_SILENCE_DB` (-90 dBFS) for `TAIL_SILENCE_SECONDS` (0.5 s) or `MAX_TAIL_SECONDS` (10 s)
+passed (`Graph::is_ringing`). `Graph::cut_tails` / `Player::cut_tails` (`Cmd::CutTails`;
+no effect while playing) silences at once and resets every device (sandboxed plugins reset
+at their next request). A seek while stopped keeps the tail; the next `play` (or count-in)
+always resets first, so no old tail is heard. A graph reload drops the tail. Offline renders
+are unaffected.
 `set_audition`: an `Arc<Audition>` of atomics per graph (mask built off-thread from
 `Resolver::feeds`: scoped tracks + the buses they reach through outputs/sends/aux outputs);
 out-of-scope nodes still render (sidechain keys work) but are not mixed; auditioned tracks

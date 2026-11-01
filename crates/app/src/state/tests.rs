@@ -406,6 +406,34 @@ fn stop_on_an_already_stopped_transport_rewinds_to_the_start() {
 	assert_eq!(s.position(), Tick::ZERO);
 }
 
+/// Stop while playing lets the effect tails ring (no cut); Stop again cuts them (and
+/// rewinds). Play needs nothing extra: the player starts from a clean state.
+#[test]
+fn a_second_stop_cuts_the_ringing_tails() {
+	let (mut s, _) = state_with_song();
+	let (audio, requests) = crate::audio::AudioEngine::detached();
+	s.audio = Some(audio);
+	let (player, _dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	s.clock = Some(player.clock());
+
+	s.play();
+	let sent = requests();
+	assert!(sent.contains(&"play"), "{sent:?}");
+	assert!(!sent.contains(&"cut_tails"), "{sent:?}");
+	s.stop();
+	let sent = requests();
+	assert!(sent.contains(&"stop"), "{sent:?}");
+	assert!(!sent.contains(&"cut_tails"), "the tails ring: {sent:?}");
+	s.stop();
+	let sent = requests();
+	let (stop, cut) = (
+		sent.iter().position(|r| *r == "stop"),
+		sent.iter().position(|r| *r == "cut_tails"),
+	);
+	assert!(stop.is_some() && cut > stop, "stop, then cut: {sent:?}");
+	assert_eq!(s.position(), Tick::ZERO);
+}
+
 /// Pattern mode: Stop while already stopped goes back to the pattern's own start, not
 /// tick 0 (the FL Studio rule already used while playing).
 #[test]

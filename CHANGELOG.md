@@ -4,6 +4,43 @@ All notable changes to Cadenza are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-11-01
+
+Editing workflow from the backlog: duplicate tracks, curved automation, effect tails on stop,
+live editors everywhere and a full preset set for every built-in device.
+
+### Added
+
+- **Duplicate track** (track header / mixer strip menu, Ctrl+Shift+T): a copy right below
+  with its devices, sends, clips (takes and linked groups kept among themselves) and
+  automation. Folders are not duplicated yet.
+- **Curved automation** (FL Studio style): drag the handle in the middle of a segment to bend
+  it; new shapes double curve (S) and stairs. The AI's `set_automation` takes `shape` and
+  `tension` too.
+- **Pitch blend** in the note editor: a blend length (default 40 ms) ramps a retune into
+  its neighbours so the notes around an edit keep their pitch; drag on the ruler to select
+  the notes of a time range.
+- **Presets for every built-in device**: EQ, compressor, limiter, reverb, delay, chorus,
+  saturator, gain, pitch correct, drum machine, electric piano and sampler now ship 8-16
+  genre-aware presets each.
+- A device's editor opens as soon as you add it from the browser, mixer or a drop.
+- A/D/S/R knobs under the Poly Synth and Sampler envelopes, and every delay parameter as a
+  knob: all automatable, MIDI-learnable and modulatable from their menus.
+
+### Changed
+
+- **Stop lets effect tails ring out** (reverb, delay, releases); a second Stop cuts them and
+  rewinds; Play always starts without the old tail.
+- Every open device editor shows live meters, scopes and animations, not only the focused
+  one.
+- Automation lanes can be hidden from their header (points kept) and resized like tracks
+  (drag the bottom edge, Alt+wheel); "Delete lane" is a separate action.
+- Sine Pad, Sine Pluck and Tight Kit presets are quieter so they no longer clip.
+
+### Fixed
+
+- A loud burst when starting playback mid-song through the saturator in Tube mode.
+
 ## [0.3.1] - 2026-10-27
 
 Workflow fixes from day-to-day use: transport, recording, layout and piano roll selection.
@@ -167,6 +204,7 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 First release: DAW with an AI arranger and sound engineer, MCP server, CLAP/VST3 hosting,
 recording, mixing, export and the style library.
 
+[0.3.2]: https://github.com/Pep3M/cadenza/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Pep3M/cadenza/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Pep3M/cadenza/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Pep3M/cadenza/compare/v0.1.1...v0.2.0

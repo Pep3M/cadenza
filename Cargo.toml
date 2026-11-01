@@ -25,6 +25,7 @@ cadenza-app = { path = "crates/app" }
 cadenza-library = { path = "crates/library" }
 cadenza-analysis = { path = "crates/analysis" }
 cadenza-notes = { path = "crates/notes" }
+cadenza-update = { path = "crates/update" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -69,6 +70,8 @@ egui_kittest = "0.36"
 keyring = "4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = "0.11"
+# Opens URLs and files with the OS handler (already in the tree through rfd).
+open = "5"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 winresource = { version = "0.1.34", default-features = false }
 sys-locale = "0.3"

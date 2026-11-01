@@ -30,6 +30,7 @@ cadenza-library.workspace = true
 cadenza-theory.workspace = true
 cadenza-notes.workspace = true
 cadenza-audio-io.workspace = true
+cadenza-update.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

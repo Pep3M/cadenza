@@ -178,8 +178,15 @@ Root: HKA; Subkey: "Software\Classes\Applications\cadenza-app.exe\SupportedTypes
 
 [Run]
 Filename: "{app}\cadenza-app.exe"; Description: "{cm:LaunchProgram,Cadenza}"; Flags: nowait postinstall skipifsilent
+; The app's self-update runs this installer with /SILENT /RELAUNCH=1 after quitting.
+Filename: "{app}\cadenza-app.exe"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
 
 [Code]
+function RelaunchRequested: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:relaunch|0}') = '1');
+end;
+
 const
   UserEnvKey = 'Environment';
   SystemEnvKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';

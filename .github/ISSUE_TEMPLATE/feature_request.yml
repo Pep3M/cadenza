@@ -1,0 +1,31 @@
+name: Feature request
+description: An idea for something Cadenza should do (or do better)
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or the workflow, in your own words. What gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: How you imagine it working. References to other DAWs are welcome.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Cadenza version
+      placeholder: "0.3.2"
+    validations:
+      required: false

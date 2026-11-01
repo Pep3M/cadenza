@@ -61,6 +61,7 @@ pub mod playlist;
 pub mod poly_synth_editor;
 pub mod project_io;
 pub mod record;
+pub mod report;
 pub mod reverb_editor;
 pub mod rows;
 pub mod safety;
@@ -72,6 +73,7 @@ pub mod start;
 pub mod timeline;
 pub mod to_midi;
 pub mod transport;
+pub mod update;
 pub mod windows;
 pub mod xruns;
 
@@ -295,6 +297,8 @@ pub enum Pending {
 	Quit,
 	/// Collect project files (after the Save As it needs).
 	Collect,
+	/// Quit and restart into a downloaded update (or run its installer).
+	Update,
 }
 
 /// Background work in flight.
@@ -434,6 +438,10 @@ pub struct AppState {
 	listen: Option<(DeviceId, cadenza_engine::Listen)>,
 	pub previews: Previews,
 	pub audio_status: AudioStatus,
+	/// Update check and self-update (`state::update`).
+	pub update: update::UpdateState,
+	/// Help → Report a problem… draft.
+	pub report: report::ReportDraft,
 	/// Warnings of the last player load (missing files, unknown devices...).
 	pub load_warnings: Vec<String>,
 	pub peaks: PeakCache,
@@ -595,6 +603,8 @@ impl AppState {
 			listen: None,
 			previews: Previews::default(),
 			audio_status: AudioStatus::Off,
+			update: update::UpdateState::default(),
+			report: report::ReportDraft::default(),
 			load_warnings: Vec::new(),
 			peaks: PeakCache::new(waker.clone()),
 			jobs: Jobs::default(),
@@ -2588,6 +2598,12 @@ impl AppState {
 			Pending::Open(None) => self.file_dialog(FileAction::Open),
 			Pending::Quit => self.quit_confirmed = true,
 			Pending::Collect => self.collect_files(),
+			Pending::Update => {
+				if self.update.arm_relaunch() {
+					self.ai.stop();
+					self.quit_confirmed = true;
+				}
+			}
 		}
 	}
 
@@ -4169,6 +4185,7 @@ impl AppState {
 			lane_heights: v.lane_heights.clone(),
 			windows: v.windows.saved.clone(),
 			language: self.language,
+			updates: self.update.prefs.clone(),
 		}
 	}
 
@@ -4231,6 +4248,69 @@ impl AppState {
 		self.record.settings = p.record.migrated();
 		self.apply_audio_settings(p.audio);
 		self.set_language(p.language);
+		self.update.prefs = p.updates;
+	}
+
+	/// The startup update check (real app only; at most once a day, if enabled).
+	pub fn auto_check_updates(&mut self) {
+		self.update
+			.auto_check(update::unix_now(), self.waker.clone());
+	}
+
+	/// Help → Check for updates…
+	pub fn check_updates(&mut self) {
+		self.update
+			.start_check(true, update::unix_now(), self.waker.clone());
+	}
+
+	/// The status-bar update chip.
+	pub fn open_update_window(&mut self) {
+		self.update
+			.open_window(update::unix_now(), self.waker.clone());
+	}
+
+	/// The update window's "Download and install".
+	pub fn download_update(&mut self) {
+		self.update.start_download(self.waker.clone());
+	}
+
+	/// What a bug report includes about this setup (Help → Report a problem…): no
+	/// project content, paths or keys.
+	pub fn system_info(&self) -> report::SystemInfo {
+		let config = &self.record.audio.config;
+		let backend = if cfg!(target_os = "macos") {
+			"CoreAudio"
+		} else if cfg!(windows) {
+			"WASAPI"
+		} else {
+			"ALSA"
+		};
+		let device = config.output.as_deref().unwrap_or("default device");
+		let rate = match &self.audio_status {
+			AudioStatus::Ready { sample_rate } => format!("{sample_rate} Hz"),
+			AudioStatus::Starting => "starting".into(),
+			AudioStatus::Off => "off".into(),
+			AudioStatus::Unavailable(_) => "unavailable".into(),
+		};
+		let buffer = config
+			.buffer_frames
+			.map_or_else(|| "default buffer".to_string(), |b| format!("{b} frames"));
+		let input = if config.input_enabled {
+			", input on"
+		} else {
+			""
+		};
+		let hosting = match cadenza_engine::PluginHosting::from_env().mode {
+			cadenza_engine::HostingMode::Sandboxed => "sandboxed",
+			cadenza_engine::HostingMode::InProcess => "in-process",
+		};
+		report::SystemInfo {
+			version: cadenza_update::CURRENT_VERSION.to_string(),
+			os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+			audio: format!("{backend}, {device}, {rate}, {buffer}{input}"),
+			plugin_hosting: hosting.to_string(),
+			language: crate::i18n::current().code().to_string(),
+		}
 	}
 
 	/// Switches the UI language; every label follows from the next frame on. Headless
@@ -4390,6 +4470,7 @@ impl AppState {
 		let actions = self.editors.flush(&self.doc.project, now, false);
 		self.editor_actions(actions);
 		self.poll_jobs();
+		self.update.poll(&mut self.notices);
 		self.poll_mix();
 		self.poll_match_eq();
 		self.poll_convert_to_midi();
@@ -4416,6 +4497,7 @@ impl AppState {
 			|| self.reload_since.is_some()
 			|| self.editors.busy()
 			|| self.jobs.scan.is_some()
+			|| self.update.busy()
 			|| self.export.running.is_some()
 			|| self.files_jobs.busy()
 			|| self.jobs.process.is_some()

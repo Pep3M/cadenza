@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in Cadenza does not work as it should (crash, wrong sound, broken UI...)
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this! In the app, **Help → Report a problem…**
+        opens this form with the version and system fields already filled in.
+        Please do not paste API keys or anything private.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and any error message shown in the status bar or a notice.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create an instrument track with Poly Synth
+        2. Press Play
+        3. ...
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Cadenza version
+      description: "`cadenza --version`, or the version in the update window / report window."
+      placeholder: "0.3.2"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "linux x86_64 (Arch, Wayland) / macOS 15 arm64 / Windows 11"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - install.sh / install.ps1
+        - AppImage
+        - Windows installer (setup.exe)
+        - macOS dmg
+        - AUR (cadenza-bin)
+        - Built from source
+        - Other
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Audio device and plugins
+      description: Audio backend/device, sample rate and buffer, plugin hosting mode, and the third-party plugins (CLAP/VST3) involved, if any.
+    validations:
+      required: false
+  - type: textarea
+    id: project
+    attributes:
+      label: Project file (optional)
+      description: If the problem happens with a specific project, attach it: zip the project folder, or `cadenza pack project.cdz out.cdzpack` makes one file with its audio. Only share what you are comfortable making public.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Terminal output if you started `cadenza-app` from a terminal, or a crash backtrace.
+      render: text
+    validations:
+      required: false

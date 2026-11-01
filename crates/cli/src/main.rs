@@ -21,6 +21,7 @@ mod mix;
 mod notes;
 mod portable;
 mod tune;
+mod update;
 
 const PLUGIN_HOSTING_HELP: &str = "\
 Plugin sandbox:
@@ -204,6 +205,13 @@ enum Command {
 	Unpack { archive: PathBuf, dest: PathBuf },
 	/// Run the MCP server over stdio, for an AI client to connect to
 	Mcp,
+	/// Check GitHub for a newer release and install it (AppImage, install.sh folder,
+	/// Windows installer, macOS app). Package-manager and development builds only report
+	Update {
+		/// Only report whether a newer version exists
+		#[arg(long)]
+		check: bool,
+	},
 	/// Open the desktop app, optionally with a project.
 	///
 	/// Starts the `cadenza-app` executable found next to this one (`cargo build --release`
@@ -395,6 +403,7 @@ fn main() -> Result<()> {
 			run_mcp()
 		}
 		Command::Gui { project } => run_gui(project, cli.in_process_plugins),
+		Command::Update { check } => update::run(check),
 		Command::Compose(args) => {
 			set_in_process_env(cli.in_process_plugins);
 			compose::run(args)

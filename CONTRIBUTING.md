@@ -4,8 +4,10 @@ Thanks for your interest! Bug reports, ideas, docs and code are all welcome.
 
 ## Before you start
 
-- **Bugs:** open an issue with your OS, the Cadenza version (`cadenza --version`), steps to
-  reproduce and, if possible, the project file.
+- **Bugs:** use the [bug report form](https://github.com/Pep3M/cadenza/issues/new?template=bug_report.yml)
+  (in the app, Help → Report a problem… prefills it) with your OS, the Cadenza version
+  (`cadenza --version`), steps to reproduce and, if possible, the project file.
+- **Ideas:** the [feature request form](https://github.com/Pep3M/cadenza/issues/new?template=feature_request.yml).
 - **Larger changes** (new features, new crates or dependencies, format changes): open an
   issue first so we can agree on the approach before you invest time.
 - Security problems: please do not open a public issue; use GitHub's private

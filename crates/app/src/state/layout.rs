@@ -1161,6 +1161,8 @@ pub struct Prefs {
 	pub windows: super::windows::SavedWindows,
 	/// UI language: the OS language ("system") or a language code.
 	pub language: crate::i18n::LanguageChoice,
+	/// Update checks: automatic or not, last check, skipped version.
+	pub updates: super::update::UpdatePrefs,
 }
 
 impl Default for Prefs {
@@ -1193,6 +1195,7 @@ impl Default for Prefs {
 			lane_heights: view.lane_heights,
 			windows: super::windows::SavedWindows::default(),
 			language: crate::i18n::LanguageChoice::System,
+			updates: super::update::UpdatePrefs::default(),
 		}
 	}
 }

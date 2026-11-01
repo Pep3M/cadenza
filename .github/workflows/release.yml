@@ -239,3 +239,13 @@ jobs:
           fi
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
             --target "$GITHUB_SHA" --title "Cadenza $TAG" --generate-notes
+      # cadenzadaw.com reads the latest release at build time for its download buttons.
+      # Prereleases and drafts are not `releases/latest`, so only a final release rebuilds it.
+      - name: Rebuild the website
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        continue-on-error: true
+        env:
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          if [[ -z "$HOOK" ]]; then echo "SITE_DEPLOY_HOOK not set; skipping"; exit 0; fi
+          curl -fsS -X POST "$HOOK" > /dev/null

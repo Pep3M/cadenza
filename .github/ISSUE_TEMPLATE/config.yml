@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and getting started
+    url: https://github.com/Pep3M/cadenza#readme
+    about: Install, quick start and platform notes are in the README.
+  - name: Security problems
+    url: https://github.com/Pep3M/cadenza/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue.

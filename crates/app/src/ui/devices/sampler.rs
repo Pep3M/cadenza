@@ -11,7 +11,8 @@
 //! the keys). The selected zone: its waveform with start / end flags, the loop region
 //! (flags and the crossfade ramp drag ⇔; wheel zooms, Shift scrolls), Off / Forward /
 //! Ping-pong, ⇆ Rev, the root key readout (type a note name) and tune / gain / pan /
-//! crossfade knobs. Globals: the amp envelope, the filter (Off / LP / HP / BP and the
+//! crossfade knobs. Globals: the amp envelope (A / D / S / R cells under it, each with the
+//! control menu), the filter (Off / LP / HP / BP and the
 //! exact curve with a cutoff / resonance node, wheel = env amount), its knobs or the
 //! collapsible filter envelope, and the bottom row (trigger, polyphony, transpose,
 //! glide, legato, velocity + curve, key track). Below 1360 px the map goes above the
@@ -33,7 +34,7 @@ use egui::{
 use crate::jobs::Peaks;
 use crate::state::AppState;
 use crate::state::device::KnobSpec;
-use crate::state::device_display::{AdsrStage, AdsrValues, DbRange};
+use crate::state::device_display::{AdsrStage, DbRange};
 use crate::state::dnd::DropTarget;
 use crate::state::drum_sampler_editor::{WaveWindow, ms_label};
 use crate::state::sampler_editor::{
@@ -1689,12 +1690,12 @@ fn globals_section(
 	let col = (upper.width() - 8.0) * 0.5;
 	let amp = upper.with_max_x(upper.left() + col);
 	let filter = upper.with_min_x(amp.right() + 8.0);
-	envelope_block(ui, state, cx, Env::Amp, tr("Amp envelope"), amp);
+	envelope_block(ui, state, cx, v, Env::Amp, tr("Amp envelope"), amp);
 	filter_block(ui, state, cx, v, filter);
 	if v.filter_env {
 		let knobs_w = 120.0_f32.min(lower.width() * 0.4);
 		let env = lower.with_max_x(lower.right() - knobs_w - 8.0);
-		envelope_block(ui, state, cx, Env::Filter, tr("Filter envelope"), env);
+		envelope_block(ui, state, cx, v, Env::Filter, tr("Filter envelope"), env);
 		let knobs = Rect::from_min_max(pos2(env.right() + 8.0, lower.top()), lower.max);
 		devices::knob_grid(
 			ui,
@@ -1725,11 +1726,13 @@ fn globals_section(
 }
 
 /// "Amp envelope" over the kit ADSR (previews while dragging, one step per node gesture)
-/// and its one-line summary.
+/// and its A / D / S / R cells (typed, dragged ⇕, the control menu: automate, MIDI learn,
+/// Ask AI, modulate, reset).
 fn envelope_block(
 	ui: &mut Ui,
 	state: &mut AppState,
 	cx: &BodyCx,
+	v: &mut SamplerView,
 	env: Env,
 	label: &str,
 	rect: Rect,
@@ -1742,9 +1745,12 @@ fn envelope_block(
 		theme::medium(10.5),
 		theme::TEXT_DIM,
 	);
+	let cols = se::env_cell_columns(rect.width());
+	let rows = 4 / cols;
+	let cells_h = rows as f32 * (ENV_CELL_H + 2.0) - 2.0;
 	let display = Rect::from_min_max(
 		pos2(rect.left(), rect.top() + 18.0),
-		pos2(rect.right(), rect.bottom() - 17.0),
+		pos2(rect.right(), rect.bottom() - cells_h - 4.0),
 	);
 	let r = cx.r;
 	let ranges = env.ranges();
@@ -1765,17 +1771,12 @@ fn envelope_block(
 	);
 	let mut commits: Vec<(&'static str, f32)> = Vec::new();
 	let mut stages = Vec::new();
-	let mut shown: AdsrValues = values;
 	for stage in AdsrStage::ALL {
 		match out.gesture(stage) {
-			Gesture::Preview(x) => {
-				state.preview_param(r.device, env.param(stage), x);
-				shown.set(stage, x);
-			}
+			Gesture::Preview(x) => state.preview_param(r.device, env.param(stage), x),
 			Gesture::Commit(x) => {
 				commits.push((env.param(stage), x));
 				stages.push(stage);
-				shown.set(stage, x);
 			}
 			Gesture::Idle => {}
 		}
@@ -1783,8 +1784,33 @@ fn envelope_block(
 	if !commits.is_empty() {
 		devices::commit_changes(state, r, cx.info, &commits, |_| env.label(&stages));
 	}
-	summary(ui, rect, &se::env_summary(&shown));
+	let cell_w = (rect.width() - (cols - 1) as f32 * 4.0) / cols as f32;
+	for (i, (id, letter)) in env.cells().into_iter().enumerate() {
+		let cell = Rect::from_min_size(
+			pos2(
+				rect.left() + (i % cols) as f32 * (cell_w + 4.0),
+				display.bottom() + 4.0 + (i / cols) as f32 * (ENV_CELL_H + 2.0),
+			),
+			vec2(cell_w, ENV_CELL_H),
+		);
+		ui.painter().text(
+			pos2(cell.left() + 2.0, cell.center().y),
+			Align2::LEFT_CENTER,
+			letter,
+			theme::medium(10.5),
+			theme::TEXT_FAINT,
+		);
+		let mut child = ui.new_child(
+			UiBuilder::new()
+				.max_rect(cell.with_min_x(cell.left() + 12.0))
+				.layout(Layout::left_to_right(Align::Center)),
+		);
+		row_readout(&mut child, state, cx, v, id, cell.width() - 12.0);
+	}
 }
+
+/// One row of an envelope's stage cells.
+const ENV_CELL_H: f32 = 22.0;
 
 fn finish_wheel(ui: &Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerView) {
 	let Some(w) = v.wheel else {
@@ -2046,8 +2072,9 @@ fn bottom_row(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SamplerVie
 	}
 }
 
-/// A typed value in the bottom row: click to type, drag ⇕ to change, right-click for
-/// Automate / Reset.
+/// A typed value in the bottom row or an envelope cell: click to type, drag ⇕ to change,
+/// right-click for the control menu (Automate, Reset...); shows the value at the playhead
+/// in the automation colour while a lane drives it.
 fn row_readout(
 	ui: &mut Ui,
 	state: &mut AppState,
@@ -2062,10 +2089,13 @@ fn row_readout(
 	let r = cx.r;
 	let current = value(state, cx, id);
 	let base = Id::new(("smp-readout", cx.salt, r.device, id));
+	let address = cadenza_core::ParamAddress::device(r.track, r.device, id);
 	let shown = if v.readout.is_some_and(|(p, _, _)| p == id) {
 		ReadoutState::Active
 	} else if state.ai_change(r.device, id).is_some() {
 		ReadoutState::Ai
+	} else if state.is_automated(&address) {
+		ReadoutState::Automated
 	} else {
 		ReadoutState::Rest
 	};
@@ -2086,7 +2116,7 @@ fn row_readout(
 	let menu = device_kit::control_menu(
 		&resp,
 		state,
-		cadenza_core::ParamAddress::device(r.track, r.device, id),
+		address,
 		ControlInfo {
 			value: current,
 			min: info.min,

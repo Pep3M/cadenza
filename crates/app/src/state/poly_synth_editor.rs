@@ -304,14 +304,9 @@ pub fn stage_name(stage: AdsrStage) -> &'static str {
 	}
 }
 
-/// The readouts under an envelope: ("Attack", "350 ms"), ("Decay", "1.20 s")...
-pub fn readouts(v: &AdsrValues) -> [(&'static str, String); 4] {
-	[
-		(tr("Attack"), format_value(v.attack, "ms")),
-		(tr("Decay"), format_value(v.decay, "ms")),
-		(tr("Sustain"), format_value(v.sustain, "%")),
-		(tr("Release"), format_value(v.release, "ms")),
-	]
+/// The automatable stage knobs under an envelope: (param, label) for A, D, S, R.
+pub fn stage_knobs(env: Env) -> [(&'static str, &'static str); 4] {
+	AdsrStage::ALL.map(|s| (env.param(s), stage_name(s)))
 }
 
 // --- Scope ----------------------------------------------------------------------------
@@ -627,11 +622,25 @@ mod tests {
 			"amp_sustain" => 70.0,
 			_ => 2400.0,
 		});
-		let r = readouts(&v);
-		assert_eq!(r[0], ("Attack", "350 ms".to_owned()));
-		assert_eq!(r[1], ("Decay", "1.20 s".to_owned()));
-		assert_eq!(r[2], ("Sustain", "70 %".to_owned()));
-		assert_eq!(r[3], ("Release", "2.40 s".to_owned()));
+		assert_eq!(
+			(v.attack, v.decay, v.sustain, v.release),
+			(350.0, 1200.0, 70.0, 2400.0)
+		);
+		assert_eq!(
+			stage_knobs(Env::Filter),
+			[
+				("filter_attack", "Attack"),
+				("filter_decay", "Decay"),
+				("filter_sustain", "Sustain"),
+				("filter_release", "Release"),
+			]
+		);
+		let info = info();
+		for env in Env::ALL {
+			for (id, _) in stage_knobs(env) {
+				assert!(info.param(id).is_some(), "{id} is a Poly Synth param");
+			}
+		}
 		assert_eq!(
 			Env::Amp.label(&[AdsrStage::Decay, AdsrStage::Sustain]),
 			"Amp decay and sustain"

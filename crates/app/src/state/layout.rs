@@ -658,6 +658,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		mark("Undo / redo"),
 	),
 	sc(mark("Edit"), "Ctrl+D", mark("Duplicate selection")),
+	sc(
+		mark("Edit"),
+		"Ctrl+Shift+T",
+		mark("Duplicate the current track"),
+	),
 	sc(mark("Edit"), "Del", mark("Delete selection")),
 	sc(
 		mark("Edit"),

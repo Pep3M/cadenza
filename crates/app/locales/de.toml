@@ -515,6 +515,8 @@
 "Duplicate      Ctrl+D" = "Duplizieren      Strg+D"
 "Duplicate (drag a copy)" = "Duplizieren (eine Kopie ziehen)"
 "Duplicate selection" = "Auswahl duplizieren"
+"Duplicate track" = "Spur duplizieren"
+"Duplicate the current track" = "Aktuelle Spur duplizieren"
 "Duplicate zone" = "Zone duplizieren"
 "Early reflections" = "Frühe Reflexionen"
 "Edges / squares / pill" = "Kanten / Quadrate / Pille"
@@ -634,6 +636,7 @@
 "Folder" = "Ordner"
 "Folder · {n} track" = ["Ordner · {n} Spur", "Ordner · {n} Spuren"]
 "Folders cannot be dropped" = "Ordner können nicht abgelegt werden"
+"Folders aren't duplicated yet" = "Ordner können noch nicht dupliziert werden"
 "Folders map a kit onto the drum sampler: drop it on its pads" = "Ordner verteilen ein Kit auf den Drum Sampler: auf dessen Pads ablegen"
 "Follow" = "Verfolgen"
 "Follow playhead" = "Abspielposition verfolgen"

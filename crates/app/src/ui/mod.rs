@@ -816,6 +816,11 @@ impl CadenzaApp {
 		} else if pressed(cmd, Key::D) {
 			duplicate_selection(s, true);
 		}
+		if let Some(track) = s.selection.track
+			&& pressed(shift_cmd, Key::T)
+		{
+			s.duplicate_track(track);
+		}
 		if pressed(cmd, Key::C) {
 			copy_clips(s, false);
 		}

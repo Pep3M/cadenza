@@ -267,6 +267,8 @@
 "Duplicate      Ctrl+D" = "복제      Ctrl+D"
 "Duplicate (drag a copy)" = "복제 (드래그로 사본 만들기)"
 "Duplicate selection" = "선택 항목 복제"
+"Duplicate track" = "트랙 복제"
+"Duplicate the current track" = "현재 트랙 복제"
 "Duplicate zone" = "존 복제"
 "Early reflections" = "초기 반사음"
 "Edges / squares / pill" = "모서리 / 사각형 / 알약형"
@@ -386,6 +388,7 @@
 "Folder" = "폴더"
 "Folder · {n} track" = ["폴더 · 트랙 {n}개"]
 "Folders cannot be dropped" = "폴더는 놓을 수 없어요"
+"Folders aren't duplicated yet" = "폴더는 아직 복제할 수 없어요"
 "Folders map a kit onto the drum sampler: drop it on its pads" = "폴더는 드럼 샘플러에 킷을 매핑해요: 그 패드 위에 놓으세요"
 "Follow" = "따라가기"
 "Follow playhead" = "재생 헤드 따라가기"

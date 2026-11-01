@@ -516,6 +516,8 @@
 "Duplicate      Ctrl+D" = "Дублировать      Ctrl+D"
 "Duplicate (drag a copy)" = "Дублировать (перетащить копию)"
 "Duplicate selection" = "Дублировать выделение"
+"Duplicate track" = "Дублировать дорожку"
+"Duplicate the current track" = "Дублировать текущую дорожку"
 "Duplicate zone" = "Дублировать зону"
 "Early reflections" = "Первые отражения"
 "Edges / squares / pill" = "Края / квадраты / пилюля"
@@ -635,6 +637,7 @@
 "Folder" = "Папка"
 "Folder · {n} track" = ["Папка · {n} дорожка", "Папка · {n} дорожки", "Папка · {n} дорожек"]
 "Folders cannot be dropped" = "Папки нельзя перетаскивать"
+"Folders aren't duplicated yet" = "Папки пока нельзя дублировать"
 "Folders map a kit onto the drum sampler: drop it on its pads" = "Папки распределяют набор по drum sampler: перетащите её на его пады"
 "Follow" = "Следование"
 "Follow playhead" = "Следовать за позицией воспроизведения"

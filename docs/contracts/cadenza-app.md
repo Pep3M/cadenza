@@ -74,6 +74,19 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   step) moves a folder with its contents and files the track: right under an open folder =
   into it, else into the folder of the row above. MCP: `set_track_folder`, create_track kind
   folder.
+- Duplicate track (`state::duplicate` pure builder): track menu and mixer strip menu
+  "Duplicate track" (Ctrl+Shift+T on the current track), one undo step
+  "Duplicate track '<name>'". The copy lands right below the source, in the same folder,
+  named "<name> (copy)", with fresh ids for everything it creates: the track, its
+  instrument/inserts/sends (and their modulators), and independent copies of its clips
+  (fresh clip/note/audio-note ids; like any other clip copy they drop `take` and `link`,
+  so comping groups and FL pattern links are not carried over). Automation lanes addressing
+  the track, its devices or its sends are copied and re-addressed to the matching new ids.
+  Sidechain and MIDI-input sources on copied devices keep pointing at their original tracks
+  (unchanged); solo is turned off on the copy; freeze is dropped. Folders are not duplicated
+  yet (nested tracks would also need cloning and re-parenting) — the menu item disables
+  itself for them with a tooltip. There is no multi-track selection in the app yet, so this
+  duplicates one track at a time (`AppState::duplicate_track`).
 - Audio editor (`state::audio_edit` + `ui::audio_editor`; double-click an audio clip): shares
   the bottom editor dock with the piano roll (`view.audio_editor`; F7 toggles the dock).
   Source-file time axis, peaks when zoomed out and decoded samples (`PeakCache::samples`) when
@@ -531,6 +544,13 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   shows it in the bottom editor dock instead (`view.device_editor`, device in
   `view.instrument.device`; the dock's pop-out button floats it again); `toggle_device_editor`
   focuses / closes; `device_editor_target` = focused window, else dock, else topmost window;
+  a device the user just added opens on its own (`AppState::open_added_device`, fed by the pure
+  `edits::devices_added(&cmd)` on every user "add a device" path: `use_device`, `insert_effect`,
+  `new_track_with`, `add_device_with_preset`, a library pattern's new track): the last device
+  the command created, a built-in in its window, a plugin in its editor window (nothing where
+  `EDITORS_SUPPORTED` is false — the generic controls stand in, silently, unlike an explicit
+  Edit click). Never fires for the AI, MCP tools, undo/redo, project load, MIDI/audio import or
+  loading a preset into an existing device, since none of those call `open_added_device`.
   plugins keep their windows. Shared
   header: power (`SetDeviceBypass`), name, track chip, preset ‹ › ▾ over factory + user
   presets (MCP `list_presets` / `load_preset`, one undo step; amber dot = `preset_status`

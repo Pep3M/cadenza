@@ -515,6 +515,8 @@
 "Duplicate      Ctrl+D" = "Duplicar      Ctrl+D"
 "Duplicate (drag a copy)" = "Duplicar (arrastar uma cópia)"
 "Duplicate selection" = "Duplicar a seleção"
+"Duplicate track" = "Duplicar faixa"
+"Duplicate the current track" = "Duplicar a faixa atual"
 "Duplicate zone" = "Duplicar a zona"
 "Early reflections" = "Primeiras reflexões"
 "Edges / squares / pill" = "Bordas / quadrados / pílula"
@@ -634,6 +636,7 @@
 "Folder" = "Pasta"
 "Folder · {n} track" = ["Pasta · {n} faixa", "Pasta · {n} faixas"]
 "Folders cannot be dropped" = "Pastas não podem ser soltas"
+"Folders aren't duplicated yet" = "Pastas ainda não podem ser duplicadas"
 "Folders map a kit onto the drum sampler: drop it on its pads" = "Pastas mapeiam um kit no drum sampler: solte-a nos seus pads"
 "Follow" = "Seguir"
 "Follow playhead" = "Seguir a cabeça de reprodução"

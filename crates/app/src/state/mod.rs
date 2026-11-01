@@ -28,6 +28,7 @@ pub mod device_display;
 pub mod dnd;
 pub mod drum_machine_editor;
 pub mod drum_sampler_editor;
+pub mod duplicate;
 pub mod editors;
 pub mod edits;
 pub mod electric_piano_editor;
@@ -1598,6 +1599,19 @@ impl AppState {
 	pub fn take_out_of_folder(&mut self, track: TrackId) {
 		if let Some(cmd) = folders::take_out(self.project(), track) {
 			self.apply(cmd);
+		}
+	}
+
+	/// Duplicates `track` (FL/Ableton-style): a copy right below it, in the same folder,
+	/// with fresh ids for everything it creates and its automation re-addressed (one undo
+	/// step). Selects the copy. No-op for folders ([`duplicate::can_duplicate`]) or a
+	/// stale id.
+	pub fn duplicate_track(&mut self, track: TrackId) {
+		if let Some((cmd, id)) = duplicate::duplicate_track(self.project(), track)
+			&& self.apply(cmd)
+		{
+			self.selection.select_track(id);
+			self.selection.clear_clips();
 		}
 	}
 

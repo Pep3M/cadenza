@@ -515,6 +515,8 @@
 "Duplicate      Ctrl+D" = "複製      Ctrl+D"
 "Duplicate (drag a copy)" = "複製(ドラッグでコピー)"
 "Duplicate selection" = "選択範囲を複製"
+"Duplicate track" = "トラックを複製"
+"Duplicate the current track" = "現在のトラックを複製"
 "Duplicate zone" = "ゾーンを複製"
 "Early reflections" = "初期反射"
 "Edges / squares / pill" = "端 / 四角 / ピル"
@@ -634,6 +636,7 @@
 "Folder" = "フォルダ"
 "Folder · {n} track" = ["フォルダ · {n}トラック"]
 "Folders cannot be dropped" = "フォルダはドロップできません"
+"Folders aren't duplicated yet" = "フォルダはまだ複製できません"
 "Folders map a kit onto the drum sampler: drop it on its pads" = "フォルダはキットをドラムサンプラーにマッピングします:そのパッドにドロップしてください"
 "Follow" = "追従"
 "Follow playhead" = "再生ヘッドに追従"

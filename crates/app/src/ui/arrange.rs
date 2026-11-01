@@ -18,6 +18,7 @@ use crate::jobs::Peaks;
 use crate::state::arrange_tool::{self, ArrangeTool};
 use crate::state::automation::LANE_HEIGHT;
 use crate::state::dnd::{DropTarget, Payload};
+use crate::state::duplicate;
 use crate::state::edits::{self, TRACK_PALETTE};
 use crate::state::files::{FileKind, classify};
 use crate::state::layout::FollowMode;
@@ -2936,6 +2937,18 @@ fn track_menu(
 		ui.close();
 	}
 	ui.separator();
+	let can_duplicate = duplicate::can_duplicate(track);
+	if ui
+		.add_enabled(
+			can_duplicate,
+			egui::Button::new(tr("Duplicate track")).shortcut_text("Ctrl+Shift+T"),
+		)
+		.on_disabled_hover_text(tr("Folders aren't duplicated yet"))
+		.clicked()
+	{
+		state.duplicate_track(track.id);
+		ui.close();
+	}
 	if ui.button(tr("Delete track")).clicked() {
 		state.apply(Command::RemoveTrack { track: track.id });
 		ui.close();

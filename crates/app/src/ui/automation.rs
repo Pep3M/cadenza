@@ -36,6 +36,20 @@ struct PointDrag {
 	dn: f32,
 }
 
+/// A segment's tension handle being dragged (FL-style curve bend).
+#[derive(Debug, Clone)]
+struct TensionDrag {
+	address: ParamAddress,
+	/// Tick of the point the segment starts at.
+	tick: Tick,
+	shape: PointShape,
+	press: Pos2,
+	start: f32,
+	/// The segment's ends in lane units (0..1), so the drag follows the pointer.
+	ends: (f32, f32),
+	tension: f32,
+}
+
 #[derive(Debug, Clone)]
 struct Band {
 	address: ParamAddress,
@@ -64,6 +78,7 @@ struct TempoDrag {
 #[derive(Default)]
 pub struct AutoUi {
 	drag: Option<PointDrag>,
+	tension: Option<TensionDrag>,
 	band: Option<Band>,
 	line: Option<LineDraw>,
 	tempo: Option<TempoDrag>,
@@ -96,6 +111,7 @@ impl AutoUi {
 	/// Whether a gesture on `address` is running (keeps processing off-screen).
 	pub fn dragging(&self, address: &ParamAddress) -> bool {
 		self.drag.as_ref().is_some_and(|d| &d.address == address)
+			|| self.tension.as_ref().is_some_and(|d| &d.address == address)
 			|| self.band.as_ref().is_some_and(|b| &b.address == address)
 			|| self.line.as_ref().is_some_and(|l| &l.address == address)
 	}
@@ -291,15 +307,23 @@ impl AutoUi {
 		let model = auto::points(state.project(), address);
 		let selected = state.view.automation.selected_in(address);
 		// Points as drawn this frame (with a running drag applied).
-		let (shown, shown_sel): (Vec<AutomationPoint>, Vec<bool>) = match &self.drag {
-			Some(d) if &d.address == address => auto::moved(&model, &meta, &d.ticks, d.dt, d.dn)
-				.into_iter()
-				.unzip(),
-			_ => (
-				model.clone(),
-				model.iter().map(|p| selected.contains(&p.tick)).collect(),
-			),
-		};
+		let (shown, shown_sel): (Vec<AutomationPoint>, Vec<bool>) =
+			match (&self.drag, &self.tension) {
+				(Some(d), _) if &d.address == address => {
+					auto::moved(&model, &meta, &d.ticks, d.dt, d.dn)
+						.into_iter()
+						.unzip()
+				}
+				(_, Some(d)) if &d.address == address => {
+					let pts = auto::with_tension(&model, d.tick, d.tension);
+					let sel = pts.iter().map(|p| selected.contains(&p.tick)).collect();
+					(pts, sel)
+				}
+				_ => (
+					model.clone(),
+					model.iter().map(|p| selected.contains(&p.tick)).collect(),
+				),
+			};
 		let visible = rect.intersect(area);
 		let p = ui.painter_at(visible);
 
@@ -355,6 +379,46 @@ impl AutoUi {
 				.map(|(i, _)| i)
 		};
 		let hovered_point = hover.and_then(near);
+		// Tension handles: `(index of the segment's first point, position)`, only where the
+		// segment is wide enough to grab.
+		let handles: Vec<(usize, Pos2)> = (0..shown.len())
+			.filter_map(|i| {
+				let (tick, v) = auto::tension_handle(&shown, i, &tempo)?;
+				let width = x_of(shown[i + 1].tick) - x_of(shown[i].tick);
+				let c = pos2(x_of(tick), norm_to_y(rect, meta.to_norm(v)));
+				(width >= 4.0 * GRAB && visible.expand(4.0).contains(c)).then_some((i, c))
+			})
+			.collect();
+		let handle_at = |pos: Pos2| -> Option<usize> {
+			if near(pos).is_some() {
+				return None;
+			}
+			handles
+				.iter()
+				.map(|(i, c)| (*i, c.distance(pos)))
+				.filter(|(_, d)| *d <= GRAB)
+				.min_by(|a, b| a.1.total_cmp(&b.1))
+				.map(|(i, _)| i)
+		};
+		let dragged_handle = self
+			.tension
+			.as_ref()
+			.filter(|d| &d.address == address)
+			.and_then(|d| shown.iter().position(|p| p.tick == d.tick));
+		let hovered_handle = dragged_handle.or_else(|| hover.and_then(handle_at));
+		for (i, c) in &handles {
+			let hot = hovered_handle == Some(*i);
+			p.circle(
+				*c,
+				if hot { 3.5 } else { 2.5 },
+				if hot {
+					theme::AUTOMATION
+				} else {
+					theme::BG_DEEP
+				},
+				Stroke::new(1.0, theme::AUTOMATION.gamma_multiply(0.8)),
+			);
+		}
 		for (i, pt) in shown.iter().enumerate() {
 			let c = pos2(x_of(pt.tick), norm_to_y(rect, meta.to_norm(pt.value)));
 			if !visible.expand(4.0).contains(c) {
@@ -412,6 +476,26 @@ impl AutoUi {
 			let v = meta.from_norm(y_to_norm(rect, pos.y));
 			value_tag(ui, pos + vec2(0.0, -12.0), &meta.format(v));
 		}
+		if let Some(i) = hovered_handle
+			&& hovered_point.is_none()
+			&& (resp.hovered() || dragged_handle.is_some())
+			&& let Some((_, c)) = handles.iter().find(|(k, _)| *k == i)
+		{
+			let pt = shown[i];
+			let text = if pt.shape == PointShape::Stairs {
+				trf(
+					"{n} steps",
+					&[("n", &cadenza_model::stairs_steps(pt.tension).to_string())],
+				)
+			} else {
+				trf(
+					"Tension {value}",
+					&[("value", &format!("{:+.2}", pt.tension))],
+				)
+			};
+			value_tag(ui, *c, &text);
+			ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+		}
 		if hovered_point.is_some() {
 			ui.ctx().set_cursor_icon(CursorIcon::Grab);
 		}
@@ -442,6 +526,19 @@ impl AutoUi {
 						press,
 						dt: Tick::ZERO,
 						dn: 0.0,
+					});
+				}
+				None if handle_at(press).is_some() => {
+					let i = handle_at(press).expect("handle");
+					let (a, b) = (shown[i], shown[i + 1]);
+					self.tension = Some(TensionDrag {
+						address: address.clone(),
+						tick: a.tick,
+						shape: a.shape,
+						press,
+						start: a.tension,
+						ends: (meta.to_norm(a.value), meta.to_norm(b.value)),
+						tension: a.tension,
 					});
 				}
 				None if ctrl => {
@@ -494,6 +591,28 @@ impl AutoUi {
 					let sel = &mut state.view.automation.selected;
 					sel.retain(|(a, _)| a != address);
 					sel.extend(ticks.into_iter().map(|t| (address.clone(), t)));
+				}
+				state.end_lane_preview();
+			}
+		}
+		if let Some(d) = &mut self.tension
+			&& &d.address == address
+		{
+			if let Some(pos) = pointer {
+				d.tension = auto::dragged_tension(
+					d.start,
+					d.shape,
+					d.ends.0,
+					d.ends.1,
+					d.press.y - pos.y,
+					alt,
+				);
+				state.preview_lane(address, auto::with_tension(&model, d.tick, d.tension));
+			}
+			if released {
+				let d = self.tension.take().expect("tension drag");
+				if let Some(cmd) = auto::set_tension(state.project(), address, d.tick, d.tension) {
+					state.apply(cmd);
 				}
 				state.end_lane_preview();
 			}
@@ -563,6 +682,7 @@ impl AutoUi {
 						sel.push((address.clone(), tick));
 					}
 				}
+				None if handle_at(pos).is_some() => {}
 				None => {
 					let tick = snapped(state, tick_at(pos.x), alt);
 					let v = meta.from_norm(y_to_norm(rect, pos.y));
@@ -575,12 +695,20 @@ impl AutoUi {
 			}
 		}
 		if resp.double_clicked()
+			&& let Some(i) = resp.interact_pointer_pos().and_then(handle_at)
+			&& let Some(cmd) = auto::set_tension(state.project(), address, shown[i].tick, 0.0)
+		{
+			state.apply(cmd);
+		}
+		if resp.double_clicked()
 			&& let Some(i) = resp.interact_pointer_pos().and_then(near)
 		{
 			let next = match shown[i].shape {
 				PointShape::Linear => PointShape::Hold,
 				PointShape::Hold => PointShape::Smooth,
-				PointShape::Smooth => PointShape::Linear,
+				PointShape::Smooth => PointShape::DoubleCurve,
+				PointShape::DoubleCurve => PointShape::Stairs,
+				PointShape::Stairs => PointShape::Linear,
 			};
 			if let Some(cmd) = auto::set_shape(state.project(), address, &[shown[i].tick], next) {
 				state.apply(cmd);
@@ -1034,6 +1162,8 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 			(tr("Linear"), PointShape::Linear),
 			(tr("Hold (step)"), PointShape::Hold),
 			(tr("Smooth"), PointShape::Smooth),
+			(tr("Double curve"), PointShape::DoubleCurve),
+			(tr("Stairs"), PointShape::Stairs),
 		] {
 			if ui
 				.button(trf("Shape: {label}", &[("label", &label)]))

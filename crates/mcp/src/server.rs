@@ -661,7 +661,7 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Replaces the automation curve for a parameter address (volume, pan, a send level or a device parameter); each point may set its shape (linear, hold, smooth). An empty points list removes the lane."
+		description = "Replaces the automation curve for a parameter address (volume, pan, a send level or a device parameter); each point may set the shape of the segment to the next point (linear, hold, smooth, double_curve, stairs) and its tension -1..1 (linear: bent curve, + = fast start; double_curve: S-curve, + = slow start and end; stairs: step count 2..16). An empty points list removes the lane."
 	)]
 	fn set_automation(
 		&self,

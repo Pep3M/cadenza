@@ -464,7 +464,22 @@ pub struct AutomationPoint {
 	/// in older files, so `format_version` stays 1.
 	#[serde(default, skip_serializing_if = "PointShape::is_linear")]
 	pub shape: PointShape,
+	/// Bend of the segment to the next point, -1..=1 (0 = the plain shape, omitted in
+	/// JSON). Linear: single curve (positive = fast start); double curve: positive = slow
+	/// start and end; stairs: step count. Hold and smooth ignore it.
+	#[serde(default, skip_serializing_if = "is_zero_tension")]
+	pub tension: f32,
 }
+
+fn is_zero_tension(t: &f32) -> bool {
+	*t == 0.0
+}
+
+/// Steepness of a full tension (1.0): the exponential curve's rate.
+const TENSION_RATE: f64 = 8.0;
+/// Stairs: step count at tension -1 and at tension 1.
+pub const MIN_STAIRS: u32 = 2;
+pub const MAX_STAIRS: u32 = 16;
 
 /// Shape of the automation segment that starts at a point.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -477,6 +492,10 @@ pub enum PointShape {
 	Hold,
 	/// Slow start and end (raised cosine), for smooth sweeps.
 	Smooth,
+	/// Two mirrored curves meeting halfway (S-curve); tension sets the bend.
+	DoubleCurve,
+	/// Equal steps from this value to the next; tension sets the step count.
+	Stairs,
 }
 
 impl PointShape {
@@ -484,16 +503,59 @@ impl PointShape {
 		*self == Self::Linear
 	}
 
-	/// Value at `t` (0..=1) of the way from `from` to `to`.
-	pub fn interpolate(self, from: f32, to: f32, t: f64) -> f32 {
+	/// Whether `tension` changes this shape.
+	pub fn uses_tension(self) -> bool {
+		matches!(self, Self::Linear | Self::DoubleCurve | Self::Stairs)
+	}
+
+	/// Fraction (0..=1) of the way from one value to the next at `t` (0..=1) of the
+	/// segment. With tension 0 the linear shape is exactly `t`.
+	pub fn progress(self, tension: f32, t: f64) -> f64 {
 		let t = t.clamp(0.0, 1.0);
-		let k = match self {
-			Self::Linear => t,
+		let tension = if tension.is_finite() {
+			tension.clamp(-1.0, 1.0)
+		} else {
+			0.0
+		};
+		match self {
+			Self::Linear => bend(tension, t),
 			Self::Hold => 0.0,
 			Self::Smooth => 0.5 - 0.5 * (std::f64::consts::PI * t).cos(),
-		};
-		(f64::from(from) + f64::from(to - from) * k) as f32
+			Self::DoubleCurve => {
+				if t < 0.5 {
+					0.5 * bend(-tension, 2.0 * t)
+				} else {
+					1.0 - 0.5 * bend(-tension, 2.0 - 2.0 * t)
+				}
+			}
+			Self::Stairs => {
+				let n = f64::from(stairs_steps(tension));
+				((t * n).floor() / n).min(1.0)
+			}
+		}
 	}
+
+	/// Value at `t` (0..=1) of the way from `from` to `to`. The engine and
+	/// [`automation_value`] both evaluate segments through this function.
+	pub fn interpolate(self, tension: f32, from: f32, to: f32, t: f64) -> f32 {
+		(f64::from(from) + f64::from(to - from) * self.progress(tension, t)) as f32
+	}
+}
+
+/// Number of steps of a stairs segment with this tension.
+pub fn stairs_steps(tension: f32) -> u32 {
+	let k = (f64::from(tension.clamp(-1.0, 1.0)) + 1.0) / 2.0;
+	MIN_STAIRS + (k * f64::from(MAX_STAIRS - MIN_STAIRS)).round() as u32
+}
+
+/// Single exponential curve through (0, 0) and (1, 1): positive tension rises fast and
+/// settles, negative starts slow. `bend(-x, t) == 1 - bend(x, 1 - t)`.
+fn bend(tension: f32, t: f64) -> f64 {
+	if tension == 0.0 {
+		return t;
+	}
+	let c = TENSION_RATE * f64::from(tension);
+	(1.0 - (-c * t).exp()) / (1.0 - (-c).exp())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1108,7 +1170,7 @@ pub fn automation_value(points: &[AutomationPoint], tick: Tick, tempo: &TempoMap
 	} else {
 		1.0
 	};
-	Some(a.shape.interpolate(a.value, b.value, t))
+	Some(a.shape.interpolate(a.tension, a.value, b.value, t))
 }
 
 impl AutomationPoint {
@@ -1117,11 +1179,17 @@ impl AutomationPoint {
 			tick,
 			value,
 			shape: PointShape::Linear,
+			tension: 0.0,
 		}
 	}
 
 	pub fn with_shape(mut self, shape: PointShape) -> Self {
 		self.shape = shape;
+		self
+	}
+
+	pub fn with_tension(mut self, tension: f32) -> Self {
+		self.tension = tension;
 		self
 	}
 }

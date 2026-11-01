@@ -926,6 +926,77 @@ fn automation_lanes_add_move_and_delete_points() {
 }
 
 #[test]
+fn dragging_a_segment_tension_handle_bends_it_in_one_undo_step() {
+	let mut a = app();
+	let keys = a
+		.state
+		.project()
+		.tracks
+		.iter()
+		.find(|t| t.name == "Keys")
+		.unwrap()
+		.id;
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	a.state.selection.select_track(keys);
+	let vol = cadenza_core::ParamAddress::track_volume(keys);
+	assert!(a.state.apply(cadenza_model::Command::SetAutomation {
+		address: vol.clone(),
+		points: vec![
+			cadenza_model::AutomationPoint::new(Tick(0), -40.0),
+			cadenza_model::AutomationPoint::new(Tick(PPQ * 8), 0.0),
+		],
+	}));
+	let mut h = harness(a);
+	h.run_steps(2);
+	h.state_mut().state.view.panels.focus = Some(PanelKind::Arrange);
+	h.key_press(Key::A);
+	h.run_steps(3);
+	let lane = h.state().lane_rect(&vol).expect("A shows the volume lane");
+	let meta = h.state_mut().state.lane_meta(&vol).unwrap();
+	let tempo = h.state().state.project().tempo.clone();
+	let pts = h
+		.state()
+		.state
+		.project()
+		.automation_lane(&vol)
+		.unwrap()
+		.points
+		.clone();
+	let (tick, v) = cadenza_app::state::automation::tension_handle(&pts, 0, &tempo).unwrap();
+	let handle = pos2(
+		lane.left() + h.state().state.view.timeline.tick_to_x(tick),
+		lane.bottom() - 5.0 - meta.to_norm(v) * (lane.height() - 10.0),
+	);
+	let steps = h.state().state.document().history_labels().len();
+	drag(&mut h, handle, handle - egui::vec2(0.0, 40.0));
+	let tension = |h: &Harness<'_, CadenzaApp>| {
+		h.state()
+			.state
+			.project()
+			.automation_lane(&vol)
+			.unwrap()
+			.points[0]
+			.tension
+	};
+	assert!(
+		tension(&h) > 0.2,
+		"dragging up bends a rising segment up: {}",
+		tension(&h)
+	);
+	assert_eq!(
+		h.state()
+			.state
+			.project()
+			.automation_lane(&vol)
+			.unwrap()
+			.points
+			.len(),
+		2
+	);
+	assert_eq!(h.state().state.document().history_labels().len(), steps + 1);
+}
+
+#[test]
 fn hiding_a_lane_from_its_header_keeps_its_points_and_resizing_follows_the_drag() {
 	let mut a = app();
 	let keys = a

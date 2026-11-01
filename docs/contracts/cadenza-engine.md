@@ -280,7 +280,10 @@ param index/send edge, built at compile time, used only off the audio thread). T
 keeps the resolver of the loaded graph; `set_live_param`/`set_live_send` resolve on the control
 side and push `Cmd::Param(device, index, value)` / `Cmd::SendLevel` (Copy) through the command
 rtrb; the callback calls `Processor::set_param` (built-ins, in-process and sandboxed plugins:
-all realtime safe) or retargets the send edge gain (ramped over a quantum). `set_automation`
+all realtime safe) or retargets the send edge gain (ramped over a quantum). Automation `Curve`s
+store `(sample, value, shape, tension)` and evaluate through `PointShape::interpolate` (the
+model's function: no alloc, same values as `automation_value`; MCP `set_automation` points take
+`shape` + `tension`). `set_automation`
 builds new `Binding`s off the audio thread and sends them boxed through a second rtrb; the
 callback swaps them in (`Graph::swap_automation`, matched by load id; sets for a graph still
 queued wait, stale ones go back) and returns the old box through a garbage ring. Covered by

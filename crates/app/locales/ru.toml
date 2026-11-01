@@ -2378,3 +2378,6 @@
 "Each note's own curve (MPE-style), drawn over the note" = "Собственная кривая каждой ноты (как в MPE), нарисованная над нотой"
 "Drag = draw the curve of the note there (selected first) · right-click = clear it" = "Перетаскивание = рисует кривую ноты в этом месте (сначала выделенной) · правый щелчок = удаляет её"
 "No note here" = "Здесь нет ноты"
+"Double curve" = "Двойная кривая"
+"Stairs" = "Лестница"
+"Tension {value}" = "Натяжение {value}"

@@ -30,8 +30,15 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   `state::rows`): per-track and master lanes expand under their channel (A key, header "A"
   toggle, track menu "Automate"), lane picker (volume, pan, sends, every device param by
   name), click adds, drag moves (snap; Alt free; Shift vertical), rubber band (Shift adds),
-  Ctrl+drag ramp, right-click/Del deletes, double-click cycles linear/hold/smooth, tooltip in
-  real units. Right-click "Automate" on mixer faders/pans/sends and inspector controls creates
+  Ctrl+drag ramp, right-click/Del deletes, double-click cycles linear/hold/smooth/double
+  curve/stairs (also in the lane menu "Shape: ..."), tooltip in real units. FL-style tension
+  handle: a small circle on the curve of each linear/double-curve/stairs segment wide enough to
+  grab (`state::automation::tension_handle`: halfway, a quarter in for the double curve); vertical
+  drag bends it with live preview (`dragged_tension`: the handle follows the pointer whichever
+  way the segment runs, 100 px = half the range, Alt 10x finer, snaps to 0; stairs: up = more
+  steps) and commits ONE `SetAutomation` on release (`set_tension`); double-click resets it to 0;
+  tooltip "Tension +0.42" / "N steps". Points win over handles when both are under the pointer;
+  a click on a handle never adds a point. Right-click "Automate" on mixer faders/pans/sends and inspector controls creates
   and shows the lane. Lane visibility (`AutomationView::hidden`, view state, not the project):
   the lane header's "×" (tooltip "Hide this lane (its points are kept)") and the lane's
   context menu "Hide lane" hide one lane without touching its points — unlike removing it from

@@ -2379,3 +2379,6 @@
 "Each note's own curve (MPE-style), drawn over the note" = "A curva própria de cada nota (estilo MPE), desenhada sobre a nota"
 "Drag = draw the curve of the note there (selected first) · right-click = clear it" = "Arrastar = desenha a curva da nota ali (a selecionada primeiro) · clique direito = apaga"
 "No note here" = "Nenhuma nota aqui"
+"Double curve" = "Curva dupla"
+"Stairs" = "Escada"
+"Tension {value}" = "Tensão {value}"

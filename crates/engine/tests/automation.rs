@@ -212,3 +212,34 @@ fn starting_mid_song_has_no_transient() {
 		);
 	}
 }
+
+#[test]
+fn render_follows_the_segment_tension() {
+	let a = synth_track("a", &[(60, 0.0, 8.0)], 8.0);
+	let level_at_quarter = |tension: f32| {
+		let mut p = project(vec![a.clone()]);
+		p.automation.push(AutomationLane::new(
+			ParamAddress::track_volume(a.id),
+			vec![
+				AutomationPoint::new(beats(0.0), -60.0).with_tension(tension),
+				AutomationPoint::new(beats(8.0), 0.0),
+			],
+		));
+		let out = render_offline(&p, &opts(8.0)).unwrap();
+		20.0 * rms(&out.left[seconds(0.95)..seconds(1.05)]).log10()
+	};
+	let (concave, straight, convex) = (
+		level_at_quarter(0.8),
+		level_at_quarter(0.0),
+		level_at_quarter(-0.8),
+	);
+	// A quarter of the way in, the model says -45 dB straight; the bent curves sit
+	// well above (fast start) and below (slow start).
+	let model = |k: f32| cadenza_model::PointShape::Linear.interpolate(k, -60.0, 0.0, 0.25);
+	assert!(concave > straight + 20.0, "{concave} vs {straight}");
+	assert!(convex < straight - 5.0, "{convex} vs {straight}");
+	assert!(
+		((concave - straight) - f64::from(model(0.8) - model(0.0))).abs() < 3.0,
+		"render follows the model curve"
+	);
+}

@@ -1,6 +1,6 @@
 # Maintainer: Pep3 Marquez <pp.marquez16@gmail.com>
 pkgname=cadenza-bin
-pkgver=0.3.1
+pkgver=0.3.2
 pkgrel=1
 pkgdesc="Open-source DAW and audio editor with an AI arranger and sound engineer"
 arch=('x86_64')
@@ -19,7 +19,7 @@ provides=('cadenza')
 conflicts=('cadenza')
 options=('!strip' '!debug')
 source=("$url/releases/download/v$pkgver/cadenza-$pkgver-linux-x86_64.tar.gz")
-sha256sums=('b8b914651c62737727fc9bded76901349b67cc376ea68484269d6d70ec068268')
+sha256sums=('48137a093e278f0ffc62ac1cb379fb51d9aa0e5bd210b6b82fc62fa42258941a')
 
 package() {
 	cd "cadenza-$pkgver-linux-x86_64"

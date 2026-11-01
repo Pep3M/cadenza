@@ -8,6 +8,10 @@
 //! Transitions keep their shape: between two connected notes the shift moves smoothly from
 //! the end of one core to the start of the next, so a glide still joins the (new) notes.
 //! Attacks, releases and the voiced ring right after a note take the shift of their core.
+//! A note's `blend` makes every change at a junction with a voiced neighbour (connected,
+//! or joined by a voiced gap) a ramp at least that long: a transition shorter than the
+//! blend grows into the core of the note(s) carrying it, never into the other one, so an
+//! unedited neighbour keeps its sung pitch to its edge and the edit fades in and out.
 
 use cadenza_theory::Scale;
 use serde::{Deserialize, Serialize};
@@ -23,6 +27,8 @@ pub const MAX_SHIFT: f64 = 24.0;
 pub const MAX_FORMANT: f64 = 1200.0;
 /// Longest attack kept at its own speed when a note is moved or stretched, seconds.
 pub const ATTACK: f64 = 0.08;
+/// Longest blend, seconds.
+pub const MAX_BLEND: f64 = 0.5;
 /// Width of each pass of the drift filter, seconds.
 const DRIFT_WINDOW: f64 = 0.2;
 
@@ -41,6 +47,9 @@ pub struct NoteEdit {
 	pub gain_db: f64,
 	/// New place of the note in the output, seconds; `None` keeps it.
 	pub time: Option<TimeEdit>,
+	/// Shortest ramp (seconds) between this note's curves and a voiced neighbour's; 0 =
+	/// the sung transition only. Changes nothing on its own.
+	pub blend: f64,
 }
 
 impl Default for NoteEdit {
@@ -52,13 +61,17 @@ impl Default for NoteEdit {
 			formant_cents: 0.0,
 			gain_db: 0.0,
 			time: None,
+			blend: 0.0,
 		}
 	}
 }
 
 impl NoteEdit {
 	pub fn is_unchanged(&self) -> bool {
-		*self == Self::default()
+		Self {
+			blend: 0.0,
+			..*self
+		} == Self::default()
 	}
 }
 
@@ -119,6 +132,7 @@ impl Edits {
 				" cents",
 			)?;
 			check(&at("gain"), e.gain_db, -60.0, 24.0, " dB")?;
+			check(&at("blend"), e.blend, 0.0, MAX_BLEND, " s")?;
 			if let Some(t) = e.time
 				&& (!t.onset.is_finite() || !t.offset.is_finite() || t.offset <= t.onset)
 			{
@@ -203,9 +217,16 @@ pub fn curves(analysis: &Analysis, seg: &Segmentation, edits: &Edits) -> Curves 
 		.enumerate()
 		.map(|(i, n)| core_shift(analysis, n, &edits.note(i)))
 		.collect();
-	c.shift = fill(analysis, notes, |i, k| shift[i][k], 0.0);
-	c.formant = fill(analysis, notes, |i, _| edits.note(i).formant_cents, 0.0);
-	let mut gain_db = fill(analysis, notes, |i, _| edits.note(i).gain_db, 0.0);
+	let blend = |i: usize| edits.note(i).blend;
+	c.shift = fill(analysis, notes, |i, k| shift[i][k], blend, 0.0);
+	c.formant = fill(
+		analysis,
+		notes,
+		|i, _| edits.note(i).formant_cents,
+		blend,
+		0.0,
+	);
+	let mut gain_db = fill(analysis, notes, |i, _| edits.note(i).gain_db, blend, 0.0);
 	if edits.sibilant_gain_db != 0.0 {
 		for (f, g) in analysis.frames.iter().zip(gain_db.iter_mut()) {
 			if seg
@@ -274,11 +295,13 @@ fn smoothstep(x: f64) -> f64 {
 /// cores take their values, the rest of a note its core's nearest value, transitions
 /// between connected notes a smooth blend, and pitched frames touching a note (ring,
 /// pre-voicing, the onset and decay the tracker calls unvoiced: [`crate::marks::pitched`])
-/// the value next to them. Everything else is `outside`.
+/// the value next to them. Everything else is `outside`. Junctions where either note has a
+/// `blend` (seconds) ramp over at least that long (module docs).
 fn fill(
 	analysis: &Analysis,
 	notes: &[SegmentedNote],
 	core: impl Fn(usize, usize) -> f64,
+	blend_of: impl Fn(usize) -> f64,
 	outside: f64,
 ) -> Vec<f64> {
 	let frames = &analysis.frames;
@@ -341,7 +364,44 @@ fn fill(
 			out[k] = out[k + 1];
 		}
 	}
-	out.into_iter().map(|v| v.unwrap_or(outside)).collect()
+	let mut out: Vec<f64> = out.into_iter().map(|v| v.unwrap_or(outside)).collect();
+	for i in 0..notes.len().saturating_sub(1) {
+		let (ba, bb) = (blend_of(i), blend_of(i + 1));
+		let b = ba.max(bb);
+		let (a, z) = (&notes[i], &notes[i + 1]);
+		let (ga, gb) = frames_in(analysis, a.offset, z.onset);
+		if b <= 0.0 || !(connected(i) || pitched[ga..gb].iter().all(Option::is_some)) {
+			continue;
+		}
+		let (mut from, mut to) = (a.core_end, z.core_start.max(a.core_end));
+		let extra = b - (to - from);
+		if extra > 0.0 {
+			let (wa, wb) = match (ba > 0.0, bb > 0.0) {
+				(true, true) => (0.5, 0.5),
+				(true, false) => (1.0, 0.0),
+				_ => (0.0, 1.0),
+			};
+			from = (from - wa * extra).max(0.5 * (a.core_start + a.core_end));
+			to = (to + wb * extra).min(0.5 * (z.core_start + z.core_end).max(to));
+		}
+		ramp(&mut out, frames, from, to);
+	}
+	out
+}
+
+/// Replaces frames `from..=to` (seconds) of `curve` with a smooth ramp between the frames
+/// right outside them.
+fn ramp(curve: &mut [f64], frames: &[crate::analysis::AnalysisFrame], from: f64, to: f64) {
+	let first = frames.partition_point(|f| f.time < from);
+	let end = frames.partition_point(|f| f.time <= to);
+	if to <= from || first == 0 || end >= frames.len() {
+		return;
+	}
+	let (v0, v1) = (curve[first - 1], curve[end]);
+	for (c, f) in curve[first..end].iter_mut().zip(&frames[first..end]) {
+		let w = smoothstep((f.time - from) / (to - from));
+		*c = v0 * (1.0 - w) + v1 * w;
+	}
 }
 
 /// The time map of the edits: moved or stretched notes keep their attack (up to
@@ -522,6 +582,102 @@ mod tests {
 		// The ring after the second note (1.15..1.2 s, still voiced) keeps its shift.
 		assert!((at(1.18) - 1.0).abs() < 1e-9);
 		assert_eq!(at(1.25), 0.0);
+	}
+
+	#[test]
+	fn a_blend_ramps_over_its_length_inside_the_edited_note_only() {
+		// Three legato notes whose cores touch (no sung transition), the middle one moved.
+		let a = analysis(&vec![Some(60.0); 400]);
+		let seg = Segmentation {
+			notes: vec![
+				note(0.0, (0.0, 0.5), 0.5, 60.0),
+				note(0.5, (0.5, 1.0), 1.0, 60.0),
+				note(1.0, (1.0, 1.5), 1.5, 60.0),
+			],
+			sibilants: Vec::new(),
+		};
+		let edits = |blend: f64| Edits {
+			notes: vec![
+				NoteEdit::default(),
+				NoteEdit {
+					pitch: Some(61.0),
+					blend,
+					..NoteEdit::default()
+				},
+			],
+			sibilant_gain_db: 0.0,
+		};
+		let e = edits(0.05);
+		e.validate(&seg).unwrap();
+		let c = curves(&a, &seg, &e);
+		let at = |t: f64| c.shift[(t / 0.005).round() as usize];
+		for k in 0..=100 {
+			assert_eq!(at(k as f64 * 0.005), 0.0, "first note at {k}");
+		}
+		for k in 200..300 {
+			assert_eq!(at(k as f64 * 0.005), 0.0, "last note at {k}");
+		}
+		for k in 110..=190 {
+			assert_eq!(at(k as f64 * 0.005), 1.0, "edited core at {k}");
+		}
+		// The ramps take exactly the blend, rising (falling) monotonically.
+		for k in 101..110 {
+			let (x, y) = (at(k as f64 * 0.005), at((k - 1) as f64 * 0.005));
+			assert!(x > y && x < 1.0, "{k}: {y} -> {x}");
+			let mirror = at((300 - k) as f64 * 0.005);
+			assert!((mirror - x).abs() < 1e-9, "{k}: {x} vs {mirror}");
+		}
+		assert!((at(0.525) - 0.5).abs() < 1e-9);
+		// Without a blend the change is a step at the junction.
+		let c = curves(&a, &seg, &edits(0.0));
+		assert_eq!(c.shift[99], 0.0);
+		assert_eq!(c.shift[101], 1.0);
+		// A blend alone changes nothing.
+		let only = Edits {
+			notes: vec![NoteEdit {
+				blend: 0.1,
+				..NoteEdit::default()
+			}],
+			sibilant_gain_db: 0.0,
+		};
+		assert!(only.is_unchanged());
+		assert!(curves(&a, &seg, &only).shift.iter().all(|s| *s == 0.0));
+		let too_long = Edits {
+			notes: vec![NoteEdit {
+				blend: 0.6,
+				..NoteEdit::default()
+			}],
+			sibilant_gain_db: 0.0,
+		};
+		assert!(too_long.validate(&seg).is_err());
+	}
+
+	#[test]
+	fn a_blend_bridges_a_voiced_gap_between_notes() {
+		let a = analysis(&vec![Some(60.0); 300]);
+		let seg = Segmentation {
+			notes: vec![
+				note(0.0, (0.0, 0.5), 0.5, 60.0),
+				note(0.6, (0.6, 1.0), 1.0, 60.0),
+			],
+			sibilants: Vec::new(),
+		};
+		let mut edits = Edits {
+			notes: vec![NoteEdit {
+				pitch: Some(59.0),
+				..NoteEdit::default()
+			}],
+			sibilant_gain_db: 0.0,
+		};
+		// Without a blend the ring carries the shift to the next note's onset: a step.
+		let c = curves(&a, &seg, &edits);
+		assert_eq!((c.shift[119], c.shift[120]), (-1.0, 0.0));
+		edits.notes[0].blend = 0.04;
+		let c = curves(&a, &seg, &edits);
+		assert_eq!(c.shift[100], -1.0);
+		assert!((c.shift[110] + 0.5).abs() < 1e-9);
+		assert_eq!(c.shift[120], 0.0);
+		assert!(c.shift[100..=120].windows(2).all(|w| w[1] >= w[0]));
 	}
 
 	#[test]

@@ -2382,3 +2382,8 @@
 "Double curve" = "Double courbe"
 "Stairs" = "Escalier"
 "Tension {value}" = "Tension {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "Cliquez pour déplacer la tête de lecture ; faites glisser pour sélectionner les notes d'une plage de temps (Maj ajoute)"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "Durée du fondu d'entrée et de sortie des changements de hauteur là où une note rejoint une voisine voisée : la rampe reste dans les notes modifiées, les notes autour gardent leur hauteur chantée"
+"blend" = "fondu"
+"Apply blend" = "Appliquer le fondu"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "Règle le fondu des notes sans les réaccorder (le glisser et Corriger la hauteur le règlent aussi)"

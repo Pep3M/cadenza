@@ -60,6 +60,7 @@ pub fn to_edits(e: &NoteEdits) -> Edits {
 					onset: t.start,
 					offset: t.end,
 				}),
+				blend: f64::from(n.blend_ms) / 1000.0,
 			})
 			.collect(),
 		sibilant_gain_db: f64::from(e.sibilant_gain_db),
@@ -142,6 +143,7 @@ pub fn detect(
 						formant_cents: old.formant_cents,
 						gain_db: old.gain_db,
 						time: old.time,
+						blend_ms: old.blend_ms,
 						..stored(n, old.id)
 					}
 				}

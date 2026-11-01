@@ -2380,3 +2380,8 @@
 "Double curve" = "Doppia curva"
 "Stairs" = "Scala"
 "Tension {value}" = "Tensione {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "Clic per spostare la testina; trascina per selezionare le note di un intervallo di tempo (Maiusc aggiunge)"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "Quanto durano l'entrata e l'uscita delle modifiche di intonazione dove una nota si unisce a una vicina sonora: la rampa resta dentro le note modificate, così le note attorno mantengono l'intonazione cantata"
+"blend" = "dissolvenza"
+"Apply blend" = "Applica dissolvenza"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "Imposta la dissolvenza delle note senza reintonarle (anche il trascinamento e Correggi intonazione la impostano)"

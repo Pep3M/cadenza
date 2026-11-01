@@ -735,10 +735,16 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   Blobs (level = thickness) on semitone rows, resulting pitch curve (`edited_curve`), sibilants
   hatched, flagged notes amber with a ✂ split; tools Main (⇕ retune snapped to the key / Alt free,
   ⇔ move, double-click split/merge), Vibrato, Drift, Formant, Level, Split (keys 1–6); macros
-  column Correct pitch / Quantize time / Leveling / Sibilants / Detection; builders
+  column Correct pitch / Quantize time / Leveling / Sibilants / Detection; ruler: click seeks,
+  drag selects the notes of a time range (`NoteEditorView::select_range`, Shift adds;
+  `notes_in_range` = notes whose span's middle is inside, never split; tinted while
+  `shown_range` = the selection is still exactly its notes), so the macros apply to that
+  stretch; `blend_ms` (macros "blend" slider, default `DEFAULT_BLEND_MS` 40) is stamped by
+  `move_pitch`/`correct_pitch` on the notes they retune and by "Apply blend" (`set_blend`), so
+  the edit fades in/out inside the edited notes and the neighbours keep their pitch; builders
   `move_pitch`, `move_time` (crossing refused), `tool_edit`, `correct_pitch` (key defaults to
   Detected = `tuning` fit + targets, "E phrygian +33 c (detected)"), `quantize_time`,
-  `leveling`, `reset`, `sibilant_gain`, `replace`; `AppState::{detect_notes, split_audio_note,
+  `leveling`, `reset` (blend too), `sibilant_gain`, `replace`; `AppState::{detect_notes, split_audio_note,
   merge_audio_notes, remove_audio_notes, note_edit}`. Arrange "♪" on clips with edited notes.
 - AI producer chat (phase 12; `state::ai` logic, `ui::chat` view): F10 / View / AI menu / F1.
   Docked right (`PanelKind::Chat`). `ai::worker` is a thread with its own tokio runtime that

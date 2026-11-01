@@ -672,3 +672,87 @@ fn an_audition_is_the_note_at_its_new_pitch() {
 		n.center + 3.0
 	);
 }
+
+/// Median tracked pitch over the middle of `a..b` seconds (trimmed 40 ms each side).
+fn median_pitch(analysis: &Analysis, a: f64, b: f64) -> f64 {
+	let mut p: Vec<f64> = analysis
+		.frames
+		.iter()
+		.filter(|f| f.time > a + 0.04 && f.time < b - 0.04)
+		.filter_map(|f| f.pitch)
+		.collect();
+	assert!(!p.is_empty(), "no pitch in {a}..{b}");
+	p.sort_by(f64::total_cmp);
+	p[p.len() / 2]
+}
+
+#[test]
+fn a_blended_range_correction_leaves_the_notes_around_it_as_sung() {
+	// Legato notes with no glide: each junction is a hard step, the worst case for a
+	// correction that stops at a neighbour.
+	let pitches = [57.0, 60.0, 62.0, 64.0, 62.0, 60.0];
+	let notes = pitches
+		.iter()
+		.enumerate()
+		.map(|(i, p)| {
+			let mut n = synth::SynthNote::new(*p, 0.45);
+			n.detune_cents = if i % 2 == 0 { 30.0 } else { -25.0 };
+			if i > 0 { n.legato(0.0) } else { n }
+		})
+		.collect();
+	let r = synth::render(&synth::Phrase {
+		notes,
+		vowel: synth::Vowel::A,
+		sample_rate: 22_050,
+		snr_db: None,
+		reverb: None,
+		seed: 5,
+	});
+	let (a, seg) = prepare(&r.samples, 22_050);
+	assert_eq!(seg.notes.len(), pitches.len(), "{:?}", seg.notes);
+	// The range: notes 3 and 4 tuned to the semitone, 40 ms blends.
+	let edits = Edits {
+		notes: seg
+			.notes
+			.iter()
+			.enumerate()
+			.map(|(i, n)| {
+				if (2..=3).contains(&i) {
+					NoteEdit {
+						pitch: Some(n.center.round()),
+						blend: 0.04,
+						..NoteEdit::default()
+					}
+				} else {
+					NoteEdit::default()
+				}
+			})
+			.collect(),
+		sibilant_gain_db: 0.0,
+	};
+	let out = resynth::render(&[&r.samples], &a, &seg, &edits).unwrap();
+	let after = analyze(
+		&out.channels[0],
+		22_050,
+		&AnalysisOptions::default(),
+		&mut |_| true,
+	)
+	.unwrap();
+	for (i, n) in seg.notes.iter().enumerate() {
+		let before = median_pitch(&a, n.core_start, n.core_end);
+		let now = median_pitch(&after, n.core_start, n.core_end);
+		let cents = (now - before) * 100.0;
+		if (2..=3).contains(&i) {
+			let error = (now - n.center.round()) * 100.0;
+			assert!(
+				error.abs() < 5.0,
+				"note {i}: {error:.1} c from the semitone"
+			);
+		} else {
+			assert!(
+				cents.abs() <= 2.0,
+				"note {i} outside the range moved {cents:.2} c"
+			);
+		}
+	}
+}

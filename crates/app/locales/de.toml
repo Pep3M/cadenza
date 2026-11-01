@@ -2380,3 +2380,8 @@
 "Double curve" = "Doppelkurve"
 "Stairs" = "Treppe"
 "Tension {value}" = "Spannung {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "Klicken, um den Abspielkopf zu setzen; ziehen, um die Noten eines Zeitbereichs auszuwählen (Umschalt fügt hinzu)"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "Wie lange Tonhöhenänderungen ein- und ausblenden, wo eine Note an eine stimmhafte Nachbarnote grenzt: Die Rampe bleibt in den bearbeiteten Noten, sodass die Noten drumherum ihre gesungene Tonhöhe behalten"
+"blend" = "Überblendung"
+"Apply blend" = "Überblendung anwenden"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "Setzt die Überblendung der Noten, ohne sie umzustimmen (Ziehen und Tonhöhe korrigieren setzen sie auch)"

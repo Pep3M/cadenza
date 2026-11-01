@@ -745,6 +745,9 @@ fn edit_text(n: &AudioNote) -> Option<String> {
 	if n.time.is_some() {
 		parts.push("moved".into());
 	}
+	if n.blend_ms != 0.0 {
+		parts.push(format!("blend {:.0} ms", n.blend_ms));
+	}
 	(!parts.is_empty()).then(|| parts.join(", "))
 }
 
@@ -992,7 +995,12 @@ pub struct NoteEditArgs {
 	/// Level change in dB (-60..24).
 	#[serde(default)]
 	pub gain_db: Option<f32>,
-	/// Back to as sung (pitch, drift, vibrato, formant, gain, timing) before the rest.
+	/// Shortest fade (ms, 0..500) of this note's edits into a voiced neighbour; the ramp
+	/// stays inside this note so the neighbour keeps its sung pitch (e.g. 40 when only a
+	/// stretch of a phrase is retuned). 0 = the sung transition only.
+	#[serde(default)]
+	pub blend_ms: Option<f32>,
+	/// Back to as sung (pitch, drift, vibrato, formant, gain, timing, blend) before the rest.
 	#[serde(default)]
 	pub as_sung: bool,
 }
@@ -1036,6 +1044,7 @@ pub fn edit_audio_notes(
 			p.formant_cents = Some(0.0);
 			p.gain_db = Some(0.0);
 			p.time = Some(None);
+			p.blend_ms = Some(0.0);
 		}
 		if let Some(c) = e.cents
 			&& !(c.is_finite() && (-100.0..=100.0).contains(&c))
@@ -1071,6 +1080,16 @@ pub fn edit_audio_notes(
 		}
 		p.formant_cents = e.formant_cents.or(p.formant_cents);
 		p.gain_db = e.gain_db.or(p.gain_db);
+		if let Some(b) = e.blend_ms {
+			let max = cadenza_model::audio_notes::MAX_BLEND_MS;
+			if !(b.is_finite() && (0.0..=max).contains(&b)) {
+				return Err(McpError::Invalid(format!(
+					"note {}: blend_ms {b} is outside 0..{max}",
+					e.note
+				)));
+			}
+			p.blend_ms = Some(b);
+		}
 		if !p.is_empty() {
 			patches.push(p);
 		}

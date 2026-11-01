@@ -2381,3 +2381,8 @@
 "Double curve" = "더블 커브"
 "Stairs" = "계단"
 "Tension {value}" = "텐션 {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "클릭하면 재생 위치를 옮기고, 드래그하면 시간 범위의 노트를 선택합니다 (Shift로 추가)"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "노트가 유성음 이웃 노트와 이어지는 곳에서 피치 편집이 페이드 인/아웃되는 길이: 램프는 편집한 노트 안에 머물러 주변 노트는 부른 피치를 유지합니다"
+"blend" = "블렌드"
+"Apply blend" = "블렌드 적용"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "노트를 다시 튜닝하지 않고 블렌드를 설정합니다 (드래그와 피치 보정도 설정합니다)"

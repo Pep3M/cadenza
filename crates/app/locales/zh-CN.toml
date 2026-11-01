@@ -2376,3 +2376,8 @@
 "Double curve" = "双曲线"
 "Stairs" = "阶梯"
 "Tension {value}" = "张力 {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "单击移动播放头；拖动选择一个时间范围内的音符（Shift 追加）"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "音符与有声的相邻音符相接处，音高编辑淡入淡出的时长：过渡留在被编辑的音符内部，周围的音符保持原唱音高"
+"blend" = "过渡"
+"Apply blend" = "应用过渡"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "为音符设置过渡而不重新调音（拖动和校正音高也会设置）"

@@ -2382,3 +2382,8 @@
 "Double curve" = "Curva doble"
 "Stairs" = "Escalera"
 "Tension {value}" = "Tensión {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "Clic para mover el cursor de reproducción; arrastra para seleccionar las notas de un tramo de tiempo (Mayús añade)"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "Cuánto tardan en entrar y salir los cambios de afinación donde una nota se une a una vecina sonora: la rampa queda dentro de las notas editadas, así las notas de alrededor conservan su altura cantada"
+"blend" = "fundido"
+"Apply blend" = "Aplicar fundido"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "Pone el fundido en las notas sin reafinarlas (arrastrar y Corregir afinación también lo ponen)"

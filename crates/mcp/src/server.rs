@@ -1033,7 +1033,9 @@ impl CadenzaServer {
 	#[tool(
 		description = "Edits single notes of an audio clip by number, in one undo step: pitch \
 			(tone name or MIDI number) and/or cents, drift_pct and vibrato_pct kept (100 = as \
-			sung, 0 = straight/flat), formant_cents, gain_db, as_sung (reset first)."
+			sung, 0 = straight/flat), formant_cents, gain_db, blend_ms (fade of the edit into \
+			a voiced neighbour, inside this note: retune a stretch with 30-60 so the notes \
+			around it keep their pitch), as_sung (reset first)."
 	)]
 	fn edit_audio_notes(
 		&self,

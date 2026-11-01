@@ -2381,3 +2381,8 @@
 "Double curve" = "Двойная кривая"
 "Stairs" = "Лестница"
 "Tension {value}" = "Натяжение {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "Щелчок перемещает курсор воспроизведения; перетаскивание выделяет ноты временного диапазона (Shift добавляет)"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "Как долго изменения высоты нарастают и спадают там, где нота соединяется со звонкой соседней: переход остаётся внутри изменённых нот, поэтому ноты вокруг сохраняют спетую высоту"
+"blend" = "сглаживание"
+"Apply blend" = "Применить сглаживание"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "Задаёт сглаживание нот, не перестраивая их (перетаскивание и «Исправить высоту» тоже его задают)"

@@ -2380,3 +2380,8 @@
 "Double curve" = "ダブルカーブ"
 "Stairs" = "階段"
 "Tension {value}" = "テンション {value}"
+"Click to move the playhead; drag to select the notes of a time range (Shift adds)" = "クリックで再生位置を移動、ドラッグで時間範囲のノートを選択（Shift で追加）"
+"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch" = "ノートが有声の隣のノートとつながる部分で、ピッチ編集がフェードイン・アウトする長さ。ランプは編集したノートの内側に収まるため、周りのノートは歌われたピッチのままです"
+"blend" = "ブレンド"
+"Apply blend" = "ブレンドを適用"
+"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)" = "ノートを再調律せずにブレンドを設定します（ドラッグとピッチ補正でも設定されます）"

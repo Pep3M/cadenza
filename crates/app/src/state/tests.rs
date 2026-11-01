@@ -2507,3 +2507,34 @@ fn a_dragged_note_asks_to_be_heard_over_its_stretch() {
 	s.audition_notes(id, &edits, &ids);
 	assert!(s.note_audition.pending().is_none());
 }
+
+#[test]
+fn restarting_into_an_update_asks_to_save_first_and_persists_update_prefs() {
+	let mut s = AppState::headless();
+	// Nothing downloaded: the request does nothing.
+	s.request(Pending::Update);
+	assert!(!s.quit_confirmed);
+	s.update.ready = Some(cadenza_update::Prepared::Restart {
+		app: "/nonexistent/cadenza-app".into(),
+	});
+	s.dirty = true;
+	s.request(Pending::Update);
+	assert_eq!(
+		s.confirm,
+		Some(Pending::Update),
+		"unsaved changes come first"
+	);
+	assert!(!s.quit_confirmed);
+	s.discard_changes();
+	s.proceed(Pending::Update);
+	assert!(s.quit_confirmed);
+
+	s.update.prefs.auto_check = false;
+	s.update.prefs.skipped = "9.9.9".into();
+	let mut t = AppState::headless();
+	t.apply_prefs(s.prefs());
+	assert_eq!(t.update.prefs, s.update.prefs);
+	let info = t.system_info();
+	assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+	assert!(!info.text().contains('/'), "no paths: {}", info.text());
+}

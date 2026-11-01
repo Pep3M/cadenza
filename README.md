@@ -152,6 +152,24 @@ The workspace is split into focused crates (`cadenza-model`, `cadenza-engine`,
 `cadenza-dsp`, `cadenza-app`…); [`CLAUDE.md`](CLAUDE.md) documents the architecture and
 the contract of each one.
 
+## Updates
+
+The app checks GitHub for a new release at most once a day (Help → **Check for updates
+automatically** turns it off; nothing but that one request is sent). When there is one, an
+**Update** chip appears in the status bar: it shows the release notes and can download,
+verify (`SHA256SUMS`) and install the new version for the AppImage, the `install.sh` /
+`install.ps1` installs, the Windows installer and the macOS app, then restart. Package-manager
+installs (AUR) are left to the package manager. From a terminal: `cadenza update` (or
+`cadenza update --check`).
+
+## Reporting problems
+
+Found a bug? In the app, **Help → Report a problem…** opens a prefilled
+[GitHub issue](https://github.com/Pep3M/cadenza/issues/new/choose) with the version, OS,
+audio setup and plugin hosting mode (never your projects, file paths or API keys). You can
+also open one directly: [bug report](https://github.com/Pep3M/cadenza/issues/new?template=bug_report.yml)
+or [feature request](https://github.com/Pep3M/cadenza/issues/new?template=feature_request.yml).
+
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Please open an issue

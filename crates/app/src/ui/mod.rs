@@ -24,9 +24,11 @@ pub mod note_editor;
 pub mod piano_roll;
 pub mod project_dialogs;
 pub mod record;
+pub mod report;
 pub mod start;
 pub mod to_midi;
 pub mod transport;
+pub mod updates;
 pub mod widgets;
 pub mod windows;
 
@@ -86,6 +88,12 @@ impl CadenzaApp {
 			.and_then(|s| eframe::get_value::<crate::state::layout::Prefs>(s, PREFS_KEY))
 			.unwrap_or_default();
 		app.state.apply_prefs(prefs);
+		if let Some(e) = app.state.update.take_install_error() {
+			app.state
+				.notices
+				.error(trf("The update could not be installed: {e}", &[("e", &e)]));
+		}
+		app.state.auto_check_updates();
 		app.state.enable_safety(crate::state::safety::state_dir());
 		match project {
 			Some(path) => {
@@ -211,13 +219,17 @@ impl CadenzaApp {
 				ctx.send_viewport_cmd(ViewportCommand::CancelClose);
 				self.state.request(Pending::Quit);
 			} else {
+				let reopen = self.state.path().map(PathBuf::from);
 				self.state.stop();
 				self.state.shutdown();
+				self.state.update.on_quit(reopen);
 			}
 		}
 		if self.state.quit_confirmed {
+			let reopen = self.state.path().map(PathBuf::from);
 			self.state.stop();
 			self.state.shutdown();
+			self.state.update.on_quit(reopen);
 			ctx.send_viewport_cmd(ViewportCommand::Close);
 		}
 	}
@@ -257,6 +269,8 @@ impl CadenzaApp {
 			project_dialogs::show(ui.ctx(), state);
 			record::audio_settings(ui.ctx(), state);
 			help_overlay(ui.ctx(), state);
+			updates::window(ui.ctx(), state);
+			report::window(ui.ctx(), state);
 			busy_overlay(ui.ctx(), state);
 			return;
 		}
@@ -533,6 +547,8 @@ impl CadenzaApp {
 		to_midi::show(ui.ctx(), state);
 		record::audio_settings(ui.ctx(), state);
 		midi_learn::show(ui.ctx(), state);
+		updates::window(ui.ctx(), state);
+		report::window(ui.ctx(), state);
 		help_overlay(ui.ctx(), state);
 		busy_overlay(ui.ctx(), state);
 	}
@@ -1508,6 +1524,18 @@ fn menu_bar(ui: &mut Ui, state: &mut AppState) {
 			if shortcut_button(ui, tr("Keyboard shortcuts"), "F1") {
 				state.view.help = true;
 			}
+			ui.separator();
+			if shortcut_button(ui, tr("Check for updates…"), "") {
+				state.check_updates();
+			}
+			let auto = state.update.prefs.auto_check;
+			if check_item(ui, auto, tr("Check for updates automatically"), "") {
+				state.update.prefs.auto_check = !auto;
+			}
+			ui.separator();
+			if shortcut_button(ui, tr("Report a problem…"), "") {
+				state.report.open = true;
+			}
 		});
 	});
 }
@@ -1534,6 +1562,7 @@ fn status_bar(ui: &mut Ui, state: &mut AppState) {
 				.max_rect(full)
 				.layout(Layout::right_to_left(Align::Center)),
 			|ui| {
+				updates::chip(ui, state);
 				let p = state.project();
 				let counts = layout.counts(
 					p.tracks.len(),
@@ -1771,6 +1800,7 @@ fn unsaved_prompt(ctx: &egui::Context, state: &mut AppState) {
 		Pending::Open(_) => tr("opening another project"),
 		Pending::Quit => "quitting",
 		Pending::Collect => tr("collecting its files"),
+		Pending::Update => tr("restarting to update"),
 	};
 	egui::Modal::new(egui::Id::new("unsaved"))
 		.frame(

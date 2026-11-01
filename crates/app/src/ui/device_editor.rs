@@ -10,7 +10,7 @@
 //! A dedicated body (`eq_body(ui, state, cx)`) is one more match arm there.
 
 use crate::i18n::{tr, tr_str, trf};
-use cadenza_core::ParamAddress;
+use cadenza_core::{DeviceId, ParamAddress};
 use cadenza_dsp::{DeviceInfo, ParamInfo};
 use cadenza_engine::ProbeFrame;
 use cadenza_model::{Command, Device};
@@ -120,7 +120,9 @@ pub struct DeviceEditorUi {
 	pub instrument: InstrumentEditorUi,
 	synth: crate::ui::devices::poly_synth::SynthKeys,
 	frames: Vec<ProbeFrame>,
+	/// The header meters of the editor being drawn, and of each probed device.
 	levels: IoLevels,
+	levels_by: std::collections::HashMap<DeviceId, IoLevels>,
 	save: Option<SaveDialog>,
 	/// Header and body of the last frame (headless tests).
 	pub header_rect: Option<Rect>,
@@ -379,15 +381,19 @@ impl DeviceEditorUi {
 	/// Takes this frame's probe frames and moves the header meters.
 	fn drain_probe(&mut self, ui: &Ui, state: &AppState, r: DeviceRef) {
 		self.frames.clear();
-		// One probe for every editor: only the device it points at drains it.
-		if state.probe_target() == Some(r.device)
-			&& let Some(probe) = state.probe()
-		{
+		// Every open editor has its own probe; each device is shown (and drained) once.
+		let probe = state.probe_for(r.device);
+		if let Some(probe) = probe {
 			probe.drain(&mut self.frames);
 		}
 		let dt = ui.input(|i| i.stable_dt).min(0.25);
-		self.levels.update(&self.frames, dt);
-		if !self.levels.is_silent() || state.probe().is_some_and(|p| p.is_active()) {
+		// The editors share this view state: each device keeps its own meter ballistics.
+		self.levels_by
+			.retain(|d, _| *d == r.device || state.probe_targets().contains(d));
+		let levels = self.levels_by.entry(r.device).or_default();
+		levels.update(&self.frames, dt);
+		self.levels = *levels;
+		if !self.levels.is_silent() || probe.is_some_and(|p| p.is_active()) {
 			ui.ctx().request_repaint();
 		}
 	}

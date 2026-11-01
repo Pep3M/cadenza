@@ -240,8 +240,8 @@ fn update_levels(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut CompView) {
 		return;
 	}
 	let dt = ui.input(|i| i.stable_dt).min(0.25);
-	let ours = state.probe_target() == Some(cx.r.device);
-	let probe = state.probe().filter(|_| ours);
+	let probe = state.probe_for(cx.r.device);
+	let ours = probe.is_some();
 	if let Some(p) = probe {
 		v.resize_history(v.seconds, p.sample_rate());
 	}
@@ -367,7 +367,9 @@ fn key_strip(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, rect: Rect) {
 		node("HP", key.hp, comp::KEY_HP, key.hp_on()),
 		node("LP", key.lp, comp::KEY_LP, key.lp_on()),
 	];
-	let rate = state.probe().map_or(48_000.0, |p| p.sample_rate() as f32);
+	let rate = state
+		.probe_for(cx.r.device)
+		.map_or(48_000.0, |p| p.sample_rate() as f32);
 	let response = move |f: f32| key.response_db(rate, f);
 	let out = FreqDisplay::new(
 		Id::new(("comp-key-filter", cx.salt, r.device)),

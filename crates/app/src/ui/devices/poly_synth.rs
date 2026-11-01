@@ -128,7 +128,7 @@ pub fn set_scope(ctx: &egui::Context, salt: &str, r: DeviceRef, samples: &[f32])
 }
 
 fn listen(cx: &BodyCx, state: &AppState, v: &mut SynthView, now: f64) {
-	if state.probe_target() != Some(cx.r.device) || cx.frames.is_empty() {
+	if state.probe_for(cx.r.device).is_none() || cx.frames.is_empty() {
 		return;
 	}
 	if !cx

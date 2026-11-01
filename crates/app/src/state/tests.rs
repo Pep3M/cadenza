@@ -2007,7 +2007,7 @@ fn probe_follows_the_chosen_device_and_works_headless() {
 	// Headless: no engine, so no ring.
 	assert!(s.probe().is_none());
 	// What the engine would answer.
-	s.probe = Some(Arc::new(DeviceProbe::new(48_000)));
+	s.attach_probe(Some(Arc::new(DeviceProbe::new(48_000))));
 	assert!(s.probe().is_some());
 	s.set_probe(None);
 	assert_eq!(s.probe_target(), None);
@@ -2077,6 +2077,71 @@ fn device_editor_points_the_probe_at_its_device() {
 	s.set_probe(Some(synth.device));
 	s.tick(Instant::now());
 	assert_eq!(s.probe_target(), Some(synth.device));
+}
+
+#[test]
+fn every_open_device_editor_gets_its_own_probe() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+	let mut inserts = Vec::new();
+	for i in 0..cadenza_engine::PROBE_SLOTS + 1 {
+		let device = cadenza_model::Device::builtin("reverb", format!("Reverb {i}"));
+		inserts.push(DeviceRef {
+			track: Some(keys),
+			device: device.id,
+		});
+		assert!(s.apply(Command::InsertDevice {
+			track: Some(keys),
+			device,
+			index: None,
+		}));
+	}
+	let (a, b) = (inserts[0], inserts[1]);
+	s.view.panels.set(PanelKind::Inspector, false);
+	assert!(s.open_device_editor(a));
+	assert!(s.open_device_editor(b));
+	assert_eq!(s.probe_targets(), &[b.device, a.device]);
+	// Focusing the other window puts it first (Listen follows it); both stay probed.
+	assert!(s.open_device_editor(a));
+	assert_eq!(s.probe_targets(), &[a.device, b.device]);
+	// The dock comes right after the focused window.
+	assert!(s.open_device_in_dock(synth));
+	assert_eq!(s.probe_targets()[..2], [a.device, synth.device]);
+	assert!(s.probe_targets().contains(&b.device));
+	// Each device reads its own ring.
+	let ring = |s: &AppState, d| s.probe_for(d).map(Arc::as_ptr);
+	s.attach_probes(
+		s.probe_targets()
+			.iter()
+			.map(|&d| (d, Arc::new(DeviceProbe::new(48_000))))
+			.collect(),
+	);
+	assert!(ring(&s, a.device).is_some() && ring(&s, b.device).is_some());
+	assert_ne!(ring(&s, a.device), ring(&s, b.device));
+	// Closing a window stops only its probe.
+	s.close_window(windows::WindowItem::Device(b));
+	s.tick(Instant::now());
+	assert!(!s.probe_targets().contains(&b.device));
+	assert!(s.probe_for(b.device).is_none());
+	assert!(s.probe_for(a.device).is_some());
+	// More editors than slots: the rest stay idle, the focused one is always in.
+	for &r in &inserts[1..] {
+		assert!(s.open_device_editor(r));
+	}
+	assert_eq!(s.probe_targets().len(), cadenza_engine::PROBE_SLOTS);
+	assert_eq!(s.probe_target(), inserts.last().map(|r| r.device));
+	// The inspector's device joins when no editor shows it.
+	s.close_device_editor();
+	for r in &inserts[1..] {
+		s.close_window(windows::WindowItem::Device(*r));
+	}
+	s.view.panels.set(PanelKind::Inspector, true);
+	s.selection.select_device(synth);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_targets(), &[a.device, synth.device]);
 }
 
 #[test]

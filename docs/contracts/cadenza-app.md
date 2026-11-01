@@ -588,8 +588,12 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   presets (MCP `list_presets` / `load_preset`, one undo step; amber dot = `preset_status`
   dirty), Save (MCP `save_preset`, name prompt), IN/OUT `io_meters` from the probe
   (`IoLevels`), Mix slider when the device has `mix`, close; below 800 px the compact
-  two-row header (Save in ⋯, 34 px meters, Mix in the body). The probe follows the open
-  editor (`sync_editor_probe`). Bodies are functions dispatched by device id in
+  two-row header (Save in ⋯, 34 px meters, Mix in the body). Every open editor has its own
+  probe (`sync_editor_probe` -> `AppState::probed_devices`: focused editor first, then the dock,
+  the other device windows top to bottom, the inspector's device when no editor shows it; at most
+  `engine::PROBE_SLOTS`; `set_probes`/`probe_targets`/`probe_for(device)`; `probe()`/`probe_target()`
+  = the first), so unfocused windows stay live (meters per device in `DeviceEditorUi::levels_by`;
+  each editor drains only its device and requests repaints while its probe is active). Bodies are functions dispatched by device id in
   `DeviceEditorUi::body` (`BodyCx`: ref, info, rect, drained probe frames, compact); the
   default `generic_body` draws every param (`param_groups`, `param_control`: knobs M,
   segmented / grid choices, toggles) in packed rows on a display panel.
@@ -637,7 +641,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   Key trace = the compressor's `KEY_LEVEL_DB` reading; footer "Listen to key" (headphones `device_kit::glyph_toggle`).
   KEY FILTER strip under the history (dock, compact): `FreqDisplay` of the key filter, HP/LP x-only nodes
   (`compressor_editor::{KeyFilter, drag_key, key_off}`: dragged to the end = off, double-click = off).
-  Listen modes (`AppState::set_listen/listen_mode`, `Request::Listen`) are view-only, follow the probed editor device and
+  Listen modes (`AppState::set_listen/listen_mode`, `Request::Listen`) are view-only, follow the editor in front (first probed device) and
   are cleared when its editor closes. EQ: "Listen" on the selected band (dock + compact) or Alt+click a node
   (`eq_editor::toggle_listen`; the solo follows the selection, `listen_follow`; listened chip ringed in SOLO yellow).
   AI on the device (D2c, `ui::device_ai` + pure `state::ai_changes`): header "Ask AI" (before pop-out) opens a
@@ -654,7 +658,7 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   Chorus / Saturator / Gain (`ui::devices::{chorus,saturator,gain}` + pure `state::{chorus,saturator,gain}_editor`; shared `ui::devices::{commit_changes, KnobDef, knob_grid, compact_scroll, footer}`, kit `Knob::wheel_step` for 0.5 dB wheels): chorus = both voices' LFO delay scrolling at the real rate (UI phase, repaints only while visible and playing/audio passes, else frozen + 50 % dim; drag ⇕ depth ⇔ rate = one step) + width fan; saturator = mode cards (keys 1/2/3), `saturator_shape` curve scaled to fit (drag ⇕ drive in 0.5 dB, double-click 0, 150 ms morph), test-sine or probe before/after scope, harmonics by DFT of the curve; gain = goniometer of the probe output (⇔ pan ⇕ width, M mono), correlation meter, XL gain, Ø toggles, 900 px centred; compact forms in the inspector.
   Poly Synth (`ui::devices::poly_synth` + pure `state::poly_synth_editor`): OSC (5 wave cards incl. Wavetable: per wavetable osc a panel with table picker, waterfall of frames (current violet, modulation extent/live frame teal; drag ⇕ / wheel = position, Shift fine, double-click resets, a MOD handle dropped on it targets position) + Position knob; one-row docks put the panels in a column right of the cards, wrapped/stacked/compact under them; right-click copy to the other osc; semi/cents readouts dragged ⇕; unison 1-4) → FILTER (`FreqDisplay` with `poly_synth_filter_response_db`, node ⇔ cutoff ⇕ resonance = one Batch, wheel env amount, dashed env peak) → AMP/FILTER ENVELOPE (kit `adsr`, D = one Batch; A / D / S / R `ParamKnob`s under each picture (`stage_knobs`, one row or 2 × 2) for the control menu, the value at the playhead and the modulation ring, also in the compact form) → OUTPUT (300-point `scope_window` of the probe, flat when idle, held notes); on-screen keyboard via `preview_note_on/off`, A-K/Z-X only while the editor has focus (`SynthKeys`, released on key up/focus loss/close); wraps into two rows below 1000 px, stacks below 560; compact in the inspector.
   Electric Piano (`ui::devices::electric_piano` + pure `state::electric_piano_editor`): tone bars of a held C4 (`partials`: brightness tilts, bell lifts 7-9 pale) over a Mellow ↔ Bright slider bound to brightness, face card (L/XL Brightness/Bell/Decay, S Velocity/Release/Gain), tremolo picture (one note over 3 s from the DSP's envelope, L up / R down × the auto-pan, LFO lines); the keyboard (`ui::devices::keyboard`: `SynthKeys`, `keyboard_row`) is shared with the Poly Synth; compact in the inspector.
-  Drum Machine (`ui::devices::drum_machine` + pure `state::drum_machine_editor`): 7 voice strips in `BAND_COLORS` (pad click = audition via `preview_note_on/off` + select, Ctrl/Cmd-click selects only, double-click resets the voice; envelope from the voice's params, 2 summaries, level bar drag ⇔ / wheel = one step), selected voice (kick waveform with its real pitch sweep, dashed amp envelope, L knobs), KIT tone/gain, ← → voices; strips flash 150 ms on the DSP trigger counters (`Flashes` over `probe().readings()`); <1100 px two rows, <700 px compact; compact in the inspector.
+  Drum Machine (`ui::devices::drum_machine` + pure `state::drum_machine_editor`): 7 voice strips in `BAND_COLORS` (pad click = audition via `preview_note_on/off` + select, Ctrl/Cmd-click selects only, double-click resets the voice; envelope from the voice's params, 2 summaries, level bar drag ⇔ / wheel = one step), selected voice (kick waveform with its real pitch sweep, dashed amp envelope, L knobs), KIT tone/gain, ← → voices; strips flash 150 ms on the DSP trigger counters (`Flashes` over `probe_for(device).readings()`); <1100 px two rows, <700 px compact; compact in the inspector.
 - Tests: state unit tests, `tests/ui.rs` drives the whole window headless with `egui_kittest`;
   `CADENZA_SCREENSHOT_DIR=dir cargo test -p cadenza-app --test ui -- --ignored` renders PNGs (wgpu),
   including automation lanes, the audio editor, an empty project, (`render_sampler_screens`)

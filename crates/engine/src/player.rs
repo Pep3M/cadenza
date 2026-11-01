@@ -73,7 +73,7 @@ use crate::hosting::{PluginCrash, PluginEditorSlot, PluginHosting, PluginWatch, 
 use crate::input::{InputFifo, InputInfo, InputMode, InputReader, InputStats, MAX_INPUT_CHANNELS};
 use crate::meter::MeterBank;
 use crate::metronome::MetronomeSettings;
-use crate::probe::DeviceProbe;
+use crate::probe::{DeviceProbe, PROBE_SLOTS};
 use crate::record::{
 	RecordSession, RecordSetup, RecordTap, Recording, RecordingMonitor, WriterOutput,
 };
@@ -155,8 +155,8 @@ enum Cmd {
 	/// Play after a count-in of this many bars.
 	PlayCountIn(u32),
 	TestTone(bool),
-	/// Device followed by the probe (kept across loads).
-	Probe(Option<DeviceId>),
+	/// Device followed by one probe slot (kept across loads).
+	Probe(u8, Option<DeviceId>),
 	/// Monitoring switches on the device output (kept across loads).
 	MonitorFx(MonitorFx),
 	/// Device playing a listen mode (kept across loads).
@@ -266,7 +266,7 @@ struct AudioCore {
 	playing: bool,
 	position: Tick,
 	loop_range: Option<(Tick, Tick)>,
-	probe_target: Option<DeviceId>,
+	probe_targets: [Option<DeviceId>; PROBE_SLOTS],
 	listen: Option<(DeviceId, Listen)>,
 	scratch_l: Vec<f32>,
 	scratch_r: Vec<f32>,
@@ -391,7 +391,7 @@ fn channel_pair(sample_rate: u32) -> (Control, AudioCore) {
 			playing: false,
 			position: Tick::ZERO,
 			loop_range: None,
-			probe_target: None,
+			probe_targets: [None; PROBE_SLOTS],
 			listen: None,
 			scratch_l: vec![0.0; SCRATCH_FRAMES],
 			scratch_r: vec![0.0; SCRATCH_FRAMES],
@@ -437,7 +437,7 @@ impl AudioCore {
 			&& let Ok(mut next) = self.graphs.pop()
 		{
 			next.set_loop(self.loop_range);
-			next.continue_probe(self.probe_target);
+			next.continue_probes(&self.probe_targets);
 			next.set_listen(self.listen);
 			next.seek(self.position);
 			if self.playing {
@@ -548,10 +548,12 @@ impl AudioCore {
 						g.set_loop(range);
 					}
 				}
-				Cmd::Probe(device) => {
-					self.probe_target = device;
+				Cmd::Probe(slot, device) => {
+					if let Some(t) = self.probe_targets.get_mut(slot as usize) {
+						*t = device;
+					}
 					if let Some(g) = &mut self.graph {
-						g.set_probe_target(device);
+						g.set_probe_slot(slot as usize, device);
 					}
 				}
 				Cmd::Arm(track, on) => {
@@ -1078,9 +1080,11 @@ pub struct Player {
 	midi_input: Option<MidiInputConnection>,
 	/// Meters of the last loaded graph.
 	meters: Option<Arc<MeterBank>>,
-	/// Ring every loaded graph writes the probed device into, and that device.
-	probe: Arc<DeviceProbe>,
-	probe_target: Option<DeviceId>,
+	/// One ring per probe slot (every loaded graph writes into them), the device each
+	/// slot follows, and the probed devices in the order they were asked for.
+	probes: [Arc<DeviceProbe>; PROBE_SLOTS],
+	probe_slots: [Option<DeviceId>; PROBE_SLOTS],
+	probe_order: Vec<DeviceId>,
 	/// Ring every loaded graph writes the master's post-fader output into.
 	master_tap: Arc<DeviceProbe>,
 	monitor_fx: MonitorFx,
@@ -1361,8 +1365,9 @@ impl Player {
 			watches: Vec::new(),
 			midi_input: None,
 			meters: None,
-			probe: Arc::new(DeviceProbe::new(sample_rate)),
-			probe_target: None,
+			probes: std::array::from_fn(|_| Arc::new(DeviceProbe::new(sample_rate))),
+			probe_slots: [None; PROBE_SLOTS],
+			probe_order: Vec::with_capacity(PROBE_SLOTS),
 			master_tap: Arc::new(DeviceProbe::new(sample_rate)),
 			monitor_fx: MonitorFx::default(),
 			listen: None,
@@ -1924,7 +1929,7 @@ impl Player {
 			self.plugins.as_deref(),
 			&self.hosting,
 		)?;
-		graph.attach_probe(Some(self.probe.clone()));
+		graph.attach_probes(&self.probes);
 		graph.attach_master_tap(Some(self.master_tap.clone()));
 		let warnings = graph.warnings().to_vec();
 		let watches = graph.plugin_watches.clone();
@@ -2104,25 +2109,86 @@ impl Player {
 	}
 
 	/// Follows `device` (a built-in or in-process plugin anywhere in the project: track
-	/// instrument, inserts, master inserts) with the probe, or stops (`None`). Kept across
-	/// loads; while the loaded graph lacks the device the probe is idle.
+	/// instrument, inserts, master inserts) with the probe, or stops (`None`): the
+	/// single-device form of [`Player::set_probes`].
 	pub fn set_probe(&mut self, device: Option<DeviceId>) -> Result<(), EngineError> {
-		if self.probe_target == device {
-			return Ok(());
+		match device {
+			Some(d) => self.set_probes(&[d]),
+			None => self.set_probes(&[]),
 		}
-		self.control.send(Cmd::Probe(device))?;
-		self.probe_target = device;
+	}
+
+	/// Follows each of `devices` (first [`PROBE_SLOTS`], repeats ignored) with its own
+	/// probe; every other device stops. A device probed already keeps its ring and the
+	/// frames not read yet. Kept across loads; while the loaded graph lacks a device its
+	/// probe is idle.
+	pub fn set_probes(&mut self, devices: &[DeviceId]) -> Result<(), EngineError> {
+		// Allocation free, like the other control calls made while audio runs.
+		let mut order = [None; PROBE_SLOTS];
+		let mut n = 0;
+		for &d in devices {
+			if n == PROBE_SLOTS {
+				break;
+			}
+			if !order.contains(&Some(d)) {
+				order[n] = Some(d);
+				n += 1;
+			}
+		}
+		let order = &order[..n];
+		let mut slots = self.probe_slots;
+		for s in &mut slots {
+			if s.is_some_and(|d| !order.contains(&Some(d))) {
+				*s = None;
+			}
+		}
+		for &d in order.iter().flatten() {
+			if !slots.contains(&Some(d))
+				&& let Some(free) = slots.iter_mut().find(|s| s.is_none())
+			{
+				*free = Some(d);
+			}
+		}
+		for (i, (&want, have)) in slots.iter().zip(self.probe_slots.iter_mut()).enumerate() {
+			if want != *have {
+				self.control.send(Cmd::Probe(i as u8, want))?;
+				*have = want;
+			}
+		}
+		self.probe_order.clear();
+		self.probe_order.extend(order.iter().flatten());
 		Ok(())
 	}
 
-	/// The probe ring while a device is probed (one per player: survives loads).
-	pub fn probe(&self) -> Option<Arc<DeviceProbe>> {
-		self.probe_target.map(|_| self.probe.clone())
+	/// The probe ring of `device` while it is probed (one per slot: survives loads).
+	pub fn probe_for(&self, device: DeviceId) -> Option<Arc<DeviceProbe>> {
+		self.probe_slots
+			.iter()
+			.position(|s| *s == Some(device))
+			.map(|i| self.probes[i].clone())
 	}
 
-	/// The probed device.
+	/// The probed devices with their rings, in the order [`Player::set_probes`] got them.
+	pub fn probes(&self) -> Vec<(DeviceId, Arc<DeviceProbe>)> {
+		self.probe_order
+			.iter()
+			.filter_map(|&d| self.probe_for(d).map(|p| (d, p)))
+			.collect()
+	}
+
+	/// The probe ring of the first probed device.
+	pub fn probe(&self) -> Option<Arc<DeviceProbe>> {
+		self.probe_target().and_then(|d| self.probe_for(d))
+	}
+
+	/// The first probed device.
 	pub fn probe_target(&self) -> Option<DeviceId> {
-		self.probe_target
+		self.probe_order.first().copied()
+	}
+
+	/// Every probed device, in the order [`Player::set_probes`] got them.
+	pub fn probe_targets(&self) -> &[DeviceId] {
+		&self.probe_order
 	}
 
 	/// Ring of the master's post-fader output (one per player: survives loads), for live

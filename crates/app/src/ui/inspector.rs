@@ -1441,15 +1441,13 @@ fn generic_params(ui: &mut Ui, state: &mut AppState, r: DeviceRef, params: Vec<P
 }
 
 /// This frame's drained probe samples of `r`, when the inspector is the one entitled to
-/// them: `AppState::sync_editor_probe` points the probe at the dock/popped-out device
-/// editor's device first and only falls back to the inspector's when none is open, so this
-/// returns nothing while an editor holds it — only one consumer may drain the probe ring
-/// per frame.
+/// them: a device shown in a device editor (window or dock) is drained by that editor,
+/// since only one consumer may drain a probe ring per frame.
 fn probe_frames(state: &AppState, r: DeviceRef) -> Vec<ProbeFrame> {
-	if state.device_editor_target().is_some() || state.probe_target() != Some(r.device) {
+	if state.device_editor_shown(r) {
 		return Vec::new();
 	}
-	let Some(probe) = state.probe() else {
+	let Some(probe) = state.probe_for(r.device) else {
 		return Vec::new();
 	};
 	let mut frames = Vec::new();

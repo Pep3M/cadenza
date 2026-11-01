@@ -220,7 +220,7 @@ the key is built even for devices without a key input; 0..1 over -60..0 dBFS + g
 target to `clamp(base + sum(depth * value) * (max - min))` via `set_param`; graph writes to a
 modulated param (initial, live, automation: `graph::Device::set_param`) only move `base`. No
 extra smoothing (32-sample steps, the built-ins smooth params). Modulator edits recompile.
-`DeviceProbe::modulation()` publishes each modulator's value for the probed device. Tests:
+`DeviceProbe::modulation()` publishes each modulator's value for each probed device. Tests:
 `tests/modulation.rs` (LFO in an offline render, follower level, offline == realtime), `no_alloc`.
 MCP `set_modulators { track_id, device_id, modulators: [{type, ..., targets}], sidechain_track_id? }`
 (`tools::modulation`: params checked against the registry, ids kept by position, optional
@@ -259,16 +259,20 @@ Metering: every graph measures each track's post-fader signal and the master per
 publishes at the end of each `Graph::process` into a `MeterBank` of atomics (peak via `fetch_max`
 on the float bits, readers take-and-reset it; RMS with 300 ms ballistics is a plain store):
 wait-free, no allocation (covered by the `no_alloc` test). Peak hold/fall-off is the UI's job.
-Device probe (redesign D1, `engine::probe`): `Player::set_probe(Option<DeviceId>)` (kept across
-loads, `Cmd::Probe`; any device: instrument, insert, master insert) -> `Player::probe() ->
-Option<Arc<DeviceProbe>>` (one per player, attached to every loaded graph): `Device::run` copies
+Device probe (redesign D1, `engine::probe`): `Player::set_probes(&[DeviceId])` (up to
+`PROBE_SLOTS` = 8 devices at once, repeats ignored, kept across loads; one preallocated
+`DeviceProbe` per slot, attached to every loaded graph; a device still probed keeps its slot and
+unread frames; per-slot `Cmd::Probe(slot, device)` -> `Graph::set_probe_slot`; any device:
+instrument, insert, master insert) -> `probe_for(device)`, `probes()`, `probe_targets()`;
+`set_probe(Option)`/`probe()`/`probe_target()` = the single-device form / the first. `Device::run` copies
 the target's in/out per quantum into a preallocated 0.5 s SPSC ring of atomics (full = drop +
 `dropped_frames`; `drain(&mut Vec<ProbeFrame { input, output }>)`, `is_active`) and its
 `Processor::readings(&mut [f32]) -> usize` (dsp `readings::{MAX, GAIN_REDUCTION_DB}`: compressor,
 limiter) as `readings()/reading(i)`. Listen (T27): `Player::set_listen(device, Listen)` / `listen()` -> `Cmd::Listen` -> `Graph::set_listen` (old target back to
 Off; re-applied to every swapped-in graph, kept across loads; never offline; `no_alloc` covered).
-App: `AudioEngine::probe` -> `AudioEvent::Probe`,
-`AppState::set_probe/probe_target/probe`. Covered by `no_alloc`.
+App: `AudioEngine::probe(Vec<DeviceId>)` -> `AudioEvent::Probe(Vec<(DeviceId, Arc<DeviceProbe>)>)`,
+`AppState::set_probes/probe_targets/probe_for`. Covered by `no_alloc` (two slots) and
+`tests/probe.rs` (`several_probes_follow_their_own_devices`).
 Master tap + monitor switches (T26): `Player::master_tap() -> Arc<DeviceProbe>` (one per player,
 attached to every loaded graph) gets the master's post-fader output per rendered quantum (both
 sides of each frame), before the metronome. `Player::set_monitor(MonitorFx { mono, dim })`

@@ -141,8 +141,7 @@ fn live_readings(state: &AppState, cx: &BodyCx, v: &EqView) -> Option<[f32; read
 	if v.synthetic.is_some() {
 		return v.synthetic;
 	}
-	let ours = state.probe_target() == Some(cx.r.device);
-	let probe = state.probe().filter(|_| ours)?;
+	let probe = state.probe_for(cx.r.device)?;
 	if !state.is_playing() && cx.frames.is_empty() {
 		return None;
 	}
@@ -282,9 +281,9 @@ fn listen_toggle(ui: &mut Ui, state: &mut AppState, r: DeviceRef, band: usize) {
 
 fn update_analyzer(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut EqView) {
 	let dt = ui.input(|i| i.stable_dt).min(0.25);
-	let ours = state.probe_target() == Some(cx.r.device);
-	if v.analyzer && ours && !cx.frames.is_empty() {
-		let rate = state.probe().map_or(48_000.0, |p| p.sample_rate() as f32);
+	let probe = state.probe_for(cx.r.device);
+	if v.analyzer && probe.is_some() && !cx.frames.is_empty() {
+		let rate = probe.map_or(48_000.0, |p| p.sample_rate() as f32);
 		v.post_window.push_channel(cx.frames, Tap::Output, v.side);
 		let bins = device_display::spectrum_bins(v.post_window.samples(), rate);
 		v.post_bins.update(&bins, dt);
@@ -354,7 +353,9 @@ fn wheel(ui: &Ui, state: &mut AppState, r: DeviceRef, v: &mut EqView, band: usiz
 fn display(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut EqView, rect: Rect) {
 	let r = cx.r;
 	let values = shown_values(state, r);
-	let rate = state.probe().map_or(48_000.0, |p| p.sample_rate() as f32);
+	let rate = state
+		.probe_for(r.device)
+		.map_or(48_000.0, |p| p.sample_rate() as f32);
 	let bands = EqBands::new(values.as_slice(), rate);
 	let bands = &bands;
 	// Dynamic bands: the live curve (static + each band's movement) over the static one.

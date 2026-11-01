@@ -20,9 +20,9 @@
 //! them ([`AudioEvent::Recorded`] carries the files and passes; the UI turns them into
 //! one undoable batch). Device lists are probed here too, never on the UI thread.
 //!
-//! Device probe: [`AudioEngine::probe`] picks the device whose editor shows live data;
-//! the thread answers with [`AudioEvent::Probe`] carrying the player's [`DeviceProbe`]
-//! (again after the devices reopen, since a new player has a new ring).
+//! Device probes: [`AudioEngine::probe`] picks the devices whose editors show live data;
+//! the thread answers with [`AudioEvent::Probe`] carrying the player's [`DeviceProbe`]s
+//! (again after the devices reopen, since a new player has new rings).
 
 use crate::i18n::{tr, trf};
 use std::sync::Arc;
@@ -111,8 +111,8 @@ enum Request {
 	/// Play a snippet once over the output (note audition): channels, rate, gain dB.
 	Snippet(Vec<Vec<f32>>, u32, f32),
 	StopSnippet,
-	/// The device the probe follows (`None`: off).
-	Probe(Option<DeviceId>),
+	/// The devices the probes follow (empty: off).
+	Probe(Vec<DeviceId>),
 	/// Monitoring switches on the output (mono, dim).
 	MonitorFx(MonitorFx),
 	/// The device playing a listen mode (compressor key, EQ band solo; `None`: off).
@@ -185,8 +185,8 @@ pub enum AudioEvent {
 	},
 	/// The output thread's scheduling became known (after the device opened).
 	AudioThread(String),
-	/// The probe of the current player (`None` while no device is probed).
-	Probe(Option<Arc<DeviceProbe>>),
+	/// The probes of the current player, one per probed device.
+	Probe(Vec<(DeviceId, Arc<DeviceProbe>)>),
 	/// What happened in open plugin editors.
 	Editor(Vec<EditorUpdate>),
 	/// Live plugin states to store in the project (captured, or carried over by a load).
@@ -292,9 +292,9 @@ impl AudioEngine {
 		self.send(Request::StopSnippet);
 	}
 
-	/// Follows `device` with the probe (answered by [`AudioEvent::Probe`]).
-	pub fn probe(&self, device: Option<DeviceId>) {
-		self.send(Request::Probe(device));
+	/// Follows each of `devices` with its own probe (answered by [`AudioEvent::Probe`]).
+	pub fn probe(&self, devices: Vec<DeviceId>) {
+		self.send(Request::Probe(devices));
 	}
 
 	/// Mono / dim on the output (monitoring only, never rendered).
@@ -469,7 +469,7 @@ struct Kept {
 	armed: Vec<TrackId>,
 	metronome: Option<MetronomeSettings>,
 	latency_offset: i64,
-	probe: Option<DeviceId>,
+	probe: Vec<DeviceId>,
 	monitor_fx: MonitorFx,
 	listen: Option<(DeviceId, Listen)>,
 }
@@ -512,7 +512,7 @@ fn open(config: &AudioConfig, kept: &mut Kept) -> Result<Player, String> {
 		let _ = player.set_metronome(m);
 	}
 	player.set_latency_offset(kept.latency_offset);
-	let _ = player.set_probe(kept.probe);
+	let _ = player.set_probes(&kept.probe);
 	let _ = player.set_monitor(kept.monitor_fx);
 	let _ = apply_listen(&mut player, kept.listen);
 	Ok(player)
@@ -599,7 +599,7 @@ fn run(
 						} => {
 							let _ = tx.send(Vec::new());
 						}
-						Request::Probe(device) => kept.probe = device,
+						Request::Probe(devices) => kept.probe = devices,
 						Request::MonitorFx(fx) => kept.monitor_fx = fx,
 						Request::Listen(target) => kept.listen = target,
 						_ => {}
@@ -618,8 +618,8 @@ fn run(
 		midi_map: player.midi_map_monitor(),
 		status: status(&player, &kept),
 	});
-	if kept.probe.is_some() {
-		emit(AudioEvent::Probe(player.probe()));
+	if !kept.probe.is_empty() {
+		emit(AudioEvent::Probe(player.probes()));
 	}
 	let mut next_crash_poll = Instant::now() + CRASH_POLL;
 	let mut last_xruns: (u64, Vec<PluginXruns>) = (0, Vec::new());
@@ -816,8 +816,8 @@ fn run(
 						midi_map: player.midi_map_monitor(),
 						status: status(&player, &kept),
 					});
-					if kept.probe.is_some() {
-						emit(AudioEvent::Probe(player.probe()));
+					if !kept.probe.is_empty() {
+						emit(AudioEvent::Probe(player.probes()));
 					}
 					Ok(())
 				}
@@ -866,10 +866,10 @@ fn run(
 					kept.listen = target;
 					apply_listen(&mut player, target)
 				}
-				Request::Probe(device) => {
-					kept.probe = device;
-					let result = player.set_probe(device);
-					emit(AudioEvent::Probe(player.probe()));
+				Request::Probe(devices) => {
+					let result = player.set_probes(&devices);
+					kept.probe = devices;
+					emit(AudioEvent::Probe(player.probes()));
 					result
 				}
 				Request::ListDevices => {

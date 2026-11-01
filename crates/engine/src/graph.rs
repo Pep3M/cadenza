@@ -426,34 +426,46 @@ impl QuantumMidi {
 	}
 }
 
-/// The audio side of the device probe (see [`crate::probe`]): the shared ring the player
-/// attached and the device it follows. Allocation free after [`ProbeTap::new`].
-pub(crate) struct ProbeTap {
+/// One probe slot: the ring the player attached and the device it follows.
+struct ProbeSlot {
 	probe: Option<Arc<DeviceProbe>>,
 	target: Option<DeviceId>,
-	input: StereoBuf,
-	readings: [f32; cadenza_dsp::readings::MAX],
 	/// The target ran in the quantum being rendered.
 	hit: bool,
+}
+
+/// The audio side of the device probes (see [`crate::probe`]): up to
+/// [`crate::PROBE_SLOTS`] devices, each with its own ring. Allocation free after
+/// [`ProbeTap::new`].
+pub(crate) struct ProbeTap {
+	slots: [ProbeSlot; crate::PROBE_SLOTS],
+	input: StereoBuf,
+	readings: [f32; cadenza_dsp::readings::MAX],
 }
 
 impl ProbeTap {
 	pub fn new() -> Self {
 		Self {
-			probe: None,
-			target: None,
+			slots: std::array::from_fn(|_| ProbeSlot {
+				probe: None,
+				target: None,
+				hit: false,
+			}),
 			input: StereoBuf::new(),
 			readings: [0.0; cadenza_dsp::readings::MAX],
-			hit: false,
 		}
 	}
 
-	fn wants(&self, device: DeviceId) -> bool {
-		self.probe.is_some() && self.target == Some(device)
+	/// The slot following `device`, if any.
+	fn wants(&self, device: DeviceId) -> Option<usize> {
+		self.slots
+			.iter()
+			.position(|s| s.probe.is_some() && s.target == Some(device))
 	}
 
-	fn capture(&mut self, device: &Device, buf: &StereoBuf) {
-		let Some(p) = &self.probe else {
+	fn capture(&mut self, slot: usize, device: &Device, buf: &StereoBuf) {
+		let s = &mut self.slots[slot];
+		let Some(p) = &s.probe else {
 			return;
 		};
 		p.push(&self.input.l, &self.input.r, &buf.l, &buf.r);
@@ -466,7 +478,22 @@ impl ProbeTap {
 			.as_ref()
 			.map_or(0, |m| m.values(&mut mods));
 		p.publish_modulation(&mods[..n]);
-		self.hit = true;
+		s.hit = true;
+	}
+
+	fn begin_quantum(&mut self) {
+		for s in &mut self.slots {
+			s.hit = false;
+		}
+	}
+
+	/// Publishes which targets ran (`all_idle`: nothing ran at all).
+	fn end_quantum(&self, all_idle: bool) {
+		for s in &self.slots {
+			if let Some(p) = &s.probe {
+				p.set_active(s.hit && !all_idle);
+			}
+		}
 	}
 }
 
@@ -504,7 +531,7 @@ impl Device {
 			m.apply(&mut *self.processor, events, t);
 		}
 		let probed = probe.wants(self.id);
-		if probed {
+		if probed.is_some() {
 			probe.input.l.copy_from_slice(&buf.l);
 			probe.input.r.copy_from_slice(&buf.r);
 		}
@@ -514,8 +541,8 @@ impl Device {
 		{
 			m.follow(&buf.l, &buf.r, false);
 		}
-		if probed {
-			probe.capture(self, buf);
+		if let Some(slot) = probed {
+			probe.capture(slot, self, buf);
 		}
 	}
 
@@ -774,10 +801,18 @@ impl Graph {
 		self.sample_rate
 	}
 
-	/// Attaches the probe ring the graph writes the probed device into (control side,
-	/// before the graph goes to the audio thread).
+	/// Attaches the probe ring of slot 0 (control side, before the graph goes to the
+	/// audio thread); see [`Graph::attach_probes`].
 	pub fn attach_probe(&mut self, probe: Option<Arc<DeviceProbe>>) {
-		self.probe.probe = probe;
+		self.probe.slots[0].probe = probe;
+	}
+
+	/// Attaches one ring per probe slot, in slot order (control side; extra rings are
+	/// ignored, missing ones leave their slots without a ring).
+	pub fn attach_probes(&mut self, probes: &[Arc<DeviceProbe>]) {
+		for (i, slot) in self.probe.slots.iter_mut().enumerate() {
+			slot.probe = probes.get(i).cloned();
+		}
 	}
 
 	/// Attaches the ring that receives the master's post-fader output (before the
@@ -787,22 +822,34 @@ impl Graph {
 		self.master_tap = tap;
 	}
 
-	/// The device whose input/output and readings go to the attached probe (`None` =
-	/// idle). A different target restarts the probe. Realtime safe.
+	/// The device whose input/output and readings go to the probe of slot 0 (`None` =
+	/// idle). See [`Graph::set_probe_slot`]. Realtime safe.
 	pub fn set_probe_target(&mut self, device: Option<DeviceId>) {
-		if self.probe.target == device {
+		self.set_probe_slot(0, device);
+	}
+
+	/// The device whose input/output and readings go to probe slot `slot` (`None` =
+	/// idle; out of range slots are ignored). A different target restarts that slot's
+	/// ring. Realtime safe.
+	pub fn set_probe_slot(&mut self, slot: usize, device: Option<DeviceId>) {
+		let Some(s) = self.probe.slots.get_mut(slot) else {
+			return;
+		};
+		if s.target == device {
 			return;
 		}
-		self.probe.target = device;
-		if let Some(p) = &self.probe.probe {
+		s.target = device;
+		if let Some(p) = &s.probe {
 			p.restart();
 		}
 	}
 
-	/// Like [`Graph::set_probe_target`] for a graph replacing one that already followed
-	/// `device`: frames not read yet are kept.
-	pub(crate) fn continue_probe(&mut self, device: Option<DeviceId>) {
-		self.probe.target = device;
+	/// Like [`Graph::set_probe_slot`] for every slot of a graph replacing one that
+	/// already followed `targets`: frames not read yet are kept.
+	pub(crate) fn continue_probes(&mut self, targets: &[Option<DeviceId>; crate::PROBE_SLOTS]) {
+		for (s, t) in self.probe.slots.iter_mut().zip(targets) {
+			s.target = *t;
+		}
 	}
 
 	/// Total plugin latency at the master output, in samples (compensated internally).
@@ -1390,9 +1437,7 @@ impl Graph {
 			self.meters.silence();
 			self.meters.publish();
 			// Nothing ran: readers must not take the last readings as live.
-			if let Some(p) = &self.probe.probe {
-				p.set_active(false);
-			}
+			self.probe.end_quantum(true);
 			return;
 		}
 		let mut start = 0;
@@ -1800,7 +1845,7 @@ impl Graph {
 			master_tap,
 			..
 		} = self;
-		probe.hit = false;
+		probe.begin_quantum();
 		for i in 0..nodes.len() {
 			let (done, rest) = nodes.split_at_mut(i);
 			let node = &mut rest[0];
@@ -1973,9 +2018,7 @@ impl Graph {
 		for d in &mut master.inserts {
 			d.run_effect(&mut master.buf, &transport, nodes, probe, quantum_midi);
 		}
-		if let Some(p) = &probe.probe {
-			p.set_active(probe.hit);
-		}
+		probe.end_quantum(false);
 		master.fader.apply(&mut master.buf);
 		meters.measure(None, &master.buf.l, &master.buf.r);
 		if let Some(tap) = master_tap {

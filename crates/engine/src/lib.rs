@@ -61,7 +61,7 @@ pub use player::{
 	EditorState, EditorUpdate, MonitorFx, Player, PlayerClock, VirtualDevice, find_midi_input,
 	midi_input_ports,
 };
-pub use probe::{DeviceProbe, ProbeFrame};
+pub use probe::{DeviceProbe, PROBE_SLOTS, ProbeFrame};
 pub use record::{
 	LiveRecording, MidiItem, RecordOptions, RecordSetup, RecordTrack, RecordedAudio, RecordedPass,
 	Recording, RecordingMonitor, record_commands,

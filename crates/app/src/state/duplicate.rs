@@ -81,11 +81,9 @@ fn copy_clip(
 	let mut copy = clip.clone();
 	copy.id = ClipId::new();
 	if let Some(take) = &mut copy.take {
-		take.group = *groups.entry(take.group).or_insert_with(TakeGroupId::new);
+		take.group = *groups.entry(take.group).or_default();
 	}
-	copy.link = clip
-		.link
-		.map(|l| *links.entry(l).or_insert_with(LinkId::new));
+	copy.link = clip.link.map(|l| *links.entry(l).or_default());
 	match &mut copy.content {
 		ClipContent::Midi { notes, .. } => {
 			for n in notes {

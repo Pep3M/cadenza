@@ -2499,6 +2499,14 @@ fn sampler_app() -> (CadenzaApp, DeviceRef, DeviceRef) {
 			device: t.instrument.as_ref().unwrap().id,
 		});
 	}
+	// Adding a device opens its floating editor; close both as the user would, so the
+	// drum sampler in the dock is the editor in front.
+	for r in &refs {
+		state
+			.view
+			.windows
+			.close(cadenza_app::state::windows::WindowItem::Device(*r));
+	}
 	state.view.panels.set(PanelKind::Mixer, false);
 	assert!(state.open_device_in_dock(refs[0]));
 	(CadenzaApp::with_state(state), refs[0], refs[1])

@@ -6,7 +6,7 @@
 use crate::i18n::{tr, trf};
 use std::collections::HashMap;
 
-use cadenza_core::{ParamAddress, ParamTarget, TempoPoint, Tick, TrackId};
+use cadenza_core::{ParamAddress, ParamTarget, TempoMap, TempoPoint, Tick, TrackId};
 use cadenza_model::{AutomationPoint, Command, DeviceKind, PointShape, Project};
 use cadenza_plugin_host::PluginCatalog;
 
@@ -38,6 +38,9 @@ pub struct AutomationView {
 	pub selected: Vec<(ParamAddress, Tick)>,
 	/// The master's lanes are listed after the tracks.
 	pub master: bool,
+	/// Lanes hidden explicitly (× in the lane header, or the picker); their points stay
+	/// in the project and the lane reappears once shown again.
+	pub hidden: Vec<ParamAddress>,
 }
 
 impl AutomationView {
@@ -45,9 +48,10 @@ impl AutomationView {
 		self.lanes.get(&owner).is_some_and(|l| l.open)
 	}
 
-	/// Lanes listed under `owner`: the ones added in the view, then the project's other
-	/// lanes of that channel (addresses that no longer resolve are dropped).
-	pub fn visible(&self, project: &Project, owner: Option<TrackId>) -> Vec<ParamAddress> {
+	/// Every lane that exists under `owner` (added in the view, or in the project),
+	/// hidden ones included; addresses that no longer resolve are dropped. Used by the
+	/// "Automate" picker to list lanes with a show/hide check.
+	pub fn existing(&self, project: &Project, owner: Option<TrackId>) -> Vec<ParamAddress> {
 		let mut out: Vec<ParamAddress> = self
 			.lanes
 			.get(&owner)
@@ -60,6 +64,28 @@ impl AutomationView {
 		}
 		out.retain(|a| resolves(project, a));
 		out
+	}
+
+	/// Lanes drawn under `owner`: `existing` minus the hidden ones.
+	pub fn visible(&self, project: &Project, owner: Option<TrackId>) -> Vec<ParamAddress> {
+		self.existing(project, owner)
+			.into_iter()
+			.filter(|a| !self.hidden.contains(a))
+			.collect()
+	}
+
+	/// Whether `address` is hidden (it may still exist in the project).
+	pub fn is_hidden(&self, address: &ParamAddress) -> bool {
+		self.hidden.contains(address)
+	}
+
+	/// Shows or hides one lane without touching the others.
+	pub fn set_hidden(&mut self, address: &ParamAddress, hidden: bool) {
+		if hidden {
+			self.hide(address);
+		} else {
+			self.show(address.clone());
+		}
 	}
 
 	/// Toggles the lanes of `owner`; opening a channel without lanes shows its volume.
@@ -78,7 +104,7 @@ impl AutomationView {
 		}
 	}
 
-	/// Shows (and opens) the lane for `address`.
+	/// Shows (opens and unhides) the lane for `address`.
 	pub fn show(&mut self, address: ParamAddress) {
 		if address.track.is_none() {
 			self.master = true;
@@ -86,20 +112,41 @@ impl AutomationView {
 		let view = self.lanes.entry(address.track).or_default();
 		view.open = true;
 		if !view.shown.contains(&address) {
-			view.shown.push(address);
+			view.shown.push(address.clone());
+		}
+		self.hidden.retain(|a| a != &address);
+	}
+
+	/// Shows every existing lane of `owner` (track menu "Automate" → "Show all").
+	pub fn show_all(&mut self, project: &Project, owner: Option<TrackId>) {
+		let addresses = self.existing(project, owner);
+		self.hidden.retain(|a| !addresses.contains(a));
+		let view = self.lanes.entry(owner).or_default();
+		view.open = true;
+		if owner.is_none() {
+			self.master = true;
+		}
+	}
+
+	/// Hides every existing lane of `owner` (track menu "Automate" → "Hide all"). Their
+	/// points stay in the project.
+	pub fn hide_all(&mut self, project: &Project, owner: Option<TrackId>) {
+		for address in self.existing(project, owner) {
+			self.hide(&address);
 		}
 	}
 
 	/// Hides a lane (its points stay in the project).
 	pub fn hide(&mut self, address: &ParamAddress) {
-		if let Some(v) = self.lanes.get_mut(&address.track) {
-			v.shown.retain(|a| a != address);
+		if !self.hidden.contains(address) {
+			self.hidden.push(address.clone());
 		}
 		self.selected.retain(|(a, _)| a != address);
 	}
 
 	/// Replaces the lane shown as `old` by `new` (parameter picker).
 	pub fn replace(&mut self, old: &ParamAddress, new: ParamAddress) {
+		self.hidden.retain(|a| a != &new);
 		let view = self.lanes.entry(old.track).or_default();
 		match view.shown.iter().position(|a| a == old) {
 			Some(i) if !view.shown.contains(&new) => view.shown[i] = new,
@@ -124,7 +171,7 @@ impl AutomationView {
 			.collect()
 	}
 
-	/// Drops selections of points that no longer exist.
+	/// Drops selections and hidden flags of lanes that no longer exist.
 	pub fn prune(&mut self, project: &Project) {
 		self.selected.retain(|(a, t)| {
 			project
@@ -134,6 +181,7 @@ impl AutomationView {
 		for view in self.lanes.values_mut() {
 			view.shown.retain(|a| resolves(project, a));
 		}
+		self.hidden.retain(|a| resolves(project, a));
 	}
 }
 
@@ -457,13 +505,17 @@ fn set(address: &ParamAddress, mut points: Vec<AutomationPoint>) -> Command {
 /// segment it lands in.
 pub fn add_point(project: &Project, address: &ParamAddress, tick: Tick, value: f32) -> Command {
 	let mut pts = points(project, address);
-	let shape = pts
+	let (shape, tension) = pts
 		.iter()
 		.rev()
 		.find(|p| p.tick <= tick)
-		.map_or(PointShape::Linear, |p| p.shape);
+		.map_or((PointShape::Linear, 0.0), |p| (p.shape, p.tension));
 	pts.retain(|p| p.tick != tick);
-	pts.push(AutomationPoint::new(tick, value).with_shape(shape));
+	pts.push(
+		AutomationPoint::new(tick, value)
+			.with_shape(shape)
+			.with_tension(tension),
+	);
 	set(address, pts)
 }
 
@@ -511,7 +563,7 @@ pub fn moved(
 		.map(|p| AutomationPoint {
 			tick: p.tick + dt,
 			value: meta.from_norm(meta.to_norm(p.value) + dnorm),
-			shape: p.shape,
+			..*p
 		})
 		.collect();
 	selected.dedup_by_key(|p| p.tick);
@@ -554,6 +606,79 @@ pub fn set_shape(
 			}
 		})
 		.collect();
+	(changed != pts).then(|| set(address, changed))
+}
+
+/// Vertical drag (px) that sweeps a tension handle over half its range (0 -> ±1).
+pub const TENSION_DRAG_PX: f32 = 100.0;
+
+/// Where along its segment (0..1 of the ticks) a shape's tension handle sits: halfway,
+/// except the double curve, whose middle never moves.
+pub fn handle_fraction(shape: PointShape) -> f64 {
+	match shape {
+		PointShape::DoubleCurve => 0.25,
+		_ => 0.5,
+	}
+}
+
+/// The tension handle of the segment that starts at `pts[i]` (sorted points): `(tick,
+/// value)` on the curve, `None` for the last point or a shape without tension.
+pub fn tension_handle(pts: &[AutomationPoint], i: usize, tempo: &TempoMap) -> Option<(Tick, f32)> {
+	let a = pts.get(i)?;
+	let b = pts.get(i + 1)?;
+	if !a.shape.uses_tension() || b.tick <= a.tick {
+		return None;
+	}
+	let span = (b.tick.0 - a.tick.0) as f64;
+	let tick = a.tick + Tick((span * handle_fraction(a.shape)).round() as i64);
+	Some((tick, cadenza_model::automation_value(pts, tick, tempo)?))
+}
+
+/// Tension after dragging a handle `dy_up` px upward from `start`, so the handle follows
+/// the pointer whichever way the segment runs (`from_norm`/`to_norm`: its ends in lane
+/// units). Stairs: up = more steps. `fine` (Alt) is 10x slower. Near 0 snaps to 0, the
+/// exact straight line.
+pub fn dragged_tension(
+	start: f32,
+	shape: PointShape,
+	from_norm: f32,
+	to_norm: f32,
+	dy_up: f32,
+	fine: bool,
+) -> f32 {
+	let rising = if to_norm >= from_norm { 1.0 } else { -1.0 };
+	let dir = match shape {
+		PointShape::DoubleCurve => -rising,
+		PointShape::Stairs => 1.0,
+		_ => rising,
+	};
+	let scale = if fine { 0.1 } else { 1.0 };
+	let t = (start + dir * scale * dy_up / TENSION_DRAG_PX).clamp(-1.0, 1.0);
+	if t.abs() < 0.005 { 0.0 } else { t }
+}
+
+/// `pts` with the segment starting at `tick` set to `tension` (drag preview).
+pub fn with_tension(pts: &[AutomationPoint], tick: Tick, tension: f32) -> Vec<AutomationPoint> {
+	pts.iter()
+		.map(|p| {
+			if p.tick == tick {
+				p.with_tension(tension)
+			} else {
+				*p
+			}
+		})
+		.collect()
+}
+
+/// Sets the tension of the segment starting at `tick` (one undo step on release).
+pub fn set_tension(
+	project: &Project,
+	address: &ParamAddress,
+	tick: Tick,
+	tension: f32,
+) -> Option<Command> {
+	let pts = points(project, address);
+	let changed = with_tension(&pts, tick, tension.clamp(-1.0, 1.0));
 	(changed != pts).then(|| set(address, changed))
 }
 
@@ -772,6 +897,67 @@ mod tests {
 	}
 
 	#[test]
+	fn tension_handle_drag_bends_the_segment() {
+		let (mut p, t, _, _) = project();
+		let a = ParamAddress::track_pan(t);
+		exec!(p, add_point(&p, &a, Tick::ZERO, -1.0));
+		exec!(p, add_point(&p, &a, beats(4.0), 1.0));
+		let tempo = p.tempo.clone();
+		let pts = points(&p, &a);
+		// Straight: the handle sits halfway, on the line; none after the last point.
+		let (tick, v) = tension_handle(&pts, 0, &tempo).unwrap();
+		assert_eq!(tick, beats(2.0));
+		assert!(v.abs() < 1e-6);
+		assert!(tension_handle(&pts, 1, &tempo).is_none());
+
+		// Dragging up on a rising segment bends it up (fast start), and the handle moves
+		// with the pointer; Alt is finer; the range is clamped.
+		let up = dragged_tension(0.0, PointShape::Linear, 0.0, 1.0, 50.0, false);
+		assert!((up - 0.5).abs() < 1e-6);
+		assert!(
+			(dragged_tension(0.0, PointShape::Linear, 0.0, 1.0, 50.0, true) - 0.05).abs() < 1e-6
+		);
+		assert!(dragged_tension(0.0, PointShape::Linear, 1.0, 0.0, 50.0, false) < 0.0);
+		assert_eq!(
+			dragged_tension(0.9, PointShape::Linear, 0.0, 1.0, 500.0, false),
+			1.0
+		);
+		assert_eq!(
+			dragged_tension(0.3, PointShape::Linear, 0.0, 1.0, -29.8, false),
+			0.0
+		);
+		let preview = with_tension(&pts, Tick::ZERO, up);
+		let (_, bent) = tension_handle(&preview, 0, &tempo).unwrap();
+		assert!(bent > 0.3, "handle follows the drag up: {bent}");
+
+		// Release: one SetAutomation; double-click resets to 0 (back to the exact line).
+		let cmd = set_tension(&p, &a, Tick::ZERO, up).unwrap();
+		assert!(matches!(cmd, Command::SetAutomation { .. }));
+		exec!(p, cmd);
+		assert_eq!(points(&p, &a)[0].tension, up);
+		assert!(set_tension(&p, &a, Tick::ZERO, up).is_none(), "no-op");
+		exec!(p, set_tension(&p, &a, Tick::ZERO, 0.0).unwrap());
+		assert_eq!(points(&p, &a)[0].tension, 0.0);
+
+		// Double curve: the handle sits a quarter in; dragging up on a rising one eases out.
+		exec!(
+			p,
+			set_shape(&p, &a, &[Tick::ZERO], PointShape::DoubleCurve).unwrap()
+		);
+		let pts = points(&p, &a);
+		assert_eq!(tension_handle(&pts, 0, &tempo).unwrap().0, beats(1.0));
+		assert!(dragged_tension(0.0, PointShape::DoubleCurve, 0.0, 1.0, 50.0, false) < 0.0);
+		exec!(
+			p,
+			set_shape(&p, &a, &[Tick::ZERO], PointShape::Hold).unwrap()
+		);
+		assert!(
+			tension_handle(&points(&p, &a), 0, &tempo).is_none(),
+			"hold has none"
+		);
+	}
+
+	#[test]
 	fn lanes_shown_follow_the_project() {
 		let (mut p, t, synth, send) = project();
 		let mut v = AutomationView::default();
@@ -797,6 +983,51 @@ mod tests {
 		assert_eq!(v.selected.len(), 1);
 		v.toggle(&p, None);
 		assert!(v.master && v.is_open(None));
+	}
+
+	#[test]
+	fn hiding_a_lane_with_points_keeps_them_and_stays_hidden() {
+		let (mut p, t, synth, _) = project();
+		let cutoff = ParamAddress::device(Some(t), synth, "filter_cutoff");
+		exec!(p, add_point(&p, &cutoff, Tick(0), 500.0));
+		let mut v = AutomationView::default();
+		v.show(cutoff.clone());
+		assert_eq!(v.visible(&p, Some(t)), vec![cutoff.clone()]);
+
+		// Hiding a lane that has points is not undone by `visible` re-adding it from the
+		// project (the bug report: hiding only "worked" for empty lanes before).
+		v.hide(&cutoff);
+		assert!(v.is_hidden(&cutoff));
+		assert!(v.visible(&p, Some(t)).is_empty());
+		assert_eq!(points(&p, &cutoff).len(), 1, "hiding never deletes points");
+		// The lane still exists for the picker to show again.
+		assert_eq!(v.existing(&p, Some(t)), vec![cutoff.clone()]);
+
+		v.set_hidden(&cutoff, false);
+		assert!(!v.is_hidden(&cutoff));
+		assert_eq!(v.visible(&p, Some(t)), vec![cutoff.clone()]);
+
+		// Show all / hide all act on every existing lane of the channel.
+		let pan = ParamAddress::track_pan(t);
+		exec!(p, add_point(&p, &pan, Tick(0), 0.0));
+		v.hide_all(&p, Some(t));
+		assert!(v.visible(&p, Some(t)).is_empty());
+		v.show_all(&p, Some(t));
+		assert_eq!(v.visible(&p, Some(t)).len(), 2);
+
+		// Deleting a lane's points (the "Delete lane" menu item) drops the hidden flag
+		// once pruned, since the address no longer resolves... except volume/pan always
+		// resolve, so hiding one stays sticky until explicitly shown again.
+		v.hide(&cutoff);
+		exec!(
+			p,
+			Command::SetAutomation {
+				address: cutoff.clone(),
+				points: Vec::new(),
+			}
+		);
+		v.prune(&p);
+		assert!(v.is_hidden(&cutoff), "pan/volume/device still resolve");
 	}
 
 	#[test]

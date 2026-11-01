@@ -28,6 +28,7 @@ pub mod device_display;
 pub mod dnd;
 pub mod drum_machine_editor;
 pub mod drum_sampler_editor;
+pub mod duplicate;
 pub mod editors;
 pub mod edits;
 pub mod electric_piano_editor;
@@ -124,6 +125,9 @@ pub const DEFAULT_TRACK_HEIGHT: f32 = 66.0;
 pub const MIN_TRACK_HEIGHT: f32 = 36.0;
 pub const MAX_TRACK_HEIGHT: f32 = 220.0;
 
+pub const MIN_LANE_HEIGHT: f32 = 30.0;
+pub const MAX_LANE_HEIGHT: f32 = 220.0;
+
 /// Panels and arrange-view settings (not part of the project).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewState {
@@ -169,6 +173,12 @@ pub struct ViewState {
 	pub arrange_tool: arrange_tool::ArrangeTool,
 	/// Track heights set by dragging a header's bottom edge (others use `track_height`).
 	pub track_heights: HashMap<TrackId, f32>,
+	/// Default automation lane height (others use `LANE_HEIGHT`'s default); scaled
+	/// together with `track_height` by Alt+wheel.
+	pub lane_height: f32,
+	/// Lane heights set by dragging a lane header's bottom edge, keyed by the lane's
+	/// parameter address (others use `lane_height`).
+	pub lane_heights: HashMap<ParamAddress, f32>,
 	/// Clips copied with Ctrl+C / Ctrl+X in the arrange.
 	pub clip_board: playlist::ClipClipboard,
 	/// The clip the Paint tool repeats when none is pressed or selected on the lane.
@@ -198,12 +208,35 @@ impl ViewState {
 	}
 
 	/// Alt+wheel: every track grows or shrinks together (resized ones keep their ratio).
+	/// Automation lane heights scale by the same ratio.
 	pub fn scale_track_heights(&mut self, height: f32) {
 		let new = height.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
 		let ratio = new / self.track_height.max(1.0);
 		self.track_height = new;
 		for h in self.track_heights.values_mut() {
 			*h = (*h * ratio).clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+		}
+		self.lane_height = (self.lane_height * ratio).clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		for h in self.lane_heights.values_mut() {
+			*h = (*h * ratio).clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		}
+	}
+
+	/// Height of the automation lane for `address` (drag-resized or the shared default).
+	pub fn height_of_lane(&self, address: &ParamAddress) -> f32 {
+		self.lane_heights
+			.get(address)
+			.copied()
+			.unwrap_or(self.lane_height)
+	}
+
+	/// Sets one lane's height (clamped); the default height clears the override.
+	pub fn set_lane_height(&mut self, address: &ParamAddress, height: f32) {
+		let h = height.clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		if (h - self.lane_height).abs() < 0.5 {
+			self.lane_heights.remove(address);
+		} else {
+			self.lane_heights.insert(address.clone(), h);
 		}
 	}
 }
@@ -234,6 +267,8 @@ impl Default for ViewState {
 			inspector: inspector::InspectorView::default(),
 			arrange_tool: arrange_tool::ArrangeTool::default(),
 			track_heights: HashMap::new(),
+			lane_height: automation::LANE_HEIGHT,
+			lane_heights: HashMap::new(),
 			clip_board: playlist::ClipClipboard::default(),
 			paint_source: None,
 			responsive: layout::Responsive::default(),
@@ -461,13 +496,13 @@ pub struct AppState {
 	audio: Option<AudioEngine>,
 	clock: Option<PlayerClock>,
 	bank: Option<Arc<MeterBank>>,
-	/// The device whose live signal the engine probes, and the probe once the engine
-	/// answered (see [`AppState::set_probe`]).
-	probe_target: Option<DeviceId>,
-	probe: Option<Arc<DeviceProbe>>,
-	/// The device the open device editor pointed the probe at (see
+	/// The devices whose live signal the engine probes (focused editor first), and their
+	/// probes once the engine answered (see [`AppState::set_probes`]).
+	probe_targets: Vec<DeviceId>,
+	probes: Vec<(DeviceId, Arc<DeviceProbe>)>,
+	/// The devices the open device editors pointed the probes at (see
 	/// [`AppState::sync_editor_probe`]).
-	editor_probe: Option<DeviceId>,
+	editor_probe: Vec<DeviceId>,
 	/// Presets of the device editor's device (factory + user), listed when it opens.
 	device_presets: Option<(DeviceRef, Vec<device::PresetEntry>)>,
 	/// The preset last loaded into (or saved from) each device, for the dirty dot.
@@ -602,9 +637,9 @@ impl AppState {
 			audio: None,
 			clock: None,
 			bank: None,
-			probe_target: None,
-			probe: None,
-			editor_probe: None,
+			probe_targets: Vec::new(),
+			probes: Vec::new(),
+			editor_probe: Vec::new(),
 			device_presets: None,
 			loaded_presets: HashMap::new(),
 			compares: HashMap::new(),
@@ -1601,6 +1636,19 @@ impl AppState {
 		}
 	}
 
+	/// Duplicates `track` (FL/Ableton-style): a copy right below it, in the same folder,
+	/// with fresh ids for everything it creates and its automation re-addressed (one undo
+	/// step). Selects the copy. No-op for folders ([`duplicate::can_duplicate`]) or a
+	/// stale id.
+	pub fn duplicate_track(&mut self, track: TrackId) {
+		if let Some((cmd, id)) = duplicate::duplicate_track(self.project(), track)
+			&& self.apply(cmd)
+		{
+			self.selection.select_track(id);
+			self.selection.clear_clips();
+		}
+	}
+
 	// --- Automation write ----------------------------------------------------------
 
 	/// Sets the transport's automation mode; leaving a write mode ends the pass (one undo
@@ -2032,12 +2080,14 @@ impl AppState {
 				}
 			}
 		};
+		let added = edits::devices_added(&cmd);
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(device_ref);
 			if item.role == DeviceRole::Instrument {
 				self.instrument_hint(&item.name);
 			}
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -2160,6 +2210,23 @@ impl AppState {
 		if let Some(a) = &self.audio {
 			a.close_editor(device);
 			a.capture_states(self.project().clone(), vec![device]);
+		}
+	}
+
+	/// Opens the editor of the device a user gesture just added (browser drop, mixer
+	/// "+ Insert", a library pattern's new track...): the last one in `added` (see
+	/// [`edits::devices_added`]). A built-in opens its floating window; a plugin opens its
+	/// own editor window — queued until the device reaches the player if the edit is still
+	/// reloading, same as the inspector's Edit — except where plugin editors are not
+	/// supported at all (`EDITORS_SUPPORTED` false), where it is left to the generic controls
+	/// (no notice, unlike an explicit Edit click). Never called for the AI, MCP tools, undo/
+	/// redo, project load, import or a preset replacing a device.
+	fn open_added_device(&mut self, added: &[DeviceRef]) {
+		let Some(&r) = added.last() else { return };
+		if self.has_device_editor(r) {
+			self.open_device_editor(r);
+		} else if cadenza_engine::EDITORS_SUPPORTED && self.is_plugin(r.device) {
+			self.open_plugin_editor(r.device);
 		}
 	}
 
@@ -2293,9 +2360,10 @@ impl AppState {
 		}
 	}
 
-	/// Stops; pattern mode goes back to the pattern start (FL Studio). Stop on an already
-	/// stopped transport rewinds to the start (song tick 0, pattern mode its pattern
-	/// start), like most DAWs: a second press of Stop is "go to the top".
+	/// Stops; pattern mode goes back to the pattern start (FL Studio). Effect tails
+	/// (reverb, delay, releases) ring out after it. Stop on an already stopped transport
+	/// cuts those tails and rewinds to the start (song tick 0, pattern mode its pattern
+	/// start), like most DAWs: a second press of Stop is "silence, go to the top".
 	pub fn stop(&mut self) {
 		let already_stopped = !self.play_intent;
 		self.end_recording(false);
@@ -2303,6 +2371,9 @@ impl AppState {
 		self.cued = false;
 		if let Some(a) = &self.audio {
 			a.stop();
+			if already_stopped {
+				a.cut_tails();
+			}
 		}
 		let (config, _) = self.transport_config();
 		if already_stopped {
@@ -2835,13 +2906,16 @@ impl AppState {
 			track,
 			device: device.id,
 		};
-		let ok = self.apply(Command::InsertDevice {
+		let cmd = Command::InsertDevice {
 			track,
 			device,
 			index,
-		});
+		};
+		let added = edits::devices_added(&cmd);
+		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -2878,12 +2952,14 @@ impl AppState {
 		};
 		let after = after.or_else(|| project.tracks.last().map(|t| t.id));
 		let cmd = edits::add_track(project, track, after);
+		let added = edits::devices_added(&cmd);
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
 			if item.role == DeviceRole::Instrument {
 				self.instrument_hint(&item.name);
 			}
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -2917,9 +2993,11 @@ impl AppState {
 				index: None,
 			},
 		};
+		let added = edits::devices_added(&cmd);
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -3435,24 +3513,56 @@ impl AppState {
 		self.inspector_targets().device
 	}
 
-	/// Points the one probe at the device editor in front ([`Self::device_editor_target`]:
-	/// the focused window first), else the inspector's Device tab.
-	pub fn sync_editor_probe(&mut self) {
-		let want = self
-			.device_editor_target()
-			.or_else(|| {
-				if !self.view.panels.visible(PanelKind::Inspector) {
-					return None;
-				}
-				self.inspector_device()
-					.filter(|r| self.has_device_editor(*r))
-			})
-			.map(|r| r.device);
-		if want != self.editor_probe {
-			self.editor_probe = want;
-			self.set_probe(want);
+	/// The devices whose editors show live data, the one in front first
+	/// ([`Self::device_editor_target`]), then the visible dock's, then every other device
+	/// window top to bottom, then the inspector's Device tab when no editor shows that
+	/// device (its compact forms draw from the same probes); at most
+	/// [`cadenza_engine::PROBE_SLOTS`]. Each device is drained by the one view showing it.
+	pub fn probed_devices(&mut self) -> Vec<DeviceId> {
+		let dock = self
+			.view
+			.instrument
+			.device
+			.filter(|r| self.docked_device_shown(*r));
+		let mut refs: Vec<DeviceRef> = self.device_editor_target().into_iter().collect();
+		refs.extend(dock);
+		refs.extend(
+			self.view
+				.windows
+				.open
+				.iter()
+				.rev()
+				.filter_map(|w| w.item.device()),
+		);
+		if self.view.panels.visible(PanelKind::Inspector)
+			&& let Some(r) = self.inspector_device()
+			&& !self.device_editor_shown(r)
+		{
+			refs.push(r);
 		}
-		if self.listen.is_some_and(|(d, _)| Some(d) != want) {
+		let mut out: Vec<DeviceId> = Vec::new();
+		for r in refs {
+			if out.len() == cadenza_engine::PROBE_SLOTS {
+				break;
+			}
+			if !out.contains(&r.device) && self.has_device_editor(r) {
+				out.push(r.device);
+			}
+		}
+		out
+	}
+
+	/// Points the probes at [`Self::probed_devices`] and away from editors that closed,
+	/// switched device or hid. A probe set by someone else is left alone while no editor
+	/// needs one. Listen (one device) follows the editor in front.
+	pub fn sync_editor_probe(&mut self) {
+		let want = self.probed_devices();
+		if want != self.editor_probe {
+			self.editor_probe = want.clone();
+			self.set_probes(want.clone());
+		}
+		let front = want.first().copied();
+		if self.listen.is_some_and(|(d, _)| Some(d) != front) {
 			self.set_listen_target(None);
 		}
 	}
@@ -3675,23 +3785,34 @@ impl AppState {
 	}
 
 	/// Follows `device` (any built-in in the project: instrument, insert, master insert)
-	/// with the engine's probe, or stops (`None`). Device editors drain
-	/// [`AppState::probe`] once per frame for analyzers, meters and scopes.
+	/// with the engine's probe, or stops (`None`): [`AppState::set_probes`] with one device.
 	pub fn set_probe(&mut self, device: Option<DeviceId>) {
-		if self.probe_target == device {
+		self.set_probes(device.into_iter().collect());
+	}
+
+	/// Follows each of `devices` (first [`cadenza_engine::PROBE_SLOTS`]) with its own
+	/// engine probe; the others stop. Device editors drain [`AppState::probe_for`] their
+	/// device once per frame for analyzers, meters and scopes.
+	pub fn set_probes(&mut self, mut devices: Vec<DeviceId>) {
+		devices.truncate(cadenza_engine::PROBE_SLOTS);
+		if self.probe_targets == devices {
 			return;
 		}
-		self.probe_target = device;
-		if device.is_none() {
-			self.probe = None;
-		}
+		self.probes.retain(|(d, _)| devices.contains(d));
+		self.probe_targets = devices.clone();
 		if let Some(a) = &self.audio {
-			a.probe(device);
+			a.probe(devices);
 		}
 	}
 
+	/// The first probed device (the editor in front).
 	pub fn probe_target(&self) -> Option<DeviceId> {
-		self.probe_target
+		self.probe_targets.first().copied()
+	}
+
+	/// Every probed device, the editor in front first.
+	pub fn probe_targets(&self) -> &[DeviceId] {
+		&self.probe_targets
 	}
 
 	/// Mono / dim on what the output device plays (after the meters, never in renders
@@ -3728,23 +3849,42 @@ impl AppState {
 		mixer::sidechain_targets(self.project(), source, |d| mixer::accepts_key(d, &catalog))
 	}
 
-	/// The probe ring of the running player while a device is probed (`None` without an
-	/// audio engine or device, or until the engine answered).
+	/// The probe ring of the first probed device (see [`AppState::probe_for`]).
 	pub fn probe(&self) -> Option<&Arc<DeviceProbe>> {
-		self.probe_target.and(self.probe.as_ref())
+		self.probe_for(self.probe_target()?)
 	}
 
-	/// Attaches a player's probe ring directly (headless tests driving a virtual device;
-	/// the app gets it from the audio thread).
+	/// The probe ring of the running player for `device` while it is probed (`None`
+	/// without an audio engine, while not probed, or until the engine answered).
+	pub fn probe_for(&self, device: DeviceId) -> Option<&Arc<DeviceProbe>> {
+		if !self.probe_targets.contains(&device) {
+			return None;
+		}
+		self.probes
+			.iter()
+			.find_map(|(d, p)| (*d == device).then_some(p))
+	}
+
+	/// Attaches a player's probe ring for the first probed device directly (headless
+	/// tests driving a virtual device; the app gets them from the audio thread).
 	pub fn attach_probe(&mut self, probe: Option<Arc<DeviceProbe>>) {
-		self.probe = probe;
+		let first = self.probe_target();
+		self.probes.retain(|(d, _)| Some(*d) != first);
+		if let (Some(d), Some(p)) = (first, probe) {
+			self.probes.push((d, p));
+		}
 	}
 
-	/// The current output of `device`'s modulators (engine order), while it is the probed
-	/// device and the player runs it.
+	/// Attaches a player's probe rings directly (see [`AppState::attach_probe`]).
+	pub fn attach_probes(&mut self, probes: Vec<(DeviceId, Arc<DeviceProbe>)>) {
+		self.probes = probes;
+	}
+
+	/// The current output of `device`'s modulators (engine order), while it is probed
+	/// and the player runs it.
 	pub fn modulation_values(&self, device: DeviceId) -> Option<Vec<f32>> {
-		match self.probe() {
-			Some(p) if self.probe_target == Some(device) && p.is_active() => {
+		match self.probe_for(device) {
+			Some(p) if p.is_active() => {
 				let (values, n) = p.modulation();
 				Some(values[..n].to_vec())
 			}
@@ -3753,10 +3893,10 @@ impl AppState {
 	}
 
 	/// What `device` plays now (held keys, voices), from its readings: empty unless it is
-	/// the probed device and the player runs it.
+	/// probed and the player runs it.
 	pub fn live_voices(&self, device: DeviceId) -> live_voices::LiveVoices {
-		match self.probe() {
-			Some(p) if self.probe_target == Some(device) && p.is_active() => {
+		match self.probe_for(device) {
+			Some(p) if p.is_active() => {
 				let (values, n) = p.readings();
 				live_voices::LiveVoices::decode(&values[..n])
 			}
@@ -3959,6 +4099,10 @@ impl AppState {
 		let at = at.unwrap_or(self.position());
 		match library::add_pattern(self.project(), &library, id, track, at) {
 			Ok(drop) => {
+				// A pattern dropped on an existing track adds no device; on an empty lane it
+				// also creates the track's instrument — a user drop like any other, so its
+				// editor opens too, same as dropping that instrument directly would.
+				let added = edits::devices_added(&drop.command);
 				if !self.apply(drop.command) {
 					return false;
 				}
@@ -3966,6 +4110,7 @@ impl AppState {
 				for w in drop.warnings {
 					self.notices.warn(w);
 				}
+				self.open_added_device(&added);
 				true
 			}
 			Err(e) => {
@@ -4020,6 +4165,8 @@ impl AppState {
 			mixer: v.mixer,
 			arrange_tool: v.arrange_tool,
 			track_heights: v.track_heights.clone(),
+			lane_height: v.lane_height,
+			lane_heights: v.lane_heights.clone(),
 			windows: v.windows.saved.clone(),
 			language: self.language,
 		}
@@ -4062,6 +4209,12 @@ impl AppState {
 			.track_heights
 			.into_iter()
 			.map(|(t, h)| (t, h.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT)))
+			.collect();
+		v.lane_height = p.lane_height.clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		v.lane_heights = p
+			.lane_heights
+			.into_iter()
+			.map(|(a, h)| (a, h.clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT)))
 			.collect();
 		v.windows.saved = p.windows;
 		self.ai.settings = p.ai.sanitized();
@@ -4284,7 +4437,7 @@ impl AppState {
 	/// `Ready`/`Unavailable` ever following it; the app otherwise stays usable
 	/// without sound. Pure state change, unit-tested directly.
 	pub(crate) fn handle_audio_unavailable(&mut self, e: String) {
-		self.probe = None;
+		self.probes.clear();
 		self.master_loudness.detach();
 		self.notices.warn(trf("No audio output: {e}", &[("e", &e)]));
 		self.audio_status = AudioStatus::Unavailable(e);
@@ -4361,8 +4514,8 @@ impl AppState {
 						status.audio_thread = Some(scheduling);
 					}
 				}
-				AudioEvent::Probe(probe) => {
-					self.probe = probe.filter(|_| self.probe_target.is_some());
+				AudioEvent::Probe(probes) => {
+					self.probes = probes;
 				}
 				AudioEvent::Xruns { device, plugins } => {
 					self.xruns.update(device, plugins, Instant::now());

@@ -109,6 +109,8 @@ pub struct NoteEditorUi {
 	poly_framed: Option<ClipId>,
 	/// Pitches the dragged notes were last auditioned at.
 	heard: Option<Vec<(AudioNoteId, f64)>>,
+	/// Ruler drag selecting a time range: where it started (file seconds).
+	range_press: Option<f64>,
 }
 
 struct View<'a> {
@@ -290,7 +292,7 @@ impl NoteEditorUi {
 			state.view.audio.notes.framed = Some(clip);
 		}
 		self.navigate(ui, state, canvas, r);
-		super::audio_editor::ruler_seek(ui, state, layout.ruler, canvas.left(), r);
+		let range = self.ruler(ui, state, layout.ruler, canvas.left(), r, &edits);
 		let analysis = state.note_analyses.get(&r.file);
 		if let Some(a) = &analysis {
 			let fresh = self
@@ -358,6 +360,20 @@ impl NoteEditorUi {
 				}
 			}
 		}
+		if let Some((a, b)) = range {
+			let band = |rect: Rect, alpha: u8| {
+				let (x0, x1) = (v.x(a).max(rect.left()), v.x(b).min(rect.right()));
+				if x1 > x0 {
+					ui.painter().rect_filled(
+						Rect::from_x_y_ranges(x0..=x1, rect.y_range()),
+						0.0,
+						theme::ACCENT.gamma_multiply(f32::from(alpha) / 255.0),
+					);
+				}
+			};
+			band(canvas, 24);
+			band(layout.ruler, 90);
+		}
 		let preview = self.preview(ui, state, &v, &edits, key.as_ref());
 		self.paint_notes(ui, state, &v, &edits, analysis.as_deref(), &preview);
 		self.interact(ui, state, &v, &edits, key.as_ref());
@@ -377,6 +393,54 @@ impl NoteEditorUi {
 		if let Some(m) = layout.macros {
 			self.macros(ui, state, m, &edits, analysis.as_deref());
 		}
+	}
+
+	/// The ruler: a click moves the playhead, a drag selects the notes of a time range
+	/// (Shift adds). Returns the range to draw.
+	fn ruler(
+		&mut self,
+		ui: &Ui,
+		state: &mut AppState,
+		ruler: Rect,
+		left: f32,
+		r: &Region,
+		edits: &NoteEdits,
+	) -> Option<(f64, f64)> {
+		let resp = ui
+			.interact(ruler, Id::new("note-editor-ruler"), Sense::click_and_drag())
+			.on_hover_cursor(CursorIcon::PointingHand)
+			.on_hover_text(tr(
+				"Click to move the playhead; drag to select the notes of a time range (Shift adds)",
+			));
+		let at = |state: &AppState, x: f32| {
+			state
+				.view
+				.audio
+				.seconds_at(x - left)
+				.clamp(r.offset, r.end())
+		};
+		if resp.clicked()
+			&& let Some(pos) = resp.interact_pointer_pos()
+		{
+			let tick = r.tick_of(state.project(), at(state, pos.x));
+			state.seek_track(tick, r.track);
+		}
+		if resp.drag_started_by(PointerButton::Primary)
+			&& let Some(pos) = resp.interact_pointer_pos()
+		{
+			self.range_press = Some(at(state, pos.x));
+		}
+		let now = ui.ctx().pointer_latest_pos().map(|pos| at(state, pos.x));
+		if let (Some(a), Some(b)) = (self.range_press, now) {
+			if resp.drag_stopped() {
+				self.range_press = None;
+				let add = ui.input(|i| i.modifiers.shift);
+				state.view.audio.notes.select_range(edits, (a, b), add);
+			} else {
+				return Some((a.min(b), a.max(b)));
+			}
+		}
+		state.view.audio.notes.shown_range(edits)
 	}
 
 	fn empty(&mut self, ui: &mut Ui, state: &mut AppState, layout: Layout, r: &Region) {
@@ -935,6 +999,7 @@ impl NoteEditorUi {
 								&ids,
 								semis,
 								snap.as_ref().map(|k| k.as_ref()),
+								state.view.audio.notes.blend_ms,
 							);
 							state.note_edit(Ok(cmd));
 						}
@@ -1104,9 +1169,32 @@ impl NoteEditorUi {
 						.text(tr("leave within")),
 				)
 				.on_hover_text(tr("Notes this close to their tone keep their pitch"));
+				let blend_tip = tr(
+					"How long pitch edits fade in and out where a note joins a voiced neighbour: the ramp stays inside the edited notes, so the notes around them keep their sung pitch",
+				);
+				ui.add(
+					egui::Slider::new(
+						&mut v.blend_ms,
+						0.0..=cadenza_model::audio_notes::MAX_BLEND_MS.min(200.0),
+					)
+					.suffix(" ms")
+					.fixed_decimals(0)
+					.text(tr("blend")),
+				)
+				.on_hover_text(blend_tip);
 				if ui.button(tr("Correct pitch")).clicked() {
 					let view = state.view.audio.notes.clone();
 					state.note_edit(Ok(ne::correct_pitch(clip, edits, &sel, &view)));
+				}
+				if ui
+					.button(tr("Apply blend"))
+					.on_hover_text(tr(
+						"Sets the blend on the notes without retuning them (drags and Correct pitch set it too)",
+					))
+					.clicked()
+				{
+					let ms = state.view.audio.notes.blend_ms;
+					state.note_edit(Ok(ne::set_blend(clip, edits, &sel, ms)));
 				}
 				if ui
 					.add_enabled(!state.ai.busy(), egui::Button::new(tr("Tune with AI")))
@@ -1249,7 +1337,8 @@ impl NoteEditorUi {
 			(egui::Modifiers::SHIFT, egui::Key::ArrowDown, -12.0),
 		] {
 			if pressed(m, k) {
-				state.note_edit(Ok(ne::move_pitch(clip, &edits, &sel, d, snap)));
+				let blend = state.view.audio.notes.blend_ms;
+				state.note_edit(Ok(ne::move_pitch(clip, &edits, &sel, d, snap, blend)));
 			}
 		}
 		if pressed(egui::Modifiers::NONE, egui::Key::Delete)

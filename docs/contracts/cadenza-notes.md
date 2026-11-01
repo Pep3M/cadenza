@@ -69,11 +69,18 @@ lane on `track_id` or a new instrument track below: bass/keys/lead by median pit
 dialog and hum recording reuse them. Round trip MIDI -> render -> audio_to_midi:
 `mcp/tests/audio_to_midi.rs` (COnP F >= 0.95, hum mode exact).
 NE-4 resynthesis (offline, pure Rust): `edit::{NoteEdit { pitch, drift, modulation (shares kept,
--1..2), formant_cents, gain_db, time: Option<TimeEdit> }, Edits { notes (by segmentation index),
+-1..2), formant_cents, gain_db, time: Option<TimeEdit>, blend (s, 0..`MAX_BLEND` 0.5; ignored by
+`is_unchanged`) }, Edits { notes (by segmentation index),
 sibilant_gain_db }, validate, curves, time_map, correct_pitch(&Correction { key, center, drift,
 threshold_cents })}`; core shift = `(target - center) + (a_drift - 1) drift + (a_mod - 1) mod`
 (drift = 0.2 s double box), transitions blend between connected cores, `marks::pitched` frames
-(voiced + up to 3 edge frames still holding the period) take the next core's value.
+(voiced + up to 3 edge frames still holding the period) take the next core's value. Blend: a
+junction (connected, or a fully voiced gap) where either note has `blend > 0` is a smoothstep
+ramp over `max(core_end..next core_start, blend)`; the extra length goes into the core of the
+note(s) carrying the blend (half each if both, at most to the core's middle), never the other,
+so an unedited neighbour keeps its pitch to its core edge (`edit` unit tests: exact ramp length,
+0 outside; `tests/resynth.rs`: a blended middle-range correction leaves the notes around it
+within ±2 c on re-analysis). No blend = the previous curves exactly.
 `marks::pitch_marks`: cycle time from the fundamental's phase (2-period Hann DFT, absolute, no
 drift), mark on the pulse (derivative-energy component) by its offset, weak pulses take the ±5
 cycle median offset; 5 ms marks elsewhere, first 0, last len-1. `psola::psola` (sin²/cos² grains
@@ -86,7 +93,7 @@ tolerance 2 c)}`. `tests/resynth.rs`: corpus moves 0..±3 st all within ±5 c (2
 formant ×1.18 for +300 c, time edits, stereo, sibilant gain, vibrato flattening, noise.
 NE-5: `cadenza-model::audio_notes` (`NoteEdits { notes: [AudioNote { id, start, end, core_start,
 core_end (file seconds), center, pitch?, drift, modulation, formant_cents, gain_db, time?,
-confidence, flags }], sibilants, sibilant_gain_db, sensitivity, user_splits, user_merges }`,
+blend_ms (0..500, omitted when 0; patch `blend_ms`), confidence, flags }], sibilants, sibilant_gain_db, sensitivity, user_splits, user_merges }`,
 `validate`, `summary` -> `ClipSummary.audio_notes { count, edited, avg_error_cents, flagged }`);
 `clip::{detect (re-detection keeps ids + edits of matching notes, splits, merges), split,
 merge_with_next, to_segmentation, to_edits}`. Renders are derived data:
@@ -145,7 +152,7 @@ in_scale|chromatic|joins_next|scoop_landing, runner_up, ambiguous), auto_targets
 `Correction.targets`. Expert labels `tests/data/expert_take.json` (`tests/tuning.rs` 51/52;
 `tests/expert.rs` with `CADENZA_NOTES_EXPERT_TAKE`, COnPOff >= 83 %).
 NE-7b (AI tuning engineer): MCP `tools::tuning` (`detect_audio_notes`, `analyze_vocal`,
-`get_audio_notes`, `tune_audio_notes` (+ `overrides`), `edit_audio_notes`, `split_audio_note`,
+`get_audio_notes`, `tune_audio_notes` (+ `overrides`), `edit_audio_notes` (+ `blend_ms`), `split_audio_note`,
 `merge_audio_notes`; notes by number in time order; key auto | nearest | scale,
 `offset_cents`, `reference_clip_id` = MIDI melody -> `TargetReason::Reference`); shared pure
 builders `plan_targets`, `correction_patches` (the app's Correct Pitch), `pitch_patch`,

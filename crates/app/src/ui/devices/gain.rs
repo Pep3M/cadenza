@@ -106,7 +106,7 @@ pub fn gain_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 }
 
 fn listen(cx: &BodyCx, state: &AppState, v: &mut GainView, now: f64) {
-	if v.synthetic || state.probe_target() != Some(cx.r.device) {
+	if v.synthetic || state.probe_for(cx.r.device).is_none() {
 		return;
 	}
 	if !cx

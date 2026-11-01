@@ -575,6 +575,46 @@ pub(crate) fn batch(label: &str, mut commands: Vec<Command>) -> Option<Command> 
 	}
 }
 
+/// The device(s) `cmd` creates, in the order they were added (a `Batch` can add several,
+/// e.g. a new track's instrument plus its chain). Used to open the newly added device's
+/// editor right after a user gesture adds one (browser drop, mixer "+ Insert", a library
+/// pattern's new track...) — never call this on a command from the AI, MCP tools, undo/
+/// redo, project load or import: those do not go through it.
+pub fn devices_added(cmd: &Command) -> Vec<super::selection::DeviceRef> {
+	use super::selection::DeviceRef;
+	match cmd {
+		Command::AddTrack { track, .. } => {
+			let mut added = Vec::new();
+			if let Some(d) = &track.instrument {
+				added.push(DeviceRef {
+					track: Some(track.id),
+					device: d.id,
+				});
+			}
+			for d in &track.channel.inserts {
+				added.push(DeviceRef {
+					track: Some(track.id),
+					device: d.id,
+				});
+			}
+			added
+		}
+		Command::SetInstrument {
+			track,
+			device: Some(d),
+		} => vec![DeviceRef {
+			track: Some(*track),
+			device: d.id,
+		}],
+		Command::InsertDevice { track, device, .. } => vec![DeviceRef {
+			track: *track,
+			device: device.id,
+		}],
+		Command::Batch { commands, .. } => commands.iter().flat_map(devices_added).collect(),
+		_ => Vec::new(),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -922,6 +962,113 @@ mod tests {
 		let (cmd, id) = new_midi_clip(p, fx.keys2, beats(8.0), beats(4.0)).unwrap();
 		fx.doc.execute(cmd).unwrap();
 		assert_eq!(clip(&fx.doc, id).0, fx.keys2);
+	}
+
+	#[test]
+	fn devices_added_finds_instruments_and_inserts_everywhere_they_can_land() {
+		use crate::state::selection::DeviceRef;
+
+		// A new track: its instrument, then its chain.
+		let instrument = Device::builtin("poly_synth", "Poly Synth");
+		let insert = Device::builtin("eq", "EQ");
+		let mut track = Track::new("Keys", TrackKind::Instrument);
+		track.id = TrackId::new();
+		track.instrument = Some(instrument.clone());
+		track.channel.inserts.push(insert.clone());
+		let cmd = Command::AddTrack {
+			track: track.clone(),
+			index: None,
+		};
+		assert_eq!(
+			devices_added(&cmd),
+			vec![
+				DeviceRef {
+					track: Some(track.id),
+					device: instrument.id
+				},
+				DeviceRef {
+					track: Some(track.id),
+					device: insert.id
+				},
+			]
+		);
+
+		// Replacing a track's instrument.
+		let t = TrackId::new();
+		let d = Device::builtin("poly_synth", "Poly Synth");
+		let cmd = Command::SetInstrument {
+			track: t,
+			device: Some(d.clone()),
+		};
+		assert_eq!(
+			devices_added(&cmd),
+			vec![DeviceRef {
+				track: Some(t),
+				device: d.id
+			}]
+		);
+		// Clearing it adds nothing (not a user "add a device").
+		assert!(
+			devices_added(&Command::SetInstrument {
+				track: t,
+				device: None
+			})
+			.is_empty()
+		);
+
+		// An insert, on a track or the master (`track: None`).
+		let d = Device::builtin("reverb", "Reverb");
+		let cmd = Command::InsertDevice {
+			track: None,
+			device: d.clone(),
+			index: None,
+		};
+		assert_eq!(
+			devices_added(&cmd),
+			vec![DeviceRef {
+				track: None,
+				device: d.id
+			}]
+		);
+
+		// A batch (a library pattern's new track) flattens in order; other commands in the
+		// batch (adding the clip) add nothing.
+		let clip = Clip::midi("Pattern", Tick::ZERO, beats(4.0));
+		let batch = Command::Batch {
+			label: "Add pattern 'Four on the floor'".into(),
+			commands: vec![
+				Command::AddTrack {
+					track: track.clone(),
+					index: None,
+				},
+				Command::AddClip {
+					track: track.id,
+					clip,
+				},
+			],
+		};
+		assert_eq!(
+			devices_added(&batch),
+			vec![
+				DeviceRef {
+					track: Some(track.id),
+					device: instrument.id
+				},
+				DeviceRef {
+					track: Some(track.id),
+					device: insert.id
+				},
+			]
+		);
+
+		// A pattern dropped on an existing track adds no device at all.
+		assert!(
+			devices_added(&Command::AddClip {
+				track: track.id,
+				clip: Clip::midi("Pattern", Tick::ZERO, beats(4.0)),
+			})
+			.is_empty()
+		);
 	}
 }
 

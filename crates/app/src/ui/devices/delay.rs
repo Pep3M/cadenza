@@ -1,6 +1,8 @@
 //! The Delay editor body (design `16 Effects`, 16c): echo taps on the beat (or free-time)
 //! timeline, Sync | Free + the note-value grid, the ping-pong toggle, the feedback filter
-//! strip and the readout. Compact: the taps at full width, then one row of S knobs. The
+//! strip, a column of S knobs (time, feedback, cuts, taps, spread and each extra tap's
+//! level / pan, so every param has the control menu; it scrolls when tall) and the
+//! readout. Compact: the taps at full width, then the same knobs plus Mix. The
 //! gesture -> parameter mapping lives in [`crate::state::delay_editor`].
 
 use crate::i18n::{tr, trf};
@@ -20,6 +22,7 @@ use crate::state::selection::DeviceRef;
 use crate::theme;
 use crate::ui::device_editor::BodyCx;
 use crate::ui::device_kit::{self, FreqDisplay, FreqEvent, FreqNode, KnobSize, ParamKnob};
+use crate::ui::devices;
 
 const CHIP_H: f32 = 22.0;
 const FOOTER_H: f32 = 32.0;
@@ -804,7 +807,10 @@ fn readout_chip(ui: &mut Ui, text: &str) {
 		.galley(rect.center() - g.size() * 0.5, g, theme::TEXT);
 }
 
-/// Time (the note value when synced, ms when free), feedback and the filter's two cuts.
+/// Every knob of [`dl::knobs`] (time, feedback, mix when `mix`, the filter's cuts, taps,
+/// spread, each extra tap's level and pan) in `cols` columns; scrolls when the rows do
+/// not fit `rect`.
+#[allow(clippy::too_many_arguments)]
 fn knob_grid(
 	ui: &mut Ui,
 	state: &mut AppState,
@@ -812,40 +818,68 @@ fn knob_grid(
 	rect: Rect,
 	size: KnobSize,
 	cols: usize,
+	mix: bool,
 ) {
-	let values = shown_values(state, cx.r);
+	let knobs = dl::knobs(&shown_values(state, cx.r), mix);
+	let rows = knobs.len().div_ceil(cols);
+	let needed = rows as f32 * knob_row_h(size);
+	if needed <= rect.height() + 0.5 {
+		place_knobs(ui, state, cx, rect, size, cols, &knobs);
+		return;
+	}
+	let mut inner = ui.new_child(
+		UiBuilder::new()
+			.max_rect(rect)
+			.layout(Layout::top_down(Align::Min)),
+	);
+	egui::ScrollArea::vertical()
+		.id_salt(("delay-knobs", cx.salt, cx.r.device))
+		.auto_shrink([false, false])
+		.show(&mut inner, |ui| {
+			let w = ui.available_width();
+			let (area, _) = ui.allocate_exact_size(vec2(w, needed), Sense::hover());
+			place_knobs(ui, state, cx, area, size, cols, &knobs);
+		});
+}
+
+fn knob_row_h(size: KnobSize) -> f32 {
+	devices::knob_height(size) + 4.0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_knobs(
+	ui: &mut Ui,
+	state: &mut AppState,
+	cx: &BodyCx,
+	rect: Rect,
+	size: KnobSize,
+	cols: usize,
+	knobs: &[dl::DelayKnob],
+) {
 	let names: Vec<String> = crate::state::device::delay_sync_choices()
 		.iter()
 		.map(|c| crate::state::device::short_choice(c))
 		.collect();
 	let names: Vec<&str> = names.iter().map(String::as_str).collect();
-	let knobs: [(&str, &str); 6] = [
-		(if values.is_free() { TIME } else { SYNC }, tr("Time")),
-		(FEEDBACK, tr("Feedback")),
-		(LOW_CUT, tr("Low cut")),
-		(HIGH_CUT, tr("High cut")),
-		(dl::TAP_SPREAD, tr("Tap spread")),
-		(dl::TAPS, tr("Taps")),
-	];
-	let rows = knobs.len().div_ceil(cols);
+	let rows = knobs.len().div_ceil(cols).max(1);
 	let cell = vec2(rect.width() / cols as f32, rect.height() / rows as f32);
-	for (i, (id, label)) in knobs.into_iter().enumerate() {
+	for (i, k) in knobs.iter().enumerate() {
 		let at = rect.min + vec2((i % cols) as f32 * cell.x, (i / cols) as f32 * cell.y);
 		let mut cell_ui = ui.new_child(
 			UiBuilder::new()
 				.max_rect(Rect::from_min_size(at, cell))
 				.layout(Layout::top_down(Align::Center)),
 		);
-		let mut knob = ParamKnob::new(cx.r, id)
+		let mut knob = ParamKnob::new(cx.r, k.id)
 			.size(size)
-			.label(label)
-			.color(match i {
-				2 | 3 => BAND,
-				4 | 5 => TAP,
-				_ => theme::TEXT,
+			.label(&k.label)
+			.color(match k.group {
+				dl::KnobGroup::Filter => BAND,
+				dl::KnobGroup::Taps => TAP,
+				dl::KnobGroup::Echo => theme::TEXT,
 			})
 			.id_salt(Id::new(cx.salt));
-		if id == SYNC {
+		if k.id == SYNC {
 			knob = knob.choices(&names);
 		}
 		knob.show(&mut cell_ui, state);
@@ -861,9 +895,8 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DelayView) {
 	let rect = cx.rect;
 	let top = Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - FOOTER_H - 4.0));
 	let col_w = if rect.width() >= 1250.0 { 320.0 } else { 284.0 };
-	let knobs_w = if rect.width() >= 1450.0 { 220.0 } else { 0.0 };
-	let knob_gap = if knobs_w > 0.0 { GAP } else { 0.0 };
-	let taps_w = (top.width() - col_w - knobs_w - GAP - knob_gap).max(300.0);
+	let knobs_w = if rect.width() >= 1450.0 { 220.0 } else { 186.0 };
+	let taps_w = (top.width() - col_w - knobs_w - 2.0 * GAP).max(300.0);
 	let taps_rect = top.with_max_x(top.left() + taps_w);
 	taps(ui, state, cx, v, taps_rect, false);
 
@@ -905,10 +938,16 @@ fn dock(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DelayView) {
 	let strip = Rect::from_min_max(pos2(col.left(), taps_row.bottom() + 8.0), col.max);
 	filter_strip(ui, state, cx, strip);
 
-	if knobs_w > 0.0 {
-		let knobs = Rect::from_min_max(pos2(col.right() + GAP, top.top()), top.max);
-		knob_grid(ui, state, cx, knobs.shrink2(vec2(0.0, 6.0)), KnobSize::S, 3);
-	}
+	let knobs = Rect::from_min_max(pos2(col.right() + GAP, top.top()), top.max);
+	knob_grid(
+		ui,
+		state,
+		cx,
+		knobs.shrink2(vec2(0.0, 6.0)),
+		KnobSize::S,
+		3,
+		false,
+	);
 
 	let foot = Rect::from_min_size(
 		pos2(rect.left() - 8.0, rect.bottom() - FOOTER_H),
@@ -947,9 +986,20 @@ const COMPACT_ROW_H: f32 = 32.0;
 const COMPACT_CELL_H: f32 = 24.0;
 const COMPACT_GRID_H: f32 = COMPACT_CELL_H * 2.0 + 4.0;
 
-/// How tall the compact form is at `width`.
-pub fn compact_height(width: f32) -> f32 {
-	compact_taps_h(width) + COMPACT_ROW_H + COMPACT_GRID_H + COMPACT_KNOBS_H * 2.0 + 8.0
+const COMPACT_COLS: usize = 3;
+
+/// How many knobs the compact form shows for `r` now (more with more taps).
+pub fn compact_knob_count(state: &AppState, r: DeviceRef) -> usize {
+	dl::knobs(&shown_values(state, r), true).len()
+}
+
+/// How tall the compact form is at `width` with `knobs` knobs ([`compact_knob_count`]).
+pub fn compact_height(width: f32, knobs: usize) -> f32 {
+	compact_taps_h(width)
+		+ COMPACT_ROW_H
+		+ COMPACT_GRID_H
+		+ COMPACT_KNOBS_H * knobs.div_ceil(COMPACT_COLS) as f32
+		+ 8.0
 }
 
 fn compact_taps_h(width: f32) -> f32 {
@@ -991,7 +1041,9 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut DelayView) {
 				vec2((width - 4.0) / 6.0, COMPACT_CELL_H),
 			);
 			ui.add_space(8.0);
-			let (k, _) = ui.allocate_exact_size(vec2(width, COMPACT_KNOBS_H * 2.0), Sense::hover());
-			knob_grid(ui, state, cx, k, KnobSize::S, 3);
+			let rows = compact_knob_count(state, cx.r).div_ceil(COMPACT_COLS);
+			let (k, _) =
+				ui.allocate_exact_size(vec2(width, COMPACT_KNOBS_H * rows as f32), Sense::hover());
+			knob_grid(ui, state, cx, k, KnobSize::S, COMPACT_COLS, true);
 		});
 }

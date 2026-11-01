@@ -61,7 +61,7 @@ pub use player::{
 	EditorState, EditorUpdate, MonitorFx, Player, PlayerClock, VirtualDevice, find_midi_input,
 	midi_input_ports,
 };
-pub use probe::{DeviceProbe, ProbeFrame};
+pub use probe::{DeviceProbe, PROBE_SLOTS, ProbeFrame};
 pub use record::{
 	LiveRecording, MidiItem, RecordOptions, RecordSetup, RecordTrack, RecordedAudio, RecordedPass,
 	Recording, RecordingMonitor, record_commands,
@@ -89,5 +89,11 @@ pub const PREVIEW_RELEASE_SECONDS: f32 = 1.5;
 /// Finite stand-in for -inf dB (silence) so reports stay valid JSON.
 pub const FLOOR_DB: f32 = cadenza_analysis::FLOOR_DB;
 
-/// Upper bound on the effect tail appended to renders with `end: None`.
+/// Upper bound on the effect tail appended to renders with `end: None`, and on how long
+/// a stopped graph lets its tails ring (see [`Graph::stop`]).
 pub const MAX_TAIL_SECONDS: f32 = 10.0;
+
+/// A stopped graph's ringing tail ends once its output stays below this level (dBFS) for
+/// [`TAIL_SILENCE_SECONDS`].
+pub const TAIL_SILENCE_DB: f32 = -90.0;
+pub const TAIL_SILENCE_SECONDS: f32 = 0.5;

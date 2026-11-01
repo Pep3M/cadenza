@@ -185,6 +185,61 @@ fn browser_devices_target_the_selection() {
 }
 
 #[test]
+fn adding_a_device_opens_its_editor_but_loading_a_preset_into_one_does_not() {
+	let (mut s, keys) = state_with_song();
+	let items = s.browser_items().to_vec();
+	let reverb = items.iter().find(|i| i.id == "reverb").unwrap().clone();
+	let piano = items
+		.iter()
+		.find(|i| i.id == "electric_piano")
+		.unwrap()
+		.clone();
+
+	// A new instrument track from the browser: its instrument's editor opens on its own.
+	s.selection.select_master();
+	assert!(s.use_device(&piano, None));
+	let new_track = s.project().tracks[1].id;
+	let instrument = s
+		.project()
+		.track(new_track)
+		.unwrap()
+		.instrument
+		.as_ref()
+		.unwrap()
+		.id;
+	let instrument_ref = DeviceRef {
+		track: Some(new_track),
+		device: instrument,
+	};
+	assert!(
+		s.view
+			.windows
+			.is_open(windows::WindowItem::Device(instrument_ref))
+	);
+
+	// An effect added to a different track (mixer "+ Insert"/browser drop): its own editor
+	// opens too — several windows can be open at once (T37), this one keeps the keyboard.
+	assert!(s.insert_effect(&reverb, Some(keys), None));
+	let fx = s.project().track(keys).unwrap().channel.inserts[0].id;
+	let fx_ref = DeviceRef {
+		track: Some(keys),
+		device: fx,
+	};
+	assert!(s.view.windows.is_open(windows::WindowItem::Device(fx_ref)));
+	assert_eq!(
+		s.view.windows.focus,
+		Some(windows::WindowItem::Device(fx_ref))
+	);
+
+	// Loading a preset into a device that is already there is not "adding a device": it
+	// does not reopen a window for it once the user closed it.
+	s.close_window(windows::WindowItem::Device(fx_ref));
+	let preset = &cadenza_dsp::factory_presets("reverb")[0];
+	s.load_factory_preset(fx_ref, preset);
+	assert!(!s.view.windows.is_open(windows::WindowItem::Device(fx_ref)));
+}
+
+#[test]
 fn unsaved_changes_are_confirmed_and_files_round_trip() {
 	let (mut s, _) = state_with_song();
 	let dir = tempfile::tempdir().unwrap();
@@ -348,6 +403,34 @@ fn stop_on_an_already_stopped_transport_rewinds_to_the_start() {
 
 	// Pressed again on the now-stopped transport: back to the start.
 	s.stop();
+	assert_eq!(s.position(), Tick::ZERO);
+}
+
+/// Stop while playing lets the effect tails ring (no cut); Stop again cuts them (and
+/// rewinds). Play needs nothing extra: the player starts from a clean state.
+#[test]
+fn a_second_stop_cuts_the_ringing_tails() {
+	let (mut s, _) = state_with_song();
+	let (audio, requests) = crate::audio::AudioEngine::detached();
+	s.audio = Some(audio);
+	let (player, _dev) = cadenza_engine::Player::virtual_device(48_000, 0);
+	s.clock = Some(player.clock());
+
+	s.play();
+	let sent = requests();
+	assert!(sent.contains(&"play"), "{sent:?}");
+	assert!(!sent.contains(&"cut_tails"), "{sent:?}");
+	s.stop();
+	let sent = requests();
+	assert!(sent.contains(&"stop"), "{sent:?}");
+	assert!(!sent.contains(&"cut_tails"), "the tails ring: {sent:?}");
+	s.stop();
+	let sent = requests();
+	let (stop, cut) = (
+		sent.iter().position(|r| *r == "stop"),
+		sent.iter().position(|r| *r == "cut_tails"),
+	);
+	assert!(stop.is_some() && cut > stop, "stop, then cut: {sent:?}");
 	assert_eq!(s.position(), Tick::ZERO);
 }
 
@@ -523,6 +606,39 @@ fn track_heights_are_per_track_scale_together_and_persist() {
 	let mut t = AppState::headless();
 	t.apply_prefs(prefs);
 	assert_eq!(t.view.height_of(a), 90.0);
+}
+
+#[test]
+fn automation_lane_heights_are_per_lane_scale_with_tracks_and_persist() {
+	use crate::state::MAX_LANE_HEIGHT;
+	use crate::state::automation::LANE_HEIGHT;
+	use cadenza_core::ParamAddress;
+
+	let mut v = ViewState::default();
+	let (track, synth) = (TrackId::new(), cadenza_core::DeviceId::new());
+	let cutoff = ParamAddress::device(Some(track), synth, "filter_cutoff");
+	let pan = ParamAddress::track_pan(track);
+	v.set_lane_height(&cutoff, 140.0);
+	v.set_lane_height(&pan, 1e6);
+	assert_eq!(v.height_of_lane(&cutoff), 140.0);
+	assert_eq!(v.height_of_lane(&pan), MAX_LANE_HEIGHT, "clamped");
+	v.set_lane_height(&pan, v.lane_height);
+	assert!(!v.lane_heights.contains_key(&pan), "the default clears it");
+	assert_eq!(v.height_of_lane(&pan), LANE_HEIGHT);
+	// Alt+wheel (`scale_track_heights`) scales lanes together with the tracks (grown
+	// here, so neither side hits its clamp and the ratio is exact).
+	let old_ratio_base = v.track_height;
+	v.scale_track_heights(DEFAULT_TRACK_HEIGHT * 1.5);
+	let ratio = v.track_height / old_ratio_base;
+	assert!((v.lane_height - LANE_HEIGHT * ratio).abs() < 0.5);
+	assert!((v.height_of_lane(&cutoff) - 140.0 * ratio).abs() < 0.5);
+
+	let mut s = AppState::headless();
+	s.view.set_lane_height(&cutoff, 95.0);
+	let prefs = s.prefs();
+	let mut t = AppState::headless();
+	t.apply_prefs(prefs);
+	assert_eq!(t.view.height_of_lane(&cutoff), 95.0);
 }
 
 #[test]
@@ -1891,7 +2007,7 @@ fn probe_follows_the_chosen_device_and_works_headless() {
 	// Headless: no engine, so no ring.
 	assert!(s.probe().is_none());
 	// What the engine would answer.
-	s.probe = Some(Arc::new(DeviceProbe::new(48_000)));
+	s.attach_probe(Some(Arc::new(DeviceProbe::new(48_000))));
 	assert!(s.probe().is_some());
 	s.set_probe(None);
 	assert_eq!(s.probe_target(), None);
@@ -1961,6 +2077,71 @@ fn device_editor_points_the_probe_at_its_device() {
 	s.set_probe(Some(synth.device));
 	s.tick(Instant::now());
 	assert_eq!(s.probe_target(), Some(synth.device));
+}
+
+#[test]
+fn every_open_device_editor_gets_its_own_probe() {
+	let (mut s, keys) = state_with_song();
+	let synth = DeviceRef {
+		track: Some(keys),
+		device: s.project().tracks[0].instrument.as_ref().unwrap().id,
+	};
+	let mut inserts = Vec::new();
+	for i in 0..cadenza_engine::PROBE_SLOTS + 1 {
+		let device = cadenza_model::Device::builtin("reverb", format!("Reverb {i}"));
+		inserts.push(DeviceRef {
+			track: Some(keys),
+			device: device.id,
+		});
+		assert!(s.apply(Command::InsertDevice {
+			track: Some(keys),
+			device,
+			index: None,
+		}));
+	}
+	let (a, b) = (inserts[0], inserts[1]);
+	s.view.panels.set(PanelKind::Inspector, false);
+	assert!(s.open_device_editor(a));
+	assert!(s.open_device_editor(b));
+	assert_eq!(s.probe_targets(), &[b.device, a.device]);
+	// Focusing the other window puts it first (Listen follows it); both stay probed.
+	assert!(s.open_device_editor(a));
+	assert_eq!(s.probe_targets(), &[a.device, b.device]);
+	// The dock comes right after the focused window.
+	assert!(s.open_device_in_dock(synth));
+	assert_eq!(s.probe_targets()[..2], [a.device, synth.device]);
+	assert!(s.probe_targets().contains(&b.device));
+	// Each device reads its own ring.
+	let ring = |s: &AppState, d| s.probe_for(d).map(Arc::as_ptr);
+	s.attach_probes(
+		s.probe_targets()
+			.iter()
+			.map(|&d| (d, Arc::new(DeviceProbe::new(48_000))))
+			.collect(),
+	);
+	assert!(ring(&s, a.device).is_some() && ring(&s, b.device).is_some());
+	assert_ne!(ring(&s, a.device), ring(&s, b.device));
+	// Closing a window stops only its probe.
+	s.close_window(windows::WindowItem::Device(b));
+	s.tick(Instant::now());
+	assert!(!s.probe_targets().contains(&b.device));
+	assert!(s.probe_for(b.device).is_none());
+	assert!(s.probe_for(a.device).is_some());
+	// More editors than slots: the rest stay idle, the focused one is always in.
+	for &r in &inserts[1..] {
+		assert!(s.open_device_editor(r));
+	}
+	assert_eq!(s.probe_targets().len(), cadenza_engine::PROBE_SLOTS);
+	assert_eq!(s.probe_target(), inserts.last().map(|r| r.device));
+	// The inspector's device joins when no editor shows it.
+	s.close_device_editor();
+	for r in &inserts[1..] {
+		s.close_window(windows::WindowItem::Device(*r));
+	}
+	s.view.panels.set(PanelKind::Inspector, true);
+	s.selection.select_device(synth);
+	s.tick(Instant::now());
+	assert_eq!(s.probe_targets(), &[a.device, synth.device]);
 }
 
 #[test]

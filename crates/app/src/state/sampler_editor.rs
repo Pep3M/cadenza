@@ -689,16 +689,34 @@ impl Env {
 	}
 }
 
-/// "A 2 ms · D 1.20 s · S 80 % · R 900 ms".
-pub fn env_summary(v: &AdsrValues) -> String {
-	let t = |ms: f32| ms_label(f64::from(ms) * 0.001);
-	format!(
-		"A {} \u{b7} D {} \u{b7} S {:.0} % \u{b7} R {}",
-		t(v.attack),
-		t(v.decay),
-		v.sustain,
-		t(v.release)
-	)
+impl Env {
+	/// The stage cells under the envelope: (param, letter) for A, D, S, R.
+	pub fn cells(self) -> [(&'static str, &'static str); 4] {
+		AdsrStage::ALL.map(|s| {
+			let letter = match s {
+				AdsrStage::Attack => "A",
+				AdsrStage::Decay => "D",
+				AdsrStage::Sustain => "S",
+				AdsrStage::Release => "R",
+			};
+			(self.param(s), letter)
+		})
+	}
+
+	fn is_stage(id: &str) -> bool {
+		[Env::Amp, Env::Filter]
+			.iter()
+			.any(|e| AdsrStage::ALL.iter().any(|s| e.param(*s) == id))
+	}
+}
+
+/// A stage cell is never narrower than this (letter + "1.20 s").
+pub const ENV_CELL_MIN_W: f32 = 64.0;
+
+/// Columns of the four stage cells under an envelope `width` wide: one row when they
+/// fit, else 2 × 2.
+pub fn env_cell_columns(width: f32) -> usize {
+	if width >= 4.0 * ENV_CELL_MIN_W { 4 } else { 2 }
 }
 
 // --- Filter ---------------------------------------------------------------------------
@@ -765,10 +783,19 @@ pub fn curve_word(value: f32) -> &'static str {
 	}
 }
 
-/// The value of a bottom-row readout after a vertical drag of `dy` points from `start`
-/// (up = more): whole voices, semitones and milliseconds of glide, half percents.
+/// Points of vertical drag that sweep an envelope stage cell over its knob travel.
+const ENV_DRAG_TRAVEL: f32 = 200.0;
+
+/// The value of a bottom-row readout or an envelope stage cell after a vertical drag of
+/// `dy` points from `start` (up = more): whole voices, semitones and milliseconds of
+/// glide, half percents; envelope stages move along their knob travel.
 pub fn drag_readout(id: &str, start: f32, dy: f32) -> f32 {
 	let steps = -dy;
+	if Env::is_stage(id) {
+		let p = param(id);
+		let spec = KnobSpec::for_param(p.min, p.max, p.default, p.unit);
+		return spec.from_pos(spec.to_pos(start) + steps / ENV_DRAG_TRAVEL);
+	}
 	let v = match id {
 		POLYPHONY => (start + steps / 4.0).round(),
 		TRANSPOSE => (start + steps / 6.0).round(),
@@ -1086,9 +1113,25 @@ mod tests {
 			_ => 900.0,
 		});
 		assert_eq!(
-			env_summary(&v),
-			"A 2 ms \u{b7} D 1.20 s \u{b7} S 80 % \u{b7} R 900 ms"
+			(v.attack, v.decay, v.sustain, v.release),
+			(2.0, 1200.0, 80.0, 900.0)
 		);
+		assert_eq!(
+			Env::Amp.cells(),
+			[
+				("amp_attack", "A"),
+				("amp_decay", "D"),
+				("amp_sustain", "S"),
+				("amp_release", "R"),
+			]
+		);
+		for env in [Env::Amp, Env::Filter] {
+			for (id, _) in env.cells() {
+				assert!(info().param(id).is_some(), "{id} is a sampler param");
+			}
+		}
+		assert_eq!(env_cell_columns(4.0 * ENV_CELL_MIN_W), 4);
+		assert_eq!(env_cell_columns(141.0), 2);
 		assert_eq!(
 			Env::Amp.label(&[AdsrStage::Decay, AdsrStage::Sustain]),
 			"Amp decay and sustain"
@@ -1119,5 +1162,11 @@ mod tests {
 		assert_eq!(drag_readout(POLYPHONY, 60.0, -400.0), 64.0);
 		assert_eq!(drag_readout(TRANSPOSE, 0.0, 12.0), -2.0);
 		assert_eq!(drag_readout(VELOCITY, 70.0, -10.0), 75.0);
+		// Envelope stages sweep their knob travel: 200 points = the whole range.
+		assert_eq!(drag_readout("amp_sustain", 0.0, -100.0), 50.0);
+		assert_eq!(drag_readout("amp_sustain", 50.0, 400.0), 0.0);
+		let release = drag_readout("amp_release", 200.0, -20.0);
+		assert!(release > 200.0 && release < 20_000.0, "{release}");
+		assert_eq!(drag_readout("filter_release", 200.0, -1000.0), 20_000.0);
 	}
 }

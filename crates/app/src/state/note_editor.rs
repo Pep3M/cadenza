@@ -146,6 +146,13 @@ pub struct NoteEditorView {
 	pub leveling: f32,
 	/// Detection sensitivity for "Detect again".
 	pub sensitivity: f32,
+	/// Blend (ms) pitch edits stamp on the notes they retune (drags, Correct pitch, Apply
+	/// blend): their change ramps over at least this long into a voiced neighbour, inside
+	/// the edited notes, so the neighbours keep their sung pitch.
+	pub blend_ms: f32,
+	/// Time range (file seconds) selected on the ruler; drawn while the selection is still
+	/// its notes ([`NoteEditorView::shown_range`]).
+	pub range: Option<(f64, f64)>,
 	/// Show the macros column.
 	pub macros: bool,
 	/// Show the polyphonic detector's notes behind (read only).
@@ -171,6 +178,8 @@ impl Default for NoteEditorView {
 			quantize_strength: 1.0,
 			leveling: 0.5,
 			sensitivity: 1.0,
+			blend_ms: DEFAULT_BLEND_MS,
+			range: None,
 			audition: true,
 			macros: true,
 			chords: false,
@@ -208,6 +217,23 @@ impl NoteEditorView {
 		self.high = self.low + span;
 	}
 
+	/// Selects the notes of the time range `a..b` (file seconds, either order; see
+	/// [`notes_in_range`]), added to the selection with `add`.
+	pub fn select_range(&mut self, edits: &NoteEdits, (a, b): (f64, f64), add: bool) {
+		let found = notes_in_range(edits, (a, b));
+		if !add {
+			self.selection.clear();
+		}
+		self.selection.extend(found);
+		self.range = (!add).then_some((a.min(b), a.max(b)));
+	}
+
+	/// The ruler range while the selection is still exactly its notes.
+	pub fn shown_range(&self, edits: &NoteEdits) -> Option<(f64, f64)> {
+		let r = self.range?;
+		(!self.selection.is_empty() && notes_in_range(edits, r) == self.selection).then_some(r)
+	}
+
 	/// Drops selected ids that are not notes of `edits` any more.
 	pub fn prune(&mut self, edits: Option<&NoteEdits>) {
 		match edits {
@@ -224,6 +250,57 @@ impl NoteEditorView {
 			KeyChoice::Scale(s) => Some(*s),
 		}
 	}
+}
+
+/// Blend a fresh editor stamps on pitch edits, ms.
+pub const DEFAULT_BLEND_MS: f32 = 40.0;
+
+/// Notes of the time range `a..b` (file seconds, either order): those whose (output) span
+/// has its middle inside it. A note the range only partly covers belongs to the side that
+/// holds most of it and is never split; the blend then smooths the edge.
+pub fn notes_in_range(edits: &NoteEdits, (a, b): (f64, f64)) -> BTreeSet<AudioNoteId> {
+	let (a, b) = (a.min(b), a.max(b));
+	edits
+		.notes
+		.iter()
+		.filter(|n| {
+			let (s, e) = note_span(n);
+			(a..=b).contains(&(0.5 * (s + e)))
+		})
+		.map(|n| n.id)
+		.collect()
+}
+
+/// `patches` also setting each note's blend to `ms` where it differs.
+fn with_blend(edits: &NoteEdits, mut patches: Vec<AudioNotePatch>, ms: f32) -> Vec<AudioNotePatch> {
+	let ms = ms.clamp(0.0, cadenza_model::audio_notes::MAX_BLEND_MS);
+	for p in &mut patches {
+		if edits.note(p.id).is_some_and(|n| n.blend_ms != ms) {
+			p.blend_ms = Some(ms);
+		}
+	}
+	patches
+}
+
+/// Sets the blend (ms) of `ids` (all notes when empty).
+pub fn set_blend(
+	clip: ClipId,
+	edits: &NoteEdits,
+	ids: &BTreeSet<AudioNoteId>,
+	ms: f32,
+) -> Option<Command> {
+	let ms = ms.clamp(0.0, cadenza_model::audio_notes::MAX_BLEND_MS);
+	let patches = edits
+		.notes
+		.iter()
+		.filter(|n| (ids.is_empty() || ids.contains(&n.id)) && n.blend_ms != ms)
+		.map(|n| AudioNotePatch {
+			id: n.id,
+			blend_ms: Some(ms),
+			..Default::default()
+		})
+		.collect();
+	command(clip, "Set note blend", patches)
 }
 
 /// The notes of audio clip `clip` and its region.
@@ -332,6 +409,7 @@ pub fn move_pitch(
 	ids: &BTreeSet<AudioNoteId>,
 	delta: f64,
 	snap_to: Option<Option<&Scale>>,
+	blend_ms: f32,
 ) -> Option<Command> {
 	let patches = moved_pitches(edits, ids, delta, snap_to)
 		.into_iter()
@@ -340,7 +418,7 @@ pub fn move_pitch(
 			((p - n.result_pitch()).abs() > 1e-9).then(|| pitch_patch(n, p))
 		})
 		.collect();
-	command(clip, "Retune notes", patches)
+	command(clip, "Retune notes", with_blend(edits, patches, blend_ms))
 }
 
 /// The edit a vertical drag of `amount` (semitones of drag) makes with `tool`: the new
@@ -487,7 +565,11 @@ pub fn correct_pitch(
 		threshold_cents: f64::from(view.correct_threshold),
 	};
 	let patches = cadenza_mcp::tools::tuning::correction_patches(edits, &tones, ids, &correction);
-	command(clip, "Correct pitch", patches)
+	command(
+		clip,
+		"Correct pitch",
+		with_blend(edits, patches, view.blend_ms),
+	)
 }
 
 /// Quantize Time macro: note starts move `strength` of the way to the nearest grid line
@@ -594,7 +676,7 @@ pub fn leveling(
 /// Every edit of `ids` back to as sung.
 pub fn reset(clip: ClipId, edits: &NoteEdits, ids: &BTreeSet<AudioNoteId>) -> Option<Command> {
 	let patches = selected(edits, ids)
-		.filter(|n| n.is_edited() || n.pitch.is_some() || n.time.is_some())
+		.filter(|n| n.is_edited() || n.pitch.is_some() || n.time.is_some() || n.blend_ms != 0.0)
 		.map(|n| AudioNotePatch {
 			id: n.id,
 			pitch: n.pitch.is_some().then_some(None),
@@ -603,6 +685,7 @@ pub fn reset(clip: ClipId, edits: &NoteEdits, ids: &BTreeSet<AudioNoteId>) -> Op
 			formant_cents: (n.formant_cents != 0.0).then_some(0.0),
 			gain_db: (n.gain_db != 0.0).then_some(0.0),
 			time: n.time.is_some().then_some(None),
+			blend_ms: (n.blend_ms != 0.0).then_some(0.0),
 		})
 		.filter(|p| !p.is_empty())
 		.collect();
@@ -1187,14 +1270,14 @@ mod tests {
 		assert!((free[0].1 - 60.7).abs() < 1e-9);
 		let after = run(
 			&mut p,
-			move_pitch(clip, &e, &ids(&e, &[0, 1]), 1.0, Some(None)).unwrap(),
+			move_pitch(clip, &e, &ids(&e, &[0, 1]), 1.0, Some(None), 0.0).unwrap(),
 		);
 		assert_eq!(after.notes[0].pitch, Some(61.0));
 		assert_eq!(after.notes[1].pitch, Some(65.0));
 		// Back onto the sung center = no pitch edit.
 		let back = moved_pitches(&after, &ids(&after, &[0]), -0.7, None);
 		assert!((back[0].1 - 60.3).abs() < 1e-9);
-		let cmd = move_pitch(clip, &after, &ids(&after, &[0]), -0.7, None).unwrap();
+		let cmd = move_pitch(clip, &after, &ids(&after, &[0]), -0.7, None, 0.0).unwrap();
 		let back = run(&mut p, cmd);
 		assert_eq!(back.notes[0].pitch, None);
 	}
@@ -1265,6 +1348,64 @@ mod tests {
 				.notes
 				.iter()
 				.all(|n| n.pitch.is_none() && n.time.is_none())
+		);
+	}
+
+	#[test]
+	fn a_ruler_range_selects_its_notes_and_pitch_edits_stamp_the_blend() {
+		let e = edits();
+		let (mut p, clip) = project(&e);
+		let mut view = NoteEditorView::default();
+		// 0.3..1.3 s holds the middle of note 2 (0.75) but not of note 1 (0.25) or 3 (1.4).
+		view.select_range(&e, (1.3, 0.3), false);
+		assert_eq!(view.selection, ids(&e, &[1]));
+		assert_eq!(view.shown_range(&e), Some((0.3, 1.3)));
+		view.select_range(&e, (1.35, 1.5), true);
+		assert_eq!(view.selection, ids(&e, &[1, 2]));
+		assert_eq!(
+			view.shown_range(&e),
+			None,
+			"an added range is not one range"
+		);
+		view.select_range(&e, (0.0, 1.0), false);
+		assert_eq!(view.selection, ids(&e, &[0, 1]));
+		view.selection.remove(&e.notes[0].id);
+		assert_eq!(view.shown_range(&e), None, "the selection moved on");
+
+		// Correct pitch over the range stamps the blend on the notes it retunes only.
+		view.blend_ms = 60.0;
+		let range = ids(&e, &[1]);
+		let after = run(&mut p, correct_pitch(clip, &e, &range, &view).unwrap());
+		assert_eq!(after.notes[1].pitch, Some(64.0));
+		assert_eq!(after.notes[1].blend_ms, 60.0);
+		assert_eq!(
+			(after.notes[0].blend_ms, after.notes[2].blend_ms),
+			(0.0, 0.0)
+		);
+		let to = cadenza_notes::clip::to_edits(&after);
+		assert!((to.notes[1].blend - 0.06).abs() < 1e-6);
+		// A drag does too; Apply blend sets it without retuning.
+		let after = run(
+			&mut p,
+			move_pitch(clip, &after, &ids(&after, &[2]), 1.0, None, 30.0).unwrap(),
+		);
+		assert_eq!(after.notes[2].blend_ms, 30.0);
+		let after = run(
+			&mut p,
+			set_blend(clip, &after, &BTreeSet::new(), 20.0).unwrap(),
+		);
+		assert!(after.notes.iter().all(|n| n.blend_ms == 20.0));
+		assert_eq!(after.notes[0].pitch, None);
+		assert!(set_blend(clip, &after, &BTreeSet::new(), 20.0).is_none());
+		let after = run(
+			&mut p,
+			reset(clip, &after, &ids(&after, &[0, 1, 2])).unwrap(),
+		);
+		assert!(
+			after
+				.notes
+				.iter()
+				.all(|n| n.blend_ms == 0.0 && n.pitch.is_none())
 		);
 	}
 

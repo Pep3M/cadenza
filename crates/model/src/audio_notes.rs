@@ -16,6 +16,8 @@ use crate::error::ModelError;
 pub const MAX_SHIFT: f64 = 24.0;
 /// Largest formant move, cents.
 pub const MAX_FORMANT_CENTS: f32 = 1200.0;
+/// Longest blend, milliseconds.
+pub const MAX_BLEND_MS: f32 = 500.0;
 /// Most notes in one clip.
 pub const MAX_NOTES: usize = 20_000;
 
@@ -85,6 +87,11 @@ pub struct AudioNote {
 	/// New place of the note, seconds of the file; `None` keeps it.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub time: Option<NoteSpan>,
+	/// Shortest ramp (ms) of this note's edits into a voiced neighbour, 0..500; a
+	/// transition shorter than it grows into this note's core, so the neighbour keeps its
+	/// sung pitch. 0 = the sung transition only. Changes nothing on its own.
+	#[serde(default, skip_serializing_if = "is_zero")]
+	pub blend_ms: f32,
 	/// 0..1: how sure the detection is that this region is exactly one note.
 	#[serde(default = "one", skip_serializing_if = "is_one")]
 	pub confidence: f32,
@@ -120,6 +127,7 @@ impl AudioNote {
 			formant_cents: 0.0,
 			gain_db: 0.0,
 			time: None,
+			blend_ms: 0.0,
 			confidence: 1.0,
 			flags: Vec::new(),
 		}
@@ -211,6 +219,8 @@ pub struct AudioNotePatch {
 		skip_serializing_if = "Option::is_none"
 	)]
 	pub time: Option<Option<NoteSpan>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub blend_ms: Option<f32>,
 }
 
 impl AudioNotePatch {
@@ -221,6 +231,7 @@ impl AudioNotePatch {
 			&& self.formant_cents.is_none()
 			&& self.gain_db.is_none()
 			&& self.time.is_none()
+			&& self.blend_ms.is_none()
 	}
 
 	/// Applies the patch, returning the one that undoes it.
@@ -237,6 +248,7 @@ impl AudioNotePatch {
 				.map(|v| std::mem::replace(&mut n.formant_cents, v)),
 			gain_db: self.gain_db.map(|v| std::mem::replace(&mut n.gain_db, v)),
 			time: self.time.map(|v| std::mem::replace(&mut n.time, v)),
+			blend_ms: self.blend_ms.map(|v| std::mem::replace(&mut n.blend_ms, v)),
 		}
 	}
 }
@@ -337,6 +349,12 @@ pub fn validate(edits: &NoteEdits) -> Result<(), ModelError> {
 		let f = f64::from(MAX_FORMANT_CENTS);
 		range(at("formant_cents"), f64::from(n.formant_cents), -f, f)?;
 		range(at("gain_db"), f64::from(n.gain_db), -60.0, 24.0)?;
+		range(
+			at("blend_ms"),
+			f64::from(n.blend_ms),
+			0.0,
+			f64::from(MAX_BLEND_MS),
+		)?;
 		range(at("confidence"), f64::from(n.confidence), 0.0, 1.0)?;
 		if let Some(t) = &n.time {
 			span(at("time"), t)?;

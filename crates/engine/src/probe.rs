@@ -1,8 +1,9 @@
-//! Live signal of one device for its editor (analyzers, gain-reduction history, scopes).
+//! Live signal of devices for their editors (analyzers, gain-reduction history, scopes).
 //!
-//! The control side picks at most one device ([`crate::Player::set_probe`]). While the
-//! running graph contains it, every quantum the graph copies the device's stereo input
-//! (before `process`) and output (after it) into a [`DeviceProbe`]: a preallocated
+//! The control side picks up to [`PROBE_SLOTS`] devices ([`crate::Player::set_probes`]),
+//! each with its own probe. While the running graph contains one, every quantum the graph
+//! copies the device's stereo input (before `process`) and output (after it) into its
+//! [`DeviceProbe`]: a preallocated
 //! single-producer ring of atomics (the audio thread writes, readers drain), plus the
 //! device's [`cadenza_dsp::Processor::readings`]. Writing is wait-free and allocation
 //! free; a full ring drops the new frames and counts them.
@@ -14,6 +15,9 @@ use cadenza_dsp::readings;
 use cadenza_model::modulation::MAX_MODULATORS;
 
 use crate::QUANTUM;
+
+/// Devices the player can probe at once (one ring each, preallocated per player).
+pub const PROBE_SLOTS: usize = 8;
 
 /// Ring length in seconds of audio.
 const PROBE_SECONDS: f64 = 0.5;

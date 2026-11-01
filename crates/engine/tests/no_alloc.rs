@@ -266,11 +266,15 @@ fn graph_process_does_not_allocate() {
 	assert!(graph.set_monitor_track(Some(source)));
 	// The probe follows an insert, then an instrument, then a master insert.
 	let probe = std::sync::Arc::new(cadenza_engine::DeviceProbe::new(48_000));
-	graph.attach_probe(Some(probe.clone()));
+	// A second slot follows another device at the same time.
+	let second = std::sync::Arc::new(cadenza_engine::DeviceProbe::new(48_000));
+	graph.attach_probes(&[probe.clone(), second.clone()]);
+	graph.set_probe_slot(1, Some(keys));
 	let duck = p.tracks[last].channel.inserts.last().unwrap().id;
 	let master_insert = p.master.inserts[0].id;
 	graph.set_probe_target(Some(duck));
 	let mut probed = Vec::with_capacity(probe.capacity());
+	let mut probed2 = Vec::with_capacity(second.capacity());
 	// Live parameter changes and automation edits, prepared off the audio thread.
 	let info = cadenza_dsp::device_info("electric_piano").unwrap();
 	let param = info.params[0].id;
@@ -312,12 +316,15 @@ fn graph_process_does_not_allocate() {
 			150 => graph.set_probe_target(Some(sampler_instrument)),
 			220 => graph.set_probe_target(Some(pads_instrument)),
 			300 => graph.set_probe_target(Some(master_insert)),
+			320 => graph.set_probe_slot(1, Some(duck)),
 			_ => {}
 		}
 		graph.process(&mut left[..block], &mut right[..block]);
 		probed.clear();
 		probe.drain(&mut probed);
 		let _ = probe.readings();
+		probed2.clear();
+		second.drain(&mut probed2);
 		let _ = probe.modulation();
 	}
 	graph.seek(beats(3.0));
@@ -358,10 +365,18 @@ fn metering_does_not_allocate() {
 		}
 	}
 	graph.stop();
+	// The tails ring (a stopped graph still renders), then are cut.
+	for block in [1usize, 64, 333, 1024].into_iter().cycle().take(40) {
+		graph.process(&mut left[..block], &mut right[..block]);
+	}
+	graph.seek(beats(1.0));
+	graph.process(&mut left, &mut right);
+	graph.cut_tails();
 	graph.process(&mut left, &mut right);
 	TRACKING.with(|t| t.set(false));
 
 	assert_no_allocations();
+	assert!(!graph.is_ringing());
 	assert!(loudest > 0.0, "meters saw the song");
 	assert_eq!(meters.master().rms, [0.0, 0.0]);
 }
@@ -598,8 +613,10 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 	player.start_recording(&setup).unwrap();
 	let comp = p.tracks.last().unwrap().channel.inserts[0].id;
 	let eq = p.tracks.last().unwrap().channel.inserts[1].id;
-	player.set_probe(Some(comp)).unwrap();
+	player.set_probes(&[comp, eq]).unwrap();
 	let probe = player.probe().unwrap();
+	let probe2 = player.probe_for(eq).unwrap();
+	let mut probed2 = Vec::with_capacity(probe2.capacity());
 	let mut probed = Vec::with_capacity(probe.capacity());
 	let master_tap = player.master_tap();
 	let mut tapped = Vec::with_capacity(master_tap.capacity());
@@ -651,7 +668,7 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 			player.preview_note_off(drums, 38).unwrap();
 		}
 		if i == 450 {
-			player.set_probe(Some(keys_instrument)).unwrap();
+			player.set_probes(&[keys_instrument, eq]).unwrap();
 		}
 		// Listen modes: the compressor's key, then an EQ band solo (replacing it), off.
 		if i == 100 {
@@ -687,6 +704,8 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 		dev.process(&mut out[..2 * block], &input[..2 * block]);
 		probed.clear();
 		probe.drain(&mut probed);
+		probed2.clear();
+		probe2.drain(&mut probed2);
 		tapped.clear();
 		master_tap.drain(&mut tapped);
 	}
@@ -694,6 +713,7 @@ fn recording_with_input_monitoring_metronome_and_loops_does_not_allocate() {
 	assert_no_allocations();
 	assert!(probe.is_active());
 	assert!(master_tap.is_active());
+	assert!(probe2.is_active());
 
 	player.request_stop_recording().unwrap();
 	dev.process(&mut out, &input);

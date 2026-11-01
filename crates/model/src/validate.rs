@@ -1074,6 +1074,16 @@ pub(crate) fn automation_points(
 			});
 		}
 		param_value(address, p.value)?;
+		if !(-1.0..=1.0).contains(&p.tension) {
+			return Err(ModelError::InvalidAutomation {
+				address: address.clone(),
+				reason: format!(
+					"tension {} at beat {} is out of range; use -1..=1 (0 = straight)",
+					p.tension,
+					p.tick.beats()
+				),
+			});
+		}
 	}
 	Ok(())
 }

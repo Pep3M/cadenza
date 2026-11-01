@@ -5,8 +5,11 @@
 //! FILTER ENVELOPE (kit ADSR editors) → OUTPUT (trigger-aligned scope of the probe,
 //! velocity / glide / gain), over an on-screen keyboard (A–K on the computer keyboard
 //! while the editor has the focus, Z / X octave). Below 1000 px the sections wrap into
-//! two rows, below 560 px they stack; both scroll. Compact (inspector): wave cards, the filter display, both envelopes small and
-//! S knobs. The pure logic lives in [`crate::state::poly_synth_editor`].
+//! two rows, below 560 px they stack; both scroll. Each envelope has A / D / S / R
+//! knobs under its picture (one row, 2 × 2 when narrow), so every stage carries the
+//! control menu, automation and the modulation ring. Compact (inspector): wave cards,
+//! the filter display, both envelopes small with their stage knobs, and S knobs. The
+//! pure logic lives in [`crate::state::poly_synth_editor`].
 
 use crate::i18n::{tr, trf};
 use std::collections::VecDeque;
@@ -56,7 +59,6 @@ const AMP_GREEN: Color32 = theme::PLAYING;
 const SCOPE_GREEN: Color32 = theme::BAND_COLORS[3];
 const SCOPE_LIGHT: Color32 = Color32::from_rgb(0xa6, 0xf0, 0xa3);
 const ARROW: Color32 = Color32::from_rgb(0x3c, 0x3f, 0x46);
-const CELL_BG: Color32 = Color32::from_rgb(0x11, 0x12, 0x15);
 
 fn env_color(env: Env) -> Color32 {
 	match env {
@@ -126,7 +128,7 @@ pub fn set_scope(ctx: &egui::Context, salt: &str, r: DeviceRef, samples: &[f32])
 }
 
 fn listen(cx: &BodyCx, state: &AppState, v: &mut SynthView, now: f64) {
-	if state.probe_target() != Some(cx.r.device) || cx.frames.is_empty() {
+	if state.probe_for(cx.r.device).is_none() || cx.frames.is_empty() {
 		return;
 	}
 	if !cx
@@ -219,8 +221,10 @@ fn dock(
 			.show(&mut inner, |ui| {
 				let w = ui.available_width();
 				let wavetable = !wavetable_oscs(state, cx).is_empty();
-				let (area, _) =
-					ui.allocate_exact_size(vec2(w, stacked_height(wavetable)), Sense::hover());
+				let (area, _) = ui.allocate_exact_size(
+					vec2(w, stacked_height(wavetable, w - 4.0)),
+					Sense::hover(),
+				);
 				stacked(ui, state, cx, v, &voices, area, now);
 			});
 	} else if rect.width() < ROW_MIN {
@@ -240,7 +244,9 @@ fn dock(
 					WRAP_ROW_MIN + WT_H + GAP
 				};
 				let row_h = top.height().max(min);
-				let (area, _) = ui.allocate_exact_size(vec2(w, 2.0 * row_h + 18.0), Sense::hover());
+				let second_h = wrap_second_h(w - 4.0, row_h);
+				let (area, _) =
+					ui.allocate_exact_size(vec2(w, row_h + second_h + 18.0), Sense::hover());
 				wrapped(ui, state, cx, v, &voices, area, row_h, now);
 			});
 	} else {
@@ -324,8 +330,8 @@ fn envelopes(
 	display_h: f32,
 	voices: &[VoicePos],
 ) {
-	let gap = if rect.width() > 500.0 { 16.0 } else { 12.0 };
-	let col = (rect.width() - gap) * 0.5;
+	let col = env_col(rect.width());
+	let gap = rect.width() - 2.0 * col;
 	for (i, e) in Env::ALL.into_iter().enumerate() {
 		let r = Rect::from_min_size(
 			pos2(rect.left() + i as f32 * (col + gap), rect.top()),
@@ -345,6 +351,17 @@ fn output_knob(small: bool, height: f32, display_h: f32) -> KnobSize {
 
 /// Rows never get shorter than this when the sections wrap.
 const WRAP_ROW_MIN: f32 = 240.0;
+const WRAP_ARROW: f32 = 18.0;
+/// The share of the wrapped second row the envelopes take (OUTPUT gets the rest).
+const WRAP_ENV_SHARE: f32 = 0.62;
+const WRAP_ENV_DISPLAY_MIN: f32 = 90.0;
+
+/// The wrapped second row (envelopes → OUTPUT) in `width`: `row_h`, taller when the
+/// envelopes' knobs wrap 2 × 2.
+fn wrap_second_h(width: f32, row_h: f32) -> f32 {
+	let col = env_col((width - WRAP_ARROW) * WRAP_ENV_SHARE);
+	row_h.max(TITLE_H + GAP + WRAP_ENV_DISPLAY_MIN + GAP + env_knobs_h(col))
+}
 
 /// Mid-width docks: OSC → FILTER on one row, the envelopes → OUTPUT on the next (scrolls).
 #[allow(clippy::too_many_arguments)]
@@ -359,13 +376,13 @@ fn wrapped(
 	now: f64,
 ) {
 	let area = area.shrink2(vec2(2.0, 0.0));
-	let arrow = 18.0;
+	let arrow = WRAP_ARROW;
 	let knob = KnobSize::S;
 	let display_h = (row_h - TITLE_H - 2.0 * GAP - devices::knob_height(knob)).max(80.0);
 	let first = Rect::from_min_size(area.min, vec2(area.width(), row_h));
 	let second = Rect::from_min_size(
 		pos2(area.left(), first.bottom() + 18.0),
-		vec2(area.width(), row_h),
+		vec2(area.width(), wrap_second_h(area.width(), row_h)),
 	);
 	ui.painter().hline(
 		second.x_range(),
@@ -384,7 +401,7 @@ fn wrapped(
 	);
 	osc_section(ui, state, cx, v, osc, true, false);
 	filter_section(ui, state, cx, v, filter, display_h, knob);
-	let env = second.with_max_x(second.left() + (area.width() - arrow) * 0.62);
+	let env = second.with_max_x(second.left() + (area.width() - arrow) * WRAP_ENV_SHARE);
 	let out = second.with_min_x(env.right() + arrow);
 	arrow_at(
 		ui,
@@ -411,18 +428,19 @@ const STACK_FILTER_DISPLAY: f32 = 150.0;
 const STACK_ENV_DISPLAY: f32 = 110.0;
 const STACK_SCOPE: f32 = 96.0;
 
-fn stack_heights(wavetable: bool) -> [f32; 4] {
+/// The sections' heights stacked in `width` (the envelopes' knobs wrap 2 × 2 when narrow).
+fn stack_heights(wavetable: bool, width: f32) -> [f32; 4] {
 	let knob = devices::knob_height(KnobSize::S);
 	[
 		STACK_OSC_H + if wavetable { WT_H + GAP } else { 0.0 },
 		TITLE_H + GAP + STACK_FILTER_DISPLAY + GAP + knob,
-		TITLE_H + GAP + STACK_ENV_DISPLAY + GAP + ENV_READOUT_2X2_H,
+		TITLE_H + GAP + STACK_ENV_DISPLAY + GAP + env_knobs_h(env_col(width)),
 		TITLE_H + GAP + STACK_SCOPE + GAP + knob,
 	]
 }
 
-fn stacked_height(wavetable: bool) -> f32 {
-	stack_heights(wavetable).iter().sum::<f32>() + 3.0 * 18.0 + 8.0
+fn stacked_height(wavetable: bool, width: f32) -> f32 {
+	stack_heights(wavetable, width).iter().sum::<f32>() + 3.0 * 18.0 + 8.0
 }
 
 /// Narrow docks: OSC / FILTER / AMP + FILTER ENVELOPE / OUTPUT stacked (scrolls).
@@ -436,8 +454,8 @@ fn stacked(
 	now: f64,
 ) {
 	let wavetable = !wavetable_oscs(state, cx).is_empty();
-	let [osc_h, filter_h, env_h, out_h] = stack_heights(wavetable);
 	let area = area.shrink2(vec2(2.0, 0.0));
+	let [osc_h, filter_h, env_h, out_h] = stack_heights(wavetable, area.width());
 	let mut y = area.top();
 	let mut next = |h: f32| {
 		let r = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), h));
@@ -1094,10 +1112,20 @@ fn filter_section(
 
 // --- Envelopes ------------------------------------------------------------------------
 
-/// Readouts as one row of 4 cells (label over value).
-const ENV_READOUT_ROW_H: f32 = 38.0;
-/// ... or a 2 × 2 grid of one-line cells in a narrow column.
-const ENV_READOUT_2X2_H: f32 = 42.0;
+/// The envelope display never gets shorter than this to make room for its knobs.
+const ENV_DISPLAY_MIN: f32 = 56.0;
+
+/// The width of each envelope column when both share `width` side by side.
+fn env_col(width: f32) -> f32 {
+	let gap = if width > 500.0 { 16.0 } else { 12.0 };
+	(width - gap) * 0.5
+}
+
+/// The height of an envelope's A / D / S / R knobs in a column `width` wide (one row,
+/// else 2 × 2).
+fn env_knobs_h(width: f32) -> f32 {
+	devices::small_rows_height(width, 4)
+}
 
 #[allow(clippy::too_many_arguments)]
 fn env_section(
@@ -1110,11 +1138,15 @@ fn env_section(
 	voices: &[VoicePos],
 ) {
 	title(ui, rect, env.title());
+	let knobs_h = env_knobs_h(rect.width());
+	let display_h = display_h
+		.min(rect.height() - TITLE_H - 2.0 * GAP - knobs_h)
+		.max(ENV_DISPLAY_MIN);
 	let display = Rect::from_min_size(
 		pos2(rect.left(), rect.top() + TITLE_H + GAP),
 		vec2(rect.width(), display_h),
 	);
-	let shown = envelope(ui, state, cx, env, display, voices);
+	envelope(ui, state, cx, env, display, voices);
 	let hint = match env {
 		Env::Amp => tr("drag nodes \u{b7} double-click resets"),
 		Env::Filter => tr("drives cutoff by env amount"),
@@ -1129,11 +1161,24 @@ fn env_section(
 			theme::TEXT_FAINT,
 		);
 	}
-	let reads = Rect::from_min_size(
+	let knobs = Rect::from_min_size(
 		pos2(rect.left(), display.bottom() + GAP),
-		vec2(rect.width(), ENV_READOUT_ROW_H),
+		vec2(rect.width(), knobs_h),
 	);
-	env_readouts(ui, state, cx, env, &shown, reads);
+	env_knobs(ui, state, cx, env, knobs);
+}
+
+/// The envelope's A / D / S / R as kit knobs: the control menu (automate, MIDI learn,
+/// Ask AI, modulate, reset), the value at the playhead and the modulation ring.
+fn env_knobs(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, env: Env, rect: Rect) {
+	let color = match env {
+		Env::Amp => theme::TEXT,
+		Env::Filter => VIOLET_LIGHT,
+	};
+	let defs =
+		ps::stage_knobs(env).map(|(id, label)| KnobDef::new(id, label, KnobSize::S).color(color));
+	let cols = devices::small_columns(rect.width(), defs.len());
+	devices::knob_grid(ui, state, cx, rect, &defs, cols);
 }
 
 /// The kit ADSR bound to `env`'s params: previews while dragging, one step per node
@@ -1145,7 +1190,7 @@ fn envelope(
 	env: Env,
 	rect: Rect,
 	voices: &[VoicePos],
-) -> crate::state::device_display::AdsrValues {
+) {
 	let r = cx.r;
 	let ranges = env.ranges();
 	let values = env.values(|id| value(state, cx, id));
@@ -1161,95 +1206,18 @@ fn envelope(
 	);
 	let mut commits: Vec<(&'static str, f32)> = Vec::new();
 	let mut stages = Vec::new();
-	let mut shown = values;
 	for stage in AdsrStage::ALL {
 		match out.gesture(stage) {
-			Gesture::Preview(x) => {
-				state.preview_param(r.device, env.param(stage), x);
-				shown.set(stage, x);
-			}
+			Gesture::Preview(x) => state.preview_param(r.device, env.param(stage), x),
 			Gesture::Commit(x) => {
 				commits.push((env.param(stage), x));
 				stages.push(stage);
-				shown.set(stage, x);
 			}
 			Gesture::Idle => {}
 		}
 	}
 	if !commits.is_empty() {
 		devices::commit_changes(state, r, cx.info, &commits, |_| env.label(&stages));
-	}
-	shown
-}
-
-fn env_readouts(
-	ui: &mut Ui,
-	state: &AppState,
-	cx: &BodyCx,
-	env: Env,
-	v: &crate::state::device_display::AdsrValues,
-	rect: Rect,
-) {
-	let reads = ps::readouts(v);
-	let p = ui.painter();
-	let color = |stage: AdsrStage| {
-		if state.ai_change(cx.r.device, env.param(stage)).is_some() {
-			theme::ACCENT_TEXT
-		} else {
-			theme::TEXT
-		}
-	};
-	if rect.width() >= 230.0 {
-		let cell_w = (rect.width() - 12.0) / 4.0;
-		for (i, ((label, text), stage)) in reads.iter().zip(AdsrStage::ALL).enumerate() {
-			let cell = Rect::from_min_size(
-				pos2(rect.left() + i as f32 * (cell_w + 4.0), rect.top()),
-				vec2(cell_w, ENV_READOUT_ROW_H),
-			);
-			p.rect_filled(cell, CornerRadius::same(theme::RADIUS), CELL_BG);
-			p.text(
-				pos2(cell.center().x, cell.top() + 11.0),
-				Align2::CENTER_CENTER,
-				*label,
-				theme::medium(10.5),
-				theme::TEXT_FAINT,
-			);
-			p.text(
-				pos2(cell.center().x, cell.bottom() - 11.0),
-				Align2::CENTER_CENTER,
-				text,
-				theme::mono(12.0),
-				color(stage),
-			);
-		}
-	} else {
-		let cell_w = (rect.width() - 4.0) / 2.0;
-		let short = cell_w < 124.0;
-		for (i, ((label, text), stage)) in reads.iter().zip(AdsrStage::ALL).enumerate() {
-			let label = if short { &label[..1] } else { label };
-			let cell = Rect::from_min_size(
-				pos2(
-					rect.left() + (i % 2) as f32 * (cell_w + 4.0),
-					rect.top() + (i / 2) as f32 * 21.0,
-				),
-				vec2(cell_w, 19.0),
-			);
-			p.rect_filled(cell, CornerRadius::same(theme::RADIUS), CELL_BG);
-			p.text(
-				pos2(cell.left() + 6.0, cell.center().y),
-				Align2::LEFT_CENTER,
-				label,
-				theme::medium(10.0),
-				theme::TEXT_FAINT,
-			);
-			p.text(
-				pos2(cell.right() - 6.0, cell.center().y),
-				Align2::RIGHT_CENTER,
-				text,
-				theme::mono(11.0),
-				color(stage),
-			);
-		}
 	}
 }
 
@@ -1357,6 +1325,10 @@ fn compact_filter_h(width: f32) -> f32 {
 	(width * 0.5).clamp(110.0, 170.0)
 }
 
+fn compact_env_col(width: f32) -> f32 {
+	(width - 8.0) * 0.5
+}
+
 fn compact_knobs() -> [KnobDef; 10] {
 	let s = KnobSize::S;
 	[
@@ -1383,6 +1355,7 @@ pub fn compact_height(width: f32, wavetables: usize) -> f32 {
 		+ compact_filter_h(width)
 		+ 6.0 + TITLE_H
 		+ COMPACT_ENV_H
+		+ 4.0 + env_knobs_h(compact_env_col(width))
 		+ 8.0 + devices::small_rows_height(width, compact_knobs().len())
 }
 
@@ -1445,7 +1418,8 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 	);
 	filter_display(ui, state, cx, v, display, false);
 	y = display.bottom() + 6.0;
-	let col = (rect.width() - 8.0) * 0.5;
+	let col = compact_env_col(rect.width());
+	let knobs_h = env_knobs_h(col);
 	for (i, env) in Env::ALL.into_iter().enumerate() {
 		let x = rect.left() + i as f32 * (col + 8.0);
 		let head = Rect::from_min_size(pos2(x, y), vec2(col, TITLE_H));
@@ -1459,8 +1433,10 @@ fn compact(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, v: &mut SynthView, re
 		);
 		let r = Rect::from_min_size(pos2(x, head.bottom()), vec2(col, COMPACT_ENV_H));
 		envelope(ui, state, cx, env, r, &[]);
+		let knobs = Rect::from_min_size(pos2(x, r.bottom() + 4.0), vec2(col, knobs_h));
+		env_knobs(ui, state, cx, env, knobs);
 	}
-	y += TITLE_H + COMPACT_ENV_H + 8.0;
+	y += TITLE_H + COMPACT_ENV_H + 4.0 + knobs_h + 8.0;
 	let knobs = compact_knobs();
 	let cols = devices::small_columns(rect.width(), knobs.len());
 	let k = Rect::from_min_max(pos2(rect.left(), y), rect.max);

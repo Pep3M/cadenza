@@ -18,6 +18,7 @@ use crate::jobs::Peaks;
 use crate::state::arrange_tool::{self, ArrangeTool};
 use crate::state::automation::LANE_HEIGHT;
 use crate::state::dnd::{DropTarget, Payload};
+use crate::state::duplicate;
 use crate::state::edits::{self, TRACK_PALETTE};
 use crate::state::files::{FileKind, classify};
 use crate::state::layout::FollowMode;
@@ -32,7 +33,7 @@ use crate::ui::widgets::{self, Gesture};
 /// Width of the clip edge that resizes instead of moving.
 const RESIZE_HANDLE: f32 = 7.0;
 /// Grab height of a track header's bottom edge (track resize).
-const RESIZE_EDGE: f32 = 4.0;
+pub(super) const RESIZE_EDGE: f32 = 4.0;
 const CLIP_HEADER: f32 = 16.0;
 /// Track headers at least this tall get a third row (buttons + volume).
 const TALL_HEADER: f32 = 62.0;
@@ -846,6 +847,22 @@ impl ArrangeUi {
 		Some(Rect::from_min_size(
 			pos2(layout.lanes.left(), y),
 			vec2(layout.lanes.width(), row.height),
+		))
+	}
+
+	/// Screen rect of the automation lane `address`'s header (the left column: picker,
+	/// hide × and the resize edge) in the last drawn frame.
+	pub fn lane_header_rect(
+		&self,
+		scroll_y: f32,
+		address: &cadenza_core::ParamAddress,
+	) -> Option<Rect> {
+		let layout = self.last?;
+		let row = self.rows.lane(address)?;
+		let y = layout.body_top + row.top - scroll_y;
+		Some(Rect::from_min_size(
+			pos2(layout.header.left(), y),
+			vec2(layout.header.width(), row.height),
 		))
 	}
 
@@ -2910,11 +2927,37 @@ fn track_menu(
 		ui.close();
 	}
 	ui.menu_button(tr("Automate"), |ui| {
+		let project = state.project().clone();
+		let existing = state.view.automation.existing(&project, Some(track.id));
+		if !existing.is_empty() {
+			for address in &existing {
+				let hidden = state.view.automation.is_hidden(address);
+				let name = state
+					.lane_meta(address)
+					.map(|m| m.name)
+					.unwrap_or_else(|| address.to_string());
+				if ui.selectable_label(!hidden, name).clicked() {
+					state.view.automation.set_hidden(address, !hidden);
+				}
+			}
+			ui.horizontal(|ui| {
+				if ui.small_button(tr("Show all")).clicked() {
+					state.view.automation.show_all(&project, Some(track.id));
+				}
+				if ui.small_button(tr("Hide all")).clicked() {
+					state.view.automation.hide_all(&project, Some(track.id));
+				}
+			});
+			ui.separator();
+		}
 		let choices = state.lane_choices(Some(track.id));
 		egui::ScrollArea::vertical()
-			.max_height(360.0)
+			.max_height(300.0)
 			.show(ui, |ui| {
 				for c in choices {
+					if existing.contains(&c.address) {
+						continue;
+					}
 					if ui.button(format!("{} · {}", c.group, c.name)).clicked() {
 						state.automate(c.address);
 						ui.close();
@@ -2936,6 +2979,18 @@ fn track_menu(
 		ui.close();
 	}
 	ui.separator();
+	let can_duplicate = duplicate::can_duplicate(track);
+	if ui
+		.add_enabled(
+			can_duplicate,
+			egui::Button::new(tr("Duplicate track")).shortcut_text("Ctrl+Shift+T"),
+		)
+		.on_disabled_hover_text(tr("Folders aren't duplicated yet"))
+		.clicked()
+	{
+		state.duplicate_track(track.id);
+		ui.close();
+	}
 	if ui.button(tr("Delete track")).clicked() {
 		state.apply(Command::RemoveTrack { track: track.id });
 		ui.close();

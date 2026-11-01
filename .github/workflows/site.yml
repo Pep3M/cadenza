@@ -1,0 +1,21 @@
+# Rebuilds cadenzadaw.com (Cloudflare Pages deploy hook) when a release becomes the latest
+# by hand: a draft or prerelease published from the GitHub UI. Releases created by
+# release.yml do not trigger this (GITHUB_TOKEN events start no workflows); that workflow
+# calls the hook itself.
+name: Website
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Rebuild the website
+        env:
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          if [[ -z "$HOOK" ]]; then echo "SITE_DEPLOY_HOOK not set; skipping"; exit 0; fi
+          curl -fsS -X POST "$HOOK" > /dev/null

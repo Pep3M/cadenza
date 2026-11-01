@@ -518,6 +518,28 @@ fn strip(ui: &mut Ui, state: &mut AppState, track: Option<&Track>, height: f32, 
 	if bg.double_clicked() {
 		state.open_track_window(id);
 	}
+	if let Some(track) = track {
+		bg.context_menu(|ui| {
+			if ui.button(tr("Track properties…")).clicked() {
+				state.open_track_window(id);
+				ui.close();
+			}
+			let can_duplicate = crate::state::duplicate::can_duplicate(track);
+			if ui
+				.add_enabled(can_duplicate, egui::Button::new(tr("Duplicate track")))
+				.on_disabled_hover_text(tr("Folders aren't duplicated yet"))
+				.clicked()
+			{
+				state.duplicate_track(track.id);
+				ui.close();
+			}
+			ui.separator();
+			if ui.button(tr("Delete track")).clicked() {
+				state.apply(Command::RemoveTrack { track: track.id });
+				ui.close();
+			}
+		});
+	}
 
 	let inner = strip_inner(rect);
 	let w = inner.width();

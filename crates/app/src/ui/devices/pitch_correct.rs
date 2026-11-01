@@ -102,10 +102,10 @@ pub fn pitch_correct_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 
 /// Samples the device's readings once per frame while it is probed and audio passes.
 fn listen(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut PcView) {
-	if v.synthetic || state.probe_target() != Some(cx.r.device) || cx.frames.is_empty() {
+	if v.synthetic || cx.frames.is_empty() {
 		return;
 	}
-	let Some(probe) = state.probe() else {
+	let Some(probe) = state.probe_for(cx.r.device) else {
 		return;
 	};
 	let read = |i| probe.reading(i).unwrap_or(-1.0);

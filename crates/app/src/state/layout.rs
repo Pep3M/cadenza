@@ -658,6 +658,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		mark("Undo / redo"),
 	),
 	sc(mark("Edit"), "Ctrl+D", mark("Duplicate selection")),
+	sc(
+		mark("Edit"),
+		"Ctrl+Shift+T",
+		mark("Duplicate the current track"),
+	),
 	sc(mark("Edit"), "Del", mark("Delete selection")),
 	sc(
 		mark("Edit"),
@@ -730,6 +735,11 @@ pub const SHORTCUTS: &[Shortcut] = &[
 		mark("Resize that track (double-click resets)"),
 	),
 	sc(
+		mark("Arrange tools"),
+		mark("Drag lane header bottom edge"),
+		mark("Resize that automation lane (double-click resets)"),
+	),
+	sc(
 		mark("Navigate"),
 		mark("Wheel / Shift+Wheel"),
 		mark("Scroll vertically / horizontally"),
@@ -738,7 +748,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
 	sc(
 		mark("Navigate"),
 		"Alt+Wheel",
-		mark("Track height / piano roll key height"),
+		mark("Track and lane height / piano roll key height"),
 	),
 	sc(mark("Navigate"), mark("Middle-drag"), mark("Pan the view")),
 	sc(
@@ -1143,6 +1153,10 @@ pub struct Prefs {
 	pub arrange_tool: super::arrange_tool::ArrangeTool,
 	/// Per-track heights (header bottom edge drags), by track id.
 	pub track_heights: std::collections::HashMap<cadenza_core::TrackId, f32>,
+	/// Default automation lane height (Alt+wheel, scaled with `track_height`).
+	pub lane_height: f32,
+	/// Per-lane heights (lane header bottom edge drags), by parameter address.
+	pub lane_heights: std::collections::HashMap<cadenza_core::ParamAddress, f32>,
 	/// Floating window rects per kind and per item.
 	pub windows: super::windows::SavedWindows,
 	/// UI language: the OS language ("system") or a language code.
@@ -1175,6 +1189,8 @@ impl Default for Prefs {
 			mixer: super::mixer::MixerView::default(),
 			arrange_tool: view.arrange_tool,
 			track_heights: view.track_heights,
+			lane_height: view.lane_height,
+			lane_heights: view.lane_heights,
 			windows: super::windows::SavedWindows::default(),
 			language: crate::i18n::LanguageChoice::System,
 		}

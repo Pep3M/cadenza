@@ -1604,6 +1604,12 @@ impl Graph {
 			} else {
 				self.tail_frames.saturating_sub(n as u32)
 			};
+			// A quiet gap can be a pause between long delay echoes: once the tail stops
+			// rendering, drop whatever is still in the devices so a later preview on the
+			// stopped transport does not replay a stale echo.
+			if self.tail_frames == 0 {
+				self.needs_reset = true;
+			}
 		}
 		self.meters.publish();
 	}

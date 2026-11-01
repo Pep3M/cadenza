@@ -163,3 +163,52 @@ fn delay_feedback_and_tap_automation_reach_the_processor() {
 	let (off, on) = (rms(&plain.left[tap.clone()]), rms(&tapped.left[tap]));
 	assert!(on > 10.0 * off.max(1e-6), "tap lane: {off} vs {on}");
 }
+
+/// Regression (demo-techno): playing from the middle of the song through an automated
+/// synth into a tube saturator burst to ~500x full scale on the first samples, because the
+/// reset left the saturator's anti-aliasing state inconsistent. Starting anywhere must
+/// sound like the same spot reached from the start.
+#[test]
+fn starting_mid_song_has_no_transient() {
+	let mut a = synth_track(
+		"lead",
+		&[
+			(57, 0.0, 1.5),
+			(60, 2.0, 1.5),
+			(64, 4.0, 1.5),
+			(62, 6.0, 1.5),
+		],
+		8.0,
+	);
+	let synth_id = a.instrument.as_ref().unwrap().id;
+	a.channel.inserts.push(
+		Device::builtin("saturator", "Drive")
+			.with_param("mode", 1.0)
+			.with_param("drive", 11.0),
+	);
+	let mut p = project(vec![a.clone()]);
+	p.automation.push(AutomationLane::new(
+		ParamAddress::device(Some(a.id), synth_id, "filter_cutoff"),
+		vec![
+			AutomationPoint::new(beats(0.0), 200.0),
+			AutomationPoint::new(beats(8.0), 4000.0),
+		],
+	));
+	let full = render_offline(&p, &opts(8.0)).unwrap();
+	let steady = peak(&full.left);
+	for start in [1.0, 2.0, 3.0, 4.0, 6.0] {
+		let mid = render_offline(
+			&p,
+			&cadenza_engine::RenderOptions {
+				start: beats(start),
+				..opts(8.0)
+			},
+		)
+		.unwrap();
+		let first = peak(&mid.left[..seconds(0.05)]).max(peak(&mid.right[..seconds(0.05)]));
+		assert!(
+			first <= steady * 1.5,
+			"start at beat {start}: first 50 ms peak {first} vs whole song peak {steady}"
+		);
+	}
+}

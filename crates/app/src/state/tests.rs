@@ -185,6 +185,61 @@ fn browser_devices_target_the_selection() {
 }
 
 #[test]
+fn adding_a_device_opens_its_editor_but_loading_a_preset_into_one_does_not() {
+	let (mut s, keys) = state_with_song();
+	let items = s.browser_items().to_vec();
+	let reverb = items.iter().find(|i| i.id == "reverb").unwrap().clone();
+	let piano = items
+		.iter()
+		.find(|i| i.id == "electric_piano")
+		.unwrap()
+		.clone();
+
+	// A new instrument track from the browser: its instrument's editor opens on its own.
+	s.selection.select_master();
+	assert!(s.use_device(&piano, None));
+	let new_track = s.project().tracks[1].id;
+	let instrument = s
+		.project()
+		.track(new_track)
+		.unwrap()
+		.instrument
+		.as_ref()
+		.unwrap()
+		.id;
+	let instrument_ref = DeviceRef {
+		track: Some(new_track),
+		device: instrument,
+	};
+	assert!(
+		s.view
+			.windows
+			.is_open(windows::WindowItem::Device(instrument_ref))
+	);
+
+	// An effect added to a different track (mixer "+ Insert"/browser drop): its own editor
+	// opens too — several windows can be open at once (T37), this one keeps the keyboard.
+	assert!(s.insert_effect(&reverb, Some(keys), None));
+	let fx = s.project().track(keys).unwrap().channel.inserts[0].id;
+	let fx_ref = DeviceRef {
+		track: Some(keys),
+		device: fx,
+	};
+	assert!(s.view.windows.is_open(windows::WindowItem::Device(fx_ref)));
+	assert_eq!(
+		s.view.windows.focus,
+		Some(windows::WindowItem::Device(fx_ref))
+	);
+
+	// Loading a preset into a device that is already there is not "adding a device": it
+	// does not reopen a window for it once the user closed it.
+	s.close_window(windows::WindowItem::Device(fx_ref));
+	let preset = &cadenza_dsp::factory_presets("reverb")[0];
+	s.load_factory_preset(fx_ref, preset);
+	assert!(!s.view.windows.is_open(windows::WindowItem::Device(fx_ref)));
+}
+
+#[test]
 fn unsaved_changes_are_confirmed_and_files_round_trip() {
 	let (mut s, _) = state_with_song();
 	let dir = tempfile::tempdir().unwrap();

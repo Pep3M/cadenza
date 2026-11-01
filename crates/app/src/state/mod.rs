@@ -2046,12 +2046,14 @@ impl AppState {
 				}
 			}
 		};
+		let added = edits::devices_added(&cmd);
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(device_ref);
 			if item.role == DeviceRole::Instrument {
 				self.instrument_hint(&item.name);
 			}
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -2174,6 +2176,23 @@ impl AppState {
 		if let Some(a) = &self.audio {
 			a.close_editor(device);
 			a.capture_states(self.project().clone(), vec![device]);
+		}
+	}
+
+	/// Opens the editor of the device a user gesture just added (browser drop, mixer
+	/// "+ Insert", a library pattern's new track...): the last one in `added` (see
+	/// [`edits::devices_added`]). A built-in opens its floating window; a plugin opens its
+	/// own editor window — queued until the device reaches the player if the edit is still
+	/// reloading, same as the inspector's Edit — except where plugin editors are not
+	/// supported at all (`EDITORS_SUPPORTED` false), where it is left to the generic controls
+	/// (no notice, unlike an explicit Edit click). Never called for the AI, MCP tools, undo/
+	/// redo, project load, import or a preset replacing a device.
+	fn open_added_device(&mut self, added: &[DeviceRef]) {
+		let Some(&r) = added.last() else { return };
+		if self.has_device_editor(r) {
+			self.open_device_editor(r);
+		} else if cadenza_engine::EDITORS_SUPPORTED && self.is_plugin(r.device) {
+			self.open_plugin_editor(r.device);
 		}
 	}
 
@@ -2849,13 +2868,16 @@ impl AppState {
 			track,
 			device: device.id,
 		};
-		let ok = self.apply(Command::InsertDevice {
+		let cmd = Command::InsertDevice {
 			track,
 			device,
 			index,
-		});
+		};
+		let added = edits::devices_added(&cmd);
+		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -2892,12 +2914,14 @@ impl AppState {
 		};
 		let after = after.or_else(|| project.tracks.last().map(|t| t.id));
 		let cmd = edits::add_track(project, track, after);
+		let added = edits::devices_added(&cmd);
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
 			if item.role == DeviceRole::Instrument {
 				self.instrument_hint(&item.name);
 			}
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -2931,9 +2955,11 @@ impl AppState {
 				index: None,
 			},
 		};
+		let added = edits::devices_added(&cmd);
 		let ok = self.apply(cmd);
 		if ok {
 			self.selection.select_device(r);
+			self.open_added_device(&added);
 		}
 		ok
 	}
@@ -3973,6 +3999,10 @@ impl AppState {
 		let at = at.unwrap_or(self.position());
 		match library::add_pattern(self.project(), &library, id, track, at) {
 			Ok(drop) => {
+				// A pattern dropped on an existing track adds no device; on an empty lane it
+				// also creates the track's instrument — a user drop like any other, so its
+				// editor opens too, same as dropping that instrument directly would.
+				let added = edits::devices_added(&drop.command);
 				if !self.apply(drop.command) {
 					return false;
 				}
@@ -3980,6 +4010,7 @@ impl AppState {
 				for w in drop.warnings {
 					self.notices.warn(w);
 				}
+				self.open_added_device(&added);
 				true
 			}
 			Err(e) => {

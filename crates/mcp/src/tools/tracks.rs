@@ -333,9 +333,15 @@ pub struct AutomationPointArg {
 	pub beat: f64,
 	pub value: f32,
 	/// How the value moves from this point to the next: `linear` (default), `hold`
-	/// (step) or `smooth` (slow start and end).
+	/// (step), `smooth` (slow start and end), `double_curve` (S-curve) or `stairs`.
 	#[serde(default)]
 	pub shape: Option<cadenza_model::PointShape>,
+	/// Bend of the segment to the next point, -1..1 (default 0 = plain shape). `linear`:
+	/// curved ramp, positive rises/falls fast then settles, negative starts slowly.
+	/// `double_curve`: positive eases in and out, negative is steep at both ends and
+	/// flat in the middle. `stairs`: -1 = 2 steps .. 0 = 9 .. 1 = 16. Ignored by hold/smooth.
+	#[serde(default)]
+	pub tension: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -354,6 +360,7 @@ pub fn set_automation(session: &mut Session, args: SetAutomationArgs) -> Result<
 		.map(|p| {
 			cadenza_model::AutomationPoint::new(crate::convert::beats_to_tick(p.beat), p.value)
 				.with_shape(p.shape.unwrap_or_default())
+				.with_tension(p.tension.unwrap_or(0.0))
 		})
 		.collect();
 	session
@@ -397,6 +404,33 @@ mod tests {
 		assert!(session.document().project().tracks.is_empty());
 		session.document_mut().redo().unwrap();
 		assert_eq!(session.document().project().tracks.len(), 1);
+	}
+
+	#[test]
+	fn set_automation_takes_shape_and_tension() {
+		let mut session = Session::new();
+		let track = synth_track(&mut session);
+		let args: SetAutomationArgs = serde_json::from_value(serde_json::json!({
+			"address": format!("track/{track}/pan"),
+			"points": [
+				{ "beat": 0.0, "value": -1.0, "shape": "double_curve", "tension": 0.6 },
+				{ "beat": 4.0, "value": 1.0 }
+			]
+		}))
+		.unwrap();
+		set_automation(&mut session, args).unwrap();
+		let lane = &session.document().project().automation[0];
+		assert_eq!(lane.points[0].shape, cadenza_model::PointShape::DoubleCurve);
+		assert_eq!(lane.points[0].tension, 0.6);
+		assert_eq!(lane.points[1].tension, 0.0);
+
+		let bad: SetAutomationArgs = serde_json::from_value(serde_json::json!({
+			"address": format!("track/{track}/pan"),
+			"points": [{ "beat": 0.0, "value": 0.0, "tension": 3.0 }]
+		}))
+		.unwrap();
+		let err = set_automation(&mut session, bad).unwrap_err();
+		assert!(err.to_string().contains("-1..=1"), "{err}");
 	}
 
 	#[test]

@@ -184,16 +184,14 @@ fn update_meter(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut ReverbView) {
 		return;
 	}
 	let dt = ui.input(|i| i.stable_dt).min(0.25);
-	let ours = state.probe_target() == Some(cx.r.device);
 	v.duck_db = state
-		.probe()
-		.filter(|_| ours)
+		.probe_for(cx.r.device)
 		.and_then(|p| p.reading(cadenza_dsp::readings::GAIN_REDUCTION_DB))
 		.unwrap_or(0.0)
 		.abs();
 	let fall = FALL_DB_PER_S * dt;
 	let mut peak = [0.0f32; 2];
-	if ours && !cx.frames.is_empty() {
+	if state.probe_for(cx.r.device).is_some() && !cx.frames.is_empty() {
 		for f in cx.frames {
 			for (p, o) in peak.iter_mut().zip(f.output) {
 				*p = p.max(o.abs());

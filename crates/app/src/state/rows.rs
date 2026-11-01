@@ -6,7 +6,6 @@ use cadenza_core::{ParamAddress, TrackId};
 use cadenza_model::Project;
 
 use super::ViewState;
-use super::automation::LANE_HEIGHT;
 
 /// Height of the master row (it only holds the automation toggle).
 pub const MASTER_ROW_HEIGHT: f32 = 26.0;
@@ -108,12 +107,13 @@ impl Rows {
 			}
 			if auto.is_open(Some(t.id)) {
 				for address in auto.visible(project, Some(t.id)) {
+					let height = view.height_of_lane(&address);
 					push(
 						RowKind::Lane {
 							owner: Some(t.id),
 							address,
 						},
-						LANE_HEIGHT,
+						height,
 						&mut rows,
 					);
 				}
@@ -124,12 +124,13 @@ impl Rows {
 			push(RowKind::Master, MASTER_ROW_HEIGHT, &mut rows);
 			if auto.is_open(None) {
 				for address in auto.visible(project, None) {
+					let height = view.height_of_lane(&address);
 					push(
 						RowKind::Lane {
 							owner: None,
 							address,
 						},
-						LANE_HEIGHT,
+						height,
 						&mut rows,
 					);
 				}
@@ -202,6 +203,7 @@ impl Rows {
 
 #[cfg(test)]
 mod tests {
+	use super::super::automation::LANE_HEIGHT;
 	use super::*;
 	use cadenza_model::{Track, TrackKind};
 
@@ -254,5 +256,40 @@ mod tests {
 		assert_eq!(rows.rows.len(), 6, "master volume lane under it");
 		assert_eq!(rows.track_top(2), rows.rows[master].top);
 		assert_eq!(rows.track_at(rows.rows[master].top + 1.0), None);
+	}
+
+	#[test]
+	fn lane_rows_use_their_own_resized_height() {
+		let mut p = Project::new("rows");
+		p.tracks = vec![
+			Track::new("A", TrackKind::Instrument),
+			Track::new("B", TrackKind::Audio),
+		];
+		let (a, b) = (p.tracks[0].id, p.tracks[1].id);
+		let mut view = ViewState {
+			track_height: 60.0,
+			..ViewState::default()
+		};
+		view.automation.toggle(&p, Some(a));
+		view.automation.show(ParamAddress::track_pan(a));
+		let volume = ParamAddress::track_volume(a);
+		let pan = ParamAddress::track_pan(a);
+		view.set_lane_height(&volume, 120.0);
+
+		let rows = Rows::new(&p, &view);
+		assert_eq!(rows.lane(&volume).unwrap().height, 120.0);
+		assert_eq!(
+			rows.lane(&pan).unwrap().height,
+			LANE_HEIGHT,
+			"untouched default"
+		);
+		// The following track moves down by the resized lane's extra height.
+		assert_eq!(rows.track_top(1), 60.0 + 120.0 + LANE_HEIGHT);
+		// Hit-testing follows the new layout.
+		assert_eq!(rows.track_at(60.0 + 119.0), Some((a, 0)));
+		assert_eq!(
+			rows.track_at(60.0 + 120.0 + LANE_HEIGHT + 1.0),
+			Some((b, 1))
+		);
 	}
 }

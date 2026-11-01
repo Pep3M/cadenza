@@ -93,6 +93,72 @@ fn probe_taps_a_gain_device_input_and_output() {
 }
 
 #[test]
+fn several_probes_follow_their_own_devices() {
+	let wav = write_sine_wav(
+		"probe-multi.wav",
+		SR,
+		2,
+		(hound::SampleFormat::Float, 32),
+		440.0,
+		0.5,
+		2.0,
+	);
+	let mut tracks = Vec::new();
+	let mut ids = Vec::new();
+	for (name, db) in [("A", -6.0), ("B", -12.0)] {
+		let mut t = Track::new(name, TrackKind::Audio);
+		t.clips
+			.push(Clip::audio("sine", beats(0.0), beats(4.0), &wav));
+		let gain = Device::builtin("gain", "Gain").with_param("gain", db);
+		ids.push((gain.id, db));
+		t.channel.inserts.push(gain);
+		t.channel.volume_db = -20.0;
+		tracks.push(t);
+	}
+	let p = project(tracks);
+	let (mut player, mut dev) = Player::virtual_device(SR, 0);
+	player.load(&p).unwrap();
+	let (a, b) = (ids[0].0, ids[1].0);
+	player.set_probes(&[b, a, b]).unwrap();
+	assert_eq!(player.probe_targets(), &[b, a]);
+	assert_eq!(player.probe_target(), Some(b));
+	let pa = player.probe_for(a).unwrap();
+	let pb = player.probe_for(b).unwrap();
+	assert!(!std::sync::Arc::ptr_eq(&pa, &pb));
+	player.play().unwrap();
+
+	let check = |probe: &cadenza_engine::DeviceProbe, db: f32| {
+		let mut frames = Vec::new();
+		probe.drain(&mut frames);
+		assert!(frames.len() >= 8 * 512 - 64, "{} frames", frames.len());
+		assert!(probe.is_active());
+		let g = 10f32.powf(db / 20.0);
+		for f in &frames[frames.len() / 2..] {
+			assert!(
+				(f.output[0] - f.input[0] * g).abs() < 1e-4,
+				"{f:?} ({db} dB)"
+			);
+		}
+	};
+	run(&mut dev, 8);
+	// Draining one never takes the other's frames.
+	check(&pa, ids[0].1);
+	check(&pb, ids[1].1);
+
+	// Dropping one keeps the other's ring (frames not read yet included).
+	run(&mut dev, 8);
+	player.set_probes(&[b]).unwrap();
+	assert!(player.probe_for(a).is_none());
+	assert!(std::sync::Arc::ptr_eq(&player.probe_for(b).unwrap(), &pb));
+	check(&pb, ids[1].1);
+	assert_eq!(player.probes().len(), 1);
+
+	player.set_probes(&[]).unwrap();
+	assert!(player.probe().is_none());
+	assert!(player.probes().is_empty());
+}
+
+#[test]
 fn probe_reads_compressor_gain_reduction_on_the_master_and_instruments() {
 	let notes: Vec<(u8, f64, f64)> = (0..4).map(|i| (48 + i * 4, 0.0, 8.0)).collect();
 	let mut synth = synth_track("Synth", &notes, 8.0);
@@ -154,8 +220,9 @@ fn probe_carries_held_keys_and_voices_from_playback_and_previews() {
 	assert_eq!(voices.len(), 2, "{voices:?}");
 	assert!(voices.iter().all(|v| !v.released && v.elapsed_ms > 50.0));
 
-	// Stopped: a preview note is what the instrument holds.
+	// Stopped with the tails cut: a preview note is what the instrument holds.
 	player.stop().unwrap();
+	player.cut_tails().unwrap();
 	run(&mut dev, 20);
 	assert!(
 		!probe.is_active(),

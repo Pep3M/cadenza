@@ -500,6 +500,66 @@ pub fn readout(v: &DelValues, bpm: f64) -> String {
 	))
 }
 
+/// The colour family of a delay knob.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnobGroup {
+	Echo,
+	Filter,
+	Taps,
+}
+
+/// One knob of the delay's knob grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DelayKnob {
+	pub id: &'static str,
+	pub label: String,
+	pub group: KnobGroup,
+}
+
+/// The delay's knobs for `v`, so every param the sound uses has a control menu
+/// (automate, MIDI learn, Ask AI, reset): time (the note value when synced), feedback
+/// (how long the echoes decay), mix when `mix` (the dock has it in the header), the
+/// feedback filter's cuts, taps and their spread, then each extra tap's level and pan.
+pub fn knobs(v: &DelValues, mix: bool) -> Vec<DelayKnob> {
+	let knob = |id, label: &str, group| DelayKnob {
+		id,
+		label: label.to_owned(),
+		group,
+	};
+	let mut out = vec![
+		knob(
+			if v.is_free() { TIME } else { SYNC },
+			tr("Time"),
+			KnobGroup::Echo,
+		),
+		knob(FEEDBACK, tr("Feedback"), KnobGroup::Echo),
+	];
+	if mix {
+		out.push(knob(MIX, tr("Mix"), KnobGroup::Echo));
+	}
+	out.extend([
+		knob(LOW_CUT, tr("Low cut"), KnobGroup::Filter),
+		knob(HIGH_CUT, tr("High cut"), KnobGroup::Filter),
+		knob(TAPS, tr("Taps"), KnobGroup::Taps),
+		knob(TAP_SPREAD, tr("Tap spread"), KnobGroup::Taps),
+	]);
+	let taps = v.taps.round().clamp(1.0, 4.0) as usize;
+	for n in 2..=taps {
+		let num = n.to_string();
+		out.push(DelayKnob {
+			id: TAP_LEVELS[n - 2],
+			label: trf("Tap {n} level", &[("n", &num)]),
+			group: KnobGroup::Taps,
+		});
+		out.push(DelayKnob {
+			id: TAP_PANS[n - 2],
+			label: trf("Tap {n} pan", &[("n", &num)]),
+			group: KnobGroup::Taps,
+		});
+	}
+	out
+}
+
 /// "Feedback filter 200 Hz – 6 kHz".
 pub fn filter_label(low_cut: f32, high_cut: f32) -> String {
 	trf(
@@ -514,6 +574,44 @@ pub fn filter_label(low_cut: f32, high_cut: f32) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn every_param_has_a_knob_or_the_ping_pong_toggle() {
+		let ids =
+			|v: &DelValues, mix| -> Vec<&str> { knobs(v, mix).iter().map(|k| k.id).collect() };
+		let synced = DelValues::default();
+		assert_eq!(
+			ids(&synced, false),
+			[SYNC, FEEDBACK, LOW_CUT, HIGH_CUT, TAPS, TAP_SPREAD]
+		);
+		assert_eq!(ids(&synced, true)[2], MIX);
+		let free = DelValues {
+			sync: 0.0,
+			taps: 4.0,
+			..synced
+		};
+		let all = ids(&free, true);
+		assert_eq!(all[0], TIME);
+		assert_eq!(
+			&all[7..],
+			[
+				"tap2_level",
+				"tap2_pan",
+				"tap3_level",
+				"tap3_pan",
+				"tap4_level",
+				"tap4_pan"
+			]
+		);
+		let k = knobs(&free, true);
+		assert_eq!(k[9].label, "Tap 3 level");
+		assert_eq!(k[9].group, KnobGroup::Taps);
+		let mut covered: Vec<&str> = all.into_iter().chain([SYNC, PING_PONG]).collect();
+		covered.sort_unstable();
+		let mut params: Vec<&str> = info().params.iter().map(|p| p.id).collect();
+		params.sort_unstable();
+		assert_eq!(covered, params);
+	}
 
 	#[test]
 	fn defaults_come_from_the_processor() {

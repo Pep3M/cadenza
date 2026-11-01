@@ -124,3 +124,122 @@ fn automation_swaps_into_a_compiled_graph() {
 	let after = rms(&l[12_000..]);
 	assert!(after < before * 1e-3, "{after} vs {before}");
 }
+
+#[test]
+fn delay_feedback_and_tap_automation_reach_the_processor() {
+	// One short note into a free 250 ms delay with no repeats of its own: a feedback lane
+	// makes the echoes ring on, a tap lane adds a second read head's echo.
+	let mut a = synth_track("a", &[(60, 0.0, 0.25)], 8.0);
+	let delay = Device::builtin("delay", "Echo")
+		.with_param("sync", 0.0)
+		.with_param("time", 250.0)
+		.with_param("feedback", 0.0)
+		.with_param("mix", 100.0)
+		.with_param("taps", 2.0)
+		.with_param("tap_spread", 100.0)
+		.with_param("tap2_level", 0.0);
+	a.channel.inserts.push(delay.clone());
+	let plain = render_offline(&project(vec![a.clone()]), &opts(8.0)).unwrap();
+	let lane = |param: &str, value: f32| {
+		AutomationLane::new(
+			ParamAddress::device(Some(a.id), delay.id, param),
+			vec![AutomationPoint::new(beats(0.0), value)],
+		)
+	};
+	let mut p = project(vec![a.clone()]);
+	p.automation.push(lane("feedback", 90.0));
+	let ringing = render_offline(&p, &opts(8.0)).unwrap();
+	let tail = seconds(1.5)..seconds(2.5);
+	let (dry_tail, wet_tail) = (rms(&plain.left[tail.clone()]), rms(&ringing.left[tail]));
+	assert!(
+		dry_tail < 1e-5 && wet_tail > 1e-3,
+		"feedback lane: {dry_tail} vs {wet_tail}"
+	);
+	// Tap 2 at 2 x 250 ms = 500 ms: silent at level 0, an echo once a lane raises it.
+	let mut p = project(vec![a.clone()]);
+	p.automation.push(lane("tap2_level", 100.0));
+	let tapped = render_offline(&p, &opts(8.0)).unwrap();
+	let tap = seconds(0.5)..seconds(0.62);
+	let (off, on) = (rms(&plain.left[tap.clone()]), rms(&tapped.left[tap]));
+	assert!(on > 10.0 * off.max(1e-6), "tap lane: {off} vs {on}");
+}
+
+/// Regression (demo-techno): playing from the middle of the song through an automated
+/// synth into a tube saturator burst to ~500x full scale on the first samples, because the
+/// reset left the saturator's anti-aliasing state inconsistent. Starting anywhere must
+/// sound like the same spot reached from the start.
+#[test]
+fn starting_mid_song_has_no_transient() {
+	let mut a = synth_track(
+		"lead",
+		&[
+			(57, 0.0, 1.5),
+			(60, 2.0, 1.5),
+			(64, 4.0, 1.5),
+			(62, 6.0, 1.5),
+		],
+		8.0,
+	);
+	let synth_id = a.instrument.as_ref().unwrap().id;
+	a.channel.inserts.push(
+		Device::builtin("saturator", "Drive")
+			.with_param("mode", 1.0)
+			.with_param("drive", 11.0),
+	);
+	let mut p = project(vec![a.clone()]);
+	p.automation.push(AutomationLane::new(
+		ParamAddress::device(Some(a.id), synth_id, "filter_cutoff"),
+		vec![
+			AutomationPoint::new(beats(0.0), 200.0),
+			AutomationPoint::new(beats(8.0), 4000.0),
+		],
+	));
+	let full = render_offline(&p, &opts(8.0)).unwrap();
+	let steady = peak(&full.left);
+	for start in [1.0, 2.0, 3.0, 4.0, 6.0] {
+		let mid = render_offline(
+			&p,
+			&cadenza_engine::RenderOptions {
+				start: beats(start),
+				..opts(8.0)
+			},
+		)
+		.unwrap();
+		let first = peak(&mid.left[..seconds(0.05)]).max(peak(&mid.right[..seconds(0.05)]));
+		assert!(
+			first <= steady * 1.5,
+			"start at beat {start}: first 50 ms peak {first} vs whole song peak {steady}"
+		);
+	}
+}
+
+#[test]
+fn render_follows_the_segment_tension() {
+	let a = synth_track("a", &[(60, 0.0, 8.0)], 8.0);
+	let level_at_quarter = |tension: f32| {
+		let mut p = project(vec![a.clone()]);
+		p.automation.push(AutomationLane::new(
+			ParamAddress::track_volume(a.id),
+			vec![
+				AutomationPoint::new(beats(0.0), -60.0).with_tension(tension),
+				AutomationPoint::new(beats(8.0), 0.0),
+			],
+		));
+		let out = render_offline(&p, &opts(8.0)).unwrap();
+		20.0 * rms(&out.left[seconds(0.95)..seconds(1.05)]).log10()
+	};
+	let (concave, straight, convex) = (
+		level_at_quarter(0.8),
+		level_at_quarter(0.0),
+		level_at_quarter(-0.8),
+	);
+	// A quarter of the way in, the model says -45 dB straight; the bent curves sit
+	// well above (fast start) and below (slow start).
+	let model = |k: f32| cadenza_model::PointShape::Linear.interpolate(k, -60.0, 0.0, 0.25);
+	assert!(concave > straight + 20.0, "{concave} vs {straight}");
+	assert!(convex < straight - 5.0, "{convex} vs {straight}");
+	assert!(
+		((concave - straight) - f64::from(model(0.8) - model(0.0))).abs() < 3.0,
+		"render follows the model curve"
+	);
+}

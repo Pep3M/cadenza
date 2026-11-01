@@ -233,6 +233,7 @@ fn overrides_hand_edits_splits_merges_and_a_reference_melody() {
 					vibrato_pct: None,
 					formant_cents: None,
 					gain_db: Some(-3.0),
+					blend_ms: Some(40.0),
 					as_sung: false,
 				},
 				tuning::NoteEditArgs {
@@ -243,6 +244,7 @@ fn overrides_hand_edits_splits_merges_and_a_reference_melody() {
 					vibrato_pct: None,
 					formant_cents: None,
 					gain_db: None,
+					blend_ms: None,
 					as_sung: true,
 				},
 			],
@@ -253,6 +255,7 @@ fn overrides_hand_edits_splits_merges_and_a_reference_melody() {
 	let edits = notes_of(&session, clip);
 	assert!((edits.notes[0].result_pitch() - 63.9).abs() < 1e-6);
 	assert_eq!(edits.notes[0].gain_db, -3.0);
+	assert_eq!(edits.notes[0].blend_ms, 40.0);
 	assert!(edits.notes[1].pitch.is_none());
 	let bad = tuning::edit_audio_notes(
 		&mut session,
@@ -266,6 +269,7 @@ fn overrides_hand_edits_splits_merges_and_a_reference_melody() {
 				vibrato_pct: None,
 				formant_cents: None,
 				gain_db: None,
+				blend_ms: Some(900.0),
 				as_sung: false,
 			}],
 		},

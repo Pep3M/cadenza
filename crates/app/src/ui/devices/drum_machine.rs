@@ -172,9 +172,7 @@ pub fn drum_machine_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 
 /// Takes the trigger counters of the probed device and keeps the flashes moving.
 fn listen(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut DrumView, now: f64) {
-	if state.probe_target() == Some(cx.r.device)
-		&& let Some(probe) = state.probe()
-	{
+	if let Some(probe) = state.probe_for(cx.r.device) {
 		let (values, n) = probe.readings();
 		v.flashes.update(&values[..n], now);
 	}

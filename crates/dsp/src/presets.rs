@@ -3,6 +3,8 @@
 //! out return to their defaults) and its modulators.
 
 mod drum_sampler;
+mod effects;
+mod instruments;
 mod poly_synth;
 
 pub use drum_sampler::KIT_SAMPLES;
@@ -439,192 +441,23 @@ const TIGHT_SYNTH_KIT: FactoryPreset = sampled(
 )
 .category("Retro");
 
-static SAMPLER: [FactoryPreset; 2] = [
-	sampled(
-		"Sine Pad",
-		"Soft, looped sine-organ pad multisampled every octave (C2-C5): slow swell, long \
-		 release. Chords, beds and sub-friendly bass notes.",
-		&[
-			("amp_attack", 350.0),
-			("amp_release", 1_200.0),
-			("filter_type", 1.0),
-			("filter_cutoff", 4_000.0),
-			("gain", -4.0),
-		],
-		&[
-			pad_loop(SINE_PAD[0], 0, 41, 36),
-			pad_loop(SINE_PAD[1], 42, 53, 48),
-			pad_loop(SINE_PAD[2], 54, 65, 60),
-			pad_loop(SINE_PAD[3], 66, 127, 72),
-		],
-	),
-	sampled(
-		"Sine Pluck",
-		"The sine multisample as a short, round pluck with a closing filter: arps and keys.",
-		&[
-			("amp_attack", 2.0),
-			("amp_decay", 450.0),
-			("amp_sustain", 0.0),
-			("amp_release", 250.0),
-			("filter_type", 1.0),
-			("filter_cutoff", 1_200.0),
-			("filter_env_amount", 36.0),
-			("filter_decay", 300.0),
-			("filter_velocity", 40.0),
-		],
-		&[
-			pad_loop(SINE_PAD[0], 0, 41, 36),
-			pad_loop(SINE_PAD[1], 42, 53, 48),
-			pad_loop(SINE_PAD[2], 54, 65, 60),
-			pad_loop(SINE_PAD[3], 66, 127, 72),
-		],
-	),
-];
-
-static DRUM_MACHINE: [FactoryPreset; 2] = [
-	preset(
-		"Tight Kit",
-		"Short, punchy kit for funk, pop and dense arrangements.",
-		&[
-			("kick_decay", 280.0),
-			("kick_punch", 80.0),
-			("snare_decay", 160.0),
-			("snare_snappy", 75.0),
-			("hat_decay", 45.0),
-			("open_hat_decay", 250.0),
-			("tone", 60.0),
-		],
-	),
-	preset(
-		"Boomy 808",
-		"Long, tuned-down kick and dark tone for hip-hop and trap.",
-		&[
-			("kick_tune", -5.0),
-			("kick_decay", 1_400.0),
-			("kick_punch", 40.0),
-			("snare_decay", 260.0),
-			("hat_decay", 60.0),
-			("tone", 35.0),
-		],
-	),
-];
-
-static ELECTRIC_PIANO: [FactoryPreset; 2] = [
-	preset(
-		"Classic Tine",
-		"Bright, bell-forward tine piano for soul and pop comping.",
-		&[("brightness", 65.0), ("bell", 50.0), ("decay", 5_000.0)],
-	),
-	preset(
-		"Dreamy Tremolo",
-		"Mellow piano with stereo-feel tremolo for ballads and lo-fi.",
-		&[
-			("brightness", 35.0),
-			("bell", 25.0),
-			("tremolo_rate", 4.0),
-			("tremolo_depth", 45.0),
-			("release", 600.0),
-		],
-	),
-];
-
-static COMPRESSOR: [FactoryPreset; 3] = [
-	preset(
-		"Vocal Leveler",
-		"Even out a lead vocal: moderate ratio, fast attack, medium release.",
-		&[
-			("threshold", -20.0),
-			("ratio", 3.0),
-			("attack", 5.0),
-			("release", 100.0),
-			("makeup", 4.0),
-		],
-	),
-	preset(
-		"Drum Bus Glue",
-		"Parallel punch for a drum bus: slow attack lets transients through.",
-		&[
-			("threshold", -18.0),
-			("ratio", 4.0),
-			("attack", 20.0),
-			("release", 100.0),
-			("makeup", 3.0),
-			("mix", 50.0),
-		],
-	),
-	preset(
-		"Sidechain Pump",
-		"Deep, fast ducking keyed by another track (set_sidechain from the kick): the \
-		 classic EDM pump on pads and bass.",
-		&[
-			("threshold", -30.0),
-			("ratio", 10.0),
-			("attack", 0.5),
-			("release", 160.0),
-			("knee", 3.0),
-		],
-	),
-];
-
-static REVERB: [FactoryPreset; 2] = [
-	preset(
-		"Small Room",
-		"Short, natural room for drums and dry sources that need a space.",
-		&[
-			("size", 25.0),
-			("decay", 0.6),
-			("damping", 60.0),
-			("pre_delay", 5.0),
-			("mix", 20.0),
-		],
-	),
-	preset(
-		"Large Hall",
-		"Long, smooth hall for pads, strings and ballad vocals (use on a send bus at 100% mix).",
-		&[
-			("size", 85.0),
-			("decay", 4.5),
-			("damping", 40.0),
-			("pre_delay", 40.0),
-			("mix", 100.0),
-		],
-	),
-];
-
-static PITCH_CORRECT: [FactoryPreset; 4] = [
-	preset(
-		"Natural",
-		"Transparent tuning for a lead vocal: notes settle in tune, scoops and vibrato stay.",
-		&[("retune", 50.0), ("humanize", 40.0), ("amount", 100.0)],
-	),
-	preset(
-		"Modern Pop",
-		"Tight, polished tuning heard in current pop and R&B, still human on long notes.",
-		&[("retune", 15.0), ("humanize", 20.0), ("amount", 100.0)],
-	),
-	preset(
-		"Hard Tune",
-		"Instant correction: the stepped, robotic tuned-vocal effect.",
-		&[("retune", 0.0), ("humanize", 0.0), ("amount", 100.0)],
-	),
-	preset(
-		"Gentle",
-		"Light touch for a good singer or backing vocals: pulls halfway, slowly.",
-		&[("retune", 120.0), ("humanize", 50.0), ("amount", 60.0)],
-	),
-];
-
 /// Factory presets of the built-in device `id` (empty for unknown ids).
 pub fn factory_presets(id: &str) -> &'static [FactoryPreset] {
 	match id {
 		"poly_synth" => &poly_synth::PRESETS,
-		"drum_machine" => &DRUM_MACHINE,
-		"electric_piano" => &ELECTRIC_PIANO,
-		"sampler" => &SAMPLER,
+		"drum_machine" => instruments::DRUM_MACHINE,
+		"electric_piano" => instruments::ELECTRIC_PIANO,
+		"sampler" => instruments::SAMPLER,
 		"drum_sampler" => &drum_sampler::PRESETS,
-		"compressor" => &COMPRESSOR,
-		"reverb" => &REVERB,
-		"pitch_correct" => &PITCH_CORRECT,
+		"eq" => effects::EQ,
+		"compressor" => effects::COMPRESSOR,
+		"limiter" => effects::LIMITER,
+		"reverb" => effects::REVERB,
+		"delay" => effects::DELAY,
+		"chorus" => effects::CHORUS,
+		"saturator" => effects::SATURATOR,
+		"gain" => effects::GAIN,
+		"pitch_correct" => effects::PITCH_CORRECT,
 		_ => &[],
 	}
 }
@@ -647,8 +480,16 @@ mod tests {
 	fn every_preset_param_exists_and_is_in_range() {
 		for info in crate::registry() {
 			let presets = factory_presets(info.id);
+			assert!(presets.len() >= 6, "{}: ship a preset set", info.id);
 			for p in presets {
 				assert!(!p.name.is_empty() && !p.description.is_empty());
+				assert!(
+					p.category.is_empty() || PRESET_CATEGORIES.contains(&p.category),
+					"{}/{}: category '{}'",
+					info.id,
+					p.name,
+					p.category
+				);
 				for (id, value) in p.params {
 					let param = info
 						.param(id)
@@ -677,6 +518,6 @@ mod tests {
 			assert_eq!(names.len(), presets.len(), "{}: duplicate names", info.id);
 		}
 		assert!(factory_presets("nope").is_empty());
-		assert_eq!(factory_presets("compressor").len(), 3);
+		assert_eq!(factory_presets("compressor").len(), 15);
 	}
 }

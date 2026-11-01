@@ -661,7 +661,7 @@ impl CadenzaServer {
 	}
 
 	#[tool(
-		description = "Replaces the automation curve for a parameter address (volume, pan, a send level or a device parameter); each point may set its shape (linear, hold, smooth). An empty points list removes the lane."
+		description = "Replaces the automation curve for a parameter address (volume, pan, a send level or a device parameter); each point may set the shape of the segment to the next point (linear, hold, smooth, double_curve, stairs) and its tension -1..1 (linear: bent curve, + = fast start; double_curve: S-curve, + = slow start and end; stairs: step count 2..16). An empty points list removes the lane."
 	)]
 	fn set_automation(
 		&self,
@@ -1033,7 +1033,9 @@ impl CadenzaServer {
 	#[tool(
 		description = "Edits single notes of an audio clip by number, in one undo step: pitch \
 			(tone name or MIDI number) and/or cents, drift_pct and vibrato_pct kept (100 = as \
-			sung, 0 = straight/flat), formant_cents, gain_db, as_sung (reset first)."
+			sung, 0 = straight/flat), formant_cents, gain_db, blend_ms (fade of the edit into \
+			a voiced neighbour, inside this note: retune a stretch with 30-60 so the notes \
+			around it keep their pitch), as_sung (reset first)."
 	)]
 	fn edit_audio_notes(
 		&self,

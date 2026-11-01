@@ -211,7 +211,8 @@ pub struct Note { id: NoteId, pitch: u8, velocity: f32 /* 0..1 */, start: Tick /
 	bend: Vec<NoteBendPoint { tick /* from the note start */, semitones }> /* per-note bend (NE-9h), optional */,
 	pressure, timbre: Vec<NoteValuePoint { tick, value /* 0..1 */ }> /* per-note expression (NE-9k), rest 0 / 0.5, optional */ }
 pub struct AutomationLane { address: ParamAddress, points: Vec<AutomationPoint { tick: Tick, value: f32,
-	shape: PointShape /* linear (default, omitted in JSON) | hold | smooth: segment to the next point */ }> }
+	shape: PointShape /* linear (default, omitted in JSON) | hold | smooth | double_curve | stairs: segment to the next point */,
+	tension: f32 /* -1..=1, 0 = plain (omitted in JSON): linear = single curve, double_curve = S, stairs = 2..16 steps */ }> }
 pub struct Marker { tick: Tick, name: String }
 ```
 

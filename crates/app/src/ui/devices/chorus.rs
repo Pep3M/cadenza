@@ -91,7 +91,7 @@ pub fn chorus_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 fn running(state: &AppState, cx: &BodyCx, v: &ChorusView) -> bool {
 	v.synthetic
 		|| state.is_playing()
-		|| (state.probe_target() == Some(cx.r.device)
+		|| (state.probe_for(cx.r.device).is_some()
 			&& cx
 				.frames
 				.iter()

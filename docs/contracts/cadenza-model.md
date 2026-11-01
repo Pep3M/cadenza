@@ -3,6 +3,15 @@
 Moved from CLAUDE.md (kept in sync with the code: update it when the contract changes).
 Core types, `Command` and `Document` are in CLAUDE.md; this file holds the rest.
 
+Automation segment shapes (FL-style curves): each point's `shape` + `tension` shape the segment
+to the next point through ONE function, `PointShape::interpolate(tension, from, to, t)`
+(`progress` = 0..1 fraction), used by `automation_value`, the engine's per-sample `Curve` and the
+app's drawing. Linear + tension = single exponential curve (`(1 - e^(-8τt)) / (1 - e^(-8τ))`,
+τ = 0 is exactly `t`, `bend(-τ, t) = 1 - bend(τ, 1 - t)`; + = fast start); double_curve = two
+mirrored halves, point-symmetric about the middle (+ = ease in/out); stairs = `stairs_steps(τ)`
+equal steps (2 at -1, 9 at 0, 16 at 1, `MIN_STAIRS`/`MAX_STAIRS`); hold/smooth ignore tension.
+`SetAutomation` refuses tension outside -1..=1 (or NaN).
+
 Sample zones (phase 13, `model::sample`): typed structured state of the sample-based built-ins
 (not the opaque `state`, which stays for plugins), all fields but sample/keys optional in JSON
 (format_version 1). Samples are absolute paths like audio clips; `SampleRef.name` keeps the

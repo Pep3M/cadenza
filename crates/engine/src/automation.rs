@@ -14,13 +14,14 @@ use cadenza_model::{AutomationLane, PointShape, Project};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Curve {
-	/// `(sample, value, shape of the segment after it)`, strictly increasing in sample.
-	points: Vec<(i64, f32, PointShape)>,
+	/// `(sample, value, shape and tension of the segment after it)`, strictly increasing
+	/// in sample.
+	points: Vec<(i64, f32, PointShape, f32)>,
 }
 
 impl Curve {
 	pub fn from_lane(lane: &AutomationLane, tempo: &TempoMap, sample_rate: f64) -> Option<Self> {
-		let mut points: Vec<(i64, f32, PointShape)> = Vec::with_capacity(lane.points.len());
+		let mut points: Vec<(i64, f32, PointShape, f32)> = Vec::with_capacity(lane.points.len());
 		let mut sorted = lane.points.clone();
 		sorted.sort_by_key(|p| p.tick);
 		for p in sorted {
@@ -34,8 +35,9 @@ impl Curve {
 				Some(last) if last.0 == sample => {
 					last.1 = p.value;
 					last.2 = p.shape;
+					last.3 = p.tension;
 				}
-				_ => points.push((sample, p.value, p.shape)),
+				_ => points.push((sample, p.value, p.shape, p.tension)),
 			}
 		}
 		(!points.is_empty()).then_some(Self { points })
@@ -49,10 +51,10 @@ impl Curve {
 		if i == self.points.len() {
 			return self.points[i - 1].1;
 		}
-		let (s0, v0, shape) = self.points[i - 1];
-		let (s1, v1, _) = self.points[i];
+		let (s0, v0, shape, tension) = self.points[i - 1];
+		let (s1, v1, _, _) = self.points[i];
 		let t = (sample - s0) as f64 / (s1 - s0) as f64;
-		shape.interpolate(v0, v1, t)
+		shape.interpolate(tension, v0, v1, t)
 	}
 }
 
@@ -314,11 +316,20 @@ mod tests {
 		let points = vec![
 			AutomationPoint::new(Tick(0), 0.0).with_shape(PointShape::Smooth),
 			AutomationPoint::new(Tick(PPQ * 2), 1.0).with_shape(PointShape::Hold),
-			AutomationPoint::new(Tick(PPQ * 4), 0.0),
+			AutomationPoint::new(Tick(PPQ * 4), 0.0).with_tension(0.8),
+			AutomationPoint::new(Tick(PPQ * 6), 1.0)
+				.with_shape(PointShape::DoubleCurve)
+				.with_tension(-0.5),
+			AutomationPoint::new(Tick(PPQ * 8), 0.0)
+				.with_shape(PointShape::Stairs)
+				.with_tension(0.3),
+			AutomationPoint::new(Tick(PPQ * 10), 1.0),
 		];
 		let lane = AutomationLane::new(ParamAddress::track_pan(TrackId::new()), points.clone());
 		let c = Curve::from_lane(&lane, &tempo, 48_000.0).unwrap();
-		for beat in [0.3, 0.9, 1.5, 2.5, 3.9, 5.0] {
+		for beat in [
+			0.3, 0.9, 1.5, 2.5, 3.9, 4.5, 5.0, 6.2, 6.9, 7.3, 8.6, 9.95, 11.0,
+		] {
 			let tick = Tick::from_beats(beat);
 			let sample = tempo.tick_to_sample(tick, 48_000.0) as i64;
 			let model = cadenza_model::automation_value(&points, tick, &tempo).unwrap();

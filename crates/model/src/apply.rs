@@ -813,7 +813,7 @@ pub(crate) fn apply(project: &mut Project, cmd: &Command) -> Result<Vec<Command>
 			{
 				return Err(empty_patch(
 					"update_audio_notes",
-					"pitch, drift, modulation, formant_cents, gain_db and/or time per note, or sibilant_gain_db",
+					"pitch, drift, modulation, formant_cents, gain_db, time and/or blend_ms per note, or sibilant_gain_db",
 				));
 			}
 			let (_, c) = project

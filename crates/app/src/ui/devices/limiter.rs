@@ -217,8 +217,8 @@ fn update_levels(ui: &Ui, state: &AppState, cx: &BodyCx, v: &mut LimView) {
 		return;
 	}
 	let dt = ui.input(|i| i.stable_dt).min(0.25);
-	let ours = state.probe_target() == Some(cx.r.device);
-	let probe = state.probe().filter(|_| ours);
+	let probe = state.probe_for(cx.r.device);
+	let ours = probe.is_some();
 	if let Some(p) = probe {
 		v.resize(v.seconds, p.sample_rate());
 	}
@@ -783,7 +783,7 @@ fn oversample_selector(ui: &mut Ui, state: &mut AppState, cx: &BodyCx, label: bo
 		.unwrap_or(0.0);
 	let selected = lim::oversample_index(current);
 	let rate = state
-		.probe()
+		.probe_for(r.device)
 		.map(|p| p.sample_rate() as f32)
 		.unwrap_or(48_000.0);
 	let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;

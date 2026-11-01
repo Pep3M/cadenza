@@ -1984,6 +1984,84 @@ fn point_shapes_interpolate_and_keep_the_old_json_shape() {
 	assert_eq!(held.shape, PointShape::Hold);
 	let old: AutomationPoint = serde_json::from_value(json!({"tick": 5, "value": 2.0})).unwrap();
 	assert_eq!(old.shape, PointShape::Linear);
+	assert_eq!(old.tension, 0.0);
+}
+
+#[test]
+fn tension_bends_segments() {
+	// Tension 0 is exactly the straight line.
+	for i in 0..=100 {
+		let t = f64::from(i) / 100.0;
+		assert_eq!(PointShape::Linear.progress(0.0, t), t);
+		assert_eq!(
+			PointShape::Linear.interpolate(0.0, -3.0, 5.0, t),
+			(-3.0 + 8.0 * t) as f32
+		);
+	}
+	// Single curve: monotonic, ends fixed, bends further with more tension, and
+	// opposite tensions mirror each other.
+	let mut last_mid = 0.5;
+	for &k in &[0.25f32, 0.5, 1.0] {
+		let f = |t: f64| PointShape::Linear.progress(k, t);
+		assert!(f(0.0).abs() < 1e-12 && (f(1.0) - 1.0).abs() < 1e-12);
+		let mut prev = 0.0;
+		for i in 1..=100 {
+			let v = f(f64::from(i) / 100.0);
+			assert!(v >= prev, "monotonic");
+			prev = v;
+		}
+		assert!(f(0.5) > last_mid, "more tension bends more");
+		last_mid = f(0.5);
+		for i in 0..=10 {
+			let t = f64::from(i) / 10.0;
+			let mirrored = 1.0 - PointShape::Linear.progress(-k, 1.0 - t);
+			assert!((f(t) - mirrored).abs() < 1e-12);
+		}
+	}
+	// Double curve: point-symmetric around the middle; positive tension eases in and out.
+	for &k in &[-0.7f32, 0.0, 0.4, 1.0] {
+		let f = |t: f64| PointShape::DoubleCurve.progress(k, t);
+		assert!((f(0.5) - 0.5).abs() < 1e-12);
+		for i in 0..=20 {
+			let t = f64::from(i) / 20.0;
+			assert!((f(t) + f(1.0 - t) - 1.0).abs() < 1e-12, "symmetric at {t}");
+		}
+	}
+	assert!(PointShape::DoubleCurve.progress(0.6, 0.25) < 0.25);
+	assert!(PointShape::DoubleCurve.progress(-0.6, 0.25) > 0.25);
+	// Stairs: tension picks the step count.
+	assert_eq!(stairs_steps(-1.0), 2);
+	assert_eq!(stairs_steps(1.0), 16);
+	assert_eq!(PointShape::Stairs.progress(-1.0, 0.49), 0.0);
+	assert_eq!(PointShape::Stairs.progress(-1.0, 0.51), 0.5);
+	// Hold and smooth ignore tension.
+	assert_eq!(
+		PointShape::Smooth.progress(0.9, 0.3),
+		PointShape::Smooth.progress(0.0, 0.3)
+	);
+	assert_eq!(PointShape::Hold.progress(0.9, 0.7), 0.0);
+
+	// JSON: omitted at 0, round-trips otherwise.
+	let p = AutomationPoint::new(Tick(0), 1.0)
+		.with_shape(PointShape::DoubleCurve)
+		.with_tension(0.5);
+	let json = serde_json::to_value(p).unwrap();
+	assert_eq!(
+		json,
+		json!({"tick": 0, "value": 1.0, "shape": "double_curve", "tension": 0.5})
+	);
+	assert_eq!(serde_json::from_value::<AutomationPoint>(json).unwrap(), p);
+
+	// Out-of-range tension is refused with an actionable message.
+	let fx = fixture();
+	let err = exec_err(
+		&fx.project,
+		Command::SetAutomation {
+			address: ParamAddress::track_volume(fx.lead),
+			points: vec![AutomationPoint::new(Tick(0), 0.0).with_tension(1.5)],
+		},
+	);
+	assert!(err.to_string().contains("tension"), "{err}");
 }
 
 #[test]

@@ -39,6 +39,7 @@ pub use project::{
 	FORMAT_VERSION, FadeCurve, Freeze, MAX_NOTE_BEND, MAX_NOTE_BEND_POINTS, Marker, MonitorMode,
 	Note, NoteBendPoint, NoteExpression, NoteValuePoint, Output, OutputRoute, PointShape, Project,
 	ProjectMeta, Send, SidechainSource, Take, Track, TrackInput, TrackKind, automation_value,
+	stairs_steps,
 };
 pub use sample::{LoopMode, SampleRef, SampleZone, root_from_file_name};
 pub use summary::{

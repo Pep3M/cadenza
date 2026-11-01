@@ -136,7 +136,7 @@ pub fn saturator_body(ui: &mut Ui, state: &mut AppState, cx: &BodyCx) {
 
 /// Keeps the probe's latest audio for the scope.
 fn listen(cx: &BodyCx, state: &AppState, v: &mut SatView, now: f64) {
-	if state.probe_target() != Some(cx.r.device) || cx.frames.is_empty() {
+	if state.probe_for(cx.r.device).is_none() || cx.frames.is_empty() {
 		return;
 	}
 	let loud = cx

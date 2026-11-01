@@ -132,13 +132,28 @@ impl Mode {
 	}
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 struct Adaa {
 	prev_x: f64,
 	prev_f: f64,
 }
 
 impl Adaa {
+	/// At rest on `x = 0` for `mode`. `prev_f` must stay the antiderivative of `prev_x`
+	/// for the current mode: tube's is not 0 at 0, and a stale `prev_f` divided by the
+	/// first small `dx` after a reset is a full-scale spike.
+	fn rest(mode: Mode) -> Self {
+		Self {
+			prev_x: 0.0,
+			prev_f: mode.integral(0.0),
+		}
+	}
+
+	/// Keeps the state consistent when the mode changes.
+	fn rebase(&mut self, mode: Mode) {
+		self.prev_f = mode.integral(self.prev_x);
+	}
+
 	#[inline]
 	fn process(&mut self, mode: Mode, x: f64) -> f64 {
 		let f = mode.integral(x);
@@ -187,10 +202,11 @@ fn mode_from(v: usize) -> Mode {
 impl Saturator {
 	pub fn new() -> Self {
 		let params = ParamValues::new(&INFO);
+		let mode = mode_from(params.choice(P_MODE));
 		Self {
 			sample_rate: 48_000.0,
-			mode: mode_from(params.choice(P_MODE)),
-			adaa: [Adaa::default(); 2],
+			mode,
+			adaa: [Adaa::rest(mode); 2],
 			dc: [(0.0, 0.0); 2],
 			dc_coeff: 0.999,
 			tone: [Biquad::default(); 2],
@@ -233,7 +249,12 @@ impl Processor for Saturator {
 		};
 		match index {
 			P_DRIVE => self.drive.set_target(db_to_gain(v)),
-			P_MODE => self.mode = mode_from(v.round() as usize),
+			P_MODE => {
+				self.mode = mode_from(v.round() as usize);
+				for a in &mut self.adaa {
+					a.rebase(self.mode);
+				}
+			}
 			P_TONE => self.tone_db.set_target(v * 0.09),
 			P_OUTPUT => self.output.set_target(db_to_gain(v)),
 			P_MIX => self.mix.set_target(v * 0.01),
@@ -273,7 +294,7 @@ impl Processor for Saturator {
 	}
 
 	fn reset(&mut self) {
-		self.adaa = [Adaa::default(); 2];
+		self.adaa = [Adaa::rest(self.mode); 2];
 		self.dc = [(0.0, 0.0); 2];
 		self.tone = [Biquad::default(); 2];
 		for s in [
@@ -376,5 +397,33 @@ mod tests {
 		let mut r = l.clone();
 		s.process(&mut l, &mut r, &[], &Transport::default());
 		assert!(l.iter().all(|x| x.is_finite() && x.abs() < 1.5));
+	}
+
+	/// A reset (start in the middle of the song) followed by a quiet signal must not spike:
+	/// every mode, and a mode switch while running, keeps the ADAA state consistent.
+	#[test]
+	fn no_spike_after_reset_or_mode_change() {
+		for mode in [Mode::Tape, Mode::Tube, Mode::Hard] {
+			for switch_from in [None, Some(Mode::Tape), Some(Mode::Hard)] {
+				let mut s = Saturator::new();
+				s.prepare(48_000.0, 512);
+				s.set_param(P_DRIVE, 11.0);
+				if let Some(from) = switch_from {
+					s.set_param(P_MODE, from as usize as f32);
+					let mut l: Vec<f32> = (0..256).map(|n| 0.3 * (n as f32 * 0.05).sin()).collect();
+					let mut r = l.clone();
+					s.process(&mut l, &mut r, &[], &Transport::default());
+					s.set_param(P_MODE, mode as usize as f32);
+				} else {
+					s.set_param(P_MODE, mode as usize as f32);
+					s.reset();
+				}
+				let mut l: Vec<f32> = (0..512).map(|n| 1e-4 * (n as f32 * 0.05).cos()).collect();
+				let mut r = l.clone();
+				s.process(&mut l, &mut r, &[], &Transport::default());
+				let peak = l.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+				assert!(peak < 0.05, "{mode:?} after {switch_from:?}: peak {peak}");
+			}
+		}
 	}
 }

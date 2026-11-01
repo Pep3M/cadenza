@@ -393,6 +393,8 @@ struct QuantumMidi {
 	pos: i64,
 	wrap: Option<Wrap>,
 	all_notes_off: bool,
+	/// Release what sounds (a stop letting the tails ring), without a reset.
+	release_notes: bool,
 	preview: bool,
 }
 
@@ -401,7 +403,7 @@ impl QuantumMidi {
 	/// after a reset, then the notes, across a loop wrap. Nothing while previewing.
 	fn fill(self, schedule: &mut MidiSchedule, events: &mut Vec<MidiEvent>) {
 		events.clear();
-		if self.all_notes_off {
+		if self.all_notes_off || self.release_notes {
 			events.push(MidiEvent::AllNotesOff { offset: 0 });
 		}
 		if self.preview {
@@ -424,34 +426,46 @@ impl QuantumMidi {
 	}
 }
 
-/// The audio side of the device probe (see [`crate::probe`]): the shared ring the player
-/// attached and the device it follows. Allocation free after [`ProbeTap::new`].
-pub(crate) struct ProbeTap {
+/// One probe slot: the ring the player attached and the device it follows.
+struct ProbeSlot {
 	probe: Option<Arc<DeviceProbe>>,
 	target: Option<DeviceId>,
-	input: StereoBuf,
-	readings: [f32; cadenza_dsp::readings::MAX],
 	/// The target ran in the quantum being rendered.
 	hit: bool,
+}
+
+/// The audio side of the device probes (see [`crate::probe`]): up to
+/// [`crate::PROBE_SLOTS`] devices, each with its own ring. Allocation free after
+/// [`ProbeTap::new`].
+pub(crate) struct ProbeTap {
+	slots: [ProbeSlot; crate::PROBE_SLOTS],
+	input: StereoBuf,
+	readings: [f32; cadenza_dsp::readings::MAX],
 }
 
 impl ProbeTap {
 	pub fn new() -> Self {
 		Self {
-			probe: None,
-			target: None,
+			slots: std::array::from_fn(|_| ProbeSlot {
+				probe: None,
+				target: None,
+				hit: false,
+			}),
 			input: StereoBuf::new(),
 			readings: [0.0; cadenza_dsp::readings::MAX],
-			hit: false,
 		}
 	}
 
-	fn wants(&self, device: DeviceId) -> bool {
-		self.probe.is_some() && self.target == Some(device)
+	/// The slot following `device`, if any.
+	fn wants(&self, device: DeviceId) -> Option<usize> {
+		self.slots
+			.iter()
+			.position(|s| s.probe.is_some() && s.target == Some(device))
 	}
 
-	fn capture(&mut self, device: &Device, buf: &StereoBuf) {
-		let Some(p) = &self.probe else {
+	fn capture(&mut self, slot: usize, device: &Device, buf: &StereoBuf) {
+		let s = &mut self.slots[slot];
+		let Some(p) = &s.probe else {
 			return;
 		};
 		p.push(&self.input.l, &self.input.r, &buf.l, &buf.r);
@@ -464,7 +478,22 @@ impl ProbeTap {
 			.as_ref()
 			.map_or(0, |m| m.values(&mut mods));
 		p.publish_modulation(&mods[..n]);
-		self.hit = true;
+		s.hit = true;
+	}
+
+	fn begin_quantum(&mut self) {
+		for s in &mut self.slots {
+			s.hit = false;
+		}
+	}
+
+	/// Publishes which targets ran (`all_idle`: nothing ran at all).
+	fn end_quantum(&self, all_idle: bool) {
+		for s in &self.slots {
+			if let Some(p) = &s.probe {
+				p.set_active(s.hit && !all_idle);
+			}
+		}
 	}
 }
 
@@ -502,7 +531,7 @@ impl Device {
 			m.apply(&mut *self.processor, events, t);
 		}
 		let probed = probe.wants(self.id);
-		if probed {
+		if probed.is_some() {
 			probe.input.l.copy_from_slice(&buf.l);
 			probe.input.r.copy_from_slice(&buf.r);
 		}
@@ -512,8 +541,8 @@ impl Device {
 		{
 			m.follow(&buf.l, &buf.r, false);
 		}
-		if probed {
-			probe.capture(self, buf);
+		if let Some(slot) = probed {
+			probe.capture(slot, self, buf);
 		}
 	}
 
@@ -729,8 +758,16 @@ pub struct Graph {
 	pub(crate) preview_frames: u32,
 	/// Live pitches held down (bit per MIDI pitch): the preview runs while any is held.
 	pub(crate) held: [u64; 2],
-	/// A preview rendered since the last stop/seek: the next `play` must reset first.
+	/// The devices ran outside the song since the last reset (a preview, a ringing tail,
+	/// a stop or a seek while stopped): the next `play` must reset first.
 	pub(crate) previewed: bool,
+	/// Frames a stopped graph may still render effect tails and released notes for (see
+	/// [`Graph::stop`]); 0 = no tail.
+	pub(crate) tail_frames: u32,
+	/// Consecutive tail output frames below [`crate::TAIL_SILENCE_DB`].
+	pub(crate) tail_quiet: u32,
+	/// The next quantum releases the notes sounding at the stop (without a reset).
+	pub(crate) release_notes: bool,
 	/// Per-track and master levels for the UI.
 	pub(crate) meters: Meters,
 	/// Loop range in timeline samples (at least one quantum long).
@@ -764,10 +801,18 @@ impl Graph {
 		self.sample_rate
 	}
 
-	/// Attaches the probe ring the graph writes the probed device into (control side,
-	/// before the graph goes to the audio thread).
+	/// Attaches the probe ring of slot 0 (control side, before the graph goes to the
+	/// audio thread); see [`Graph::attach_probes`].
 	pub fn attach_probe(&mut self, probe: Option<Arc<DeviceProbe>>) {
-		self.probe.probe = probe;
+		self.probe.slots[0].probe = probe;
+	}
+
+	/// Attaches one ring per probe slot, in slot order (control side; extra rings are
+	/// ignored, missing ones leave their slots without a ring).
+	pub fn attach_probes(&mut self, probes: &[Arc<DeviceProbe>]) {
+		for (i, slot) in self.probe.slots.iter_mut().enumerate() {
+			slot.probe = probes.get(i).cloned();
+		}
 	}
 
 	/// Attaches the ring that receives the master's post-fader output (before the
@@ -777,22 +822,34 @@ impl Graph {
 		self.master_tap = tap;
 	}
 
-	/// The device whose input/output and readings go to the attached probe (`None` =
-	/// idle). A different target restarts the probe. Realtime safe.
+	/// The device whose input/output and readings go to the probe of slot 0 (`None` =
+	/// idle). See [`Graph::set_probe_slot`]. Realtime safe.
 	pub fn set_probe_target(&mut self, device: Option<DeviceId>) {
-		if self.probe.target == device {
+		self.set_probe_slot(0, device);
+	}
+
+	/// The device whose input/output and readings go to probe slot `slot` (`None` =
+	/// idle; out of range slots are ignored). A different target restarts that slot's
+	/// ring. Realtime safe.
+	pub fn set_probe_slot(&mut self, slot: usize, device: Option<DeviceId>) {
+		let Some(s) = self.probe.slots.get_mut(slot) else {
+			return;
+		};
+		if s.target == device {
 			return;
 		}
-		self.probe.target = device;
-		if let Some(p) = &self.probe.probe {
+		s.target = device;
+		if let Some(p) = &s.probe {
 			p.restart();
 		}
 	}
 
-	/// Like [`Graph::set_probe_target`] for a graph replacing one that already followed
-	/// `device`: frames not read yet are kept.
-	pub(crate) fn continue_probe(&mut self, device: Option<DeviceId>) {
-		self.probe.target = device;
+	/// Like [`Graph::set_probe_slot`] for every slot of a graph replacing one that
+	/// already followed `targets`: frames not read yet are kept.
+	pub(crate) fn continue_probes(&mut self, targets: &[Option<DeviceId>; crate::PROBE_SLOTS]) {
+		for (s, t) in self.probe.slots.iter_mut().zip(targets) {
+			s.target = *t;
+		}
 	}
 
 	/// Total plugin latency at the master output, in samples (compensated internally).
@@ -1206,6 +1263,12 @@ impl Graph {
 		!self.playing && self.preview_frames > 0
 	}
 
+	/// Whether a stopped graph still renders the tails of the last stop (see
+	/// [`Graph::stop`]).
+	pub fn is_ringing(&self) -> bool {
+		!self.playing && self.tail_frames > 0
+	}
+
 	pub fn play(&mut self) {
 		if self.previewed {
 			// The preview ran the devices outside the song: start from a clean state.
@@ -1216,38 +1279,97 @@ impl Graph {
 			self.discard = self.latency;
 			self.wrap_pending = None;
 			self.out_wrap = None;
+			self.release_notes = false;
 		}
 		self.preview_frames = 0;
+		self.tail_frames = 0;
+		self.tail_quiet = 0;
 		self.playing = true;
 	}
 
-	/// Stops output; sounding notes are released (AllNotesOff) and tails cleared on resume.
+	/// Stops the transport: no more song notes, clips or clicks, and the notes sounding
+	/// are released, but the devices keep running (without moving the playhead) so effect
+	/// tails, delays and note releases ring out like in most DAWs, until the output has
+	/// stayed below [`crate::TAIL_SILENCE_DB`] for [`crate::TAIL_SILENCE_SECONDS`] or
+	/// [`crate::MAX_TAIL_SECONDS`] passed. [`Graph::cut_tails`] silences them at once; the
+	/// next [`Graph::play`] always starts from a clean state (no old tail). Realtime safe.
 	pub fn stop(&mut self) {
+		let ring = self.playing || self.preview_frames > 0;
+		if self.playing {
+			// What was already sent to the instruments (they run ahead of the output).
+			let pos = self.engine_pos;
+			for n in &mut self.nodes {
+				if let Source::Instrument {
+					schedule,
+					midi_delay,
+					release,
+					..
+				} = &mut n.source
+				{
+					let sounding = schedule.sounding(pos - i64::from(*midi_delay));
+					release[0] |= sounding[0];
+					release[1] |= sounding[1];
+				}
+			}
+		}
+		if let Some(i) = self.monitor
+			&& let Source::Instrument { release, .. } = &mut self.nodes[i].source
+		{
+			release[0] |= self.held[0];
+			release[1] |= self.held[1];
+		}
+		if ring {
+			self.release_notes = true;
+			self.tail_frames = (crate::MAX_TAIL_SECONDS * self.sample_rate as f32) as u32;
+			self.tail_quiet = 0;
+		}
 		self.playing = false;
+		self.previewed = true;
 		self.count_in = CountIn::default();
 		self.metronome.reset();
 		self.live.clear();
 		self.held = [0; 2];
 		self.preview_frames = 0;
-		self.needs_reset = true;
-		self.fifo_pos = QUANTUM;
 		self.engine_pos = self.out_pos;
 		self.discard = self.latency;
 		self.wrap_pending = None;
 		self.out_wrap = None;
 	}
 
-	/// Moves the playhead to timeline sample `sample`. Sends AllNotesOff and clears all
-	/// device state at the next quantum.
+	/// Silences a stopped graph at once: the ringing tails (and previewed notes) stop and
+	/// every device is reset (`Processor::reset`, sandboxed plugins included) before it
+	/// renders again. No effect while playing. Realtime safe.
+	pub fn cut_tails(&mut self) {
+		if self.playing {
+			return;
+		}
+		self.tail_frames = 0;
+		self.tail_quiet = 0;
+		self.preview_frames = 0;
+		self.release_notes = false;
+		self.live.clear();
+		self.held = [0; 2];
+		self.previewed = true;
+		self.needs_reset = true;
+		self.fifo_pos = QUANTUM;
+	}
+
+	/// Moves the playhead to timeline sample `sample`. While playing, sends AllNotesOff
+	/// and clears all device state at the next quantum; while stopped the tails ring on
+	/// and the next [`Graph::play`] starts clean at the new position.
 	pub fn seek_sample(&mut self, sample: i64) {
 		self.metronome.reset();
 		self.out_pos = sample;
 		self.engine_pos = sample;
 		self.discard = self.latency;
-		self.fifo_pos = QUANTUM;
-		self.needs_reset = true;
 		self.wrap_pending = None;
 		self.out_wrap = None;
+		if self.playing {
+			self.fifo_pos = QUANTUM;
+			self.needs_reset = true;
+		} else {
+			self.previewed = true;
+		}
 	}
 
 	pub fn seek(&mut self, tick: Tick) {
@@ -1303,7 +1425,9 @@ impl Graph {
 		if !self.playing {
 			self.idle_devices();
 		}
-		if !self.playing && (self.preview_frames > 0 || self.monitors_input()) {
+		if !self.playing
+			&& (self.preview_frames > 0 || self.tail_frames > 0 || self.monitors_input())
+		{
 			self.process_preview(&mut left[..n], &mut right[..n], input);
 			return;
 		}
@@ -1313,9 +1437,7 @@ impl Graph {
 			self.meters.silence();
 			self.meters.publish();
 			// Nothing ran: readers must not take the last readings as live.
-			if let Some(p) = &self.probe.probe {
-				p.set_active(false);
-			}
+			self.probe.end_quantum(true);
 			return;
 		}
 		let mut start = 0;
@@ -1510,6 +1632,30 @@ impl Graph {
 		} else {
 			self.preview_frames = self.preview_tail_frames();
 		}
+		if self.tail_frames > 0 {
+			let floor = cadenza_core::db_to_gain(crate::TAIL_SILENCE_DB);
+			let peak = left
+				.iter()
+				.chain(right.iter())
+				.fold(0.0f32, |m, x| m.max(x.abs()));
+			self.tail_quiet = if peak < floor {
+				self.tail_quiet.saturating_add(n as u32)
+			} else {
+				0
+			};
+			let quiet = (crate::TAIL_SILENCE_SECONDS * self.sample_rate as f32) as u32;
+			self.tail_frames = if self.tail_quiet >= quiet {
+				0
+			} else {
+				self.tail_frames.saturating_sub(n as u32)
+			};
+			// A quiet gap can be a pause between long delay echoes: once the tail stops
+			// rendering, drop whatever is still in the devices so a later preview on the
+			// stopped transport does not replay a stale echo.
+			if self.tail_frames == 0 {
+				self.needs_reset = true;
+			}
+		}
 		self.meters.publish();
 	}
 
@@ -1639,6 +1785,7 @@ impl Graph {
 			fifo.read_quantum(&mut self.input_block[..]);
 		}
 		let all_notes_off = self.needs_reset;
+		let release_notes = std::mem::take(&mut self.release_notes) && !all_notes_off;
 		if self.needs_reset {
 			self.reset_state();
 			self.needs_reset = false;
@@ -1680,6 +1827,7 @@ impl Graph {
 			pos,
 			wrap,
 			all_notes_off,
+			release_notes,
 			preview,
 		};
 		let Self {
@@ -1697,7 +1845,7 @@ impl Graph {
 			master_tap,
 			..
 		} = self;
-		probe.hit = false;
+		probe.begin_quantum();
 		for i in 0..nodes.len() {
 			let (done, rest) = nodes.split_at_mut(i);
 			let node = &mut rest[0];
@@ -1728,6 +1876,18 @@ impl Graph {
 						if !preview {
 							schedule.chase(pos, 0, events);
 						}
+					}
+					if release_notes {
+						events.push(if *notes_off_on_reset {
+							MidiEvent::AllNotesOff { offset: 0 }
+						} else {
+							// Plugins get explicit note-offs (`release`) and the pedal up.
+							MidiEvent::ControlChange {
+								offset: 0,
+								controller: 64,
+								value: 0.0,
+							}
+						});
 					}
 					if *release != [0; 2] {
 						for pitch in 0..128u8 {
@@ -1858,9 +2018,7 @@ impl Graph {
 		for d in &mut master.inserts {
 			d.run_effect(&mut master.buf, &transport, nodes, probe, quantum_midi);
 		}
-		if let Some(p) = &probe.probe {
-			p.set_active(probe.hit);
-		}
+		probe.end_quantum(false);
 		master.fader.apply(&mut master.buf);
 		meters.measure(None, &master.buf.l, &master.buf.r);
 		if let Some(tap) = master_tap {

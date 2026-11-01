@@ -220,7 +220,7 @@ the key is built even for devices without a key input; 0..1 over -60..0 dBFS + g
 target to `clamp(base + sum(depth * value) * (max - min))` via `set_param`; graph writes to a
 modulated param (initial, live, automation: `graph::Device::set_param`) only move `base`. No
 extra smoothing (32-sample steps, the built-ins smooth params). Modulator edits recompile.
-`DeviceProbe::modulation()` publishes each modulator's value for the probed device. Tests:
+`DeviceProbe::modulation()` publishes each modulator's value for each probed device. Tests:
 `tests/modulation.rs` (LFO in an offline render, follower level, offline == realtime), `no_alloc`.
 MCP `set_modulators { track_id, device_id, modulators: [{type, ..., targets}], sidechain_track_id? }`
 (`tools::modulation`: params checked against the registry, ids kept by position, optional
@@ -259,16 +259,20 @@ Metering: every graph measures each track's post-fader signal and the master per
 publishes at the end of each `Graph::process` into a `MeterBank` of atomics (peak via `fetch_max`
 on the float bits, readers take-and-reset it; RMS with 300 ms ballistics is a plain store):
 wait-free, no allocation (covered by the `no_alloc` test). Peak hold/fall-off is the UI's job.
-Device probe (redesign D1, `engine::probe`): `Player::set_probe(Option<DeviceId>)` (kept across
-loads, `Cmd::Probe`; any device: instrument, insert, master insert) -> `Player::probe() ->
-Option<Arc<DeviceProbe>>` (one per player, attached to every loaded graph): `Device::run` copies
+Device probe (redesign D1, `engine::probe`): `Player::set_probes(&[DeviceId])` (up to
+`PROBE_SLOTS` = 8 devices at once, repeats ignored, kept across loads; one preallocated
+`DeviceProbe` per slot, attached to every loaded graph; a device still probed keeps its slot and
+unread frames; per-slot `Cmd::Probe(slot, device)` -> `Graph::set_probe_slot`; any device:
+instrument, insert, master insert) -> `probe_for(device)`, `probes()`, `probe_targets()`;
+`set_probe(Option)`/`probe()`/`probe_target()` = the single-device form / the first. `Device::run` copies
 the target's in/out per quantum into a preallocated 0.5 s SPSC ring of atomics (full = drop +
 `dropped_frames`; `drain(&mut Vec<ProbeFrame { input, output }>)`, `is_active`) and its
 `Processor::readings(&mut [f32]) -> usize` (dsp `readings::{MAX, GAIN_REDUCTION_DB}`: compressor,
 limiter) as `readings()/reading(i)`. Listen (T27): `Player::set_listen(device, Listen)` / `listen()` -> `Cmd::Listen` -> `Graph::set_listen` (old target back to
 Off; re-applied to every swapped-in graph, kept across loads; never offline; `no_alloc` covered).
-App: `AudioEngine::probe` -> `AudioEvent::Probe`,
-`AppState::set_probe/probe_target/probe`. Covered by `no_alloc`.
+App: `AudioEngine::probe(Vec<DeviceId>)` -> `AudioEvent::Probe(Vec<(DeviceId, Arc<DeviceProbe>)>)`,
+`AppState::set_probes/probe_targets/probe_for`. Covered by `no_alloc` (two slots) and
+`tests/probe.rs` (`several_probes_follow_their_own_devices`).
 Master tap + monitor switches (T26): `Player::master_tap() -> Arc<DeviceProbe>` (one per player,
 attached to every loaded graph) gets the master's post-fader output per rendered quantum (both
 sides of each frame), before the metronome. `Player::set_monitor(MonitorFx { mono, dim })`
@@ -280,7 +284,10 @@ param index/send edge, built at compile time, used only off the audio thread). T
 keeps the resolver of the loaded graph; `set_live_param`/`set_live_send` resolve on the control
 side and push `Cmd::Param(device, index, value)` / `Cmd::SendLevel` (Copy) through the command
 rtrb; the callback calls `Processor::set_param` (built-ins, in-process and sandboxed plugins:
-all realtime safe) or retargets the send edge gain (ramped over a quantum). `set_automation`
+all realtime safe) or retargets the send edge gain (ramped over a quantum). Automation `Curve`s
+store `(sample, value, shape, tension)` and evaluate through `PointShape::interpolate` (the
+model's function: no alloc, same values as `automation_value`; MCP `set_automation` points take
+`shape` + `tension`). `set_automation`
 builds new `Binding`s off the audio thread and sends them boxed through a second rtrb; the
 callback swaps them in (`Graph::swap_automation`, matched by load id; sets for a graph still
 queued wait, stale ones go back) and returns the old box through a garbage ring. Covered by
@@ -292,6 +299,16 @@ chase at the start, collect the rest; audio clips split the quantum; a quantum e
 on the end wraps at the next one; the output position wraps once the latency has passed;
 tails ring on; automation is evaluated per quantum on the timeline position). The loop is a
 `Cmd::Loop` kept by the callback across graph swaps; offline renders never loop.
+Stop tails: `Graph::stop` (`Player::stop`, also the recording stop) stops the song (no notes,
+clips, clicks; the playhead stays) and releases what sounds (builtins `AllNotesOff`, plugins
+note-offs of the scheduled/held pitches + CC64 off; no reset), but the stopped graph keeps
+rendering like a note preview so reverb/delay/releases ring out, until the output stays below
+`TAIL_SILENCE_DB` (-90 dBFS) for `TAIL_SILENCE_SECONDS` (0.5 s) or `MAX_TAIL_SECONDS` (10 s)
+passed (`Graph::is_ringing`). `Graph::cut_tails` / `Player::cut_tails` (`Cmd::CutTails`;
+no effect while playing) silences at once and resets every device (sandboxed plugins reset
+at their next request). A seek while stopped keeps the tail; the next `play` (or count-in)
+always resets first, so no old tail is heard. A graph reload drops the tail. Offline renders
+are unaffected.
 `set_audition`: an `Arc<Audition>` of atomics per graph (mask built off-thread from
 `Resolver::feeds`: scoped tracks + the buses they reach through outputs/sends/aux outputs);
 out-of-scope nodes still render (sidechain keys work) but are not mixed; auditioned tracks

@@ -4,6 +4,26 @@ All notable changes to Cadenza are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-11-01
+
+Cadenza now tells you when a new version is out and can install it for you, and there is a
+place to report problems.
+
+### Added
+
+- **Update check**: once a day at startup (Help > "Check for updates automatically") and
+  from Help > "Check for updates…". A new version shows a small chip in the status bar,
+  never a dialog; its window has the release notes, Download and install, Later and Skip
+  this version.
+- **Self-update**: the download is verified against the release's SHA-256 sums, then the
+  AppImage is replaced, an `install.sh` folder or the macOS app is swapped when Cadenza
+  restarts or quits, or the Windows installer upgrades in place and reopens Cadenza.
+  Package-manager installs (AUR) get a notice and the download link. Unsaved changes are
+  asked about before restarting. `cadenza update [--check]` does the same from the CLI.
+- **Report a problem** (Help menu): opens a prefilled GitHub bug report with the app
+  version, system, audio setup, plugin hosting and language (never projects, paths or
+  keys), plus "Copy system info". GitHub issue forms for bugs and feature requests.
+
 ## [0.3.2] - 2026-11-01
 
 Editing workflow from the backlog: duplicate tracks, curved automation, effect tails on stop,
@@ -204,6 +224,7 @@ device, an FL Studio-style workflow, ten languages and a set of new DSP features
 First release: DAW with an AI arranger and sound engineer, MCP server, CLAP/VST3 hosting,
 recording, mixing, export and the style library.
 
+[0.3.3]: https://github.com/Pep3M/cadenza/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/Pep3M/cadenza/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Pep3M/cadenza/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Pep3M/cadenza/compare/v0.2.0...v0.3.0

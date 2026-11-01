@@ -67,6 +67,13 @@ by the processor's trigger counters and the editor (`drum_sampler_editor::kit_pa
 names every GM note 35-81. `engine/tests/drum_kits.rs`: every sample credited/used/installed, each
 kit's genre groove -16..-10 LUFS momentary (or peak-limited) and <= -1 dBTP; `CADENZA_KIT_AUDITION_DIR
 ... --ignored audition_kits` writes WAVs.
+Other built-ins (`presets/instruments.rs`, `presets/effects.rs`): `drum_machine` 15 (genre
+`KIT_CATEGORIES`), `electric_piano` 13 and every effect (`eq` 16, `compressor` 15, `reverb` 13,
+`delay` 12, `chorus` 11, `saturator` 11, `gain` 11, `pitch_correct` 10, `limiter` 8) uncategorized
+(""); `sampler` 13 in `SYNTH_CATEGORIES` (sine multisample, the 808 kit samples mapped
+chromatically from F1, a reversed crash FX). The dsp test checks every preset (known params in range,
+valid category, unique names, >= 6 per device); `engine/tests/builtin_presets.rs` plays each (effects on
+a keys part): audible and <= -1 dBTP (the three older hot presets: audible only).
 Wavetables (T35, `util::wavetable`): poly_synth `oscN_wave` 4 = Wavetable (appended choice; defaults
 bit-identical; `wavetable_params_leave_the_classic_waves_bit_identical` checks table/position never touch the other waves) with `oscN_table`
 (Basic sine→tri→saw→square, PWM, Formant vowels, Harmonics sweep, Digital sync/crush) and

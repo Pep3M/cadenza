@@ -167,7 +167,7 @@ jobs:
 
   macos:
     needs: version
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       NAME: cadenza-${{ needs.version.outputs.version }}-macos-universal

@@ -12,7 +12,7 @@ pub(super) static SAMPLER: &[FactoryPreset] = &[
 			("amp_release", 1_200.0),
 			("filter_type", 1.0),
 			("filter_cutoff", 4_000.0),
-			("gain", -4.0),
+			("gain", -12.0),
 		],
 		&[
 			pad_loop(SINE_PAD[0], 0, 41, 36),
@@ -35,6 +35,7 @@ pub(super) static SAMPLER: &[FactoryPreset] = &[
 			("filter_env_amount", 36.0),
 			("filter_decay", 300.0),
 			("filter_velocity", 40.0),
+			("gain", -9.0),
 		],
 		&[
 			pad_loop(SINE_PAD[0], 0, 41, 36),
@@ -241,6 +242,7 @@ pub(super) static DRUM_MACHINE: &[FactoryPreset] = &[
 			("hat_decay", 45.0),
 			("open_hat_decay", 250.0),
 			("tone", 60.0),
+			("gain", -2.0),
 		],
 	)
 	.category("Funk"),

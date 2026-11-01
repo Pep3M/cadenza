@@ -66,14 +66,6 @@ const LEAD: Phrase = &[
 
 const HIT: Phrase = &[(60, 0.0, 4.0, 1.0)];
 
-/// Presets that predate this check and peak over -1 dBTP on full-velocity chords or hits;
-/// their sound is kept as shipped, so only their audibility is checked.
-const LEGACY_HOT: [&str; 3] = [
-	"sampler/Sine Pad",
-	"sampler/Sine Pluck",
-	"drum_machine/Tight Kit",
-];
-
 fn factory_dir() -> &'static PathBuf {
 	static DIR: OnceLock<PathBuf> = OnceLock::new();
 	DIR.get_or_init(|| {
@@ -122,7 +114,7 @@ fn check(problems: &mut Vec<String>, label: String, s: &LevelStats) {
 	if s.true_peak_db.is_nan() || s.true_peak_db <= -40.0 {
 		problems.push(format!("{label}: silent ({:.1} dBTP)", s.true_peak_db));
 	}
-	if s.true_peak_db > -1.0 && !LEGACY_HOT.contains(&label.as_str()) {
+	if s.true_peak_db > -1.0 {
 		problems.push(format!("{label}: true peak {:.1} dBTP", s.true_peak_db));
 	}
 }

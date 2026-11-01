@@ -13,6 +13,7 @@ use egui::{
 	StrokeKind, Ui, pos2, vec2,
 };
 
+use super::arrange::RESIZE_EDGE;
 use crate::state::AppState;
 use crate::state::automation as auto;
 use crate::state::timeline::format_bbt;
@@ -123,6 +124,16 @@ impl AutoUi {
 			rect.bottom() - 0.5,
 			Stroke::new(1.0, theme::BORDER),
 		);
+		// The whole row answers the context menu; narrower widgets below (hide ×, the
+		// picker, the resize edge) are interacted after it so they win the pointer over
+		// this full-row region instead of being shadowed by it (egui gives the pointer
+		// to the most recently submitted overlapping widget).
+		let r = ui.interact(
+			rect,
+			Id::new(("lane-header", address.to_string())),
+			Sense::click(),
+		);
+		r.context_menu(|ui| lane_menu(ui, state, address));
 		let Some(meta) = state.lane_meta(address) else {
 			return;
 		};
@@ -223,12 +234,7 @@ impl AutoUi {
 				);
 			}
 		}
-		let r = ui.interact(
-			rect,
-			Id::new(("lane-header", address.to_string())),
-			Sense::click(),
-		);
-		r.context_menu(|ui| lane_menu(ui, state, address));
+		lane_resize_edge(ui, state, address, rect);
 	}
 
 	/// The master row: name and automation toggle.
@@ -977,6 +983,30 @@ impl AutoUi {
 	}
 }
 
+/// The bottom edge of a lane header: drag resizes that lane (like a track row),
+/// double-click resets it to the shared default.
+fn lane_resize_edge(ui: &mut Ui, state: &mut AppState, address: &ParamAddress, rect: Rect) {
+	let edge = Rect::from_min_max(
+		pos2(rect.left(), rect.bottom() - RESIZE_EDGE),
+		pos2(rect.right(), rect.bottom() + 1.0),
+	);
+	let r = ui.interact(
+		edge,
+		Id::new(("lane-resize", address.to_string())),
+		Sense::click_and_drag(),
+	);
+	if r.hovered() || r.dragged() {
+		ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+	}
+	if r.dragged() {
+		let h = state.view.height_of_lane(address) + r.drag_delta().y;
+		state.view.set_lane_height(address, h);
+	}
+	if r.double_clicked() {
+		state.view.lane_heights.remove(address);
+	}
+}
+
 /// A small value label next to the pointer.
 fn value_tag(ui: &Ui, at: Pos2, text: &str) {
 	let p = ui.ctx().layer_painter(egui::LayerId::new(
@@ -1026,10 +1056,16 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 		}
 	});
 	ui.separator();
+	if ui.button(tr("Hide lane")).clicked() {
+		state.view.automation.hide(address);
+		ui.close();
+	}
+	// Distinct from hiding: this drops every point (one `SetAutomation` undo step), the
+	// lane itself stops existing until it is automated again.
 	if ui
 		.add_enabled(
 			state.is_automated(address),
-			egui::Button::new(tr("Clear lane")),
+			egui::Button::new(tr("Delete lane")),
 		)
 		.clicked()
 	{
@@ -1037,10 +1073,6 @@ fn lane_menu(ui: &mut Ui, state: &mut AppState, address: &ParamAddress) {
 			address: address.clone(),
 			points: Vec::new(),
 		});
-		ui.close();
-	}
-	if ui.button(tr("Hide lane")).clicked() {
-		state.view.automation.hide(address);
 		ui.close();
 	}
 }

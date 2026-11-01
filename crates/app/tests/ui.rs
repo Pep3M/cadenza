@@ -926,6 +926,87 @@ fn automation_lanes_add_move_and_delete_points() {
 }
 
 #[test]
+fn hiding_a_lane_from_its_header_keeps_its_points_and_resizing_follows_the_drag() {
+	let mut a = app();
+	let keys = a
+		.state
+		.project()
+		.tracks
+		.iter()
+		.find(|t| t.name == "Keys")
+		.unwrap()
+		.id;
+	a.state.view.panels.set(PanelKind::Mixer, false);
+	a.state.selection.select_track(keys);
+	// Short steps (like the other resize/double-click tests) so the double-click below
+	// falls within egui's double-click delay.
+	let mut h = app_harness(a, vec2(1600.0, 1000.0), false);
+	h.run_steps(2);
+	h.state_mut().state.view.panels.focus = Some(PanelKind::Arrange);
+	h.key_press(Key::A);
+	h.run_steps(3);
+	let vol = cadenza_core::ParamAddress::track_volume(keys);
+
+	// Add a point so the lane has data (the bug report: hiding only "worked" while a
+	// lane was still empty, since `visible` re-added it from the project otherwise).
+	let lane = h.state().lane_rect(&vol).expect("A shows the volume lane");
+	let x_of = |h: &Harness<'_, CadenzaApp>, beat: f64| {
+		lane.left() + h.state().state.view.timeline.beat_to_x(beat)
+	};
+	let at = pos2(x_of(&h, 4.0) + 1.0, lane.center().y);
+	h.drag_at(at);
+	h.run_steps(1);
+	h.drop_at(at);
+	h.run_steps(3);
+	assert!(h.state().state.project().automation_lane(&vol).is_some());
+
+	// The header's × hides the lane even though it has points.
+	let header = h.state().lane_header_rect(&vol).expect("lane header shown");
+	let close = pos2(header.right() - 16.0, header.top() + 14.0);
+	click(&mut h, close);
+	h.run_steps(2);
+	assert!(
+		h.state().lane_rect(&vol).is_none(),
+		"hidden even with points in the lane"
+	);
+	assert!(
+		h.state().state.project().automation_lane(&vol).is_some(),
+		"hiding never deletes points"
+	);
+	assert!(h.state().state.view.automation.is_hidden(&vol));
+
+	// Showing it again (the picker/track menu path) brings it back.
+	h.state_mut().state.view.automation.show(vol.clone());
+	h.run_steps(2);
+	let header = h.state().lane_header_rect(&vol).expect("shown again");
+
+	// The lane header's bottom edge resizes just that lane.
+	let default_height = header.height();
+	let edge = pos2(header.center().x, header.bottom() - 1.0);
+	drag(&mut h, edge, pos2(edge.x, edge.y + 40.0));
+	let resized = h
+		.state()
+		.lane_header_rect(&vol)
+		.expect("still shown")
+		.height();
+	assert!(
+		resized > default_height + 20.0,
+		"dragged taller: {default_height} -> {resized}"
+	);
+	// Resetting the override (double-click's effect, covered at the state level by
+	// `automation_lane_heights_are_per_lane_scale_with_tracks_and_persist`) brings it
+	// back to the shared default.
+	h.state_mut().state.view.lane_heights.remove(&vol);
+	h.run_steps(1);
+	let after_reset = h
+		.state()
+		.lane_header_rect(&vol)
+		.expect("still shown")
+		.height();
+	assert_eq!(after_reset, default_height);
+}
+
+#[test]
 fn rubber_band_selects_clips_and_left_trim_keeps_notes_in_place() {
 	let mut a = app();
 	a.state.view.panels.set(PanelKind::Mixer, false);

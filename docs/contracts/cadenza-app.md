@@ -32,7 +32,26 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   name), click adds, drag moves (snap; Alt free; Shift vertical), rubber band (Shift adds),
   Ctrl+drag ramp, right-click/Del deletes, double-click cycles linear/hold/smooth, tooltip in
   real units. Right-click "Automate" on mixer faders/pans/sends and inspector controls creates
-  and shows the lane. Tempo lane (transport ♩ toggle, pinned under the markers): step curve
+  and shows the lane. Lane visibility (`AutomationView::hidden`, view state, not the project):
+  the lane header's "×" (tooltip "Hide this lane (its points are kept)") and the lane's
+  context menu "Hide lane" hide one lane without touching its points — unlike removing it from
+  the picker, a hidden lane with points stays hidden (`visible` filters `existing` by
+  `hidden`), and reappears once shown again (picker, "Show automation", or the track menu).
+  Track menu "Automate" lists every lane that exists under the channel (`existing`, shown or
+  hidden) with a check to show/hide each (`set_hidden`), "Show all" / "Hide all"
+  (`show_all`/`hide_all`), then the remaining parameters to add a new lane. The lane's own
+  context menu keeps "Delete lane" separate from "Hide lane": it drops every point in one
+  `SetAutomation` undo step, same as before (previously named "Clear lane"). The track header's
+  "A" toggle still expands/collapses every lane of that channel together (`is_open`/`toggle`);
+  master lanes follow the same `AutomationView` so hide/show/delete are consistent for both.
+  Lane height (`ViewState::lane_height`/`lane_heights`, `Prefs.lane_height`/`lane_heights`,
+  keyed by `ParamAddress`): a lane header's bottom edge drags to resize that lane
+  (`height_of_lane`/`set_lane_height`, same `MIN_LANE_HEIGHT`/`MAX_LANE_HEIGHT` clamp pattern as
+  track rows), double-click resets it to the shared default, and Alt+wheel
+  (`scale_track_heights`) scales every lane together with the tracks, by the same ratio.
+  `state::rows::Rows` reads `view.height_of_lane(&address)` per lane row, so hit-testing,
+  point drawing and the next row's position all follow the resized height. Tempo lane
+  (transport ♩ toggle, pinned under the markers): step curve
   of the `TempoMap`, click adds a change, drag moves, right-click removes; the BPM field edits
   the segment under the playhead. Time signatures (phase 17, `state::meter` builders): the
   transport TIME field edits the signature in effect at the playhead; the signature lane

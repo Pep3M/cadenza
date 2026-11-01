@@ -124,6 +124,13 @@ impl CadenzaApp {
 		self.arrange.lane_rect(self.state.view.scroll_y, address)
 	}
 
+	/// Automation lane `address`'s header (picker, hide ×, resize edge) in the last
+	/// frame (headless tests).
+	pub fn lane_header_rect(&self, address: &cadenza_core::ParamAddress) -> Option<Rect> {
+		self.arrange
+			.lane_header_rect(self.state.view.scroll_y, address)
+	}
+
 	/// Clip row of track `index` in the arrange view in the last frame (headless tests).
 	pub fn track_rect(&self, index: usize) -> Option<Rect> {
 		self.arrange.track_rect(self.state.view.scroll_y, index)

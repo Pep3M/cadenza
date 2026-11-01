@@ -38,6 +38,9 @@ pub struct AutomationView {
 	pub selected: Vec<(ParamAddress, Tick)>,
 	/// The master's lanes are listed after the tracks.
 	pub master: bool,
+	/// Lanes hidden explicitly (× in the lane header, or the picker); their points stay
+	/// in the project and the lane reappears once shown again.
+	pub hidden: Vec<ParamAddress>,
 }
 
 impl AutomationView {
@@ -45,9 +48,10 @@ impl AutomationView {
 		self.lanes.get(&owner).is_some_and(|l| l.open)
 	}
 
-	/// Lanes listed under `owner`: the ones added in the view, then the project's other
-	/// lanes of that channel (addresses that no longer resolve are dropped).
-	pub fn visible(&self, project: &Project, owner: Option<TrackId>) -> Vec<ParamAddress> {
+	/// Every lane that exists under `owner` (added in the view, or in the project),
+	/// hidden ones included; addresses that no longer resolve are dropped. Used by the
+	/// "Automate" picker to list lanes with a show/hide check.
+	pub fn existing(&self, project: &Project, owner: Option<TrackId>) -> Vec<ParamAddress> {
 		let mut out: Vec<ParamAddress> = self
 			.lanes
 			.get(&owner)
@@ -60,6 +64,28 @@ impl AutomationView {
 		}
 		out.retain(|a| resolves(project, a));
 		out
+	}
+
+	/// Lanes drawn under `owner`: `existing` minus the hidden ones.
+	pub fn visible(&self, project: &Project, owner: Option<TrackId>) -> Vec<ParamAddress> {
+		self.existing(project, owner)
+			.into_iter()
+			.filter(|a| !self.hidden.contains(a))
+			.collect()
+	}
+
+	/// Whether `address` is hidden (it may still exist in the project).
+	pub fn is_hidden(&self, address: &ParamAddress) -> bool {
+		self.hidden.contains(address)
+	}
+
+	/// Shows or hides one lane without touching the others.
+	pub fn set_hidden(&mut self, address: &ParamAddress, hidden: bool) {
+		if hidden {
+			self.hide(address);
+		} else {
+			self.show(address.clone());
+		}
 	}
 
 	/// Toggles the lanes of `owner`; opening a channel without lanes shows its volume.
@@ -78,7 +104,7 @@ impl AutomationView {
 		}
 	}
 
-	/// Shows (and opens) the lane for `address`.
+	/// Shows (opens and unhides) the lane for `address`.
 	pub fn show(&mut self, address: ParamAddress) {
 		if address.track.is_none() {
 			self.master = true;
@@ -86,20 +112,41 @@ impl AutomationView {
 		let view = self.lanes.entry(address.track).or_default();
 		view.open = true;
 		if !view.shown.contains(&address) {
-			view.shown.push(address);
+			view.shown.push(address.clone());
+		}
+		self.hidden.retain(|a| a != &address);
+	}
+
+	/// Shows every existing lane of `owner` (track menu "Automate" → "Show all").
+	pub fn show_all(&mut self, project: &Project, owner: Option<TrackId>) {
+		let addresses = self.existing(project, owner);
+		self.hidden.retain(|a| !addresses.contains(a));
+		let view = self.lanes.entry(owner).or_default();
+		view.open = true;
+		if owner.is_none() {
+			self.master = true;
+		}
+	}
+
+	/// Hides every existing lane of `owner` (track menu "Automate" → "Hide all"). Their
+	/// points stay in the project.
+	pub fn hide_all(&mut self, project: &Project, owner: Option<TrackId>) {
+		for address in self.existing(project, owner) {
+			self.hide(&address);
 		}
 	}
 
 	/// Hides a lane (its points stay in the project).
 	pub fn hide(&mut self, address: &ParamAddress) {
-		if let Some(v) = self.lanes.get_mut(&address.track) {
-			v.shown.retain(|a| a != address);
+		if !self.hidden.contains(address) {
+			self.hidden.push(address.clone());
 		}
 		self.selected.retain(|(a, _)| a != address);
 	}
 
 	/// Replaces the lane shown as `old` by `new` (parameter picker).
 	pub fn replace(&mut self, old: &ParamAddress, new: ParamAddress) {
+		self.hidden.retain(|a| a != &new);
 		let view = self.lanes.entry(old.track).or_default();
 		match view.shown.iter().position(|a| a == old) {
 			Some(i) if !view.shown.contains(&new) => view.shown[i] = new,
@@ -124,7 +171,7 @@ impl AutomationView {
 			.collect()
 	}
 
-	/// Drops selections of points that no longer exist.
+	/// Drops selections and hidden flags of lanes that no longer exist.
 	pub fn prune(&mut self, project: &Project) {
 		self.selected.retain(|(a, t)| {
 			project
@@ -134,6 +181,7 @@ impl AutomationView {
 		for view in self.lanes.values_mut() {
 			view.shown.retain(|a| resolves(project, a));
 		}
+		self.hidden.retain(|a| resolves(project, a));
 	}
 }
 
@@ -797,6 +845,51 @@ mod tests {
 		assert_eq!(v.selected.len(), 1);
 		v.toggle(&p, None);
 		assert!(v.master && v.is_open(None));
+	}
+
+	#[test]
+	fn hiding_a_lane_with_points_keeps_them_and_stays_hidden() {
+		let (mut p, t, synth, _) = project();
+		let cutoff = ParamAddress::device(Some(t), synth, "filter_cutoff");
+		exec!(p, add_point(&p, &cutoff, Tick(0), 500.0));
+		let mut v = AutomationView::default();
+		v.show(cutoff.clone());
+		assert_eq!(v.visible(&p, Some(t)), vec![cutoff.clone()]);
+
+		// Hiding a lane that has points is not undone by `visible` re-adding it from the
+		// project (the bug report: hiding only "worked" for empty lanes before).
+		v.hide(&cutoff);
+		assert!(v.is_hidden(&cutoff));
+		assert!(v.visible(&p, Some(t)).is_empty());
+		assert_eq!(points(&p, &cutoff).len(), 1, "hiding never deletes points");
+		// The lane still exists for the picker to show again.
+		assert_eq!(v.existing(&p, Some(t)), vec![cutoff.clone()]);
+
+		v.set_hidden(&cutoff, false);
+		assert!(!v.is_hidden(&cutoff));
+		assert_eq!(v.visible(&p, Some(t)), vec![cutoff.clone()]);
+
+		// Show all / hide all act on every existing lane of the channel.
+		let pan = ParamAddress::track_pan(t);
+		exec!(p, add_point(&p, &pan, Tick(0), 0.0));
+		v.hide_all(&p, Some(t));
+		assert!(v.visible(&p, Some(t)).is_empty());
+		v.show_all(&p, Some(t));
+		assert_eq!(v.visible(&p, Some(t)).len(), 2);
+
+		// Deleting a lane's points (the "Delete lane" menu item) drops the hidden flag
+		// once pruned, since the address no longer resolves... except volume/pan always
+		// resolve, so hiding one stays sticky until explicitly shown again.
+		v.hide(&cutoff);
+		exec!(
+			p,
+			Command::SetAutomation {
+				address: cutoff.clone(),
+				points: Vec::new(),
+			}
+		);
+		v.prune(&p);
+		assert!(v.is_hidden(&cutoff), "pan/volume/device still resolve");
 	}
 
 	#[test]

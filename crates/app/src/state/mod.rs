@@ -125,6 +125,9 @@ pub const DEFAULT_TRACK_HEIGHT: f32 = 66.0;
 pub const MIN_TRACK_HEIGHT: f32 = 36.0;
 pub const MAX_TRACK_HEIGHT: f32 = 220.0;
 
+pub const MIN_LANE_HEIGHT: f32 = 30.0;
+pub const MAX_LANE_HEIGHT: f32 = 220.0;
+
 /// Panels and arrange-view settings (not part of the project).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewState {
@@ -170,6 +173,12 @@ pub struct ViewState {
 	pub arrange_tool: arrange_tool::ArrangeTool,
 	/// Track heights set by dragging a header's bottom edge (others use `track_height`).
 	pub track_heights: HashMap<TrackId, f32>,
+	/// Default automation lane height (others use `LANE_HEIGHT`'s default); scaled
+	/// together with `track_height` by Alt+wheel.
+	pub lane_height: f32,
+	/// Lane heights set by dragging a lane header's bottom edge, keyed by the lane's
+	/// parameter address (others use `lane_height`).
+	pub lane_heights: HashMap<ParamAddress, f32>,
 	/// Clips copied with Ctrl+C / Ctrl+X in the arrange.
 	pub clip_board: playlist::ClipClipboard,
 	/// The clip the Paint tool repeats when none is pressed or selected on the lane.
@@ -199,12 +208,35 @@ impl ViewState {
 	}
 
 	/// Alt+wheel: every track grows or shrinks together (resized ones keep their ratio).
+	/// Automation lane heights scale by the same ratio.
 	pub fn scale_track_heights(&mut self, height: f32) {
 		let new = height.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
 		let ratio = new / self.track_height.max(1.0);
 		self.track_height = new;
 		for h in self.track_heights.values_mut() {
 			*h = (*h * ratio).clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT);
+		}
+		self.lane_height = (self.lane_height * ratio).clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		for h in self.lane_heights.values_mut() {
+			*h = (*h * ratio).clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		}
+	}
+
+	/// Height of the automation lane for `address` (drag-resized or the shared default).
+	pub fn height_of_lane(&self, address: &ParamAddress) -> f32 {
+		self.lane_heights
+			.get(address)
+			.copied()
+			.unwrap_or(self.lane_height)
+	}
+
+	/// Sets one lane's height (clamped); the default height clears the override.
+	pub fn set_lane_height(&mut self, address: &ParamAddress, height: f32) {
+		let h = height.clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		if (h - self.lane_height).abs() < 0.5 {
+			self.lane_heights.remove(address);
+		} else {
+			self.lane_heights.insert(address.clone(), h);
 		}
 	}
 }
@@ -235,6 +267,8 @@ impl Default for ViewState {
 			inspector: inspector::InspectorView::default(),
 			arrange_tool: arrange_tool::ArrangeTool::default(),
 			track_heights: HashMap::new(),
+			lane_height: automation::LANE_HEIGHT,
+			lane_heights: HashMap::new(),
 			clip_board: playlist::ClipClipboard::default(),
 			paint_source: None,
 			responsive: layout::Responsive::default(),
@@ -4065,6 +4099,8 @@ impl AppState {
 			mixer: v.mixer,
 			arrange_tool: v.arrange_tool,
 			track_heights: v.track_heights.clone(),
+			lane_height: v.lane_height,
+			lane_heights: v.lane_heights.clone(),
 			windows: v.windows.saved.clone(),
 			language: self.language,
 		}
@@ -4107,6 +4143,12 @@ impl AppState {
 			.track_heights
 			.into_iter()
 			.map(|(t, h)| (t, h.clamp(MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT)))
+			.collect();
+		v.lane_height = p.lane_height.clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT);
+		v.lane_heights = p
+			.lane_heights
+			.into_iter()
+			.map(|(a, h)| (a, h.clamp(MIN_LANE_HEIGHT, MAX_LANE_HEIGHT)))
 			.collect();
 		v.windows.saved = p.windows;
 		self.ai.settings = p.ai.sanitized();

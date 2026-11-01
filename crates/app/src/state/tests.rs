@@ -581,6 +581,39 @@ fn track_heights_are_per_track_scale_together_and_persist() {
 }
 
 #[test]
+fn automation_lane_heights_are_per_lane_scale_with_tracks_and_persist() {
+	use crate::state::MAX_LANE_HEIGHT;
+	use crate::state::automation::LANE_HEIGHT;
+	use cadenza_core::ParamAddress;
+
+	let mut v = ViewState::default();
+	let (track, synth) = (TrackId::new(), cadenza_core::DeviceId::new());
+	let cutoff = ParamAddress::device(Some(track), synth, "filter_cutoff");
+	let pan = ParamAddress::track_pan(track);
+	v.set_lane_height(&cutoff, 140.0);
+	v.set_lane_height(&pan, 1e6);
+	assert_eq!(v.height_of_lane(&cutoff), 140.0);
+	assert_eq!(v.height_of_lane(&pan), MAX_LANE_HEIGHT, "clamped");
+	v.set_lane_height(&pan, v.lane_height);
+	assert!(!v.lane_heights.contains_key(&pan), "the default clears it");
+	assert_eq!(v.height_of_lane(&pan), LANE_HEIGHT);
+	// Alt+wheel (`scale_track_heights`) scales lanes together with the tracks (grown
+	// here, so neither side hits its clamp and the ratio is exact).
+	let old_ratio_base = v.track_height;
+	v.scale_track_heights(DEFAULT_TRACK_HEIGHT * 1.5);
+	let ratio = v.track_height / old_ratio_base;
+	assert!((v.lane_height - LANE_HEIGHT * ratio).abs() < 0.5);
+	assert!((v.height_of_lane(&cutoff) - 140.0 * ratio).abs() < 0.5);
+
+	let mut s = AppState::headless();
+	s.view.set_lane_height(&cutoff, 95.0);
+	let prefs = s.prefs();
+	let mut t = AppState::headless();
+	t.apply_prefs(prefs);
+	assert_eq!(t.view.height_of_lane(&cutoff), 95.0);
+}
+
+#[test]
 fn f7_opens_the_track_clip_or_creates_one() {
 	let (mut s, keys) = state_with_song();
 	let clip_a = s.project().tracks[0].clips[0].id;

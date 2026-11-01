@@ -78,10 +78,13 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   "Duplicate track" (Ctrl+Shift+T on the current track), one undo step
   "Duplicate track '<name>'". The copy lands right below the source, in the same folder,
   named "<name> (copy)", with fresh ids for everything it creates: the track, its
-  instrument/inserts/sends (and their modulators), and independent copies of its clips
-  (fresh clip/note/audio-note ids; like any other clip copy they drop `take` and `link`,
-  so comping groups and FL pattern links are not carried over). Automation lanes addressing
-  the track, its devices or its sends are copied and re-addressed to the matching new ids.
+  instrument/inserts/sends (and their modulators), and copies of its clips (fresh clip/
+  note/audio-note ids). Take groups and links are kept, not dropped, but given fresh group/
+  link ids: comped clips stay comped and FL pattern instances stay linked *among the
+  copies*, independent of the source's groups (dropping them would make every inactive
+  take lane audible, and fail a trimmed linked clip's note-span check). Automation lanes
+  addressing the track, its devices or its sends are copied and re-addressed to the matching
+  new ids.
   Sidechain and MIDI-input sources on copied devices keep pointing at their original tracks
   (unchanged); solo is turned off on the copy; freeze is dropped. Folders are not duplicated
   yet (nested tracks would also need cloning and re-parenting) — the menu item disables

@@ -4,18 +4,26 @@
 //! original onto the copy. Always one undo step (`Command::Batch`), even when there is
 //! nothing to re-address, so the history always reads "Duplicate track '<name>'".
 //!
-//! Decisions (documented here, not just in code): the copy is independent, not linked to
-//! the original — clips drop their `link`/`take` like any other copy (`playlist::copy_of`).
-//! Sidechain and MIDI-input sources on copied devices keep pointing at their original
-//! tracks (only this track's own ids change). Solo is turned off on the copy so duplicating
-//! a soloed track does not silence everything else twice over. Freeze is dropped (the copy
-//! has no render to reuse). Folder tracks are not duplicated yet (`can_duplicate` says so);
-//! duplicating one along with its nested tracks is a larger feature.
+//! Decisions (documented here, not just in code): the copy is independent of the
+//! original's take groups and links — not dropped, but given fresh group/link ids, so
+//! takes and FL pattern instances stay linked *among the copies* without also pulling in
+//! (or being pulled into) the originals. Keeping `take` matters: `Clip::plays()` is "no
+//! take, or the active one", so dropping it would make every inactive take lane of a
+//! comped track audible on the copy. Keeping `link` (remapped) matters too: `AddClip`
+//! only bounds a clip's notes by its own length when `link` is `None` — a trimmed linked
+//! clip (notes reaching past its own, shorter length; the group's longest copy covers
+//! them) would fail that check as an independent copy. Sidechain and MIDI-input sources on
+//! copied devices keep pointing at their original tracks (only this track's own ids
+//! change). Solo is turned off on the copy so duplicating a soloed track does not silence
+//! everything else twice over. Freeze is dropped (the copy has no render to reuse). Folder
+//! tracks are not duplicated yet (`can_duplicate` says so); duplicating one along with its
+//! nested tracks is a larger feature.
 
 use std::collections::HashMap;
 
 use cadenza_core::{
-	AudioNoteId, ClipId, DeviceId, ModulatorId, NoteId, ParamAddress, ParamTarget, TrackId,
+	AudioNoteId, ClipId, DeviceId, LinkId, ModulatorId, NoteId, ParamAddress, ParamTarget,
+	TakeGroupId, TrackId,
 };
 use cadenza_model::{
 	Channel, Clip, ClipContent, Command, Device, NoteEdits, Project, Send, Track, TrackKind,
@@ -61,13 +69,23 @@ fn copy_note_edits(edits: &NoteEdits) -> NoteEdits {
 	copy
 }
 
-/// An independent copy of `clip`: fresh clip (and note) ids, no take, no link, same
-/// position and content otherwise.
-fn copy_clip(clip: &Clip) -> Clip {
+/// A copy of `clip`: fresh clip (and note) ids, same position and content otherwise. Its
+/// take group and link (if any) are given fresh ids (shared with any other clip of this
+/// duplicate carrying the same originals, via `groups`/`links`), so the copies stay
+/// comped/linked among themselves, independent of the source track's groups.
+fn copy_clip(
+	clip: &Clip,
+	groups: &mut HashMap<TakeGroupId, TakeGroupId>,
+	links: &mut HashMap<LinkId, LinkId>,
+) -> Clip {
 	let mut copy = clip.clone();
 	copy.id = ClipId::new();
-	copy.take = None;
-	copy.link = None;
+	if let Some(take) = &mut copy.take {
+		take.group = *groups.entry(take.group).or_insert_with(TakeGroupId::new);
+	}
+	copy.link = clip
+		.link
+		.map(|l| *links.entry(l).or_insert_with(LinkId::new));
 	match &mut copy.content {
 		ClipContent::Midi { notes, .. } => {
 			for n in notes {
@@ -127,7 +145,13 @@ pub fn duplicate_track(project: &Project, track: TrackId) -> Option<(Command, Tr
 		.iter()
 		.map(|s| copy_send(s, &mut devices))
 		.collect();
-	let clips: Vec<Clip> = source.clips.iter().map(copy_clip).collect();
+	let mut groups = HashMap::new();
+	let mut links = HashMap::new();
+	let clips: Vec<Clip> = source
+		.clips
+		.iter()
+		.map(|c| copy_clip(c, &mut groups, &mut links))
+		.collect();
 	let copy = Track {
 		id: new_id,
 		name: format!("{} (copy)", source.name),
@@ -355,5 +379,89 @@ mod tests {
 		p.tracks.push(folder);
 		let doc = Document::new(p);
 		assert!(duplicate_track(doc.project(), id).is_none());
+	}
+
+	/// A comped track (two takes stacked over the same stretch, only one active): the
+	/// copy must keep the same shape (one group, two lanes, the same one active) so only
+	/// the active take plays on it too, not both.
+	#[test]
+	fn comped_track_keeps_only_the_active_take_playing() {
+		use cadenza_model::Take;
+
+		let mut p = Project::new("t");
+		let mut track = Track::new("Vox", TrackKind::Instrument);
+		let group = TakeGroupId::new();
+		let mut take1 = Clip::midi("Take 1", Tick::ZERO, Tick(960));
+		take1.take = Some(Take {
+			group,
+			lane: 0,
+			active: false,
+		});
+		let mut take2 = Clip::midi("Take 2", Tick::ZERO, Tick(960));
+		take2.take = Some(Take {
+			group,
+			lane: 1,
+			active: true,
+		});
+		assert!(!take1.plays());
+		assert!(take2.plays());
+		let (take1_id, take2_id) = (take1.id, take2.id);
+		track.clips.push(take1);
+		track.clips.push(take2);
+		let track_id = track.id;
+		p.tracks.push(track);
+		let mut doc = Document::new(p);
+
+		let (cmd, new_id) = duplicate_track(doc.project(), track_id).unwrap();
+		doc.execute(cmd).unwrap();
+		let copy = doc.project().track(new_id).unwrap();
+		assert_eq!(copy.clips.len(), 2);
+		let new_take1 = copy.clips.iter().find(|c| c.name == "Take 1").unwrap();
+		let new_take2 = copy.clips.iter().find(|c| c.name == "Take 2").unwrap();
+		assert_ne!(new_take1.id, take1_id);
+		assert_ne!(new_take2.id, take2_id);
+		// Still one group, lanes kept, same one active: only the take that played before
+		// plays on the copy.
+		let (g1, g2) = (new_take1.take.unwrap().group, new_take2.take.unwrap().group);
+		assert_eq!(g1, g2, "both copies stay in one (fresh) group");
+		assert_ne!(g1, group, "but not the source's group");
+		assert!(!new_take1.plays(), "inactive take stays inactive");
+		assert!(new_take2.plays(), "active take stays active");
+	}
+
+	/// A trimmed linked clip (notes reach past its own, shorter length; valid because the
+	/// group's longest copy covers them) must still validate as a copy: dropping `link`
+	/// would bound it by its own length and reject the note past the end.
+	#[test]
+	fn trimmed_linked_clip_duplicates_without_a_validation_error() {
+		let mut p = Project::new("t");
+		let mut track = Track::new("Lead", TrackKind::Instrument);
+		let link = LinkId::new();
+		// Trimmed to 1 bar, but (like a real linked copy) still holds a note reaching
+		// into bar 2: only valid because `link` makes `AddClip` skip the length bound.
+		let mut clip = Clip::midi("Pattern", Tick::ZERO, Tick(960)).with_notes([Note::new(
+			60,
+			Tick(1200),
+			Tick(100),
+			0.8,
+		)]);
+		clip.link = Some(link);
+		let clip_id = clip.id;
+		track.clips.push(clip);
+		let track_id = track.id;
+		p.tracks.push(track);
+		let mut doc = Document::new(p);
+
+		let (cmd, new_id) = duplicate_track(doc.project(), track_id).unwrap();
+		doc.execute(cmd)
+			.expect("the copy must pass AddClip validation");
+		let copy = doc.project().track(new_id).unwrap();
+		assert_eq!(copy.clips.len(), 1);
+		let new_clip = &copy.clips[0];
+		assert_ne!(new_clip.id, clip_id);
+		assert!(
+			matches!(new_clip.link, Some(l) if l != link),
+			"linked, but to a fresh id, not the source's"
+		);
 	}
 }

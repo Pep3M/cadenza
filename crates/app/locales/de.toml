@@ -2155,6 +2155,8 @@
 "Tap Spread" = "Tap-Abstand"
 "Tap spread" = "Tap-Abstand"
 "Tap {n}" = "Tap {n}"
+"Tap {n} level" = "Tap {n} Pegel"
+"Tap {n} pan" = "Tap {n} Pan"
 "Tap {n} · {level} % · {pan}" = "Tap {n} · {level} % · {pan}"
 "Taps" = "Taps"
 "{ms} ms latency" = "{ms} ms Latenz"

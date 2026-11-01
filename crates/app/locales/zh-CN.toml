@@ -2151,6 +2151,8 @@
 "Tap Spread" = "抽头间距"
 "Tap spread" = "抽头间距"
 "Tap {n}" = "抽头 {n}"
+"Tap {n} level" = "抽头 {n} 电平"
+"Tap {n} pan" = "抽头 {n} 声像"
 "Tap {n} · {level} % · {pan}" = "抽头 {n} · {level} % · {pan}"
 "Taps" = "抽头"
 "{ms} ms latency" = "延迟 {ms} 毫秒"

@@ -124,3 +124,42 @@ fn automation_swaps_into_a_compiled_graph() {
 	let after = rms(&l[12_000..]);
 	assert!(after < before * 1e-3, "{after} vs {before}");
 }
+
+#[test]
+fn delay_feedback_and_tap_automation_reach_the_processor() {
+	// One short note into a free 250 ms delay with no repeats of its own: a feedback lane
+	// makes the echoes ring on, a tap lane adds a second read head's echo.
+	let mut a = synth_track("a", &[(60, 0.0, 0.25)], 8.0);
+	let delay = Device::builtin("delay", "Echo")
+		.with_param("sync", 0.0)
+		.with_param("time", 250.0)
+		.with_param("feedback", 0.0)
+		.with_param("mix", 100.0)
+		.with_param("taps", 2.0)
+		.with_param("tap_spread", 100.0)
+		.with_param("tap2_level", 0.0);
+	a.channel.inserts.push(delay.clone());
+	let plain = render_offline(&project(vec![a.clone()]), &opts(8.0)).unwrap();
+	let lane = |param: &str, value: f32| {
+		AutomationLane::new(
+			ParamAddress::device(Some(a.id), delay.id, param),
+			vec![AutomationPoint::new(beats(0.0), value)],
+		)
+	};
+	let mut p = project(vec![a.clone()]);
+	p.automation.push(lane("feedback", 90.0));
+	let ringing = render_offline(&p, &opts(8.0)).unwrap();
+	let tail = seconds(1.5)..seconds(2.5);
+	let (dry_tail, wet_tail) = (rms(&plain.left[tail.clone()]), rms(&ringing.left[tail]));
+	assert!(
+		dry_tail < 1e-5 && wet_tail > 1e-3,
+		"feedback lane: {dry_tail} vs {wet_tail}"
+	);
+	// Tap 2 at 2 x 250 ms = 500 ms: silent at level 0, an echo once a lane raises it.
+	let mut p = project(vec![a.clone()]);
+	p.automation.push(lane("tap2_level", 100.0));
+	let tapped = render_offline(&p, &opts(8.0)).unwrap();
+	let tap = seconds(0.5)..seconds(0.62);
+	let (off, on) = (rms(&plain.left[tap.clone()]), rms(&tapped.left[tap]));
+	assert!(on > 10.0 * off.max(1e-6), "tap lane: {off} vs {on}");
+}

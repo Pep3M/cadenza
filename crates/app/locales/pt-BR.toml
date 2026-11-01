@@ -2157,6 +2157,8 @@
 "Tap Spread" = "Espaçamento dos taps"
 "Tap spread" = "Espaçamento dos taps"
 "Tap {n}" = "Tap {n}"
+"Tap {n} level" = "Nível tap {n}"
+"Tap {n} pan" = "Pan tap {n}"
 "Tap {n} · {level} % · {pan}" = "Tap {n} · {level} % · {pan}"
 "Taps" = "Taps"
 "{ms} ms latency" = "{ms} ms de latência"

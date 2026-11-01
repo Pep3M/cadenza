@@ -2157,6 +2157,8 @@
 "Tap Spread" = "Separación de toques"
 "Tap spread" = "Separación de toques"
 "Tap {n}" = "Toque {n}"
+"Tap {n} level" = "Nivel toque {n}"
+"Tap {n} pan" = "Pan toque {n}"
 "Tap {n} · {level} % · {pan}" = "Toque {n} · {level} % · {pan}"
 "Taps" = "Toques"
 "{ms} ms latency" = "{ms} ms de latencia"

@@ -1574,7 +1574,7 @@ fn compact_delay(ui: &mut Ui, state: &mut AppState, r: DeviceRef) {
 		return;
 	};
 	let width = ui.available_width() - 8.0;
-	let height = delay::compact_height(width);
+	let height = delay::compact_height(width, delay::compact_knob_count(state, r));
 	let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
 	let accent = r
 		.track

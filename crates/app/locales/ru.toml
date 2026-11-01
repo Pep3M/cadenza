@@ -2156,6 +2156,8 @@
 "Tap Spread" = "Шаг отводов"
 "Tap spread" = "Шаг отводов"
 "Tap {n}" = "Отвод {n}"
+"Tap {n} level" = "Уровень отвода {n}"
+"Tap {n} pan" = "Панорама отвода {n}"
 "Tap {n} · {level} % · {pan}" = "Отвод {n} · {level} % · {pan}"
 "Taps" = "Отводы"
 "{ms} ms latency" = "Задержка {ms} мс"

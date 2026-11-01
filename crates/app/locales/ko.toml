@@ -2156,6 +2156,8 @@
 "Tap Spread" = "탭 간격"
 "Tap spread" = "탭 간격"
 "Tap {n}" = "탭 {n}"
+"Tap {n} level" = "탭 {n} 레벨"
+"Tap {n} pan" = "탭 {n} 팬"
 "Tap {n} · {level} % · {pan}" = "탭 {n} · {level} % · {pan}"
 "Taps" = "탭"
 "{ms} ms latency" = "지연 {ms} ms"

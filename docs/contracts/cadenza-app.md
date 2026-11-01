@@ -177,12 +177,18 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   "⬆ Update x.y.z" (survives restarts via `latest`, hidden for `skipped`), never a modal. The
   window shows the release notes (2000 chars, link to the release) and, by `InstallKind`,
   "Download and install" (worker with progress bar + Cancel; verified against `SHA256SUMS`;
-  AppImage replaced, install.sh folder swapped, Windows `-setup.exe` kept, macOS bundle replaced
-  from the dmg or the dmg opened) / "Open the download page" + advice (package manager, dev build,
+  AppImage replaced at once (the running image stays mounted), install.sh folder / macOS bundle
+  only unpacked into a `<name>.update` sibling (`Prepared::Swap`: the running app finds samples
+  and helper binaries next to its exe, so the swap waits for the quit), Windows `-setup.exe` kept,
+  or the dmg opened) / "Open the download page" + advice (package manager, dev build,
   read-only, unmanaged) / Later / Skip this version. A ready update offers "Restart now"
   ("Install and restart" on Windows) = `request(Pending::Update)` (unsaved-changes prompt first),
-  then the app quits and `launch_after_quit` starts the new app with the open project (or the
-  installer, `/SILENT ... /RELAUNCH=1`). Failures leave the install untouched and show the error.
+  then the app quits and `UpdateState::on_quit` swaps a staged folder in (`cadenza_update::finish`,
+  rolled back on failure) and starts the new app with the open project (or the installer,
+  `/SILENT ... /RELAUNCH=1`). "Later" + a plain quit still swaps a staged (verified) update in, so
+  the next start runs it; a Windows installer never runs on a plain quit. A failed on-quit swap is
+  kept in `UpdatePrefs.install_error` and shown once at the next start. Failures leave the install
+  untouched and show the error.
 - Report a problem (`state::report`, `ui::report`): Help → Report a problem… (title +
   description) opens `issues/new?template=bug_report.yml` prefilled (`title`, `what-happened`,
   `version`, `os`, `environment` = audio backend/device/rate/buffer, plugin hosting, UI language;

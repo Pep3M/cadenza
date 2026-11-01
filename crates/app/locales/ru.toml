@@ -2426,3 +2426,5 @@
 "What happened? Steps to reproduce help a lot." = "Что случилось? Шаги для воспроизведения очень помогают."
 "restarting to update" = "перезапуском для обновления"
 "the worker thread stopped" = "рабочий поток остановился"
+"The update could not be installed: {e}" = "Не удалось установить обновление: {e}"
+"The update is ready: it is installed when Cadenza restarts or quits." = "Обновление готово: оно установится при перезапуске или закрытии Cadenza."

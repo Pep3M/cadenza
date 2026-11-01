@@ -21,9 +21,19 @@ pub const RELAUNCH_ARG: &str = "/RELAUNCH=1";
 /// What is left to do once [`install`] succeeded (always after the app quits).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Prepared {
-	/// The new version is in place: start `app` (the new `cadenza-app`, or the bundle on
-	/// macOS).
+	/// The new version is in place: start `app` (the new AppImage; the running one stays
+	/// mounted from the old file, so replacing it early is harmless).
 	Restart { app: PathBuf },
+	/// The verified new version is unpacked in `staged` (a sibling of `current`): it
+	/// replaces `current` only once the app has quit ([`finish`]), because the running
+	/// app finds its samples and helper binaries next to its own executable. `cleanup` is
+	/// the staging folder to remove afterwards; `app` is what a restart starts.
+	Swap {
+		current: PathBuf,
+		staged: PathBuf,
+		cleanup: PathBuf,
+		app: PathBuf,
+	},
 	/// Run this verified installer (Windows), which upgrades and relaunches.
 	RunInstaller { setup: PathBuf },
 	/// Open this verified disk image for the user to drag the app (macOS bundle that
@@ -160,13 +170,16 @@ pub fn install(
 							.into(),
 					));
 				}
-				swap_dirs(dir, &unpacked)
-					.map_err(UpdateError::io(format!("replacing {}", dir.display())))
+				Ok(unpacked)
 			})();
-			let _ = std::fs::remove_dir_all(&staging);
 			let _ = std::fs::remove_file(&dest);
-			result?;
-			Ok(Prepared::Restart {
+			let staged = result.inspect_err(|_| {
+				let _ = std::fs::remove_dir_all(&staging);
+			})?;
+			Ok(Prepared::Swap {
+				current: dir.clone(),
+				staged,
+				cleanup: staging,
 				app: dir.join("cadenza-app"),
 			})
 		}
@@ -203,8 +216,7 @@ pub fn install(
 					.args(["-dr", "com.apple.quarantine"])
 					.arg(&staging)
 					.output();
-				swap_dirs(bundle, &staging)
-					.map_err(UpdateError::io(format!("replacing {}", bundle.display())))
+				Ok(())
 			})();
 			let _ = Command::new("hdiutil")
 				.args(["detach", "-quiet"])
@@ -215,7 +227,10 @@ pub fn install(
 			}
 			let _ = std::fs::remove_file(&dest);
 			result?;
-			Ok(Prepared::Restart {
+			Ok(Prepared::Swap {
+				current: bundle.clone(),
+				staged: staging.clone(),
+				cleanup: staging,
 				app: bundle.clone(),
 			})
 		}
@@ -224,11 +239,45 @@ pub fn install(
 	}
 }
 
-/// Starts what [`install`] prepared, detached; `reopen` is a project the restarted app
-/// opens. Call it when the app is quitting (the installer replaces the running files).
-pub fn launch(prepared: &Prepared, reopen: Option<&Path>) -> std::io::Result<()> {
+/// Puts a [`Prepared::Swap`] in place (no-op for the others). Call it only once the app
+/// has stopped using its install folder. On failure the old install stays (rolled back)
+/// and the staged copy is removed.
+pub fn finish(prepared: &Prepared) -> Result<(), UpdateError> {
+	let Prepared::Swap {
+		current,
+		staged,
+		cleanup,
+		..
+	} = prepared
+	else {
+		return Ok(());
+	};
+	if !staged.is_dir() {
+		return Err(UpdateError::Install(
+			"the downloaded update is gone; download it again".into(),
+		));
+	}
+	let result = swap_dirs(current, staged)
+		.map_err(UpdateError::io(format!("replacing {}", current.display())));
+	let _ = std::fs::remove_dir_all(cleanup);
+	result
+}
+
+/// The installer's command line; `relaunch` starts Cadenza again when it is done.
+pub fn installer_args(relaunch: bool) -> Vec<&'static str> {
+	let mut args = INSTALLER_ARGS.to_vec();
+	if relaunch {
+		args.push(RELAUNCH_ARG);
+	}
+	args
+}
+
+/// Starts what [`install`] prepared, detached (after [`finish`] for a swap); `reopen` is
+/// a project the restarted app opens, `relaunch` asks the installer to start the app
+/// again. Call it when the app is quitting (the installer replaces the running files).
+pub fn launch(prepared: &Prepared, reopen: Option<&Path>, relaunch: bool) -> std::io::Result<()> {
 	match prepared {
-		Prepared::Restart { app } => {
+		Prepared::Restart { app } | Prepared::Swap { app, .. } => {
 			let mut cmd = if app.extension().is_some_and(|e| e == "app") {
 				let mut c = Command::new("open");
 				c.arg("-n").arg(app);
@@ -244,9 +293,10 @@ pub fn launch(prepared: &Prepared, reopen: Option<&Path>) -> std::io::Result<()>
 			}
 			cmd.spawn().map(drop)
 		}
-		Prepared::RunInstaller { setup } => {
-			Command::new(setup).args(INSTALLER_ARGS).spawn().map(drop)
-		}
+		Prepared::RunInstaller { setup } => Command::new(setup)
+			.args(installer_args(relaunch))
+			.spawn()
+			.map(drop),
 		Prepared::OpenFile { file } => open::that_detached(file),
 	}
 }
@@ -456,17 +506,62 @@ mod tests {
 			&Progress::default(),
 		)
 		.unwrap();
+		let staging = t.path().join("opt").join("cadenza.update");
 		assert_eq!(
 			done,
-			Prepared::Restart {
-				app: dir.join("cadenza-app")
+			Prepared::Swap {
+				current: dir.clone(),
+				staged: staging.join("cadenza-1.0.0-linux-x86_64"),
+				cleanup: staging.clone(),
+				app: dir.join("cadenza-app"),
 			}
 		);
+		assert_eq!(
+			std::fs::read_to_string(dir.join("cadenza-app")).unwrap(),
+			"old",
+			"the running install is untouched until finish"
+		);
+		finish(&done).unwrap();
 		assert_eq!(
 			std::fs::read_to_string(dir.join("cadenza-app")).unwrap(),
 			"new"
 		);
 		let left: Vec<_> = std::fs::read_dir(t.path().join("opt")).unwrap().collect();
 		assert_eq!(left.len(), 1, "no backup or staging folder left");
+	}
+}
+
+#[cfg(test)]
+mod launch_tests {
+	use super::*;
+
+	#[test]
+	fn the_installer_relaunches_only_when_asked() {
+		assert!(installer_args(true).ends_with(&[RELAUNCH_ARG]));
+		assert!(!installer_args(false).contains(&RELAUNCH_ARG));
+		assert!(installer_args(false).contains(&"/SILENT"));
+	}
+
+	#[test]
+	fn finish_swaps_and_a_missing_stage_keeps_the_install() {
+		let t = tempfile::tempdir().unwrap();
+		let cur = t.path().join("Cadenza.app");
+		let staged = t.path().join("Cadenza.app.update");
+		std::fs::create_dir_all(&cur).unwrap();
+		std::fs::write(cur.join("v"), "old").unwrap();
+		let p = Prepared::Swap {
+			current: cur.clone(),
+			staged: staged.clone(),
+			cleanup: staged.clone(),
+			app: cur.clone(),
+		};
+		assert!(finish(&p).is_err());
+		assert_eq!(std::fs::read_to_string(cur.join("v")).unwrap(), "old");
+		std::fs::create_dir_all(&staged).unwrap();
+		std::fs::write(staged.join("v"), "new").unwrap();
+		finish(&p).unwrap();
+		assert_eq!(std::fs::read_to_string(cur.join("v")).unwrap(), "new");
+		assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 1);
+		finish(&Prepared::RunInstaller { setup: "x".into() }).unwrap();
 	}
 }

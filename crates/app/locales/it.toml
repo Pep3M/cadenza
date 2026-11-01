@@ -2425,3 +2425,5 @@
 "What happened? Steps to reproduce help a lot." = "Cos'è successo? I passaggi per riprodurlo aiutano molto."
 "restarting to update" = "riavviare per aggiornare"
 "the worker thread stopped" = "il thread di lavoro si è fermato"
+"The update could not be installed: {e}" = "Impossibile installare l'aggiornamento: {e}"
+"The update is ready: it is installed when Cadenza restarts or quits." = "L'aggiornamento è pronto: viene installato quando Cadenza si riavvia o si chiude."

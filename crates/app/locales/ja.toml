@@ -2425,3 +2425,5 @@
 "What happened? Steps to reproduce help a lot." = "何が起きましたか? 再現手順がとても役立ちます。"
 "restarting to update" = "アップデートのための再起動"
 "the worker thread stopped" = "ワーカースレッドが停止しました"
+"The update could not be installed: {e}" = "アップデートをインストールできませんでした: {e}"
+"The update is ready: it is installed when Cadenza restarts or quits." = "アップデートの準備ができました: Cadenza の再起動時または終了時にインストールされます。"

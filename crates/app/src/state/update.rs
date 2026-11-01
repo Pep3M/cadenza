@@ -33,6 +33,9 @@ pub struct UpdatePrefs {
 	pub latest: String,
 	/// A version the user chose to skip: no chip or notice for it.
 	pub skipped: String,
+	/// Why the update staged for the last quit could not be put in place (shown once at
+	/// the next start).
+	pub install_error: String,
 }
 
 impl Default for UpdatePrefs {
@@ -42,6 +45,7 @@ impl Default for UpdatePrefs {
 			last_check: 0,
 			latest: String::new(),
 			skipped: String::new(),
+			install_error: String::new(),
 		}
 	}
 }
@@ -295,7 +299,7 @@ impl UpdateState {
 		let opened = Prepared::OpenFile {
 			file: file.to_path_buf(),
 		};
-		match cadenza_update::launch(&opened, None) {
+		match cadenza_update::launch(&opened, None, false) {
 			Ok(()) => notices.info(tr(
 				"Opened the new disk image: drag Cadenza onto Applications to finish",
 			)),
@@ -313,16 +317,29 @@ impl UpdateState {
 		self.relaunch
 	}
 
-	/// After the app shut down: restarts into the new version or runs the installer.
-	pub fn launch_after_quit(&mut self, reopen: Option<PathBuf>) {
-		if !std::mem::take(&mut self.relaunch) {
+	/// After the app shut down (any quit). A staged folder / bundle update is swapped in
+	/// now, also on a plain quit after "Later" (it was verified; the next start runs it);
+	/// a failed swap leaves the old install and is reported at the next start
+	/// (`UpdatePrefs.install_error`). With a confirmed restart the app (new, or the old
+	/// one after a failure) starts again, or the installer runs; a Windows installer is
+	/// never run on a plain quit (it is downloaded again next time).
+	pub fn on_quit(&mut self, reopen: Option<PathBuf>) {
+		let restart = std::mem::take(&mut self.relaunch);
+		let Some(p) = self.ready.take() else {
 			return;
+		};
+		if let Err(e) = cadenza_update::finish(&p) {
+			eprintln!("cadenza-app: could not install the update: {e}");
+			self.prefs.install_error = e.to_string();
 		}
-		if let Some(p) = self.ready.take()
-			&& let Err(e) = cadenza_update::launch(&p, reopen.as_deref())
-		{
+		if restart && let Err(e) = cadenza_update::launch(&p, reopen.as_deref(), true) {
 			eprintln!("cadenza-app: could not start the updated app: {e}");
 		}
+	}
+
+	/// The failure of the last on-quit install, once (startup notice).
+	pub fn take_install_error(&mut self) -> Option<String> {
+		Some(std::mem::take(&mut self.prefs.install_error)).filter(|e| !e.is_empty())
 	}
 }
 
@@ -445,5 +462,48 @@ mod tests {
 			u.error
 		);
 		assert!(!u.arm_relaunch());
+	}
+
+	#[test]
+	fn a_staged_update_is_swapped_in_on_any_quit() {
+		let t = tempfile::tempdir().unwrap();
+		let cur = t.path().join("cadenza");
+		let staging = t.path().join("cadenza.update");
+		let staged = staging.join("cadenza-9.0.0-linux-x86_64");
+		std::fs::create_dir_all(&cur).unwrap();
+		std::fs::create_dir_all(&staged).unwrap();
+		std::fs::write(cur.join("cadenza-app"), "old").unwrap();
+		std::fs::write(staged.join("cadenza-app"), "new").unwrap();
+		let swap = Prepared::Swap {
+			current: cur.clone(),
+			staged,
+			cleanup: staging.clone(),
+			app: cur.join("cadenza-app"),
+		};
+		let mut u = UpdateState {
+			ready: Some(swap.clone()),
+			..UpdateState::default()
+		};
+		// "Later", then a plain quit: installed, nothing started.
+		u.on_quit(None);
+		assert_eq!(
+			std::fs::read_to_string(cur.join("cadenza-app")).unwrap(),
+			"new"
+		);
+		assert!(!staging.exists() && u.ready.is_none());
+		assert_eq!(u.take_install_error(), None);
+		// The staged copy vanished: the install stays and the error waits for next start.
+		u.ready = Some(swap);
+		u.on_quit(None);
+		assert_eq!(
+			std::fs::read_to_string(cur.join("cadenza-app")).unwrap(),
+			"new"
+		);
+		assert!(
+			u.take_install_error()
+				.unwrap()
+				.contains("download it again")
+		);
+		assert_eq!(u.take_install_error(), None);
 	}
 }

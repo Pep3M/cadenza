@@ -59,15 +59,17 @@ pub fn run(check_only: bool) -> anyhow::Result<()> {
 		Prepared::Restart { .. } => println!(
 			"updated to {latest}; a running Cadenza keeps the old version until it restarts"
 		),
-		Prepared::RunInstaller { setup } => {
-			std::process::Command::new(setup)
-				.args(cadenza_update::INSTALLER_ARGS)
-				.spawn()
-				.context("starting the installer")?;
+		// This CLI is done with its folder: swap now (quit a running app first).
+		Prepared::Swap { .. } => {
+			cadenza_update::finish(&prepared)?;
+			println!("updated to {latest}; restart a running Cadenza to use it");
+		}
+		Prepared::RunInstaller { .. } => {
+			cadenza_update::launch(&prepared, None, false).context("starting the installer")?;
 			println!("started the {latest} installer; it closes a running Cadenza and upgrades it");
 		}
 		Prepared::OpenFile { file } => {
-			cadenza_update::launch(&prepared, None).context("opening the disk image")?;
+			cadenza_update::launch(&prepared, None, false).context("opening the disk image")?;
 			println!(
 				"opened {}: drag Cadenza.app onto Applications to finish",
 				file.display()

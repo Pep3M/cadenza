@@ -2421,3 +2421,5 @@
 "What happened? Steps to reproduce help a lot." = "发生了什么？复现步骤非常有帮助。"
 "restarting to update" = "为更新而重启"
 "the worker thread stopped" = "工作线程已停止"
+"The update could not be installed: {e}" = "无法安装更新：{e}"
+"The update is ready: it is installed when Cadenza restarts or quits." = "更新已就绪：将在 Cadenza 重启或退出时安装。"

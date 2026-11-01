@@ -124,6 +124,10 @@ fn body(ui: &mut Ui, state: &mut AppState) -> bool {
 				),
 				tr("Install and restart"),
 			),
+			Prepared::Swap { .. } => (
+				tr("The update is ready: it is installed when Cadenza restarts or quits."),
+				tr("Restart now"),
+			),
 			_ => (
 				tr("The update is installed. Restart Cadenza to use it."),
 				tr("Restart now"),

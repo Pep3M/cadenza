@@ -88,6 +88,11 @@ impl CadenzaApp {
 			.and_then(|s| eframe::get_value::<crate::state::layout::Prefs>(s, PREFS_KEY))
 			.unwrap_or_default();
 		app.state.apply_prefs(prefs);
+		if let Some(e) = app.state.update.take_install_error() {
+			app.state
+				.notices
+				.error(trf("The update could not be installed: {e}", &[("e", &e)]));
+		}
 		app.state.auto_check_updates();
 		app.state.enable_safety(crate::state::safety::state_dir());
 		match project {
@@ -214,15 +219,17 @@ impl CadenzaApp {
 				ctx.send_viewport_cmd(ViewportCommand::CancelClose);
 				self.state.request(Pending::Quit);
 			} else {
+				let reopen = self.state.path().map(PathBuf::from);
 				self.state.stop();
 				self.state.shutdown();
+				self.state.update.on_quit(reopen);
 			}
 		}
 		if self.state.quit_confirmed {
 			let reopen = self.state.path().map(PathBuf::from);
 			self.state.stop();
 			self.state.shutdown();
-			self.state.update.launch_after_quit(reopen);
+			self.state.update.on_quit(reopen);
 			ctx.send_viewport_cmd(ViewportCommand::Close);
 		}
 	}

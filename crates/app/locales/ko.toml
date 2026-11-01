@@ -2426,3 +2426,5 @@
 "What happened? Steps to reproduce help a lot." = "무슨 일이 있었나요? 재현 단계가 큰 도움이 됩니다."
 "restarting to update" = "업데이트를 위한 다시 시작"
 "the worker thread stopped" = "작업 스레드가 중지되었습니다"
+"The update could not be installed: {e}" = "업데이트를 설치할 수 없습니다: {e}"
+"The update is ready: it is installed when Cadenza restarts or quits." = "업데이트가 준비되었습니다: Cadenza를 다시 시작하거나 종료할 때 설치됩니다."

@@ -6,7 +6,8 @@
 //! - [`detect`] tells how this copy was installed ([`InstallKind`]), which decides
 //!   whether it can update itself and which release asset it needs.
 //! - [`install`] downloads that asset, verifies it against the release's `SHA256SUMS`
-//!   and puts it in place; [`launch`] then restarts the app or runs the installer.
+//!   and stages it; [`finish`] swaps a staged folder in once the app quit, and
+//!   [`launch`] then restarts the app or runs the installer.
 
 mod apply;
 mod fetch;
@@ -15,7 +16,9 @@ mod release;
 mod sums;
 mod version;
 
-pub use apply::{INSTALLER_ARGS, Prepared, RELAUNCH_ARG, install, launch, swap_dirs};
+pub use apply::{
+	INSTALLER_ARGS, Prepared, RELAUNCH_ARG, finish, install, installer_args, launch, swap_dirs,
+};
 pub use fetch::{Fetcher, HttpFetcher, Progress};
 pub use install::{Context, InstallKind, ManualReason, Os, Probe, RealProbe, detect};
 pub use release::{Asset, Release, check};

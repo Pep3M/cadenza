@@ -773,6 +773,7 @@ dependencies = [
  "cadenza-notes",
  "cadenza-plugin-host",
  "cadenza-theory",
+ "cadenza-update",
  "eframe",
  "egui",
  "egui_kittest",

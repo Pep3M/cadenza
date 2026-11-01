@@ -30,6 +30,7 @@ cadenza-agent.workspace = true
 cadenza-library.workspace = true
 cadenza-analysis.workspace = true
 cadenza-notes.workspace = true
+cadenza-update.workspace = true
 realfft.workspace = true
 eframe.workspace = true
 egui.workspace = true

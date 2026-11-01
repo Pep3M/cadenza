@@ -169,6 +169,25 @@ the CLI so the CLI stays free of GPU/windowing deps). egui 0.36 / eframe with th
   opening a project whose newest autosave is newer than the file offers Recover (unsaved
   document, same path) or keeping the saved version (reason: crashed when a dead pid's marker
   is left); untitled sessions of dead processes are offered at startup.
+- Updates (`state::update`, `ui::updates`, logic in `cadenza-update`): `CadenzaApp::new` runs
+  `auto_check_updates` (worker, at most once per 24 h, `Prefs.updates: UpdatePrefs { auto_check
+  (default on), last_check, latest, skipped }`; headless states never check); Help → Check for
+  updates… (manual: opens the window, reports "up to date"/failures) and Check for updates
+  automatically. A newer non-prerelease release = one info notice per version + a status-bar chip
+  "⬆ Update x.y.z" (survives restarts via `latest`, hidden for `skipped`), never a modal. The
+  window shows the release notes (2000 chars, link to the release) and, by `InstallKind`,
+  "Download and install" (worker with progress bar + Cancel; verified against `SHA256SUMS`;
+  AppImage replaced, install.sh folder swapped, Windows `-setup.exe` kept, macOS bundle replaced
+  from the dmg or the dmg opened) / "Open the download page" + advice (package manager, dev build,
+  read-only, unmanaged) / Later / Skip this version. A ready update offers "Restart now"
+  ("Install and restart" on Windows) = `request(Pending::Update)` (unsaved-changes prompt first),
+  then the app quits and `launch_after_quit` starts the new app with the open project (or the
+  installer, `/SILENT ... /RELAUNCH=1`). Failures leave the install untouched and show the error.
+- Report a problem (`state::report`, `ui::report`): Help → Report a problem… (title +
+  description) opens `issues/new?template=bug_report.yml` prefilled (`title`, `what-happened`,
+  `version`, `os`, `environment` = audio backend/device/rate/buffer, plugin hosting, UI language;
+  URL-encoded, <= 6000 chars by cutting the description); "Copy system info" copies the same
+  text. Never project content, paths or keys. Templates in `.github/ISSUE_TEMPLATE/`.
 - `ui`: views only read state and call its methods; `theme` is the single palette/metrics
   module. Panels (`state::layout::PanelLayout`, FL Studio-like keys): F5 arrange, F6 / Alt+F8
   browser, F7 piano roll, F8 inspector, F9 mixer, F11 / Ctrl+Enter maximize the focused panel
